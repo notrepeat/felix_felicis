@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+slotmap = "1.1.1"
+toml = "1"
+serde = { version = "1", features = ["derive"] }
+proptest = "1"
+trybuild = "1"
+tempfile = "3"
+rmcp = "3.2"
+universo-core = { path = "crates/universo-core" }
+universo-okf = { path = "crates/universo-okf" }
+universo-testkit = { path = "crates/universo-testkit" }

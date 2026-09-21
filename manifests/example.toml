@@ -1,0 +1,28 @@
+version = "example/1"
+
+[nodos]
+sortes = ["decision", "principle", "Retirado", "Patrón"]
+
+[nodos.disco]
+"Patrón" = "pattern"
+
+[nodos.retirado_en_disco]
+clave = "status"
+valor = "deprecated"
+
+[[aristas]]
+clave = "supports"
+
+[[aristas]]
+clave = "related"
+simetrica = true
+
+[[predicados]]
+nombre = "Maturity"
+clave = "maturity"
+dominio = ["draft", "accepted"]
+
+[layout]
+directorios = ["knowledge"]
+sin_iota = []
+ignorados = ["README.md"]

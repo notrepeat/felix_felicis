@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 76dc795548db4915f7ac7332de99c0ac827d7e8289eee0b917a8464dfedb91f5 # shrinks to archivos = [("n/x1.md", "---\ntype: a\ntitle: \"\"\n---\n"), ("n/x2.md", "---\ntype: a\ntitle: \"\"\nten:\n  - with: \"[[x1]]\"\n    scope: \"\\\"\"\n---\n")]
+cc 02dab9305acd2dafd470d4199ea5ad826a1f8805bc4fbb5176beb42a3b344d7f # shrinks to archivos = [("n/x1.md", "---\ntype: a\ntitle: \"\"\n---\n"), ("n/x2.md", "---\ntype: a\ntitle: \"\"\nten:\n  - with: \"[[x1]]\"\n    scope: \" \"\n---\n"), ("n/x3.md", "---\ntype: a\ntitle: \"\"\n---\n")]

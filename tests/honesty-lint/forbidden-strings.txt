@@ -1,0 +1,42 @@
+# Lista de cadenas prohibidas en el código y la documentación del motor
+# (cap. 06 del plan de conducta: cero promesas de rendimiento sin análisis;
+# plan 10, lint de honestidad). El motor no mide ni analiza rendimiento en
+# este tema, así que ningún comentario, mensaje de error, doc o test puede
+# afirmar (ni sugerir) que algo es rápido, eficiente o infalible: son
+# afirmaciones que requieren evidencia (benchmarks, análisis de
+# complejidad) que este código no tiene.
+#
+# Coincidencia por subcadena, sin distinguir mayúsculas/minúsculas. Las
+# entradas con `(` (las formas de notación O grande: `O(1)`, `O(n)`,
+# `O(log`, `O(n log`) además exigen frontera a la izquierda —la entrada debe
+# empezar al inicio de la línea o tras un carácter no alfanumérico ni `_`—
+# para que `O(n)` no coincida dentro de `Reservado(n)` (un nombre de
+# variante seguido de un binding de una letra). El resto de entradas (las
+# palabras sueltas de más abajo) son subcadena simple sin exigir frontera en
+# ningún lado, así que también marcan compuestos como «ultrarrápido» o
+# «supereficiente». Comentarios (`#`) y líneas vacías se ignoran.
+#
+# Modificar esta lista es un cambio revisable como cualquier otro: si hace
+# falta agregar o quitar una entrada, es porque cambió el criterio de qué
+# cuenta como promesa de rendimiento, no un ajuste de conveniencia para
+# que pase un lint molesto.
+
+O(1)
+O(n)
+O(log
+O(n log
+rápido
+rapido
+rapidez
+eficiente
+eficiencia
+performante
+alto rendimiento
+blazing
+lightning fast
+infalible
+nunca falla
+garantiza rendimiento
+sin latencia
+instantáneo
+instantaneo

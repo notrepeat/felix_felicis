@@ -1,0 +1,5 @@
+# Fija la toolchain: los tests compile-fail de trybuild comparan el texto
+# exacto de los diagnosticos de rustc, que cambia entre versiones.
+[toolchain]
+channel = "1.88.0"
+components = ["rustfmt", "clippy"]
