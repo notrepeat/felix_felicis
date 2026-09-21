@@ -44,6 +44,9 @@ python tools/check_public_boundary.py
 El estudio que fundamenta el diseño comienza en
 [`docs/00-indice.md`](docs/00-indice.md).
 
+El plan ejecutable para demostrar que el sistema funciona está en
+[`docs/plan/00-plan-maestro.md`](docs/plan/00-plan-maestro.md).
+
 ## Datos privados
 
 No copies una base de conocimiento real dentro de este repositorio. Consulta

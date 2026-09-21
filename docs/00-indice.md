@@ -75,3 +75,9 @@ de este repositorio son ficticios y sirven únicamente para documentación y
 pruebas. Frontmatter y links portan los átomos formales que el motor chequea;
 el cuerpo markdown sigue siendo contenido humano anclado al nodo, fuera de la
 garantía formal ([06](06-limites.md)).
+
+## Plan de demostración
+
+La implementación y su evidencia de funcionamiento se siguen en el
+[`plan maestro`](plan/00-plan-maestro.md). Ese plan separa cada afirmación
+que el proyecto debe demostrar, sus entregables y su criterio de cierre.
