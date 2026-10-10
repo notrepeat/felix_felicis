@@ -9,7 +9,8 @@ use crate::formula::{
 use crate::manifiesto::Manifiesto;
 use crate::tipos::{Etiqueta, Sorte};
 
-use super::{ErrorValidacionInvariante, validar_sentencia};
+use super::{ErrorValidacionInvariante, validar_sentencia, validar_sentencia_fuente};
+use crate::sexpr::SentenciaFuente;
 
 /// Máximo predeterminado de instancias de esquemas generadas en una llamada.
 pub const PRESUPUESTO_INSTANCIAS_POR_DEFECTO: u64 = 100_000;
@@ -31,8 +32,51 @@ pub struct ResultadoExpansion {
     pub metricas: MetricasExpansion,
 }
 
-/// Error al validar o expandir un programa de invariantes.
+/// Sustitución aplicada a una metavariable de esquema.
+///
+/// Los valores se exponen solo como datos tipados de la API. Este tipo no
+/// implementa `Display` para evitar que una representación de diagnóstico
+/// exponga valores del bundle.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SustitucionMeta {
+    pub meta: Var,
+    pub valor: ValorMeta,
+}
+
+/// Valor tipado de una sustitución de esquema.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ValorMeta {
+    Sorte(Sorte),
+    Etiqueta(Etiqueta),
+    ConstanteExt(String),
+}
+
+/// Oración emitida por la expansión, junto con su procedencia.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OracionExpandida {
+    pub formula: Formula,
+    /// Índice 0-based de la sentencia en el programa fuente.
+    pub source_index: usize,
+    /// Posición 1-based del inicio de la sentencia, si vino del parser.
+    pub linea: Option<usize>,
+    pub columna: Option<usize>,
+    /// Índice 0-based dentro de las instancias de esta plantilla. Es `None`
+    /// para una oración directa.
+    pub instance_index: Option<u64>,
+    /// Sustituciones en orden lexicográfico por nombre de metavariable.
+    /// Está vacío para una oración directa.
+    pub sustituciones: Vec<SustitucionMeta>,
+}
+
+/// Resultado de expansión que conserva la procedencia de cada oración.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResultadoExpansionFuente {
+    pub oraciones: Vec<OracionExpandida>,
+    pub metricas: MetricasExpansion,
+}
+
+/// Error al validar o expandir un programa de invariantes.
+#[derive(Clone, PartialEq, Eq)]
 pub enum ErrorExpansion {
     SentenciaInvalida {
         indice: usize,
@@ -44,6 +88,23 @@ pub enum ErrorExpansion {
     },
 }
 
+impl std::fmt::Debug for ErrorExpansion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SentenciaInvalida { indice, errores } => f
+                .debug_struct("SentenciaInvalida")
+                .field("indice", indice)
+                .field("errores", errores)
+                .finish(),
+            Self::DominioPredicadoDesconocido(_) => f.write_str("DominioPredicadoDesconocido"),
+            Self::PresupuestoAgotado { limite } => f
+                .debug_struct("PresupuestoAgotado")
+                .field("limite", limite)
+                .finish(),
+        }
+    }
+}
+
 impl std::fmt::Display for ErrorExpansion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -52,8 +113,8 @@ impl std::fmt::Display for ErrorExpansion {
                 "la sentencia {indice} no es válida ({} diagnósticos)",
                 errores.len()
             ),
-            Self::DominioPredicadoDesconocido(nombre) => {
-                write!(f, "no existe el dominio del predicado {nombre:?}")
+            Self::DominioPredicadoDesconocido(_) => {
+                write!(f, "no existe el dominio del predicado declarado")
             }
             Self::PresupuestoAgotado { limite } => {
                 write!(f, "se agotó el presupuesto de instancias ({limite})")
@@ -75,12 +136,66 @@ pub fn expandir_sentencias(
     manifiesto: &Manifiesto,
     estructura: &Estructura,
 ) -> Result<ResultadoExpansion, ErrorExpansion> {
-    expandir_con_presupuesto(
+    let entradas = sentencias
+        .iter()
+        .map(|sentencia| EntradaExpansion {
+            sentencia,
+            linea: None,
+            columna: None,
+        })
+        .collect::<Vec<_>>();
+    let resultado = expandir_entradas(
+        &entradas,
+        manifiesto,
+        estructura,
+        PRESUPUESTO_INSTANCIAS_POR_DEFECTO,
+    )?;
+    Ok(ResultadoExpansion {
+        oraciones: resultado
+            .oraciones
+            .into_iter()
+            .map(|oracion| oracion.formula)
+            .collect(),
+        metricas: resultado.metricas,
+    })
+}
+
+/// Expande sentencias del parser conservando fuente, posición e instanciación.
+///
+/// `source_index` e `instance_index` son 0-based. Una oración directa recibe
+/// `instance_index: None`; cada esquema empieza en cero de forma independiente.
+/// Los pares de sustitución se ordenan lexicográficamente por metavariable,
+/// independientemente del orden de sus ligaduras en la declaración.
+pub fn expandir_sentencias_fuente(
+    sentencias: &[SentenciaFuente],
+    manifiesto: &Manifiesto,
+    estructura: &Estructura,
+) -> Result<ResultadoExpansionFuente, ErrorExpansion> {
+    expandir_sentencias_fuente_con_presupuesto(
         sentencias,
         manifiesto,
         estructura,
         PRESUPUESTO_INSTANCIAS_POR_DEFECTO,
     )
+}
+
+/// Variante con presupuesto explícito que conserva la procedencia de fuente.
+/// El error por agotamiento es atómico: nunca devuelve resultados parciales.
+pub fn expandir_sentencias_fuente_con_presupuesto(
+    sentencias: &[SentenciaFuente],
+    manifiesto: &Manifiesto,
+    estructura: &Estructura,
+    limite: u64,
+) -> Result<ResultadoExpansionFuente, ErrorExpansion> {
+    let entradas = sentencias
+        .iter()
+        .map(|fuente| EntradaExpansion {
+            sentencia: &fuente.sentencia,
+            linea: Some(fuente.linea),
+            columna: Some(fuente.columna),
+        })
+        .collect::<Vec<_>>();
+    expandir_entradas(&entradas, manifiesto, estructura, limite)
 }
 
 /// Variante con límite explícito de instancias generadas.
@@ -94,8 +209,50 @@ pub fn expandir_con_presupuesto(
     estructura: &Estructura,
     limite: u64,
 ) -> Result<ResultadoExpansion, ErrorExpansion> {
-    for (indice, sentencia) in sentencias.iter().enumerate() {
-        let errores = validar_sentencia(sentencia, manifiesto, estructura);
+    let entradas = sentencias
+        .iter()
+        .map(|sentencia| EntradaExpansion {
+            sentencia,
+            linea: None,
+            columna: None,
+        })
+        .collect::<Vec<_>>();
+    let resultado = expandir_entradas(&entradas, manifiesto, estructura, limite)?;
+    Ok(ResultadoExpansion {
+        oraciones: resultado
+            .oraciones
+            .into_iter()
+            .map(|oracion| oracion.formula)
+            .collect(),
+        metricas: resultado.metricas,
+    })
+}
+
+struct EntradaExpansion<'a> {
+    sentencia: &'a Sentencia,
+    linea: Option<usize>,
+    columna: Option<usize>,
+}
+
+fn expandir_entradas(
+    sentencias: &[EntradaExpansion<'_>],
+    manifiesto: &Manifiesto,
+    estructura: &Estructura,
+    limite: u64,
+) -> Result<ResultadoExpansionFuente, ErrorExpansion> {
+    for (indice, entrada) in sentencias.iter().enumerate() {
+        let errores = match (entrada.linea, entrada.columna) {
+            (Some(linea), Some(columna)) => validar_sentencia_fuente(
+                &SentenciaFuente {
+                    sentencia: entrada.sentencia.clone(),
+                    linea,
+                    columna,
+                },
+                manifiesto,
+                estructura,
+            ),
+            _ => validar_sentencia(entrada.sentencia, manifiesto, estructura),
+        };
         if !errores.is_empty() {
             return Err(ErrorExpansion::SentenciaInvalida { indice, errores });
         }
@@ -103,15 +260,23 @@ pub fn expandir_con_presupuesto(
 
     let plantillas = sentencias
         .iter()
-        .filter(|sentencia| matches!(sentencia, Sentencia::Esquema { .. }))
+        .filter(|entrada| matches!(entrada.sentencia, Sentencia::Esquema { .. }))
         .count();
     let mut oraciones = Vec::new();
     let mut instancias = 0_u64;
 
-    for sentencia in sentencias {
-        match sentencia {
-            Sentencia::Oracion(formula) => oraciones.push(formula.clone()),
+    for (source_index, entrada) in sentencias.iter().enumerate() {
+        match entrada.sentencia {
+            Sentencia::Oracion(formula) => oraciones.push(OracionExpandida {
+                formula: formula.clone(),
+                source_index,
+                linea: entrada.linea,
+                columna: entrada.columna,
+                instance_index: None,
+                sustituciones: Vec::new(),
+            }),
             Sentencia::Esquema { ligaduras, cuerpo } => {
+                let mut instance_index = 0_u64;
                 let dominios = ligaduras
                     .iter()
                     .map(|(_, dominio)| dominio_instancia(dominio, manifiesto, estructura))
@@ -125,7 +290,7 @@ pub fn expandir_con_presupuesto(
                     if instancias >= limite {
                         return Err(ErrorExpansion::PresupuestoAgotado { limite });
                     }
-                    let valores = ligaduras
+                    let valores: HashMap<_, _> = ligaduras
                         .iter()
                         .zip(&dominios)
                         .zip(&indices)
@@ -135,7 +300,23 @@ pub fn expandir_con_presupuesto(
                         .collect();
                     let mut instancia = cuerpo.clone();
                     sustituir_metas(&mut instancia, &valores);
-                    oraciones.push(instancia);
+                    let mut sustituciones: Vec<_> = valores
+                        .iter()
+                        .map(|(meta, valor)| SustitucionMeta {
+                            meta: meta.clone(),
+                            valor: valor.clone(),
+                        })
+                        .collect();
+                    sustituciones.sort_by(|izquierda, derecha| izquierda.meta.cmp(&derecha.meta));
+                    oraciones.push(OracionExpandida {
+                        formula: instancia,
+                        source_index,
+                        linea: entrada.linea,
+                        columna: entrada.columna,
+                        instance_index: Some(instance_index),
+                        sustituciones,
+                    });
+                    instance_index += 1;
                     instancias += 1;
 
                     if indices.is_empty() || !avanzar(&mut indices, &dominios) {
@@ -146,20 +327,13 @@ pub fn expandir_con_presupuesto(
         }
     }
 
-    Ok(ResultadoExpansion {
+    Ok(ResultadoExpansionFuente {
         oraciones,
         metricas: MetricasExpansion {
             plantillas,
             instancias,
         },
     })
-}
-
-#[derive(Clone)]
-enum ValorMeta {
-    Sorte(Sorte),
-    Etiqueta(Etiqueta),
-    ConstanteExt(String),
 }
 
 fn dominio_instancia(

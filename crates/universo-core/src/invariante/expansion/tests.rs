@@ -5,7 +5,10 @@ use crate::path::BundlePath;
 use crate::sexpr::parsear;
 use crate::tipos::{Etiqueta, Sorte};
 
-use super::{ErrorExpansion, expandir_con_presupuesto, expandir_sentencias};
+use super::{
+    ErrorExpansion, ValorMeta, expandir_con_presupuesto, expandir_sentencias,
+    expandir_sentencias_fuente, expandir_sentencias_fuente_con_presupuesto,
+};
 
 fn programa(texto: &str) -> Sentencia {
     parsear(texto).unwrap_or_else(|error| panic!("{texto}: {error}"))
@@ -150,4 +153,106 @@ fn valida_todo_antes_de_publicar_oraciones_expandidas() {
         expandir_sentencias(&[directa.clone(), invalida], &manifiesto, &estructura),
         Err(ErrorExpansion::SentenciaInvalida { indice: 1, .. })
     ));
+}
+
+#[test]
+fn expansion_conserva_fuente_indices_y_sustituciones_canonicas() {
+    let texto = "; línea previa\n(Type @n/a a)\n(esquema ((z Lab) (a Dom.Nivel))\n  (forall ((x N)) (and (HasLab x z) (Nivel x a))))";
+    let fuentes = crate::sexpr::parsear_programa(texto).unwrap();
+    let (manifiesto, estructura) = mundo(false);
+    let resultado = expandir_sentencias_fuente(&fuentes, &manifiesto, &estructura).unwrap();
+
+    assert_eq!(resultado.metricas.plantillas, 1);
+    assert_eq!(resultado.metricas.instancias, 6);
+    let directa = &resultado.oraciones[0];
+    assert_eq!(directa.source_index, 0);
+    assert_eq!((directa.linea, directa.columna), (Some(2), Some(1)));
+    assert_eq!(directa.instance_index, None);
+    assert!(directa.sustituciones.is_empty());
+
+    let primera = &resultado.oraciones[1];
+    assert_eq!(primera.source_index, 1);
+    assert_eq!((primera.linea, primera.columna), (Some(3), Some(1)));
+    assert_eq!(primera.instance_index, Some(0));
+    assert_eq!(
+        primera
+            .sustituciones
+            .iter()
+            .map(|sustitucion| sustitucion.meta.como_str())
+            .collect::<Vec<_>>(),
+        ["a", "z"]
+    );
+    assert_eq!(
+        primera.sustituciones[0].valor,
+        ValorMeta::ConstanteExt("alto".into())
+    );
+    assert_eq!(
+        primera.sustituciones[1].valor,
+        ValorMeta::Etiqueta(Etiqueta::nuevo("alpha"))
+    );
+    assert_eq!(resultado.oraciones[2].instance_index, Some(1));
+    assert_eq!(resultado.oraciones[6].instance_index, Some(5));
+}
+
+#[test]
+fn expansion_con_fuente_coincide_con_la_api_legacy_y_es_independiente_de_insercion() {
+    let texto =
+        "(Type @n/a a)\n(esquema ((k KV) (l Lab)) (forall ((x N)) (and (Type x k) (HasLab x l))))";
+    let fuentes = crate::sexpr::parsear_programa(texto).unwrap();
+    let sentencias: Vec<_> = fuentes
+        .iter()
+        .map(|fuente| fuente.sentencia.clone())
+        .collect();
+    let (manifiesto_a, estructura_a) = mundo(false);
+    let (manifiesto_b, estructura_b) = mundo(true);
+    let con_fuente_a = expandir_sentencias_fuente(&fuentes, &manifiesto_a, &estructura_a).unwrap();
+    let con_fuente_b = expandir_sentencias_fuente(&fuentes, &manifiesto_b, &estructura_b).unwrap();
+    let legacy = expandir_sentencias(&sentencias, &manifiesto_a, &estructura_a).unwrap();
+
+    assert_eq!(con_fuente_a, con_fuente_b);
+    assert_eq!(
+        con_fuente_a
+            .oraciones
+            .iter()
+            .map(|oracion| oracion.formula.clone())
+            .collect::<Vec<_>>(),
+        legacy.oraciones
+    );
+    assert_eq!(con_fuente_a.metricas, legacy.metricas);
+}
+
+#[test]
+fn dominio_vacio_con_fuente_no_emite_instancias_y_presupuesto_no_publica_parciales() {
+    let esquema =
+        crate::sexpr::parsear_programa("(esquema ((k KE)) (forall ((e E)) (Edge e @n/a @n/a k)))")
+            .unwrap();
+    let mut manifiesto = crate::manifiesto::tests::base();
+    manifiesto.aristas.clear();
+    let mut estructura = Estructura::nueva(manifiesto.clone()).unwrap();
+    estructura
+        .insertar_nodo(
+            BundlePath::nuevo("n/a").unwrap(),
+            Sorte::nuevo("a"),
+            Etiqueta::nuevo("label"),
+        )
+        .unwrap();
+    let vacio = expandir_sentencias_fuente(&esquema, &manifiesto, &estructura).unwrap();
+    assert!(vacio.oraciones.is_empty());
+    assert_eq!(vacio.metricas.plantillas, 1);
+    assert_eq!(vacio.metricas.instancias, 0);
+
+    let programa =
+        crate::sexpr::parsear_programa("(esquema ((k KV)) (forall ((x N)) (Type x k)))").unwrap();
+    let (manifiesto, estructura) = mundo(false);
+    assert_eq!(
+        expandir_sentencias_fuente_con_presupuesto(&programa, &manifiesto, &estructura, 2),
+        Err(ErrorExpansion::PresupuestoAgotado { limite: 2 })
+    );
+}
+
+#[test]
+fn errores_de_expansion_no_interpolan_identificadores_de_dominio() {
+    let error = ErrorExpansion::DominioPredicadoDesconocido("dato-privado".into());
+    assert!(!error.to_string().contains("dato-privado"));
+    assert!(!format!("{error:?}").contains("dato-privado"));
 }
