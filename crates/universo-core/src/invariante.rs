@@ -16,6 +16,8 @@ use crate::formula::{
 use crate::manifiesto::Manifiesto;
 use crate::sexpr::SentenciaFuente;
 
+pub mod expansion;
+
 /// Código estable de un error de validación estática.
 ///
 /// Los códigos y ubicaciones no incluyen los valores del bundle ni el texto
