@@ -1,0 +1,13 @@
+; Invariantes públicos para el bundle ficticio de este directorio.
+; Cada nodo es una decisión o un principio.
+(forall ((x N))
+  (or (Type x decision) (Type x principle)))
+
+; La madurez accepted solo aparece en principios.
+(forall ((x N))
+  (=> (Maturity x accepted) (Type x principle)))
+
+; Las aristas supports conectan decisiones con principios.
+(forall ((e E) (x N) (y N))
+  :guarda (Edge e x y supports)
+  (and (Type x decision) (Type y principle)))

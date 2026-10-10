@@ -1,0 +1,6 @@
+; Fixture documental: intencionalmente falsa sobre el bundle de ejemplo.
+; Su nodo decision tiene maturity=draft, no accepted. No contiene datos
+; personales y no debe usarse como conjunto normal de invariantes.
+(forall ((x N))
+  :guarda (Type x decision)
+  (Maturity x accepted))
