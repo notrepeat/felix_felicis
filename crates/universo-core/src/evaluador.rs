@@ -24,10 +24,204 @@ pub const MAX_LIGADURAS_POR_CUANTIFICADOR: usize = 64;
 /// Presupuesto determinista predeterminado, medido en unidades de trabajo y
 /// no en tiempo de pared.
 pub const PRESUPUESTO_EVALUACION_POR_DEFECTO: u64 = 1_000_000;
+/// Límite predeterminado para la API de evidencia: cuenta nodos/entradas y
+/// bytes UTF-8 de cadenas copiadas. Es independiente del presupuesto semántico.
+pub const PRESUPUESTO_EVIDENCIA_POR_DEFECTO: u64 = 1_000_000;
+
+/// Constructor atómico reconocido por una evidencia de evaluación.
+/// No contiene los términos ni valores de la fórmula.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConstructorAtomico {
+    Type,
+    Edge,
+    Parent,
+    HasLabNodo,
+    HasLabArista,
+    Ext,
+    TcParent,
+    IgualNodo,
+    IgualArista,
+}
+
+/// Identidad canónica de un valor que liga una variable en una instancia.
+///
+/// No implementa `Display`: la evidencia es un valor estructurado, no una
+/// cadena de presentación que pueda revelar identificadores accidentalmente.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ValorLigadura {
+    Nodo(BundlePath),
+    Arista(IdArista),
+}
+
+impl std::fmt::Debug for ValorLigadura {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Nodo(_) => f.write_str("Nodo([redactado])"),
+            Self::Arista(_) => f.write_str("Arista([redactada])"),
+        }
+    }
+}
+
+/// Una ligadura bisortida capturada en orden de declaración.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LigaduraCanonica {
+    pub variable: Var,
+    pub valor: ValorLigadura,
+}
+
+impl std::fmt::Debug for LigaduraCanonica {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LigaduraCanonica([redactada])")
+    }
+}
+
+/// Asignación canónica local a una instancia cuantificada.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct AsignacionCanonica {
+    pub ligaduras: Vec<LigaduraCanonica>,
+}
+
+impl std::fmt::Debug for AsignacionCanonica {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AsignacionCanonica")
+            .field("cantidad_ligaduras", &self.ligaduras.len())
+            .finish()
+    }
+}
+
+/// Tipo de cuantificador que aparece en la evidencia.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TipoCuantificador {
+    ParaTodo,
+    Existe,
+}
+
+/// Una instancia efectiva de un cuantificador.
+///
+/// `cuerpo` es `None` cuando la guarda fue falsa. Una instancia siempre
+/// contiene la asignación de sus ligaduras, incluso si el cuerpo no aplica.
+#[derive(Clone, PartialEq, Eq)]
+pub struct InstanciaCuantificada {
+    pub asignacion: AsignacionCanonica,
+    pub guarda: Option<Box<EvidenciaEvaluacion>>,
+    pub cuerpo: Option<Box<EvidenciaEvaluacion>>,
+    pub valor: bool,
+}
+
+impl std::fmt::Debug for InstanciaCuantificada {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstanciaCuantificada")
+            .field("valor", &self.valor)
+            .field("cantidad_ligaduras", &self.asignacion.ligaduras.len())
+            .field("tiene_guarda", &self.guarda.is_some())
+            .field("tiene_cuerpo", &self.cuerpo.is_some())
+            .finish()
+    }
+}
+
+/// Regla local que justifica un valor booleano.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ReglaEvidencia {
+    Atomo {
+        constructor: ConstructorAtomico,
+        /// Ruta positiva (incluye inicio y fin) solo para un `tc Parent` verdadero.
+        camino_tc: Option<Vec<BundlePath>>,
+    },
+    No {
+        interior: Box<EvidenciaEvaluacion>,
+    },
+    Conjuncion {
+        partes_evaluadas: Vec<EvidenciaEvaluacion>,
+    },
+    Disyuncion {
+        partes_evaluadas: Vec<EvidenciaEvaluacion>,
+    },
+    Implicacion {
+        antecedente: Box<EvidenciaEvaluacion>,
+        consecuente: Option<Box<EvidenciaEvaluacion>>,
+    },
+    Cuantificador {
+        tipo: TipoCuantificador,
+        /// Instancias visitadas en el orden canónico del producto de dominios.
+        instancias: Vec<InstanciaCuantificada>,
+        /// `false` cuando la evaluación terminó por cortocircuito.
+        busqueda_agotada: bool,
+    },
+}
+
+impl std::fmt::Debug for ReglaEvidencia {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Atomo {
+                constructor,
+                camino_tc,
+            } => f
+                .debug_struct("Atomo")
+                .field("constructor", constructor)
+                .field("tiene_camino_tc", &camino_tc.is_some())
+                .finish(),
+            Self::No { .. } => f.write_str("No([subevidencia redactada])"),
+            Self::Conjuncion { partes_evaluadas } => f
+                .debug_struct("Conjuncion")
+                .field("partes_evaluadas", &partes_evaluadas.len())
+                .finish(),
+            Self::Disyuncion { partes_evaluadas } => f
+                .debug_struct("Disyuncion")
+                .field("partes_evaluadas", &partes_evaluadas.len())
+                .finish(),
+            Self::Implicacion { consecuente, .. } => f
+                .debug_struct("Implicacion")
+                .field("consecuente_evaluado", &consecuente.is_some())
+                .finish(),
+            Self::Cuantificador {
+                tipo,
+                instancias,
+                busqueda_agotada,
+            } => f
+                .debug_struct("Cuantificador")
+                .field("tipo", tipo)
+                .field("cantidad_instancias", &instancias.len())
+                .field("busqueda_agotada", busqueda_agotada)
+                .finish(),
+        }
+    }
+}
+
+/// Evidencia recursiva; no contiene el texto original de la fórmula.
+#[derive(Clone, PartialEq, Eq)]
+pub struct EvidenciaEvaluacion {
+    pub valor: bool,
+    pub regla: ReglaEvidencia,
+}
+
+impl std::fmt::Debug for EvidenciaEvaluacion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EvidenciaEvaluacion")
+            .field("valor", &self.valor)
+            .field("regla", &self.regla)
+            .finish()
+    }
+}
+
+/// Resultado de una decisión con evidencia reproducible.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ResultadoTrazable {
+    pub valor: bool,
+    pub evidencia: EvidenciaEvaluacion,
+}
+
+impl std::fmt::Debug for ResultadoTrazable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResultadoTrazable")
+            .field("valor", &self.valor)
+            .field("evidencia", &"[redactada]")
+            .finish()
+    }
+}
 
 /// Error al evaluar una fórmula que no está bien formada sobre la firma de
 /// la estructura dada, o que no es una oración cerrada.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ErrorEvaluacion {
     ProfundidadAstExcedida {
         maximo: usize,
@@ -37,6 +231,9 @@ pub enum ErrorEvaluacion {
         maximo: usize,
     },
     PresupuestoAgotado {
+        limite: u64,
+    },
+    PresupuestoEvidenciaAgotado {
         limite: u64,
     },
     VariableNoLigada {
@@ -63,80 +260,105 @@ pub enum ErrorEvaluacion {
     AristaLigadaInexistente(Var),
 }
 
+impl std::fmt::Debug for ErrorEvaluacion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProfundidadAstExcedida { maximo } => f
+                .debug_struct("ProfundidadAstExcedida")
+                .field("maximo", maximo)
+                .finish(),
+            Self::DemasiadasLigaduras { cantidad, maximo } => f
+                .debug_struct("DemasiadasLigaduras")
+                .field("cantidad", cantidad)
+                .field("maximo", maximo)
+                .finish(),
+            Self::PresupuestoAgotado { limite } => f
+                .debug_struct("PresupuestoAgotado")
+                .field("limite", limite)
+                .finish(),
+            Self::PresupuestoEvidenciaAgotado { limite } => f
+                .debug_struct("PresupuestoEvidenciaAgotado")
+                .field("limite", limite)
+                .finish(),
+            Self::VariableNoLigada { sorte, .. } => f
+                .debug_tuple("VariableNoLigada")
+                .field(sorte)
+                .field(&"[redactada]")
+                .finish(),
+            Self::VariableDeSorteIncorrecta { esperada, .. } => f
+                .debug_tuple("VariableDeSorteIncorrecta")
+                .field(esperada)
+                .field(&"[redactada]")
+                .finish(),
+            Self::VariableRedeclarada(_) => f.write_str("VariableRedeclarada([redactada])"),
+            Self::ConstanteNodoInexistente(_) => {
+                f.write_str("ConstanteNodoInexistente([redactada])")
+            }
+            Self::ConstanteAristaInexistente(_) => {
+                f.write_str("ConstanteAristaInexistente([redactada])")
+            }
+            Self::SorteNodoNoDeclarada(_) => f.write_str("SorteNodoNoDeclarada([redactada])"),
+            Self::SorteAristaNoDeclarada(_) => f.write_str("SorteAristaNoDeclarada([redactada])"),
+            Self::EtiquetaNoEnUso(_) => f.write_str("EtiquetaNoEnUso([redactada])"),
+            Self::PredicadoNoDeclarado(_) => f.write_str("PredicadoNoDeclarado([redactado])"),
+            Self::ConstanteFueraDeDominio { .. } => {
+                f.write_str("ConstanteFueraDeDominio([redactada])")
+            }
+            Self::MetaNoInstanciada(_) => f.write_str("MetaNoInstanciada([redactada])"),
+            Self::NodoLigadoInexistente(_) => f.write_str("NodoLigadoInexistente([redactada])"),
+            Self::AristaLigadaInexistente(_) => f.write_str("AristaLigadaInexistente([redactada])"),
+        }
+    }
+}
+
 impl std::fmt::Display for ErrorEvaluacion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ProfundidadAstExcedida { maximo } => write!(
-                f,
-                "la fórmula excede la profundidad máxima de AST ({maximo})"
-            ),
-            Self::DemasiadasLigaduras { cantidad, maximo } => write!(
-                f,
-                "el cuantificador tiene {cantidad} ligaduras; el máximo es {maximo}"
-            ),
-            Self::PresupuestoAgotado { limite } => write!(
-                f,
-                "se agotó el presupuesto de evaluación ({limite} unidades de trabajo)"
-            ),
-            Self::VariableNoLigada { variable, sorte } => write!(
-                f,
-                "la variable {variable} de sorte {} no está ligada",
-                sorte.como_str()
-            ),
-            Self::VariableDeSorteIncorrecta { variable, esperada } => write!(
-                f,
-                "la variable {variable} no está ligada con sorte {}",
-                esperada.como_str()
-            ),
-            Self::VariableRedeclarada(variable) => {
-                write!(f, "la variable {variable} está ligada más de una vez")
+            Self::ProfundidadAstExcedida { .. } => {
+                f.write_str("la fórmula excede un límite estructural del evaluador")
             }
-            Self::ConstanteNodoInexistente(path) => {
-                write!(f, "la constante de nodo @{path} no existe en la estructura")
+            Self::DemasiadasLigaduras { .. } => {
+                f.write_str("un cuantificador excede un límite estructural del evaluador")
             }
-            Self::ConstanteAristaInexistente(id) => {
-                write!(f, "la constante de arista @{id} no existe en la estructura")
+            Self::PresupuestoAgotado { .. } => f.write_str("se agotó el presupuesto de evaluación"),
+            Self::PresupuestoEvidenciaAgotado { .. } => {
+                f.write_str("se agotó el presupuesto de evidencia")
             }
-            Self::SorteNodoNoDeclarada(sorte) => {
-                write!(f, "la sorte de nodo {sorte} no está declarada")
+            Self::VariableNoLigada { .. } => {
+                f.write_str("la fórmula contiene una variable no ligada")
             }
-            Self::SorteAristaNoDeclarada(sorte) => {
-                write!(
-                    f,
-                    "la sorte de arista {} no está declarada",
-                    sorte.como_str()
-                )
+            Self::VariableDeSorteIncorrecta { .. } => {
+                f.write_str("la fórmula usa una variable en una posición incompatible")
             }
-            Self::EtiquetaNoEnUso(etiqueta) => {
-                write!(f, "la etiqueta {:?} no está en uso", etiqueta.como_str())
+            Self::VariableRedeclarada(_) => {
+                f.write_str("la fórmula contiene una variable redeclarada")
             }
-            Self::PredicadoNoDeclarado(predicado) => {
-                write!(
-                    f,
-                    "el predicado de extensión {predicado:?} no está declarado"
-                )
+            Self::ConstanteNodoInexistente(_) => {
+                f.write_str("la fórmula refiere a un nodo inexistente")
             }
-            Self::ConstanteFueraDeDominio {
-                predicado,
-                constante,
-            } => write!(
-                f,
-                "la constante {constante:?} no pertenece al dominio de {predicado:?}"
-            ),
-            Self::MetaNoInstanciada(variable) => {
-                write!(f, "la metavariable {variable} no fue instanciada")
+            Self::ConstanteAristaInexistente(_) => {
+                f.write_str("la fórmula refiere a una arista inexistente")
             }
-            Self::NodoLigadoInexistente(variable) => {
-                write!(
-                    f,
-                    "la asignación de {variable} refiere a un nodo inexistente"
-                )
+            Self::SorteNodoNoDeclarada(_) | Self::SorteAristaNoDeclarada(_) => {
+                f.write_str("la fórmula refiere a una sorte no declarada")
             }
-            Self::AristaLigadaInexistente(variable) => {
-                write!(
-                    f,
-                    "la asignación de {variable} refiere a una arista inexistente"
-                )
+            Self::EtiquetaNoEnUso(_) => {
+                f.write_str("la fórmula refiere a una etiqueta no disponible")
+            }
+            Self::PredicadoNoDeclarado(_) => {
+                f.write_str("la fórmula refiere a un predicado no declarado")
+            }
+            Self::ConstanteFueraDeDominio { .. } => {
+                f.write_str("la fórmula usa un valor fuera de un dominio cerrado")
+            }
+            Self::MetaNoInstanciada(_) => {
+                f.write_str("la fórmula contiene una metavariable sin instanciar")
+            }
+            Self::NodoLigadoInexistente(_) => {
+                f.write_str("una asignación refiere a un nodo inexistente")
+            }
+            Self::AristaLigadaInexistente(_) => {
+                f.write_str("una asignación refiere a una arista inexistente")
             }
         }
     }
@@ -166,6 +388,68 @@ impl Presupuesto {
         self.restante -= cantidad;
         Ok(())
     }
+}
+
+struct PresupuestoEvidencia {
+    limite: u64,
+    restante: u64,
+}
+
+impl PresupuestoEvidencia {
+    fn nuevo(limite: u64) -> Self {
+        Self {
+            limite,
+            restante: limite,
+        }
+    }
+
+    fn consumir(&mut self, cantidad: u64) -> Result<(), ErrorEvaluacion> {
+        if self.restante < cantidad {
+            return Err(ErrorEvaluacion::PresupuestoEvidenciaAgotado {
+                limite: self.limite,
+            });
+        }
+        self.restante -= cantidad;
+        Ok(())
+    }
+}
+
+enum ModoEvidencia {
+    Omitir,
+    Capturar(PresupuestoEvidencia),
+}
+
+impl ModoEvidencia {
+    fn capturando(&self) -> bool {
+        matches!(self, Self::Capturar(_))
+    }
+
+    fn consumir(&mut self, cantidad: u64) -> Result<(), ErrorEvaluacion> {
+        if let Self::Capturar(presupuesto) = self {
+            presupuesto.consumir(cantidad)?;
+        }
+        Ok(())
+    }
+
+    fn consumir_bytes(&mut self, bytes: usize) -> Result<(), ErrorEvaluacion> {
+        self.consumir(u64::try_from(bytes).unwrap_or(u64::MAX))
+    }
+}
+
+fn preparar_evaluacion(
+    formula: &Formula,
+    estructura: &Estructura,
+    limite: u64,
+) -> Result<Presupuesto, ErrorEvaluacion> {
+    let mut presupuesto = Presupuesto::nuevo(limite);
+    validar_formula(
+        formula,
+        estructura,
+        &mut Alcance::default(),
+        &mut presupuesto,
+        0,
+    )?;
+    Ok(presupuesto)
 }
 
 /// Evalúa una fórmula cerrada en la estructura finita dada.
@@ -208,20 +492,93 @@ pub fn evaluar_con_presupuesto(
     estructura: &Estructura,
     limite: u64,
 ) -> Result<bool, ErrorEvaluacion> {
-    let mut presupuesto = Presupuesto::nuevo(limite);
-    validar_formula(
-        formula,
-        estructura,
-        &mut Alcance::default(),
-        &mut presupuesto,
-        0,
-    )?;
-    evaluar_con(
+    let mut presupuesto = preparar_evaluacion(formula, estructura, limite)?;
+    let mut modo_evidencia = ModoEvidencia::Omitir;
+    evaluar_interno(
         formula,
         estructura,
         &mut Entorno::default(),
         &mut presupuesto,
+        &mut modo_evidencia,
     )
+    .map(|resultado| resultado.valor)
+}
+
+/// Evalúa una fórmula cerrada y conserva el árbol de decisiones visitado.
+/// Las asignaciones se expresan con rutas de nodo e identidades canónicas de
+/// arista, en el orden de ligaduras; los cuantificadores anidados conservan su
+/// propio ámbito y no se aplanan en un mapa ambiguo. Para `tc Parent` verdadero
+/// incluye la ruta positiva recorrida. No contiene el texto de la fórmula ni
+/// implementa `Display` para las asignaciones.
+///
+/// El cálculo semántico, el preflight y el presupuesto son los mismos que en
+/// [`evaluar`]. Si la evaluación falla o agota presupuesto, no se devuelve
+/// evidencia parcial.
+/// Para un AST no confiable, primero compruebe que
+/// `crate::invariante::validar_sentencia(&Sentencia::Oracion(formula.clone()),
+/// estructura.manifiesto(), estructura)` devuelve un vector vacío; esta API no
+/// sustituye la validación estática ni expande esquemas.
+pub fn evaluar_trazable(
+    formula: &Formula,
+    estructura: &Estructura,
+) -> Result<ResultadoTrazable, ErrorEvaluacion> {
+    evaluar_trazable_con_presupuestos(
+        formula,
+        estructura,
+        PRESUPUESTO_EVALUACION_POR_DEFECTO,
+        PRESUPUESTO_EVIDENCIA_POR_DEFECTO,
+    )
+}
+
+/// Variante de [`evaluar_trazable`] con presupuesto explícito para el cálculo.
+/// La materialización de evidencia conserva el límite predeterminado de
+/// [`PRESUPUESTO_EVIDENCIA_POR_DEFECTO`].
+/// Para un AST no confiable o construido directamente, aplique antes
+/// [`crate::invariante::validar_sentencia`] con la sentencia, el manifiesto y
+/// la estructura, igual que para [`evaluar`].
+pub fn evaluar_trazable_con_presupuesto(
+    formula: &Formula,
+    estructura: &Estructura,
+    limite: u64,
+) -> Result<ResultadoTrazable, ErrorEvaluacion> {
+    evaluar_trazable_con_presupuestos(
+        formula,
+        estructura,
+        limite,
+        PRESUPUESTO_EVIDENCIA_POR_DEFECTO,
+    )
+}
+
+/// Evalúa con presupuestos independientes para cómputo semántico y evidencia.
+/// El segundo cuenta nodos/entradas y bytes UTF-8 de las cadenas copiadas a la
+/// evidencia; al agotarse devuelve
+/// [`ErrorEvaluacion::PresupuestoEvidenciaAgotado`] y descarta el árbol parcial
+/// sin alterar el límite de evaluación.
+pub fn evaluar_trazable_con_presupuestos(
+    formula: &Formula,
+    estructura: &Estructura,
+    limite_evaluacion: u64,
+    limite_evidencia: u64,
+) -> Result<ResultadoTrazable, ErrorEvaluacion> {
+    let mut presupuesto = preparar_evaluacion(formula, estructura, limite_evaluacion)?;
+    let mut modo_evidencia = ModoEvidencia::Capturar(PresupuestoEvidencia::nuevo(limite_evidencia));
+    // La envoltura pública también cuenta como una entrada y se cobra antes
+    // de materializar el árbol que se devolvería dentro de ella.
+    modo_evidencia.consumir(1)?;
+    let resultado = evaluar_interno(
+        formula,
+        estructura,
+        &mut Entorno::default(),
+        &mut presupuesto,
+        &mut modo_evidencia,
+    )?;
+    let evidencia = resultado
+        .evidencia
+        .expect("el modo trazable construye evidencia para toda fórmula visitada");
+    Ok(ResultadoTrazable {
+        valor: resultado.valor,
+        evidencia,
+    })
 }
 
 #[derive(Default)]
@@ -479,12 +836,66 @@ struct Entorno {
     aristas: HashMap<Var, AristaId>,
 }
 
-fn evaluar_con(
+struct ModoCuantificador<'a> {
+    universal: bool,
+    evidencia: &'a mut ModoEvidencia,
+}
+
+struct EvaluacionInterna {
+    valor: bool,
+    evidencia: Option<EvidenciaEvaluacion>,
+}
+
+fn resultado_interno(
+    valor: bool,
+    modo: &mut ModoEvidencia,
+    regla: impl FnOnce(&mut ModoEvidencia) -> Result<ReglaEvidencia, ErrorEvaluacion>,
+) -> Result<EvaluacionInterna, ErrorEvaluacion> {
+    if !modo.capturando() {
+        return Ok(EvaluacionInterna {
+            valor,
+            evidencia: None,
+        });
+    }
+    modo.consumir(1)?;
+    let regla = regla(modo)?;
+    Ok(EvaluacionInterna {
+        valor,
+        evidencia: Some(EvidenciaEvaluacion { valor, regla }),
+    })
+}
+
+fn tomar_evidencia(
+    evaluacion: EvaluacionInterna,
+    modo: &mut ModoEvidencia,
+    destino: &mut Vec<EvidenciaEvaluacion>,
+) -> Result<(), ErrorEvaluacion> {
+    if modo.capturando() {
+        modo.consumir(1)?;
+        destino.push(
+            evaluacion
+                .evidencia
+                .expect("el modo trazable conserva evidencia de cada hijo evaluado"),
+        );
+    }
+    Ok(())
+}
+
+fn encajar_evidencia(
+    evidencia: EvidenciaEvaluacion,
+    modo: &mut ModoEvidencia,
+) -> Result<Box<EvidenciaEvaluacion>, ErrorEvaluacion> {
+    modo.consumir(1)?;
+    Ok(Box::new(evidencia))
+}
+
+fn evaluar_interno(
     formula: &Formula,
     estructura: &Estructura,
     entorno: &mut Entorno,
     presupuesto: &mut Presupuesto,
-) -> Result<bool, ErrorEvaluacion> {
+    modo: &mut ModoEvidencia,
+) -> Result<EvaluacionInterna, ErrorEvaluacion> {
     presupuesto.consumir(1)?;
     match formula {
         Formula::Type { sujeto, sorte } => {
@@ -493,7 +904,15 @@ fn evaluar_con(
             let nodo = estructura.nodo(id).ok_or_else(|| {
                 ErrorEvaluacion::NodoLigadoInexistente(nombre_variable_nodo(sujeto))
             })?;
-            Ok(nodo.tipo == esperado)
+            let valor = nodo.tipo == esperado;
+            resultado_interno(valor, modo, |_| {
+                Ok({
+                    ReglaEvidencia::Atomo {
+                        constructor: ConstructorAtomico::Type,
+                        camino_tc: None,
+                    }
+                })
+            })
         }
         Formula::Edge {
             arista,
@@ -508,31 +927,59 @@ fn evaluar_con(
             let arista = estructura.arista(id).ok_or_else(|| {
                 ErrorEvaluacion::AristaLigadaInexistente(nombre_variable_arista(arista))
             })?;
-            Ok(arista.origen == origen && arista.destino == destino && arista.tipo == sorte)
+            let valor =
+                arista.origen == origen && arista.destino == destino && arista.tipo == sorte;
+            resultado_interno(valor, modo, |_| {
+                Ok({
+                    ReglaEvidencia::Atomo {
+                        constructor: ConstructorAtomico::Edge,
+                        camino_tc: None,
+                    }
+                })
+            })
         }
         Formula::Parent { hijo, padre } => {
             let hijo = resolver_nodo(hijo, estructura, entorno)?;
             let padre = resolver_nodo(padre, estructura, entorno)?;
-            Ok(estructura.padre(hijo) == Some(padre))
+            let valor = estructura.padre(hijo) == Some(padre);
+            resultado_interno(valor, modo, |_| {
+                Ok({
+                    ReglaEvidencia::Atomo {
+                        constructor: ConstructorAtomico::Parent,
+                        camino_tc: None,
+                    }
+                })
+            })
         }
         Formula::HasLab { sujeto, etiqueta } => {
             let etiqueta = resolver_etiqueta(etiqueta)?;
-            match sujeto {
+            let (valor, constructor) = match sujeto {
                 SujetoTermino::Nodo(termino) => {
                     let id = resolver_nodo(termino, estructura, entorno)?;
                     let nodo = estructura.nodo(id).ok_or_else(|| {
                         ErrorEvaluacion::NodoLigadoInexistente(nombre_variable_nodo(termino))
                     })?;
-                    Ok(nodo.etiqueta == etiqueta)
+                    (nodo.etiqueta == etiqueta, ConstructorAtomico::HasLabNodo)
                 }
                 SujetoTermino::Arista(termino) => {
                     let id = resolver_arista(termino, estructura, entorno, presupuesto)?;
                     let arista = estructura.arista(id).ok_or_else(|| {
                         ErrorEvaluacion::AristaLigadaInexistente(nombre_variable_arista(termino))
                     })?;
-                    Ok(arista.etiqueta == etiqueta)
+                    (
+                        arista.etiqueta == etiqueta,
+                        ConstructorAtomico::HasLabArista,
+                    )
                 }
-            }
+            };
+            resultado_interno(valor, modo, |_| {
+                Ok({
+                    ReglaEvidencia::Atomo {
+                        constructor,
+                        camino_tc: None,
+                    }
+                })
+            })
         }
         Formula::Ext {
             predicado,
@@ -546,52 +993,181 @@ fn evaluar_con(
                     nombre_variable_nodo(sujeto),
                 ));
             }
-            Ok(estructura.atributos(id).get(predicado) == Some(&constante))
+            let valor = estructura.atributos(id).get(predicado) == Some(&constante);
+            resultado_interno(valor, modo, |_| {
+                Ok({
+                    ReglaEvidencia::Atomo {
+                        constructor: ConstructorAtomico::Ext,
+                        camino_tc: None,
+                    }
+                })
+            })
         }
         Formula::TcParent { desde, hasta } => {
-            let desde = resolver_nodo(desde, estructura, entorno)?;
-            let hasta = resolver_nodo(hasta, estructura, entorno)?;
-            let mut actual = estructura.padre(desde);
+            let desde_id = resolver_nodo(desde, estructura, entorno)?;
+            let hasta_id = resolver_nodo(hasta, estructura, entorno)?;
+            if estructura.nodo(desde_id).is_none() {
+                return Err(ErrorEvaluacion::NodoLigadoInexistente(
+                    nombre_variable_nodo(desde),
+                ));
+            }
+            let mut actual = estructura.padre(desde_id);
             let mut visitados = HashSet::new();
             while let Some(ancestro) = actual {
                 presupuesto.consumir(1)?;
-                if ancestro == hasta {
-                    return Ok(true);
+                estructura.nodo(ancestro).ok_or_else(|| {
+                    ErrorEvaluacion::NodoLigadoInexistente(nombre_variable_nodo(desde))
+                })?;
+                if ancestro == hasta_id {
+                    let camino = if modo.capturando() {
+                        // Reconstruir solo cuando hay ruta positiva evita
+                        // materializar evidencia descartable para TC falso.
+                        // Cada entrada temporal/final se cobra antes del push,
+                        // la reserva y el clone que la materializan.
+                        let mut nodos = Vec::new();
+                        modo.consumir(1)?;
+                        nodos.push(desde_id);
+                        let mut nodo_actual = desde_id;
+                        while nodo_actual != hasta_id {
+                            let padre = estructura.padre(nodo_actual).ok_or_else(|| {
+                                ErrorEvaluacion::NodoLigadoInexistente(nombre_variable_nodo(desde))
+                            })?;
+                            modo.consumir(1)?;
+                            nodos.push(padre);
+                            nodo_actual = padre;
+                        }
+                        modo.consumir(u64::try_from(nodos.len()).unwrap_or(u64::MAX))?;
+                        let mut camino = Vec::with_capacity(nodos.len());
+                        for id in nodos {
+                            let nodo = estructura.nodo(id).ok_or_else(|| {
+                                ErrorEvaluacion::NodoLigadoInexistente(nombre_variable_nodo(desde))
+                            })?;
+                            modo.consumir_bytes(nodo.path.como_str().len())?;
+                            camino.push(nodo.path.clone());
+                        }
+                        Some(camino)
+                    } else {
+                        None
+                    };
+                    return resultado_interno(true, modo, |_| {
+                        Ok(ReglaEvidencia::Atomo {
+                            constructor: ConstructorAtomico::TcParent,
+                            camino_tc: camino,
+                        })
+                    });
                 }
                 if !visitados.insert(ancestro) {
                     break;
                 }
                 actual = estructura.padre(ancestro);
             }
-            Ok(false)
+            resultado_interno(false, modo, |_| {
+                Ok(ReglaEvidencia::Atomo {
+                    constructor: ConstructorAtomico::TcParent,
+                    camino_tc: None,
+                })
+            })
         }
         Formula::IgualNodo(a, b) => {
-            Ok(resolver_nodo(a, estructura, entorno)? == resolver_nodo(b, estructura, entorno)?)
+            let valor =
+                resolver_nodo(a, estructura, entorno)? == resolver_nodo(b, estructura, entorno)?;
+            resultado_interno(valor, modo, |_| {
+                Ok(ReglaEvidencia::Atomo {
+                    constructor: ConstructorAtomico::IgualNodo,
+                    camino_tc: None,
+                })
+            })
         }
-        Formula::IgualArista(a, b) => Ok(resolver_arista(a, estructura, entorno, presupuesto)?
-            == resolver_arista(b, estructura, entorno, presupuesto)?),
-        Formula::No(interior) => Ok(!evaluar_con(interior, estructura, entorno, presupuesto)?),
+        Formula::IgualArista(a, b) => {
+            let valor = resolver_arista(a, estructura, entorno, presupuesto)?
+                == resolver_arista(b, estructura, entorno, presupuesto)?;
+            resultado_interno(valor, modo, |_| {
+                Ok(ReglaEvidencia::Atomo {
+                    constructor: ConstructorAtomico::IgualArista,
+                    camino_tc: None,
+                })
+            })
+        }
+        Formula::No(interior) => {
+            let evaluacion = evaluar_interno(interior, estructura, entorno, presupuesto, modo)?;
+            let valor = !evaluacion.valor;
+            resultado_interno(valor, modo, |modo| {
+                Ok(ReglaEvidencia::No {
+                    interior: encajar_evidencia(
+                        evaluacion
+                            .evidencia
+                            .expect("el modo trazable conserva evidencia del interior"),
+                        modo,
+                    )?,
+                })
+            })
+        }
         Formula::Y(partes) => {
+            let mut partes_evaluadas = Vec::new();
             for parte in partes {
-                if !evaluar_con(parte, estructura, entorno, presupuesto)? {
-                    return Ok(false);
+                let evaluacion = evaluar_interno(parte, estructura, entorno, presupuesto, modo)?;
+                let valor = evaluacion.valor;
+                tomar_evidencia(evaluacion, modo, &mut partes_evaluadas)?;
+                if !valor {
+                    return resultado_interno(false, modo, |_| {
+                        Ok(ReglaEvidencia::Conjuncion { partes_evaluadas })
+                    });
                 }
             }
-            Ok(true)
+            resultado_interno(true, modo, |_| {
+                Ok(ReglaEvidencia::Conjuncion { partes_evaluadas })
+            })
         }
         Formula::O(partes) => {
+            let mut partes_evaluadas = Vec::new();
             for parte in partes {
-                if evaluar_con(parte, estructura, entorno, presupuesto)? {
-                    return Ok(true);
+                let evaluacion = evaluar_interno(parte, estructura, entorno, presupuesto, modo)?;
+                let valor = evaluacion.valor;
+                tomar_evidencia(evaluacion, modo, &mut partes_evaluadas)?;
+                if valor {
+                    return resultado_interno(true, modo, |_| {
+                        Ok(ReglaEvidencia::Disyuncion { partes_evaluadas })
+                    });
                 }
             }
-            Ok(false)
+            resultado_interno(false, modo, |_| {
+                Ok(ReglaEvidencia::Disyuncion { partes_evaluadas })
+            })
         }
         Formula::Implica(antecedente, consecuente) => {
-            if !evaluar_con(antecedente, estructura, entorno, presupuesto)? {
-                Ok(true)
+            let antecedente = evaluar_interno(antecedente, estructura, entorno, presupuesto, modo)?;
+            if !antecedente.valor {
+                resultado_interno(true, modo, |modo| {
+                    Ok(ReglaEvidencia::Implicacion {
+                        antecedente: encajar_evidencia(
+                            antecedente
+                                .evidencia
+                                .expect("el modo trazable conserva evidencia del antecedente"),
+                            modo,
+                        )?,
+                        consecuente: None,
+                    })
+                })
             } else {
-                evaluar_con(consecuente, estructura, entorno, presupuesto)
+                let consecuente =
+                    evaluar_interno(consecuente, estructura, entorno, presupuesto, modo)?;
+                let valor = consecuente.valor;
+                resultado_interno(valor, modo, |modo| {
+                    Ok(ReglaEvidencia::Implicacion {
+                        antecedente: encajar_evidencia(
+                            antecedente
+                                .evidencia
+                                .expect("el modo trazable conserva evidencia del antecedente"),
+                            modo,
+                        )?,
+                        consecuente: Some(encajar_evidencia(
+                            consecuente
+                                .evidencia
+                                .expect("el modo trazable conserva evidencia del consecuente"),
+                            modo,
+                        )?),
+                    })
+                })
             }
         }
         Formula::ParaTodo {
@@ -602,10 +1178,13 @@ fn evaluar_con(
             ligaduras,
             guarda.as_deref(),
             cuerpo,
-            true,
             estructura,
             entorno,
             presupuesto,
+            ModoCuantificador {
+                universal: true,
+                evidencia: modo,
+            },
         ),
         Formula::Existe {
             ligaduras,
@@ -615,10 +1194,13 @@ fn evaluar_con(
             ligaduras,
             guarda.as_deref(),
             cuerpo,
-            false,
             estructura,
             entorno,
             presupuesto,
+            ModoCuantificador {
+                universal: false,
+                evidencia: modo,
+            },
         ),
     }
 }
@@ -627,21 +1209,42 @@ fn evaluar_cuantificador(
     ligaduras: &[(Var, SorteVar)],
     guarda: Option<&Formula>,
     cuerpo: &Formula,
-    universal: bool,
     estructura: &Estructura,
     entorno: &mut Entorno,
     presupuesto: &mut Presupuesto,
-) -> Result<bool, ErrorEvaluacion> {
+    modo: ModoCuantificador<'_>,
+) -> Result<EvaluacionInterna, ErrorEvaluacion> {
+    let ModoCuantificador {
+        universal,
+        evidencia,
+    } = modo;
+    let capturando = evidencia.capturando();
     if ligaduras.is_empty() {
         presupuesto.consumir(1)?;
-        return evaluar_instancia_cuantificada(
+        let evaluacion = evaluar_instancia_cuantificada(
             guarda,
             cuerpo,
             universal,
             estructura,
             entorno,
             presupuesto,
-        );
+            evidencia,
+        )?;
+        let valor = evaluacion.valor;
+        let mut instancias = Vec::new();
+        if capturando {
+            let instancia =
+                instancia_con_evidencia(evaluacion, AsignacionCanonica::default(), evidencia)?;
+            evidencia.consumir(1)?;
+            instancias.push(instancia);
+        }
+        return resultado_interno(valor, evidencia, |_| {
+            Ok(ReglaEvidencia::Cuantificador {
+                tipo: tipo_cuantificador(universal),
+                instancias,
+                busqueda_agotada: true,
+            })
+        });
     }
 
     let mut dominio_nodos = Vec::new();
@@ -675,7 +1278,13 @@ fn evaluar_cuantificador(
         SorteVar::Nodo => dominio_nodos.is_empty(),
         SorteVar::Arista => dominio_aristas.is_empty(),
     }) {
-        return Ok(universal);
+        return resultado_interno(universal, evidencia, |_| {
+            Ok(ReglaEvidencia::Cuantificador {
+                tipo: tipo_cuantificador(universal),
+                instancias: Vec::new(),
+                busqueda_agotada: true,
+            })
+        });
     }
 
     let anteriores_nodos: Vec<(Var, Option<NodoId>)> = ligaduras
@@ -691,6 +1300,7 @@ fn evaluar_cuantificador(
 
     let resultado = (|| {
         let mut indices = vec![0; ligaduras.len()];
+        let mut instancias = Vec::new();
         loop {
             presupuesto.consumir(1)?;
             for (indice, (variable, sorte)) in ligaduras.iter().enumerate() {
@@ -709,19 +1319,46 @@ fn evaluar_cuantificador(
                 }
             }
 
-            let valor = evaluar_instancia_cuantificada(
+            let evaluacion = evaluar_instancia_cuantificada(
                 guarda,
                 cuerpo,
                 universal,
                 estructura,
                 entorno,
                 presupuesto,
+                evidencia,
             )?;
+            let valor = evaluacion.valor;
+            if capturando {
+                let asignacion = capturar_asignacion(
+                    ligaduras,
+                    &indices,
+                    &dominio_nodos,
+                    &dominio_aristas,
+                    estructura,
+                    evidencia,
+                )?;
+                let instancia = instancia_con_evidencia(evaluacion, asignacion, evidencia)?;
+                evidencia.consumir(1)?;
+                instancias.push(instancia);
+            }
             if universal && !valor {
-                return Ok(false);
+                return resultado_interno(false, evidencia, |_| {
+                    Ok(ReglaEvidencia::Cuantificador {
+                        tipo: TipoCuantificador::ParaTodo,
+                        instancias,
+                        busqueda_agotada: false,
+                    })
+                });
             }
             if !universal && valor {
-                return Ok(true);
+                return resultado_interno(true, evidencia, |_| {
+                    Ok(ReglaEvidencia::Cuantificador {
+                        tipo: TipoCuantificador::Existe,
+                        instancias,
+                        busqueda_agotada: false,
+                    })
+                });
             }
             if !avanzar_combinacion(
                 &mut indices,
@@ -729,7 +1366,13 @@ fn evaluar_cuantificador(
                 dominio_nodos.len(),
                 dominio_aristas.len(),
             ) {
-                return Ok(universal);
+                return resultado_interno(universal, evidencia, |_| {
+                    Ok(ReglaEvidencia::Cuantificador {
+                        tipo: tipo_cuantificador(universal),
+                        instancias,
+                        busqueda_agotada: true,
+                    })
+                });
             }
         }
     })();
@@ -743,6 +1386,12 @@ fn evaluar_cuantificador(
     resultado
 }
 
+struct EvaluacionInstancia {
+    valor: bool,
+    guarda: Option<EvaluacionInterna>,
+    cuerpo: Option<EvaluacionInterna>,
+}
+
 fn evaluar_instancia_cuantificada(
     guarda: Option<&Formula>,
     cuerpo: &Formula,
@@ -750,15 +1399,129 @@ fn evaluar_instancia_cuantificada(
     estructura: &Estructura,
     entorno: &mut Entorno,
     presupuesto: &mut Presupuesto,
-) -> Result<bool, ErrorEvaluacion> {
-    let cubierta = match guarda {
-        Some(guarda) => evaluar_con(guarda, estructura, entorno, presupuesto)?,
-        None => true,
+    evidencia: &mut ModoEvidencia,
+) -> Result<EvaluacionInstancia, ErrorEvaluacion> {
+    let guarda_evaluada = match guarda {
+        Some(guarda) => Some(evaluar_interno(
+            guarda,
+            estructura,
+            entorno,
+            presupuesto,
+            evidencia,
+        )?),
+        None => None,
     };
+    let cubierta = guarda_evaluada.as_ref().is_none_or(|guardia| guardia.valor);
     if !cubierta {
-        return Ok(universal);
+        return Ok(EvaluacionInstancia {
+            valor: universal,
+            guarda: guarda_evaluada,
+            cuerpo: None,
+        });
     }
-    evaluar_con(cuerpo, estructura, entorno, presupuesto)
+    let cuerpo_evaluado = evaluar_interno(cuerpo, estructura, entorno, presupuesto, evidencia)?;
+    Ok(EvaluacionInstancia {
+        valor: cuerpo_evaluado.valor,
+        guarda: guarda_evaluada,
+        cuerpo: Some(cuerpo_evaluado),
+    })
+}
+
+fn tipo_cuantificador(universal: bool) -> TipoCuantificador {
+    if universal {
+        TipoCuantificador::ParaTodo
+    } else {
+        TipoCuantificador::Existe
+    }
+}
+
+fn instancia_con_evidencia(
+    instancia: EvaluacionInstancia,
+    asignacion: AsignacionCanonica,
+    evidencia: &mut ModoEvidencia,
+) -> Result<InstanciaCuantificada, ErrorEvaluacion> {
+    evidencia.consumir(1)?;
+    let guarda = match instancia.guarda {
+        Some(guardia) => Some(encajar_evidencia(
+            guardia
+                .evidencia
+                .expect("el modo trazable conserva evidencia de la guarda"),
+            evidencia,
+        )?),
+        None => None,
+    };
+    let cuerpo = match instancia.cuerpo {
+        Some(cuerpo) => Some(encajar_evidencia(
+            cuerpo
+                .evidencia
+                .expect("el modo trazable conserva evidencia del cuerpo"),
+            evidencia,
+        )?),
+        None => None,
+    };
+    Ok(InstanciaCuantificada {
+        asignacion,
+        guarda,
+        cuerpo,
+        valor: instancia.valor,
+    })
+}
+
+fn capturar_asignacion(
+    ligaduras: &[(Var, SorteVar)],
+    indices: &[usize],
+    dominio_nodos: &[NodoId],
+    dominio_aristas: &[AristaId],
+    estructura: &Estructura,
+    evidencia: &mut ModoEvidencia,
+) -> Result<AsignacionCanonica, ErrorEvaluacion> {
+    evidencia.consumir(u64::try_from(ligaduras.len()).unwrap_or(u64::MAX))?;
+    let mut asignacion = AsignacionCanonica {
+        ligaduras: Vec::with_capacity(ligaduras.len()),
+    };
+    for (indice, (variable, sorte)) in ligaduras.iter().enumerate() {
+        let valor = match sorte {
+            SorteVar::Nodo => {
+                let id = dominio_nodos[indices[indice]];
+                let nodo = estructura
+                    .nodo(id)
+                    .ok_or_else(|| ErrorEvaluacion::NodoLigadoInexistente(variable.clone()))?;
+                evidencia.consumir_bytes(nodo.path.como_str().len())?;
+                ValorLigadura::Nodo(nodo.path.clone())
+            }
+            SorteVar::Arista => {
+                let id = dominio_aristas[indices[indice]];
+                let arista = estructura
+                    .arista(id)
+                    .ok_or_else(|| ErrorEvaluacion::AristaLigadaInexistente(variable.clone()))?;
+                let origen = estructura
+                    .nodo(arista.origen)
+                    .ok_or_else(|| ErrorEvaluacion::AristaLigadaInexistente(variable.clone()))?;
+                let destino = estructura
+                    .nodo(arista.destino)
+                    .ok_or_else(|| ErrorEvaluacion::AristaLigadaInexistente(variable.clone()))?;
+                let bytes = origen
+                    .path
+                    .como_str()
+                    .len()
+                    .saturating_add(destino.path.como_str().len())
+                    .saturating_add(arista.tipo.como_str().len());
+                evidencia.consumir_bytes(bytes)?;
+                ValorLigadura::Arista(IdArista {
+                    origen: origen.path.clone(),
+                    sorte: arista.tipo.clone(),
+                    destino: destino.path.clone(),
+                    ordinal: arista.ordinal,
+                })
+            }
+        };
+        evidencia.consumir_bytes(variable.como_str().len())?;
+        asignacion.ligaduras.push(LigaduraCanonica {
+            variable: variable.clone(),
+            valor,
+        });
+    }
+    Ok(asignacion)
 }
 
 fn avanzar_combinacion(

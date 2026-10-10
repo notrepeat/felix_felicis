@@ -12,10 +12,20 @@ use crate::tipos::{Etiqueta, Sorte};
 
 // Oracle independiente: consulta nodos/aristas y padre/atributos desde
 // la estructura, sin usar el evaluador ni Estructura::atomos().
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct AsignacionOraculo {
     nodos: HashMap<Var, NodoId>,
     aristas: HashMap<Var, AristaId>,
+}
+
+impl AsignacionOraculo {
+    pub(super) fn ligar_nodo(&mut self, variable: Var, nodo: NodoId) {
+        self.nodos.insert(variable, nodo);
+    }
+
+    pub(super) fn ligar_arista(&mut self, variable: Var, arista: AristaId) {
+        self.aristas.insert(variable, arista);
+    }
 }
 
 fn buscar_nodo_oraculo(

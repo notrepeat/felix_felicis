@@ -111,6 +111,8 @@ fn oracion(texto: &str) -> Formula {
 mod oracle;
 #[path = "tests/property.rs"]
 mod property;
+#[path = "tests/trazabilidad.rs"]
+mod trazabilidad;
 use oracle::{AsignacionOraculo, oraculo};
 
 fn evaluar_y_comparar(mundo: &Mundo, texto: &str, esperado: bool) {
