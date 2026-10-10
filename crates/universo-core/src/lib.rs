@@ -6,6 +6,7 @@ pub mod atomos;
 pub mod estructura;
 pub mod formula;
 pub mod ids;
+pub mod invariante;
 pub mod manifiesto;
 pub mod path;
 pub mod sexpr;
