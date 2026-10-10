@@ -23,5 +23,5 @@ pub use manifiesto::{
     SORTES_RESERVADOS,
 };
 pub use path::{BundlePath, ErrorPath};
-pub use sexpr::{ErrorAutoria, MotivoAutoria, parsear};
+pub use sexpr::{ErrorAutoria, MotivoAutoria, SentenciaFuente, parsear, parsear_programa};
 pub use tipos::{Etiqueta, Sorte};

@@ -152,6 +152,16 @@ impl std::fmt::Display for ErrorAutoria {
 
 impl std::error::Error for ErrorAutoria {}
 
+/// Una sentencia de un programa de invariantes junto con la ubicación de su
+/// expresión de nivel superior. Las posiciones son 1-based y se cuentan en
+/// caracteres Unicode, igual que las posiciones de [`ErrorAutoria`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SentenciaFuente {
+    pub sentencia: Sentencia,
+    pub linea: usize,
+    pub columna: usize,
+}
+
 /// Un token con su posición en el texto, en base 1.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Tok {
@@ -354,6 +364,25 @@ fn arbol(tokens: &[Tok]) -> Result<Sexp, ErrorAutoria> {
         });
     }
     Ok(raiz)
+}
+
+/// Arma todas las expresiones de nivel superior de un programa. A diferencia
+/// de [`arbol`], una secuencia vacía es válida; cada elemento conserva las
+/// posiciones originales que asignó el lexer.
+fn arboles(tokens: &[Tok]) -> Result<Vec<Sexp>, ErrorAutoria> {
+    let mut posicion = 0usize;
+    let mut raices = Vec::new();
+    while let Some(tok) = tokens.get(posicion) {
+        if tok.clase == Clase::Cierra {
+            return Err(ErrorAutoria {
+                linea: tok.linea,
+                columna: tok.columna,
+                motivo: MotivoAutoria::ParentesisSobrante,
+            });
+        }
+        raices.push(arbol_desde(tokens, &mut posicion, 1)?);
+    }
+    Ok(raices)
 }
 
 /// `profundidad` es el nivel de la lista que se está armando, contando
@@ -1006,21 +1035,20 @@ fn ligaduras_esquema(sexp: &Sexp) -> Result<Vec<(Var, DominioEsquema)>, ErrorAut
     Ok(resultado)
 }
 
-/// Parsea la sintaxis de autoría a una [`Sentencia`].
-pub fn parsear(texto: &str) -> Result<Sentencia, ErrorAutoria> {
-    let tokens = lexar(texto)?;
-    let raiz = arbol(&tokens)?;
+/// Traduce una expresión superior al AST, con un contexto independiente por
+/// sentencia para que las ligaduras nunca crucen límites del programa.
+fn sentencia_desde(raiz: &Sexp) -> Result<Sentencia, ErrorAutoria> {
     let mut contexto = Contexto::default();
-    let es_esquema = matches!(&raiz, Sexp::Lista { elementos, .. }
+    let es_esquema = matches!(raiz, Sexp::Lista { elementos, .. }
         if elementos.first().and_then(Sexp::simbolo) == Some("esquema"));
     if !es_esquema {
-        return Ok(Sentencia::Oracion(formula(&raiz, &mut contexto)?));
+        return Ok(Sentencia::Oracion(formula(raiz, &mut contexto)?));
     }
-    let Sexp::Lista { elementos, .. } = &raiz else {
+    let Sexp::Lista { elementos, .. } = raiz else {
         unreachable!("ya se comprobó que es una lista");
     };
     let argumentos = &elementos[1..];
-    exigir_aridad(&raiz, "esquema", 2, argumentos.len())?;
+    exigir_aridad(raiz, "esquema", 2, argumentos.len())?;
     let ligaduras = ligaduras_esquema(&argumentos[0])?;
     contexto.metas = ligaduras
         .iter()
@@ -1035,6 +1063,36 @@ pub fn parsear(texto: &str) -> Result<Sentencia, ErrorAutoria> {
         }
     }
     Ok(Sentencia::Esquema { ligaduras, cuerpo })
+}
+
+/// Parsea la sintaxis de autoría a una única [`Sentencia`]. Conserva el
+/// contrato histórico de exigir exactamente una expresión de nivel superior.
+pub fn parsear(texto: &str) -> Result<Sentencia, ErrorAutoria> {
+    let tokens = lexar(texto)?;
+    let raiz = arbol(&tokens)?;
+    sentencia_desde(&raiz)
+}
+
+/// Parsea un programa UTF-8 de cero o más sentencias S-expression.
+///
+/// Los espacios y comentarios `; ...` se ignoran entre expresiones. Los
+/// errores conservan las líneas y columnas del archivo completo; la ubicación
+/// de cada elemento apunta al paréntesis inicial de su expresión top-level.
+/// El resultado es sintáctico: no evalúa ni valida sentencias contra un
+/// manifiesto. Cada sentencia obtiene un contexto de ligaduras independiente.
+pub fn parsear_programa(texto: &str) -> Result<Vec<SentenciaFuente>, ErrorAutoria> {
+    let tokens = lexar(texto)?;
+    arboles(&tokens)?
+        .iter()
+        .map(|raiz| {
+            let (linea, columna) = raiz.posicion();
+            Ok(SentenciaFuente {
+                sentencia: sentencia_desde(raiz)?,
+                linea,
+                columna,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1063,6 +1121,48 @@ mod tests {
                 }),
             })
         );
+    }
+
+    #[test]
+    fn programa_vacio_admite_blancos_y_comentarios() {
+        assert_eq!(
+            parsear_programa(" \n ; solo comentarios\n\t").unwrap(),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn programa_parsea_sentencias_top_level_con_posiciones_del_archivo() {
+        let texto = "; cabecera\n\n  (Type @a rule) ; comentario final\n(HasLab @a \"x\")\n";
+        let programa = parsear_programa(texto).unwrap();
+        assert_eq!(programa.len(), 2);
+        assert_eq!((programa[0].linea, programa[0].columna), (3, 3));
+        assert_eq!((programa[1].linea, programa[1].columna), (4, 1));
+        assert_eq!(programa[0].sentencia, parsear("(Type @a rule)").unwrap());
+        assert_eq!(programa[1].sentencia, parsear("(HasLab @a \"x\")").unwrap());
+    }
+
+    #[test]
+    fn programa_aisla_ligaduras_y_preserva_posicion_de_error_absoluta() {
+        let independientes =
+            parsear_programa("(forall ((x N)) (Parent x @a))\n(forall ((x N)) (Parent x @b))")
+                .unwrap();
+        assert_eq!(independientes.len(), 2);
+
+        let texto = "(forall ((x N)) (Parent x @a))\n  (forall ((x N)) (Parent x padre))";
+        let error = parsear_programa(texto).unwrap_err();
+        assert_eq!(
+            error.motivo,
+            MotivoAutoria::SimboloLibre("padre".to_string())
+        );
+        assert_eq!((error.linea, error.columna), (2, 29));
+        assert!(matches!(
+            parsear("(forall ((x N)) (Parent x @a)) (Type @a rule)"),
+            Err(ErrorAutoria {
+                motivo: MotivoAutoria::TextoSobrante,
+                ..
+            })
+        ));
     }
 
     fn oracion(texto: &str) -> Formula {
