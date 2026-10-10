@@ -1,7 +1,7 @@
 //! Carga de un bundle OKF a una `Estructura` (spec §3.3, §3.4, §4.2).
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use universo_core::{
     Anexo, BundlePath, Entrada, ErrorEstructura, Estructura, Etiqueta, Manifiesto, NodoId, Sorte,
@@ -151,6 +151,9 @@ pub fn parsear_bundle(
                     ErrorDocumento::FrontmatterSinCierre => (Regla::FrontmatterSinCierre, None),
                     ErrorDocumento::FrontmatterMalformado { linea } => {
                         (Regla::FrontmatterMalformado, Some(linea))
+                    }
+                    ErrorDocumento::ClaveEstructuralDuplicada { linea, .. } => {
+                        (Regla::ClaveEstructuralDuplicada, Some(linea))
                     }
                 };
                 errores.push(error(Some(&path_str), linea, regla, err.to_string()));
@@ -368,6 +371,7 @@ pub fn parsear_bundle(
                         ErrorEntrada::ValorEnLineaDeClave => Regla::ValorEnLineaDeClave,
                         ErrorEntrada::EtiquetaAusente => Regla::EtiquetaAusente,
                         ErrorEntrada::DestinoAusente => Regla::DestinoAusente,
+                        ErrorEntrada::CampoDuplicado(_) => Regla::ClaveEstructuralDuplicada,
                     };
                     errores.push(error(
                         Some(&path_str),
@@ -479,9 +483,67 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
     let mut errores: Vec<ErrorBundle> = Vec::new();
     let mut archivos: Vec<(String, String)> = Vec::new();
 
+    let metadatos_raiz = match std::fs::metadata(raiz) {
+        Ok(metadatos) => metadatos,
+        Err(err) => {
+            return Err(vec![error(
+                None,
+                None,
+                Regla::Io,
+                format!("no se puede acceder a la raíz del bundle: {err}"),
+            )]);
+        }
+    };
+    if !metadatos_raiz.is_dir() {
+        return Err(vec![error(
+            None,
+            None,
+            Regla::Io,
+            "la raíz del bundle no es un directorio",
+        )]);
+    }
+    let raiz_canonica = match std::fs::canonicalize(raiz) {
+        Ok(raiz) => raiz,
+        Err(err) => {
+            return Err(vec![error(
+                None,
+                None,
+                Regla::Io,
+                format!("no se puede resolver la raíz del bundle: {err}"),
+            )]);
+        }
+    };
+
     for directorio in &manifiesto.layout.directorios {
-        let base = raiz.join(directorio);
-        if !base.is_dir() {
+        if !directorio_layout_seguro(directorio) {
+            errores.push(error(
+                Some(directorio),
+                None,
+                Regla::Io,
+                "el directorio declarado debe ser una ruta relativa segura dentro de la raíz",
+            ));
+            continue;
+        }
+        let base = raiz_canonica.join(directorio);
+        let metadatos = match std::fs::metadata(&base) {
+            Ok(metadatos) => metadatos,
+            Err(err) => {
+                errores.push(error(
+                    Some(directorio),
+                    None,
+                    Regla::Io,
+                    format!("no se puede acceder al directorio declarado: {err}"),
+                ));
+                continue;
+            }
+        };
+        if !metadatos.is_dir() {
+            errores.push(error(
+                Some(directorio),
+                None,
+                Regla::Io,
+                "la ruta declarada no es un directorio",
+            ));
             continue;
         }
         let base_canonica = match std::fs::canonicalize(&base) {
@@ -491,13 +553,23 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
                 continue;
             }
         };
+        if !base_canonica.starts_with(&raiz_canonica) {
+            errores.push(error(
+                Some(directorio),
+                None,
+                Regla::Io,
+                "el directorio declarado resuelve fuera de la raíz del bundle",
+            ));
+            continue;
+        }
         let mut encontrados: Vec<std::path::PathBuf> = Vec::new();
         let mut camino: Vec<PathBuf> = Vec::new();
         let mut procesados: HashSet<PathBuf> = HashSet::new();
         let recorrido = Recorrido {
-            raiz,
+            raiz: &raiz_canonica,
             base_declarada: directorio,
             base_canonica: &base_canonica,
+            raiz_canonica: &raiz_canonica,
         };
         recorrer(
             &recorrido,
@@ -509,11 +581,7 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
         );
         encontrados.sort();
         for ruta in encontrados {
-            let relativa = ruta
-                .strip_prefix(raiz)
-                .unwrap_or(&ruta)
-                .to_string_lossy()
-                .replace('\\', "/");
+            let relativa = relativa_a_raiz(&raiz_canonica, &ruta);
             if manifiesto
                 .layout
                 .ignorados
@@ -522,7 +590,32 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
             {
                 continue;
             }
-            match std::fs::read(&ruta) {
+            let ruta_canonica = match std::fs::canonicalize(&ruta) {
+                Ok(ruta_canonica) => ruta_canonica,
+                Err(err) => {
+                    errores.push(error(
+                        Some(&relativa),
+                        None,
+                        Regla::Io,
+                        format!("no se puede resolver el archivo dentro del bundle: {err}"),
+                    ));
+                    continue;
+                }
+            };
+            if !ruta_canonica.starts_with(&raiz_canonica)
+                || !ruta_canonica.starts_with(&base_canonica)
+            {
+                errores.push(error(
+                    Some(&relativa),
+                    None,
+                    Regla::Io,
+                    format!(
+                        "enlace fuera del directorio declarado: {relativa} resuelve fuera de {directorio}"
+                    ),
+                ));
+                continue;
+            }
+            match std::fs::read(&ruta_canonica) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(texto) => archivos.push((relativa, texto)),
                     Err(_) => {
@@ -568,6 +661,27 @@ fn relativa_a_raiz(raiz: &Path, dir: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// Acepta solo segmentos normales portables y separados con `/`. Se evita
+/// interpretar rutas absolutas, prefijos de unidad, `.` y `..` de manera
+/// distinta entre plataformas.
+fn directorio_layout_seguro(directorio: &str) -> bool {
+    if directorio.is_empty() || directorio.contains('\\') || directorio.contains(':') {
+        return false;
+    }
+    if directorio
+        .split('/')
+        .any(|segmento| segmento.is_empty() || matches!(segmento, "." | ".."))
+    {
+        return false;
+    }
+
+    let path = Path::new(directorio);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|componente| matches!(componente, Component::Normal(_)))
+}
+
 /// Contexto inmutable del recorrido de un directorio declarado del layout.
 struct Recorrido<'a> {
     /// Raíz del bundle (para reportar paths relativos).
@@ -577,6 +691,8 @@ struct Recorrido<'a> {
     /// Forma canónica de ese directorio: todo lo recorrido debe quedar
     /// dentro.
     base_canonica: &'a Path,
+    /// Raíz canónica del bundle: ningún enlace puede cruzar esta frontera.
+    raiz_canonica: &'a Path,
 }
 
 /// Recorre `dir` recursivamente. Sigue symlinks (vía `Path::is_dir`), así
@@ -623,7 +739,7 @@ fn recorrer(
         }
     };
 
-    if !canonico.starts_with(ctx.base_canonica) {
+    if !canonico.starts_with(ctx.raiz_canonica) || !canonico.starts_with(ctx.base_canonica) {
         errores.push(error(
             Some(&relativa_a_raiz(ctx.raiz, dir)),
             None,
@@ -662,7 +778,7 @@ fn recorrer(
         Ok(e) => e,
         Err(err) => {
             errores.push(error(
-                Some(&dir.to_string_lossy()),
+                Some(&relativa_a_raiz(ctx.raiz, dir)),
                 None,
                 Regla::Io,
                 err.to_string(),
@@ -969,12 +1085,85 @@ mod tests {
         assert_eq!(u.len_nodos(), 2);
         assert!(u.por_path(&BundlePath::nuevo("n/sub/z").unwrap()).is_some());
         let vacio = tempfile::tempdir().unwrap();
+        std::fs::create_dir(vacio.path().join("n")).unwrap();
         let u = cargar_bundle(vacio.path(), manifiesto_minimo()).unwrap();
         assert_eq!(
             u.len_nodos(),
             0,
-            "directorios ausentes se saltan en silencio"
+            "un directorio declarado existente puede estar vacío"
         );
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_raiz_inexistente() {
+        let dir = tempfile::tempdir().unwrap();
+        let raiz = dir.path().join("no-existe");
+
+        let errores = cargar_bundle(&raiz, manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path, None);
+        assert!(errores[0].detalle.contains("raíz del bundle"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_raiz_que_no_es_directorio() {
+        let dir = tempfile::tempdir().unwrap();
+        let raiz = dir.path().join("archivo");
+        std::fs::write(&raiz, "no es un bundle").unwrap();
+
+        let errores = cargar_bundle(&raiz, manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path, None);
+        assert!(errores[0].detalle.contains("no es un directorio"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_directorio_de_layout_ausente() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path.as_deref(), Some("n"));
+        assert!(errores[0].detalle.contains("directorio declarado"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_ruta_de_layout_que_no_es_directorio() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("n"), "no es un directorio").unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path.as_deref(), Some("n"));
+        assert!(errores[0].detalle.contains("no es un directorio"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_directorios_de_layout_no_relativos_o_con_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let absoluta = dir.path().join("n").to_string_lossy().into_owned();
+
+        for directorio in [absoluta, "../fuera".into(), "n/../fuera".into()] {
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = vec![directorio.clone()];
+
+            let errores = cargar_bundle(dir.path(), manifiesto).unwrap_err();
+
+            let error_ruta = errores
+                .iter()
+                .find(|error| error.regla == Regla::Io)
+                .unwrap_or_else(|| panic!("{directorio}: {errores:?}"));
+            assert_eq!(error_ruta.path.as_deref(), Some(directorio.as_str()));
+            assert!(error_ruta.detalle.contains("ruta relativa segura"));
+        }
     }
 
     #[test]

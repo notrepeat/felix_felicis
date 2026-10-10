@@ -12,6 +12,8 @@
 //! primera entrada) es `FrontmatterMalformado` donde Python la ignoraba
 //! (spec §4.1).
 
+use std::collections::HashSet;
+
 use crate::errores::{ErrorDocumento, ErrorEntrada};
 
 /// Documento OKF parseado: entradas del frontmatter en orden y cuerpo
@@ -268,6 +270,11 @@ impl EntradaCruda {
 
         let mut resultado = Vec::with_capacity(mapeos.len());
         for mapeo in mapeos {
+            for campo in [destino, etiqueta] {
+                if mapeo.iter().filter(|(clave, _)| clave == campo).count() > 1 {
+                    return Err(ErrorEntrada::CampoDuplicado(campo.to_string()));
+                }
+            }
             let buscar = |clave: &str| -> Option<&str> {
                 mapeo
                     .iter()
@@ -313,6 +320,7 @@ pub fn parsear_documento(texto: &str) -> Result<Documento, ErrorDocumento> {
     let cuerpo = texto[inicio_cuerpo..].to_string();
 
     let mut entradas = Vec::new();
+    let mut claves_estructurales = HashSet::new();
     let mut i = 0;
     while i < fm_lineas.len() {
         let (linea_num, texto_linea) = &fm_lineas[i];
@@ -324,6 +332,13 @@ pub fn parsear_documento(texto: &str) -> Result<Documento, ErrorDocumento> {
         let valor = texto_linea[idx_colon + 1..].trim().to_string();
         let mut crudo_lineas = vec![texto_linea.clone()];
         let linea_entrada = *linea_num;
+        if matches!(clave.as_str(), "type" | "title") && !claves_estructurales.insert(clave.clone())
+        {
+            return Err(ErrorDocumento::ClaveEstructuralDuplicada {
+                clave,
+                linea: linea_entrada,
+            });
+        }
         i += 1;
         while i < fm_lineas.len() {
             let (num_j, linea_j) = &fm_lineas[i];
@@ -535,6 +550,46 @@ mod tests {
         assert_eq!(
             parsear_documento("---\ntype: a\n").unwrap_err(),
             ErrorDocumento::FrontmatterSinCierre
+        );
+    }
+
+    #[test]
+    fn rechaza_claves_estructurales_duplicadas_con_diagnostico() {
+        for (clave, texto, linea) in [
+            ("type", "---\ntype: a\ntitle: X\ntype: b\n---\n", 4),
+            ("title", "---\ntype: a\ntitle: X\ntitle: Y\n---\n", 4),
+        ] {
+            assert_eq!(
+                parsear_documento(texto).unwrap_err(),
+                ErrorDocumento::ClaveEstructuralDuplicada {
+                    clave: clave.to_string(),
+                    linea,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn rechaza_destino_y_etiqueta_duplicados_en_mapping() {
+        let destino_duplicado = parsear_documento(
+            "---\ntension:\n  - with: [[x]]\n    with: [[y]]\n    scope: S\n---\n",
+        )
+        .unwrap();
+        assert_eq!(
+            destino_duplicado.entradas[0]
+                .lista_mappings("with", "scope")
+                .unwrap_err(),
+            ErrorEntrada::CampoDuplicado("with".into())
+        );
+
+        let etiqueta_duplicada =
+            parsear_documento("---\ntension:\n  - with: [[x]]\n    scope: S\n    scope: T\n---\n")
+                .unwrap();
+        assert_eq!(
+            etiqueta_duplicada.entradas[0]
+                .lista_mappings("with", "scope")
+                .unwrap_err(),
+            ErrorEntrada::CampoDuplicado("scope".into())
         );
     }
 }

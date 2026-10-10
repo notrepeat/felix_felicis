@@ -16,6 +16,9 @@ pub enum ErrorDocumento {
     /// (`clave:`) ni una continuación de la entrada en curso (vacía,
     /// indentada o iniciada con `-`).
     FrontmatterMalformado { linea: usize },
+    /// Una clave estructural singular (`type` o `title`) aparece más de una
+    /// vez en el frontmatter.
+    ClaveEstructuralDuplicada { clave: String, linea: usize },
 }
 
 impl fmt::Display for ErrorDocumento {
@@ -34,6 +37,10 @@ impl fmt::Display for ErrorDocumento {
                 f,
                 "frontmatter malformado en la línea {linea}: se esperaba el inicio de una entrada \
                  (`clave:`) o la continuación de la entrada en curso"
+            ),
+            ErrorDocumento::ClaveEstructuralDuplicada { clave, linea } => write!(
+                f,
+                "clave estructural duplicada `{clave}` en la línea {linea}"
             ),
         }
     }
@@ -58,6 +65,8 @@ pub enum ErrorEntrada {
     EtiquetaAusente,
     /// El mapping no trae el campo de destino.
     DestinoAusente,
+    /// El mapping repite un campo singular, como destino o etiqueta.
+    CampoDuplicado(String),
 }
 
 impl fmt::Display for ErrorEntrada {
@@ -84,6 +93,9 @@ impl fmt::Display for ErrorEntrada {
             ErrorEntrada::DestinoAusente => {
                 write!(f, "falta el campo de destino")
             }
+            ErrorEntrada::CampoDuplicado(clave) => {
+                write!(f, "campo de mapping duplicado: `{clave}`")
+            }
         }
     }
 }
@@ -98,6 +110,9 @@ pub enum Regla {
     /// Una línea del frontmatter no es ni el inicio de una entrada ni una
     /// continuación de la entrada en curso.
     FrontmatterMalformado,
+    /// Una clave estructural singular o un campo singular de mapping se
+    /// repite y no puede resolverse de forma inequívoca.
+    ClaveEstructuralDuplicada,
     /// El frontmatter no tiene línea de cierre `---`.
     FrontmatterSinCierre,
     /// Falta la entrada `type` del frontmatter.
@@ -141,6 +156,7 @@ impl std::fmt::Display for Regla {
         let nombre = match self {
             Regla::FrontmatterAusente => "FrontmatterAusente",
             Regla::FrontmatterMalformado => "FrontmatterMalformado",
+            Regla::ClaveEstructuralDuplicada => "ClaveEstructuralDuplicada",
             Regla::FrontmatterSinCierre => "FrontmatterSinCierre",
             Regla::TypeAusente => "TypeAusente",
             Regla::TypeDesconocido => "TypeDesconocido",
