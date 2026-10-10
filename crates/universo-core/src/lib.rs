@@ -4,6 +4,7 @@
 pub mod anexo;
 pub mod atomos;
 pub mod estructura;
+pub mod evaluador;
 pub mod formula;
 pub mod ids;
 pub mod invariante;
@@ -14,6 +15,9 @@ pub mod tipos;
 pub use anexo::{Anexo, Entrada};
 pub use atomos::{Atomo, ErrorAtomo, IdArista, Sujeto};
 pub use estructura::{Arista, ErrorEstructura, Estructura, Nodo};
+pub use evaluador::{
+    ErrorEvaluacion, PRESUPUESTO_EVALUACION_POR_DEFECTO, evaluar, evaluar_con_presupuesto,
+};
 pub use formula::{
     DominioEsquema, Formula, Sentencia, SorteVar, SujetoTermino, TerminoArista, TerminoConstExt,
     TerminoEtiqueta, TerminoNodo, TerminoSorte, Var,
