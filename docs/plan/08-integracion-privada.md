@@ -19,6 +19,15 @@ público, conservando una frontera física y verificable entre producto y datos.
 4. Informe agregado sin títulos, citas, paths ni identificadores de sesión.
 5. Procedimiento para reportar un bug mediante una reproducción ficticia.
 
+## Revisión de licencia
+
+La separación entre repositorios y datos no determina por sí sola las
+obligaciones de licencia del código de integración. Antes de enlazar o
+combinar el motor AGPL con el adaptador privado, o de exponer una versión
+modificada por red, documenta una revisión del modelo concreto de uso y
+distribución. No supongas que el repositorio de integración puede permanecer
+privado solo porque el bundle y sus fixtures no se publican.
+
 ## Criterios de aceptación
 
 - [ ] El motor público no conoce la ubicación del repositorio privado.

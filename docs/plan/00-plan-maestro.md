@@ -9,11 +9,11 @@ resultado de un agente en escenarios reproducibles.
 
 | Campo | Valor |
 |---|---|
-| Estado | pendiente |
+| Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 0/9 fases completas |
-| Última actualización | 2026-09-21 |
+| Progreso | 0/9 fases completas; fase 01 en curso (6/7 criterios de aceptación verificados, 86%) |
+| Última actualización | 2026-10-10 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
@@ -48,7 +48,7 @@ flowchart LR
 
 | # | Fase | Estado | Depende de | Resultado observable |
 |---|---|---|---|---|
-| [01](01-contrato-de-verdad.md) | Contrato de verdad | pendiente | — | `validate` y `check` significan cosas distintas y verificables. |
+| [01](01-contrato-de-verdad.md) | Contrato de verdad | en curso | — | `validate` valida estructura; la interfaz de `check` queda fijada y su rechazo semántico se acepta junto con la fase 02. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | pendiente | 01 | Toda fórmula admitida tiene semántica ejecutable. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | pendiente | 02 | Los rechazos traen testigos; las ausencias, prescripciones. |
 | [04](04-operacion-transaccional.md) | Operación transaccional | pendiente | 03 | Ningún rechazo modifica el estado vigente. |
@@ -72,7 +72,7 @@ flowchart LR
 
 ## Checklist maestro
 
-- [ ] 01 — El contrato público distingue estructura de semántica.
+- [ ] 01 — El contrato estructural de `validate` está implementado y verificado; la fase sigue abierta hasta cerrar con 02 la aceptación semántica de `check`.
 - [ ] 02 — El evaluador de referencia ejecuta todo el AST soportado.
 - [ ] 03 — Los veredictos explican contradicciones y vacíos.
 - [ ] 04 — Las propuestas son transaccionales.
@@ -84,5 +84,7 @@ flowchart LR
 
 ## Próximo paso
 
-Abrir la fase [01 — Contrato de verdad](01-contrato-de-verdad.md), fijar los
-nombres de comandos, sus códigos de salida y la forma estable del resultado.
+Iniciar la fase [02 — Evaluador de referencia](02-evaluador-de-referencia.md).
+La aceptación semántica de `check` se verifica allí y cierra conjuntamente
+con la fase 01; la validación estructural de `validate`, su JSON v1 y sus
+pruebas ya están verificadas.

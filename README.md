@@ -1,9 +1,10 @@
 # felix_felicis
 
 `felix_felicis` contiene el motor experimental Universo para representar
-conocimiento como un multigrafo tipado,
-comprobar invariantes de primer orden sobre estructuras finitas y serializar
-el resultado como bundles OKF.
+conocimiento como un multigrafo tipado, definir invariantes de primer orden y
+serializar estructuras como bundles OKF. El evaluador de invariantes sigue en
+construcción: la CLI actual carga y comprueba la estructura, pero todavía no
+ofrece una garantía semántica.
 
 El repositorio contiene solamente el motor, el fundamento matemático y datos
 ficticios. Las bases de conocimiento de sus usuarios viven fuera de este
@@ -16,7 +17,7 @@ Implementado:
 - modelo tipado en memoria;
 - parser y serializador de bundles OKF;
 - AST y parser de invariantes FO bisortidos;
-- CLI de inspección (`atomos` y `verificar`);
+- CLI de inspección estructural (`atomos` y `validate`; `verificar` es alias compatible);
 - pruebas unitarias, de propiedades, compile-fail y round-trip.
 
 En construcción:
@@ -28,9 +29,13 @@ En construcción:
 ## Probar el ejemplo
 
 ```powershell
-cargo run -p universo-cli -- verificar examples/knowledge-base --manifiesto manifests/example.toml
+cargo run -p universo-cli -- validate examples/knowledge-base --manifiesto manifests/example.toml
 cargo run -p universo-cli -- atomos examples/knowledge-base --manifiesto manifests/example.toml
 ```
+
+`validate` comprueba estructura, no invariantes. `verificar` conserva el mismo
+comportamiento como alias; el evaluador semántico y el comando `check` siguen
+en construcción.
 
 ## Desarrollo
 
@@ -56,10 +61,11 @@ No copies una base de conocimiento real dentro de este repositorio. Consulta
 
 GNU Affero General Public License v3.0 o posterior
 (`AGPL-3.0-or-later`). Puedes usar, estudiar, modificar y redistribuir el
-software. Si distribuyes una versión modificada —o permites que usuarios
-interactúen con ella a través de una red— debes ofrecerles el código fuente
-correspondiente bajo la misma licencia. Consulta [`LICENSE`](LICENSE).
+software. Al distribuir copias debes cumplir sus condiciones. Si modificas
+el programa y tu versión permite interacción remota por red, la sección 13
+exige ofrecer a quienes interactúan una vía gratuita para obtener el código
+fuente correspondiente. Consulta [`LICENSE`](LICENSE) y la
+[sección 13 de la AGPLv3](https://www.gnu.org/licenses/agpl-3.0.html).
 
-La licencia obliga a compartir el código con los usuarios de la versión
-modificada; no obliga a enviar un pull request a este repositorio. Aun así,
-las contribuciones upstream son bienvenidas.
+Esto no exige enviar un pull request a este repositorio. Aun así, las
+contribuciones upstream son bienvenidas.

@@ -24,12 +24,13 @@ TEXT_SUFFIXES = {
     ".yaml",
 }
 
-# Las cadenas se parten para que el guard no se denuncie a sí mismo.
+# El marcador se parte para que el guard no se denuncie a sí mismo.
 FORBIDDEN = {
-    "identidad personal": "human:" + "romeo",
     "propietario del remoto privado": "not" + "repeat",
-    "ruta local del propietario": "C:\\Users\\" + "RomeoP",
 }
+LOCAL_USER_PATH = re.compile(
+    r"(?i)(?:\b[a-z]:[\\/](?:users|documents and settings)[\\/][^\\/\s]+|/(?:home|users)/[^/\s]+)"
+)
 UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
 
 
@@ -57,6 +58,8 @@ def main() -> int:
         for label, marker in FORBIDDEN.items():
             if marker.casefold() in content.casefold():
                 findings.append(f"{path.relative_to(ROOT)}: {label}")
+        if LOCAL_USER_PATH.search(content):
+            findings.append(f"{path.relative_to(ROOT)}: ruta local con segmento de usuario")
         if UUID.search(content):
             findings.append(f"{path.relative_to(ROOT)}: UUID potencialmente procedente de una sesión")
 
