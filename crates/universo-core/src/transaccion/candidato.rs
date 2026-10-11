@@ -218,12 +218,33 @@ fn aplicar_altas(
         .keys()
         .filter_map(|handle| identidad_arista(estructura, *handle))
         .collect();
+    let mut etiquetas_vigentes = HashMap::<IdArista, Etiqueta>::new();
+    for (handle, arista) in estructura.aristas() {
+        let identidad =
+            identidad_arista(estructura, handle).ok_or(ErrorCandidato::SnapshotInconsistente)?;
+        etiquetas_vigentes.insert(identidad, arista.etiqueta.clone());
+    }
     if etiquetas.keys().any(|identidad| {
-        !identidades_edge.contains(identidad) && !identidades_reemplazo.contains(identidad)
+        !identidades_edge.contains(identidad)
+            && !identidades_reemplazo.contains(identidad)
+            && !etiquetas_vigentes.contains_key(identidad)
     }) {
         return Err(ErrorCandidato::AddConflict {
             clase: ClaseOperacion::HasLab,
         });
+    }
+
+    for (identidad, etiquetas_nuevas) in &etiquetas {
+        if identidades_edge.contains(identidad) || identidades_reemplazo.contains(identidad) {
+            continue;
+        }
+        if etiquetas_nuevas.len() != 1
+            || etiquetas_vigentes.get(identidad) != etiquetas_nuevas.first().copied()
+        {
+            return Err(ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::HasLab,
+            });
+        }
     }
 
     for ((origen_path, sorte, destino_path), mut altas) in grupos {

@@ -1,6 +1,6 @@
 use universo_core::{
-    Atomo, BundlePath, ClaseConflicto, Delta, ErrorDelta, Estructura, Etiqueta, IdArista, Sorte,
-    Sujeto, detectar_conflictos_funcionales,
+    Atomo, BundlePath, ClaseConflicto, ClaseOperacion, Delta, ErrorCandidato, ErrorDelta,
+    Estructura, Etiqueta, IdArista, Sorte, Sujeto, detectar_conflictos_funcionales,
 };
 
 fn p(texto: &str) -> BundlePath {
@@ -31,7 +31,7 @@ fn cantidad(resultado: &universo_core::ResultadoConflictos, clase: ClaseConflict
 }
 
 #[test]
-fn detecta_type_haslab_de_nodo_y_arista_y_parent_por_clave_funcional() {
+fn detecta_type_haslab_de_nodo_y_parent_por_clave_funcional() {
     let mut snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
     nodo(
         &mut snapshot,
@@ -44,7 +44,7 @@ fn detecta_type_haslab_de_nodo_y_arista_y_parent_por_clave_funcional() {
     let a = snapshot.por_path(&p("secreto/PRIVATE_PATH_A")).unwrap();
     let b = snapshot.por_path(&p("secreto/PRIVATE_PATH_B")).unwrap();
     snapshot.asignar_padre(a, b).unwrap();
-    let edge = snapshot
+    snapshot
         .insertar_arista(
             a,
             b,
@@ -52,26 +52,16 @@ fn detecta_type_haslab_de_nodo_y_arista_y_parent_por_clave_funcional() {
             Etiqueta::nuevo("PRIVATE_EDGE_LABEL_OLD"),
         )
         .unwrap();
-    let edge_id = id_arista(
-        "secreto/PRIVATE_PATH_A",
-        "secreto/PRIVATE_PATH_B",
-        "rel",
-        snapshot.arista(edge).unwrap().ordinal,
-    );
     let antes = snapshot.atomos();
     let delta = Delta::nuevo(
         [
             Atomo::Type {
                 sujeto: p("secreto/PRIVATE_PATH_A"),
-                sorte: Sorte::nuevo("PRIVATE_TYPE_NEW"),
+                sorte: Sorte::nuevo("b"),
             },
             Atomo::HasLab {
                 sujeto: Sujeto::Nodo(p("secreto/PRIVATE_PATH_A")),
                 etiqueta: Etiqueta::nuevo("PRIVATE_NODE_LABEL_NEW"),
-            },
-            Atomo::HasLab {
-                sujeto: Sujeto::Arista(edge_id),
-                etiqueta: Etiqueta::nuevo("PRIVATE_EDGE_LABEL_NEW"),
             },
             Atomo::Parent {
                 hijo: p("secreto/PRIVATE_PATH_A"),
@@ -82,12 +72,12 @@ fn detecta_type_haslab_de_nodo_y_arista_y_parent_por_clave_funcional() {
     )
     .unwrap();
 
-    let resultado = detectar_conflictos_funcionales(&snapshot, &delta);
+    let resultado = detectar_conflictos_funcionales(&snapshot, &delta).unwrap();
 
     assert_eq!(cantidad(&resultado, ClaseConflicto::Type), 1);
-    assert_eq!(cantidad(&resultado, ClaseConflicto::HasLab), 2);
+    assert_eq!(cantidad(&resultado, ClaseConflicto::HasLab), 1);
     assert_eq!(cantidad(&resultado, ClaseConflicto::Parent), 1);
-    assert_eq!(resultado.total_conflictos(), 4);
+    assert_eq!(resultado.total_conflictos(), 3);
     assert_eq!(
         resultado
             .diagnosticos()
@@ -103,9 +93,7 @@ fn detecta_type_haslab_de_nodo_y_arista_y_parent_por_clave_funcional() {
     let salida = format!("{resultado} {resultado:?}");
     for canario in [
         "PRIVATE_PATH",
-        "PRIVATE_TYPE",
         "PRIVATE_NODE_LABEL",
-        "PRIVATE_EDGE_LABEL",
         "PRIVATE_ATOMO",
         "PRIVATE_DELTA",
     ] {
@@ -178,7 +166,7 @@ fn reemplazos_exactos_remove_add_no_son_conflictos() {
     .unwrap();
     let antes = snapshot.atomos();
 
-    let resultado = detectar_conflictos_funcionales(&snapshot, &delta);
+    let resultado = detectar_conflictos_funcionales(&snapshot, &delta).unwrap();
 
     assert!(!resultado.hay_conflictos());
     assert_eq!(snapshot.atomos(), antes);
@@ -241,7 +229,7 @@ fn altas_identicas_son_no_op_y_etiquetas_iguales_en_sujetos_distintos_se_permite
     )
     .unwrap();
 
-    let resultado = detectar_conflictos_funcionales(&snapshot, &delta);
+    let resultado = detectar_conflictos_funcionales(&snapshot, &delta).unwrap();
 
     assert!(!resultado.hay_conflictos());
     assert_eq!(resultado.total_conflictos(), 0);
@@ -251,15 +239,15 @@ fn altas_identicas_son_no_op_y_etiquetas_iguales_en_sujetos_distintos_se_permite
 fn diagnosticos_son_deterministas_y_ext_o_retiros_ausentes_no_son_conflictos() {
     let mut snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
     nodo(&mut snapshot, "n/a", "a", "label");
-    nodo(&mut snapshot, "n/b", "b", "label");
+    nodo(&mut snapshot, "n/b", "a", "label");
     let adds = vec![
         Atomo::Type {
             sujeto: p("n/a"),
-            sorte: Sorte::nuevo("other-type"),
+            sorte: Sorte::nuevo("b"),
         },
         Atomo::Type {
             sujeto: p("n/b"),
-            sorte: Sorte::nuevo("other-type"),
+            sorte: Sorte::nuevo("b"),
         },
         Atomo::Ext {
             predicado: "Nivel".into(),
@@ -275,8 +263,8 @@ fn diagnosticos_son_deterministas_y_ext_o_retiros_ausentes_no_son_conflictos() {
     let delta_a = Delta::nuevo(adds.clone(), []).unwrap();
     let delta_b = Delta::nuevo(adds.into_iter().rev(), []).unwrap();
 
-    let resultado_a = detectar_conflictos_funcionales(&snapshot, &delta_a);
-    let resultado_b = detectar_conflictos_funcionales(&snapshot, &delta_b);
+    let resultado_a = detectar_conflictos_funcionales(&snapshot, &delta_a).unwrap();
+    let resultado_b = detectar_conflictos_funcionales(&snapshot, &delta_b).unwrap();
 
     assert_eq!(resultado_a, resultado_b);
     assert_eq!(format!("{resultado_a:?}"), format!("{resultado_b:?}"));
@@ -287,16 +275,20 @@ fn diagnosticos_son_deterministas_y_ext_o_retiros_ausentes_no_son_conflictos() {
         [],
         [Atomo::Type {
             sujeto: p("n/no-existe"),
-            sorte: Sorte::nuevo("tipo"),
+            sorte: Sorte::nuevo("a"),
         }],
     )
     .unwrap();
-    assert!(!detectar_conflictos_funcionales(&snapshot, &retiro_ausente).hay_conflictos());
+    assert!(
+        !detectar_conflictos_funcionales(&snapshot, &retiro_ausente)
+            .unwrap()
+            .hay_conflictos()
+    );
 }
 
 #[test]
 fn incidencia_inconsistente_se_rechaza_antes_y_no_hay_conflicto_representable_en_v1() {
-    let snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
+    let mut snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
     let inconsistente = Atomo::Edge {
         id: id_arista(
             "secreto/PRIVATE_ID_ORIGIN",
@@ -320,6 +312,9 @@ fn incidencia_inconsistente_se_rechaza_antes_y_no_hay_conflicto_representable_en
         assert!(!salida_error.contains(canario));
     }
 
+    nodo(&mut snapshot, "n/origen", "a", "origen");
+    nodo(&mut snapshot, "n/otro-origen", "b", "otro-origen");
+    nodo(&mut snapshot, "n/destino", "a", "destino");
     let aristas_validas = Delta::nuevo(
         [
             Atomo::Edge {
@@ -334,9 +329,113 @@ fn incidencia_inconsistente_se_rechaza_antes_y_no_hay_conflicto_representable_en
                 destino: p("n/destino"),
                 sorte: Sorte::nuevo("rel"),
             },
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(id_arista("n/origen", "n/destino", "rel", 0)),
+                etiqueta: Etiqueta::nuevo("label-a"),
+            },
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(id_arista("n/otro-origen", "n/destino", "rel", 0)),
+                etiqueta: Etiqueta::nuevo("label-b"),
+            },
         ],
         [],
     )
     .unwrap();
-    assert!(!detectar_conflictos_funcionales(&snapshot, &aristas_validas).hay_conflictos());
+    assert!(
+        !detectar_conflictos_funcionales(&snapshot, &aristas_validas)
+            .unwrap()
+            .hay_conflictos()
+    );
+}
+
+#[test]
+fn etiqueta_de_arista_se_rebasa_por_handle_tras_compactar_ordinales() {
+    let mut snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
+    nodo(&mut snapshot, "n/origen", "a", "origen");
+    nodo(&mut snapshot, "n/destino", "b", "destino");
+    let origen = snapshot.por_path(&p("n/origen")).unwrap();
+    let destino = snapshot.por_path(&p("n/destino")).unwrap();
+    for etiqueta in ["edge-cero", "edge-uno", "edge-dos"] {
+        snapshot
+            .insertar_arista(
+                origen,
+                destino,
+                Sorte::nuevo("rel"),
+                Etiqueta::nuevo(etiqueta),
+            )
+            .unwrap();
+    }
+    let antes = snapshot.atomos();
+    let delta = Delta::nuevo(
+        [Atomo::HasLab {
+            sujeto: Sujeto::Arista(id_arista("n/origen", "n/destino", "rel", 1)),
+            etiqueta: Etiqueta::nuevo("edge-dos-nueva"),
+        }],
+        [
+            Atomo::Edge {
+                id: id_arista("n/origen", "n/destino", "rel", 0),
+                origen: p("n/origen"),
+                destino: p("n/destino"),
+                sorte: Sorte::nuevo("rel"),
+            },
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(id_arista("n/origen", "n/destino", "rel", 2)),
+                etiqueta: Etiqueta::nuevo("edge-dos"),
+            },
+        ],
+    )
+    .unwrap();
+
+    let resultado = detectar_conflictos_funcionales(&snapshot, &delta).unwrap();
+
+    assert!(!resultado.hay_conflictos());
+    assert_eq!(snapshot.atomos(), antes);
+}
+
+#[test]
+fn etiqueta_conflictiva_de_arista_devuelve_error_redactado() {
+    let mut snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
+    nodo(&mut snapshot, "secreto/PRIVATE_ORIGIN", "a", "origen");
+    nodo(&mut snapshot, "secreto/PRIVATE_DEST", "b", "destino");
+    let origen = snapshot.por_path(&p("secreto/PRIVATE_ORIGIN")).unwrap();
+    let destino = snapshot.por_path(&p("secreto/PRIVATE_DEST")).unwrap();
+    snapshot
+        .insertar_arista(
+            origen,
+            destino,
+            Sorte::nuevo("rel"),
+            Etiqueta::nuevo("PRIVATE_OLD_LABEL"),
+        )
+        .unwrap();
+    let delta = Delta::nuevo(
+        [Atomo::HasLab {
+            sujeto: Sujeto::Arista(id_arista(
+                "secreto/PRIVATE_ORIGIN",
+                "secreto/PRIVATE_DEST",
+                "rel",
+                0,
+            )),
+            etiqueta: Etiqueta::nuevo("PRIVATE_NEW_LABEL"),
+        }],
+        [],
+    )
+    .unwrap();
+
+    let error = detectar_conflictos_funcionales(&snapshot, &delta).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab
+        }
+    ));
+    let salida = format!("{error} {error:?}");
+    for canario in [
+        "PRIVATE_ORIGIN",
+        "PRIVATE_DEST",
+        "PRIVATE_OLD_LABEL",
+        "PRIVATE_NEW_LABEL",
+    ] {
+        assert!(!salida.contains(canario), "se filtró {canario}: {salida}");
+    }
 }

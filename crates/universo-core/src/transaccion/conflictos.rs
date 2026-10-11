@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{Atomo, BundlePath, Delta, Estructura, Etiqueta, Sorte, Sujeto};
 
+use super::candidato::{ErrorCandidato, construir_candidato};
+
 /// Clase de conflicto funcional detectada sobre el estado lógico final.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClaseConflicto {
@@ -85,11 +87,13 @@ impl std::fmt::Display for ResultadoConflictos {
 
 /// Detecta conflictos funcionales sobre `snapshot - remove + add`.
 ///
-/// Los retiros solo sustraen el átomo exacto cuando está presente; las altas
-/// idénticas a hechos vigentes no duplican valores. La función no construye ni
-/// aplica un candidato, no evalúa invariantes, y no clasifica errores de retiro
-/// o de soporte de operaciones. `Ext` se omite porque su validación pertenece
-/// al procesamiento de candidato.
+/// Las operaciones `Edge` y `HasLab` de arista se normalizan con el constructor
+/// de candidato para conservar la identidad por handle tras compactar
+/// ordinales. Sus errores técnicos se devuelven redactados en vez de ocultarse.
+/// `Type`, `Parent` y `HasLab` de nodo se superponen sobre el snapshot usando
+/// retiros exactos y altas; las altas idénticas no duplican valores. No evalúa
+/// invariantes ni aplica/publica el candidato. `Ext` se omite porque su
+/// validación pertenece al procesamiento de candidato de otra etapa.
 ///
 /// No se informa conflicto de incidencia en v1: `IdArista` ya contiene
 /// origen, tipo, destino y ordinal, y `Atomo`/`Delta::nuevo` rechazan una
@@ -97,16 +101,36 @@ impl std::fmt::Display for ResultadoConflictos {
 pub fn detectar_conflictos_funcionales(
     snapshot: &Estructura,
     delta: &Delta,
-) -> ResultadoConflictos {
+) -> Result<ResultadoConflictos, ErrorCandidato> {
     let mut tipos = HashMap::<BundlePath, HashSet<Sorte>>::new();
     let mut etiquetas = HashMap::<Sujeto, HashSet<Etiqueta>>::new();
     let mut padres = HashMap::<BundlePath, HashSet<BundlePath>>::new();
 
-    let finales = snapshot
+    let delta_aristas = delta.filtrar(es_operacion_arista);
+    let candidato = construir_candidato(snapshot, &delta_aristas)?;
+    let finales = candidato
+        .estructura()
         .atomos()
         .into_iter()
-        .filter(|atomo| delta.retirar().binary_search(atomo).is_err())
-        .chain(delta.agregar().iter().cloned());
+        .filter(|atomo| {
+            if matches!(
+                atomo,
+                Atomo::HasLab {
+                    sujeto: Sujeto::Arista(_),
+                    ..
+                }
+            ) {
+                return true;
+            }
+            es_hecho_funcional_de_nodo(atomo) && delta.retirar().binary_search(atomo).is_err()
+        })
+        .chain(
+            delta
+                .agregar()
+                .iter()
+                .filter(|atomo| es_hecho_funcional_de_nodo(atomo))
+                .cloned(),
+        );
 
     for atomo in finales {
         match atomo {
@@ -123,7 +147,30 @@ pub fn detectar_conflictos_funcionales(
     agregar_diagnostico(&mut diagnosticos, ClaseConflicto::Type, &tipos);
     agregar_diagnostico(&mut diagnosticos, ClaseConflicto::HasLab, &etiquetas);
     agregar_diagnostico(&mut diagnosticos, ClaseConflicto::Parent, &padres);
-    ResultadoConflictos { diagnosticos }
+    Ok(ResultadoConflictos { diagnosticos })
+}
+
+fn es_operacion_arista(atomo: &Atomo) -> bool {
+    matches!(
+        atomo,
+        Atomo::Edge { .. }
+            | Atomo::HasLab {
+                sujeto: Sujeto::Arista(_),
+                ..
+            }
+    )
+}
+
+fn es_hecho_funcional_de_nodo(atomo: &Atomo) -> bool {
+    matches!(
+        atomo,
+        Atomo::Type { .. }
+            | Atomo::Parent { .. }
+            | Atomo::HasLab {
+                sujeto: Sujeto::Nodo(_),
+                ..
+            }
+    )
 }
 
 fn agregar_diagnostico<K, V>(
