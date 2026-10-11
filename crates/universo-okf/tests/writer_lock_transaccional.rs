@@ -261,13 +261,45 @@ fn junction_root_se_rechaza_sin_seguirla() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("target");
     let alias = temp.path().join("bundle");
+    let canary = target.join("canary.bin");
+    let contenido_canary = b"junction target must remain untouched";
     std::fs::create_dir(&target).unwrap();
+    std::fs::write(&canary, contenido_canary).unwrap();
     crear_junction(&alias, &target);
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    let metadata = std::fs::symlink_metadata(&alias).unwrap();
+    assert_ne!(
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT,
+        0,
+        "fixture root must be a reparse point"
+    );
+    assert_eq!(
+        std::fs::read(alias.join("canary.bin")).unwrap(),
+        contenido_canary,
+        "fixture junction must resolve to its external target"
+    );
 
     let error = LockEscritura::adquirir(&alias).unwrap_err();
     assert_eq!(error, ErrorLockEscritura::Io);
     assert_eq!(error.to_string(), "writer_lock_io");
     assert!(!format!("{error:?}").contains(temp.path().to_string_lossy().as_ref()));
+    assert_eq!(std::fs::read(&canary).unwrap(), contenido_canary);
+    let expected_stage = temp.path().join(".bundle.felix.stage.junction-root-test");
+    assert!(
+        !expected_stage.exists(),
+        "rejecting the junction root must not create a stage sibling"
+    );
+    assert!(
+        std::fs::read_dir(temp.path())
+            .unwrap()
+            .all(|entrada| !entrada
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".bundle.felix.stage.")),
+        "rechazar el root junction no debe crear un sibling stage"
+    );
 }
 
 #[cfg(windows)]
