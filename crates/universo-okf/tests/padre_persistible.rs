@@ -452,6 +452,74 @@ fn candidato_roundtrip_conserva_parent_explicito_e_inferido_en_hermanos() {
 }
 
 #[test]
+#[ignore = "harness de runtime; ejecutar en release con --ignored --nocapture"]
+fn runtime_parent_mide_serializacion_de_1000_cambios() {
+    use std::time::Instant;
+
+    const CAMBIOS: usize = 1_000;
+
+    let mut archivos = vec![
+        ("n/old.md".into(), doc("Padre anterior", "")),
+        ("n/new.md".into(), doc("Padre final", "")),
+    ];
+    for indice in 0..CAMBIOS {
+        archivos.push((
+            format!("n/child-{indice:04}.md"),
+            doc(&format!("Hijo {indice}"), "parent: n/old\n"),
+        ));
+    }
+    let manifiesto = manifiesto_con_parent_key();
+    let snapshot = parsear_bundle(&archivos, manifiesto.clone()).unwrap();
+
+    let mut altas = Vec::with_capacity(CAMBIOS);
+    let mut retiros = Vec::with_capacity(CAMBIOS);
+    let mut overrides = Vec::with_capacity(CAMBIOS);
+    for indice in 0..CAMBIOS {
+        let hijo = format!("n/child-{indice:04}");
+        altas.push(parent(&hijo, "n/new"));
+        retiros.push(parent(&hijo, "n/old"));
+        overrides.push(ParentOverride::new(
+            BundlePath::nuevo(&hijo).unwrap(),
+            Some(BundlePath::nuevo("n/new").unwrap()),
+        ));
+    }
+    let delta = Delta::nuevo(altas, retiros).unwrap();
+    let candidato = construir(&snapshot, &delta);
+
+    // El intervalo mide solo la serialización; setup, replay y recarga quedan fuera.
+    let inicio = Instant::now();
+    let documentos = serializar_candidato(&snapshot, &candidato, &overrides).unwrap();
+    let duracion = inicio.elapsed();
+    let replay = serializar_candidato(&snapshot, &candidato, &overrides).unwrap();
+    assert_eq!(documentos, replay, "la salida debe ser determinista");
+
+    let recargado = parsear_bundle(&archivos_de(&documentos), manifiesto).unwrap();
+    let padre_final = BundlePath::nuevo("n/new").unwrap();
+    let padre_anterior = BundlePath::nuevo("n/old").unwrap();
+    let con_padre_final = recargado
+        .atomos()
+        .iter()
+        .filter(|atomo| matches!(atomo, Atomo::Parent { padre, .. } if padre == &padre_final))
+        .count();
+    let con_padre_anterior = recargado
+        .atomos()
+        .iter()
+        .filter(|atomo| matches!(atomo, Atomo::Parent { padre, .. } if padre == &padre_anterior))
+        .count();
+    assert_eq!(con_padre_final, CAMBIOS, "round-trip de todos los cambios");
+    assert_eq!(
+        con_padre_anterior, 0,
+        "ningún Parent anterior debe persistir"
+    );
+    assert_eq!(documentos.len(), CAMBIOS + 2);
+
+    println!(
+        "Runtime: 1.000 cambios, {:.3} ms (serializar_candidato; release; métrica orientativa, sin SLA)",
+        duracion.as_secs_f64() * 1_000.0,
+    );
+}
+
+#[test]
 fn candidato_parent_reemplaza_y_quita_varios_hijos_con_roundtrip_determinista() {
     let archivos = vec![
         ("n/Old.md".into(), doc("Viejo", "")),
