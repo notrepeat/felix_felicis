@@ -19,6 +19,25 @@ dominio = ["bajo", "alto"]
 directorios = ["n"]
 "#;
 
+const MANIFIESTO_PRIVACIDAD: &str = r#"
+version = "check-explain-privacy-test/1"
+[nodos]
+sortes = ["a", "Retirado", "Patrón"]
+[[aristas]]
+clave = "rel"
+simetrica = true
+[[predicados]]
+nombre = "Nivel"
+clave = "nivel"
+dominio = ["bajo", "alto"]
+[[predicados]]
+nombre = "PRIVATE_ATTRIBUTE_PREDICATE_CANARY"
+clave = "private_attribute"
+dominio = ["PRIVATE_ATTRIBUTE_VALUE_CANARY"]
+[layout]
+directorios = ["n"]
+"#;
+
 const PATH_CANARY: &str = "private-node";
 const LABEL_CANARY: &str = "LABEL_SECRET_7f31";
 const VARIABLE_CANARY: &str = "PRIVATE_VARIABLE_CANARY";
@@ -31,6 +50,32 @@ fn bundle_valido() -> (tempfile::TempDir, PathBuf) {
         .escribir();
     let manifest = root.path().join("manifest.toml");
     std::fs::write(&manifest, MANIFIESTO).unwrap();
+    (root, manifest)
+}
+
+fn bundle_con_dos_labels() -> (tempfile::TempDir, PathBuf) {
+    let root = Constructor::nuevo()
+        .archivo("n/a.md", "---\ntype: a\ntitle: SCHEMA_LABEL_A\n---\n")
+        .archivo("n/b.md", "---\ntype: a\ntitle: SCHEMA_LABEL_B\n---\n")
+        .escribir();
+    let manifest = root.path().join("manifest.toml");
+    std::fs::write(&manifest, MANIFIESTO).unwrap();
+    (root, manifest)
+}
+
+fn bundle_con_canarios() -> (tempfile::TempDir, PathBuf) {
+    let root = Constructor::nuevo()
+        .archivo(
+            "n/private/index.md",
+            "---\ntype: a\ntitle: PRIVATE_ROOT_LABEL_CANARY\nprivate_attribute: PRIVATE_ATTRIBUTE_VALUE_CANARY\n---\n",
+        )
+        .archivo(
+            "n/private/leaf.md",
+            "---\ntype: a\ntitle: PRIVATE_LABEL_CANARY\nprivate_attribute: PRIVATE_ATTRIBUTE_VALUE_CANARY\nrel: [\"[[index]]\"]\n---\n",
+        )
+        .escribir();
+    let manifest = root.path().join("manifest.toml");
+    std::fs::write(&manifest, MANIFIESTO_PRIVACIDAD).unwrap();
     (root, manifest)
 }
 
@@ -137,6 +182,33 @@ fn assert_counterexample_tree(node: &Value) {
             }
         }
         other => panic!("regla fuera de la allowlist: {other}"),
+    }
+}
+
+fn contiene_predicado(node: &Value, predicate: &str) -> bool {
+    match node["rule"].as_str() {
+        Some("atom") => node["predicate"] == predicate,
+        Some("not") => contiene_predicado(&node["inner"], predicate),
+        Some("and" | "or") => node["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|child| contiene_predicado(child, predicate)),
+        Some("implies") => {
+            contiene_predicado(&node["antecedent"], predicate)
+                || (!node["consequent"].is_null()
+                    && contiene_predicado(&node["consequent"], predicate))
+        }
+        Some("forall" | "exists") => node["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|instance| {
+                [&instance["guard"], &instance["body"]]
+                    .into_iter()
+                    .any(|child| !child.is_null() && contiene_predicado(child, predicate))
+            }),
+        _ => false,
     }
 }
 
@@ -505,6 +577,152 @@ fn decide_y_enumerate_son_deterministas_y_redactan_canarios() {
             assert!(!text.contains(canary), "salida filtró {canary:?}: {text}");
         }
     }
+}
+
+#[test]
+fn enumerate_rechazado_combina_core_y_gap_y_redacta_canarios_de_edge_ext_y_fuente() {
+    let (root, manifest) = bundle_con_canarios();
+    const FORMULA_SOURCE_CANARY: &str = "(exists ((PRIVATE_VARIABLE_CANARY N)) (Parent PRIVATE_VARIABLE_CANARY PRIVATE_VARIABLE_CANARY))";
+    let invariants = archivo_invariantes(
+        root.path(),
+        &format!(
+            "; PRIVATE_INVARIANT_SOURCE_CANARY\n\
+             ; (forall ((PRIVATE_FORMULA_TEXT_CANARY N)) (Type PRIVATE_FORMULA_TEXT_CANARY a))\n\
+             (forall ((x N)) :guarda (and (Type x a) (HasLab x \"PRIVATE_LABEL_CANARY\"))\
+               (not (and (Parent x @n/private/index))))\n\
+             {FORMULA_SOURCE_CANARY}\n\
+             (forall ((e E)) (not (Edge e @n/private/leaf @n/private/index rel)))\n\
+             (forall ((z N)) (not (PRIVATE_ATTRIBUTE_PREDICATE_CANARY z PRIVATE_ATTRIBUTE_VALUE_CANARY)))\n"
+        ),
+    );
+
+    let json_output = check_explain(root.path(), &manifest, &invariants, "enumerate");
+    let json = resultado_explicativo(&json_output, 1);
+    assert_eq!(json["status"], "reject");
+    assert_eq!(json["summary"]["sources"], 4);
+    assert_eq!(json["summary"]["failed"], 4);
+    let objects = json["explanations"]["objects"]
+        .as_array()
+        .expect("enumerate debe entregar objetos");
+    assert_eq!(objects.len(), 4);
+    assert!(objects.iter().all(|object| object.get("repair").is_none()));
+
+    let objects_with_core: Vec<_> = objects
+        .iter()
+        .filter(|object| !object["presence_core"].is_null())
+        .collect();
+    assert_eq!(objects_with_core.len(), 1);
+    let presence = objects_with_core[0];
+    assert_eq!(presence["source_index"], 0);
+    assert!(presence["presence_core"]["atom_count"].as_u64().unwrap() > 0);
+    assert!(presence["gap"].is_null());
+    let objects_with_gap: Vec<_> = objects
+        .iter()
+        .filter(|object| !object["gap"].is_null())
+        .collect();
+    assert_eq!(objects_with_gap.len(), 1);
+    let gap = objects_with_gap[0];
+    assert_eq!(gap["source_index"], 1);
+    assert_eq!(gap["gap"]["class"], "existence_without_witness");
+    assert!(gap["presence_core"].is_null());
+    let edge = objects
+        .iter()
+        .find(|object| object["source_index"] == 2)
+        .expect("la fórmula de Edge es la fuente 2");
+    assert!(edge["presence_core"].is_null());
+    assert!(edge["gap"].is_null());
+    assert!(contiene_predicado(&edge["counterexample"], "edge"));
+    let extension = objects
+        .iter()
+        .find(|object| object["source_index"] == 3)
+        .expect("la fórmula de Ext es la fuente 3");
+    assert!(extension["presence_core"].is_null());
+    assert!(extension["gap"].is_null());
+    assert!(contiene_predicado(
+        &extension["counterexample"],
+        "extension"
+    ));
+
+    let text = String::from_utf8(json_output.stdout).unwrap();
+    let canaries = [
+        "n/private/leaf→n/private/index#rel#0",
+        "n/private/leaf",
+        "n/private/index",
+        "PRIVATE_ROOT_LABEL_CANARY",
+        "PRIVATE_LABEL_CANARY",
+        "PRIVATE_ATTRIBUTE_PREDICATE_CANARY",
+        "PRIVATE_ATTRIBUTE_VALUE_CANARY",
+        "PRIVATE_VARIABLE_CANARY",
+        "PRIVATE_FORMULA_TEXT_CANARY",
+        "PRIVATE_INVARIANT_SOURCE_CANARY",
+        FORMULA_SOURCE_CANARY,
+    ];
+    for canary in canaries {
+        assert!(!text.contains(canary), "JSON opt-in filtró {canary:?}");
+    }
+
+    let text_output = check_explain_text(root.path(), &manifest, &invariants, "enumerate");
+    assert_eq!(text_output.status.code(), Some(1));
+    assert!(text_output.stderr.is_empty());
+    let text = String::from_utf8(text_output.stdout).unwrap();
+    assert!(text.starts_with("REJECT: 4 fuentes, 4 instancias, 4 evaluadas, 4 fallidas\n"));
+    assert!(text.contains("EXPLANATIONS mode=enumerate"));
+    for canary in canaries {
+        assert!(!text.contains(canary), "texto opt-in filtró {canary:?}");
+    }
+}
+
+#[test]
+fn esquema_expandido_vincula_ordinals_de_fuente_e_instancia_deterministicamente() {
+    let (root, manifest) = bundle_con_dos_labels();
+    let invariants = archivo_invariantes(
+        root.path(),
+        "(Type @n/a a)\n(esquema ((l Lab)) (forall ((x N)) (not (HasLab x l))))\n",
+    );
+
+    let decide_a = check_explain(root.path(), &manifest, &invariants, "decide");
+    let decide_b = check_explain(root.path(), &manifest, &invariants, "decide");
+    assert_eq!(decide_a.stdout, decide_b.stdout);
+    let decide = resultado_explicativo(&decide_a, 1);
+    assert_eq!(decide["status"], "reject");
+    assert_eq!(decide["summary"]["sources"], 2);
+    assert_eq!(decide["summary"]["instances"], 3);
+    assert_eq!(decide["summary"]["failed"], 2);
+    let decision = &decide["explanations"]["objects"];
+    assert_eq!(decision.as_array().unwrap().len(), 1);
+    assert_eq!(decision[0]["source_index"], 1);
+    assert_eq!(decision[0]["instance_index"], 0);
+    assert_eq!(decision[0]["line"], 2);
+    assert_eq!(decision[0]["column"], 1);
+
+    let enumerate_a = check_explain(root.path(), &manifest, &invariants, "enumerate");
+    let enumerate_b = check_explain(root.path(), &manifest, &invariants, "enumerate");
+    assert_eq!(enumerate_a.stdout, enumerate_b.stdout);
+    let enumerate = resultado_explicativo(&enumerate_a, 1);
+    assert_eq!(enumerate["status"], "reject");
+    let objects = enumerate["explanations"]["objects"]
+        .as_array()
+        .expect("enumerate debe mostrar ambas instancias");
+    assert_eq!(objects.len(), 2);
+    assert_eq!(
+        objects
+            .iter()
+            .map(|object| object["source_index"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![1, 1]
+    );
+    assert_eq!(
+        objects
+            .iter()
+            .map(|object| object["instance_index"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert!(
+        objects
+            .iter()
+            .all(|object| object["line"] == 2 && object["column"] == 1)
+    );
 }
 
 #[test]

@@ -54,6 +54,14 @@ enum Comando {
     },
 }
 
+struct SolicitudCheck<'a> {
+    raiz: &'a Path,
+    manifiesto: &'a Path,
+    invariantes: &'a Path,
+    formato: Formato,
+    explicacion: Option<ModoExplicacion>,
+}
+
 /// Interpreta los argumentos de línea de comandos (sin el nombre del
 /// binario). Acepta `--manifiesto <valor>` y `--manifiesto=<valor>`.
 fn parsear_args(args: &[String]) -> Result<Comando, String> {
@@ -1021,6 +1029,7 @@ fn objeto_explicacion_a_json(objeto: &ObjetoExplicacion) -> Value {
 fn explicaciones_medidas_a_json(
     medido: &ResultadoExplicacionesMedido,
     modo: ModoExplicacion,
+    limite: u64,
 ) -> Value {
     let (objects, truncated, reason) = match &medido.resultado {
         ResultadoExplicaciones::Decision(objeto) => (
@@ -1054,7 +1063,7 @@ fn explicaciones_medidas_a_json(
         "truncated": truncated,
         "reason": reason,
         "budget": {
-            "limit": PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+            "limit": limite,
             "consumed": medido.unidades_consumidas,
             "semantic_units": medido.unidades_semanticas,
             "evidence_units": medido.unidades_evidencia,
@@ -1087,14 +1096,10 @@ fn explicar_check(
     expansion: &universo_core::invariante::expansion::ResultadoExpansionFuente,
     estructura: &universo_core::Estructura,
     modo: ModoExplicacion,
+    limite: u64,
 ) -> Result<Value, ErrorVeredicto> {
-    explicar_con_presupuesto_y_consumos(
-        expansion,
-        estructura,
-        modo,
-        PRESUPUESTO_EXPLICACION_POR_DEFECTO,
-    )
-    .map(|medido| explicaciones_medidas_a_json(&medido, modo))
+    explicar_con_presupuesto_y_consumos(expansion, estructura, modo, limite)
+        .map(|medido| explicaciones_medidas_a_json(&medido, modo, limite))
 }
 
 /// Ejecuta el pipeline cerrado de `check`. Ningún error de carga, autoría o
@@ -1108,6 +1113,36 @@ fn ejecutar_check(
     salida: &mut impl Write,
     error: &mut impl Write,
 ) -> i32 {
+    ejecutar_check_con_presupuesto_explicacion(
+        SolicitudCheck {
+            raiz,
+            manifiesto,
+            invariantes,
+            formato,
+            explicacion,
+        },
+        PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+        salida,
+        error,
+    )
+}
+
+/// Inyección privada del límite para regresores deterministas de agotamiento.
+/// La CLI usa siempre `PRESUPUESTO_EXPLICACION_POR_DEFECTO` mediante
+/// [`ejecutar_check`]; no existe una opción pública para cambiarlo.
+fn ejecutar_check_con_presupuesto_explicacion(
+    solicitud: SolicitudCheck<'_>,
+    limite_explicacion: u64,
+    salida: &mut impl Write,
+    error: &mut impl Write,
+) -> i32 {
+    let SolicitudCheck {
+        raiz,
+        manifiesto,
+        invariantes,
+        formato,
+        explicacion,
+    } = solicitud;
     let manifiesto_cargado = match cargar_manifiesto(manifiesto) {
         Ok(manifiesto) => manifiesto,
         Err(error_manifiesto) => {
@@ -1313,7 +1348,7 @@ fn ejecutar_check(
                 error,
             );
         };
-        match explicar_check(expansion, &estructura, modo) {
+        match explicar_check(expansion, &estructura, modo, limite_explicacion) {
             Ok(explanations) => escribir_resultado_check_explicado(
                 ResultadoCheckExplicado {
                     status,
@@ -1423,4 +1458,121 @@ fn main() {
         std::process::exit(1);
     }
     std::process::exit(codigo);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use universo_testkit::bundle_sintetico::Constructor;
+
+    const MANIFIESTO_PRUEBA: &str = r#"
+version = "cli-budget-test/1"
+[nodos]
+sortes = ["a", "Retirado", "Patrón"]
+[[aristas]]
+clave = "rel"
+simetrica = true
+[[predicados]]
+nombre = "Nivel"
+clave = "nivel"
+dominio = ["bajo", "alto"]
+[layout]
+directorios = ["n"]
+"#;
+
+    #[test]
+    fn agotamiento_presupuestario_no_parcial_json_v2_para_ambos_modos() {
+        let root = Constructor::nuevo()
+            .archivo(
+                "n/private-node.md",
+                "---\ntype: a\ntitle: PRIVATE_LABEL_CANARY\n---\n",
+            )
+            .escribir();
+        let manifiesto = root.path().join("manifest.toml");
+        fs::write(&manifiesto, MANIFIESTO_PRUEBA).unwrap();
+        let invariantes = root.path().join("invariants.smt2");
+        fs::write(
+            &invariantes,
+            "(forall ((x N)) (not (Type x a)))\n(forall ((x N)) (not (Type x a)))\n",
+        )
+        .unwrap();
+
+        for modo in [
+            ModoExplicacion::Decidir,
+            ModoExplicacion::enumerar_por_defecto(),
+        ] {
+            let mut salida = Vec::new();
+            let mut error = Vec::new();
+            let codigo = ejecutar_check_con_presupuesto_explicacion(
+                SolicitudCheck {
+                    raiz: root.path(),
+                    manifiesto: &manifiesto,
+                    invariantes: &invariantes,
+                    formato: Formato::Json,
+                    explicacion: Some(modo),
+                },
+                0,
+                &mut salida,
+                &mut error,
+            );
+
+            assert_eq!(codigo, 1);
+            assert!(error.is_empty());
+            assert!(salida.ends_with(b"\n"));
+            let json: Value = serde_json::from_slice(&salida).unwrap();
+            assert_eq!(
+                json,
+                json!({
+                    "schema_version": 2,
+                    "command": "check",
+                    "status": "error",
+                    "summary": null,
+                    "errors": [{
+                        "kind": "resource",
+                        "code": "explanation_budget_exceeded",
+                        "message": "se agotó el presupuesto de explicación",
+                        "path": null,
+                        "line": null,
+                        "column": null,
+                        "location": null,
+                    }],
+                    "explanations": null,
+                })
+            );
+            assert!(!String::from_utf8_lossy(&salida).contains("PRIVATE_LABEL_CANARY"));
+
+            let limite_inyectado = 4_096;
+            let mut salida_con_limite = Vec::new();
+            let mut error_con_limite = Vec::new();
+            let codigo_con_limite = ejecutar_check_con_presupuesto_explicacion(
+                SolicitudCheck {
+                    raiz: root.path(),
+                    manifiesto: &manifiesto,
+                    invariantes: &invariantes,
+                    formato: Formato::Json,
+                    explicacion: Some(modo),
+                },
+                limite_inyectado,
+                &mut salida_con_limite,
+                &mut error_con_limite,
+            );
+            assert_eq!(codigo_con_limite, 1, "el check lógico sigue siendo reject");
+            assert!(error_con_limite.is_empty());
+            let json_con_limite: Value = serde_json::from_slice(&salida_con_limite).unwrap();
+            assert_eq!(json_con_limite["status"], "reject");
+            assert_eq!(json_con_limite["errors"], json!([]));
+            assert!(!json_con_limite["summary"].is_null());
+            assert!(!json_con_limite["explanations"].is_null());
+            assert_eq!(
+                json_con_limite["explanations"]["budget"]["limit"],
+                limite_inyectado
+            );
+            assert!(
+                json_con_limite["explanations"]["budget"]["consumed"]
+                    .as_u64()
+                    .unwrap()
+                    <= limite_inyectado
+            );
+        }
+    }
 }
