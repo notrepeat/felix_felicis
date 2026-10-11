@@ -132,8 +132,9 @@ fn haslab_nodo_no_admite_retiro_aislado_ni_retiro_inexacto() {
     let error = construir_candidato(&snapshot, &alta_ausente).unwrap_err();
     assert!(matches!(
         error,
-        ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab
+        ErrorCandidato::InvalidOperation {
+            clase: ClaseOperacion::HasLab,
+            ..
         }
     ));
     assert_redactado(&error, &["PRIV_NODE", "label"]);
@@ -153,8 +154,9 @@ fn haslab_nodo_rechaza_cr_y_lf_redactado_sin_mutar_entradas() {
 
         assert!(matches!(
             &error,
-            ErrorCandidato::AddConflict {
-                clase: ClaseOperacion::HasLab
+            ErrorCandidato::InvalidOperation {
+                clase: ClaseOperacion::HasLab,
+                ..
             }
         ));
         assert_redactado(&error, &[etiqueta, "PRIV_LF", "PRIV_CR"]);
@@ -292,57 +294,44 @@ fn parent_rechaza_conflictos_estructurales_redactados() {
         (
             Delta::nuevo([parent("n/raiz", "n/raiz")], []).unwrap(),
             "n/raiz",
-            true,
+            "self_parent",
         ),
         (
             Delta::nuevo([parent("n/raiz", "n/hijo")], []).unwrap(),
             "n/hijo",
-            true,
+            "parent_cycle",
         ),
         (
             Delta::nuevo([parent("n/PRIV_CHILD", "n/raiz")], []).unwrap(),
             "PRIV_CHILD",
-            true,
+            "child_reference_not_found",
         ),
         (
             Delta::nuevo([parent("n/otro", "n/PRIV_PARENT")], []).unwrap(),
             "PRIV_PARENT",
-            true,
+            "parent_reference_not_found",
         ),
         (
             Delta::nuevo([parent("n/otro", "n/raiz"), parent("n/otro", "n/hijo")], []).unwrap(),
             "n/otro",
-            true,
+            "add_conflict",
         ),
         (
             Delta::nuevo([], [parent("n/PRIV_CHILD", "n/raiz")]).unwrap(),
             "PRIV_CHILD",
-            false,
+            "remove_not_found",
         ),
         (
             Delta::nuevo([], [parent("n/otro", "n/PRIV_PARENT")]).unwrap(),
             "PRIV_PARENT",
-            false,
+            "remove_not_found",
         ),
     ];
 
-    for (delta, canario, add_conflict) in casos {
+    for (delta, canario, codigo) in casos {
         let error = construir_candidato(&snapshot, &delta).unwrap_err();
-        if add_conflict {
-            assert!(matches!(
-                &error,
-                ErrorCandidato::AddConflict {
-                    clase: ClaseOperacion::Parent
-                }
-            ));
-        } else {
-            assert!(matches!(
-                &error,
-                ErrorCandidato::RemoveNotFound {
-                    clase: ClaseOperacion::Parent
-                }
-            ));
-        }
+        assert_eq!(error.codigo(), codigo);
+        assert_eq!(error.clase(), Some(ClaseOperacion::Parent));
         assert_redactado(&error, &[canario]);
         assert_eq!(snapshot.atomos(), antes);
     }

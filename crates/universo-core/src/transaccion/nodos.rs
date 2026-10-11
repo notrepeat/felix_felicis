@@ -24,6 +24,7 @@ struct Fallos {
     retirar_haslab: bool,
     agregar_parent: bool,
     retirar_parent: bool,
+    invalidez_tecnica: Option<ErrorCandidato>,
 }
 
 #[derive(Default)]
@@ -53,10 +54,23 @@ pub(super) fn preparar(
                         if es_retiro {
                             fallos.retirar_haslab = true;
                         } else {
-                            fallos.agregar_haslab = true;
+                            fallos.invalidez_tecnica.get_or_insert(
+                                ErrorCandidato::InvalidOperation {
+                                    clase: ClaseOperacion::HasLab,
+                                    codigo: "subject_not_found",
+                                },
+                            );
                         }
                         continue;
                     };
+                    if !es_retiro && etiqueta.como_str().contains(['\n', '\r']) {
+                        fallos
+                            .invalidez_tecnica
+                            .get_or_insert(ErrorCandidato::InvalidOperation {
+                                clase: ClaseOperacion::HasLab,
+                                codigo: "label_contains_line_break",
+                            });
+                    }
                     let solicitud = etiquetas.entry(path.clone()).or_default();
                     solicitud.nodo = Some(nodo);
                     if es_retiro {
@@ -70,7 +84,12 @@ pub(super) fn preparar(
                         if es_retiro {
                             fallos.retirar_parent = true;
                         } else {
-                            fallos.agregar_parent = true;
+                            fallos.invalidez_tecnica.get_or_insert(
+                                ErrorCandidato::InvalidOperation {
+                                    clase: ClaseOperacion::Parent,
+                                    codigo: "child_reference_not_found",
+                                },
+                            );
                         }
                         continue;
                     };
@@ -78,7 +97,12 @@ pub(super) fn preparar(
                         if es_retiro {
                             fallos.retirar_parent = true;
                         } else {
-                            fallos.agregar_parent = true;
+                            fallos.invalidez_tecnica.get_or_insert(
+                                ErrorCandidato::InvalidOperation {
+                                    clase: ClaseOperacion::Parent,
+                                    codigo: "parent_reference_not_found",
+                                },
+                            );
                         }
                         continue;
                     }
@@ -163,16 +187,26 @@ pub(super) fn preparar(
             if Some(padre_nuevo) == padre_actual {
                 continue;
             }
+            if padre_nuevo == &hijo_path {
+                fallos
+                    .invalidez_tecnica
+                    .get_or_insert(ErrorCandidato::InvalidOperation {
+                        clase: ClaseOperacion::Parent,
+                        codigo: "self_parent",
+                    });
+                continue;
+            }
             if padre_actual.is_some() && !retiro_exacto {
                 fallos.agregar_parent = true;
                 continue;
             }
-            if padre_nuevo == &hijo_path {
-                fallos.agregar_parent = true;
-                continue;
-            }
             let Some(nodo_padre) = snapshot.por_path(padre_nuevo) else {
-                fallos.agregar_parent = true;
+                fallos
+                    .invalidez_tecnica
+                    .get_or_insert(ErrorCandidato::InvalidOperation {
+                        clase: ClaseOperacion::Parent,
+                        codigo: "parent_reference_not_found",
+                    });
                 continue;
             };
             if padre_actual.is_some() {
@@ -187,7 +221,12 @@ pub(super) fn preparar(
     }
 
     if !cambios.agregar_padres.is_empty() && tiene_ciclo(&padres_finales) {
-        fallos.agregar_parent = true;
+        fallos
+            .invalidez_tecnica
+            .get_or_insert(ErrorCandidato::InvalidOperation {
+                clase: ClaseOperacion::Parent,
+                codigo: "parent_cycle",
+            });
     }
     devolver_fallo(fallos)?;
     Ok(cambios)
@@ -207,8 +246,9 @@ pub(super) fn aplicar(
     for &(hijo, padre) in &cambios.agregar_padres {
         candidato
             .asignar_padre(hijo, padre)
-            .map_err(|_| ErrorCandidato::AddConflict {
+            .map_err(|_| ErrorCandidato::InvalidOperation {
                 clase: ClaseOperacion::Parent,
+                codigo: "parent_assignment_failed",
             })?;
     }
     for (nodo, etiqueta) in &cambios.etiquetas {
@@ -220,16 +260,6 @@ pub(super) fn aplicar(
 }
 
 fn devolver_fallo(fallos: Fallos) -> Result<(), ErrorCandidato> {
-    if fallos.agregar_haslab {
-        return Err(ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab,
-        });
-    }
-    if fallos.agregar_parent {
-        return Err(ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::Parent,
-        });
-    }
     if fallos.retirar_haslab {
         return Err(ErrorCandidato::RemoveNotFound {
             clase: ClaseOperacion::HasLab,
@@ -237,6 +267,19 @@ fn devolver_fallo(fallos: Fallos) -> Result<(), ErrorCandidato> {
     }
     if fallos.retirar_parent {
         return Err(ErrorCandidato::RemoveNotFound {
+            clase: ClaseOperacion::Parent,
+        });
+    }
+    if let Some(error) = fallos.invalidez_tecnica {
+        return Err(error);
+    }
+    if fallos.agregar_haslab {
+        return Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab,
+        });
+    }
+    if fallos.agregar_parent {
+        return Err(ErrorCandidato::AddConflict {
             clase: ClaseOperacion::Parent,
         });
     }

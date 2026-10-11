@@ -42,6 +42,10 @@ pub enum ErrorCandidato {
     AddConflict {
         clase: ClaseOperacion,
     },
+    InvalidOperation {
+        clase: ClaseOperacion,
+        codigo: &'static str,
+    },
     SnapshotInconsistente,
 }
 
@@ -53,12 +57,37 @@ impl std::fmt::Display for ErrorCandidato {
             }
             Self::RemoveNotFound { clase } => write!(f, "remove_not_found: {clase}"),
             Self::AddConflict { clase } => write!(f, "add_conflict: {clase}"),
+            Self::InvalidOperation { clase, codigo } => write!(f, "{codigo}: {clase}"),
             Self::SnapshotInconsistente => f.write_str("candidate_error: snapshot_inconsistent"),
         }
     }
 }
 
 impl std::error::Error for ErrorCandidato {}
+
+impl ErrorCandidato {
+    /// Código estable del error sin valores del delta o del snapshot.
+    pub const fn codigo(&self) -> &'static str {
+        match self {
+            Self::UnsupportedOperation { .. } => "unsupported_operation",
+            Self::RemoveNotFound { .. } => "remove_not_found",
+            Self::AddConflict { .. } => "add_conflict",
+            Self::InvalidOperation { codigo, .. } => codigo,
+            Self::SnapshotInconsistente => "snapshot_inconsistent",
+        }
+    }
+
+    /// Clase de operación asociada, cuando el error se refiere a una sola.
+    pub const fn clase(&self) -> Option<ClaseOperacion> {
+        match self {
+            Self::UnsupportedOperation { clase, .. }
+            | Self::RemoveNotFound { clase }
+            | Self::AddConflict { clase }
+            | Self::InvalidOperation { clase, .. } => Some(*clase),
+            Self::SnapshotInconsistente => None,
+        }
+    }
+}
 
 /// Estructura aislada construida desde un snapshot sin modificarlo.
 pub struct Candidato {
