@@ -36,6 +36,10 @@ pub(crate) struct Snapshot {
     entradas: Vec<EntradaSnapshot>,
     manifiesto_raw: Arc<[u8]>,
     invariantes_raw: Arc<[u8]>,
+    version_motor: Arc<str>,
+    policy_id: Arc<str>,
+    ruta_manifiesto_root: Option<String>,
+    ruta_invariantes_root: Option<String>,
     estructura: Estructura,
     fuentes_invariantes: Vec<SentenciaFuente>,
 }
@@ -47,6 +51,15 @@ struct CapturaSnapshotRaw {
     entradas: Vec<EntradaSnapshot>,
     manifiesto_raw: Arc<[u8]>,
     invariantes_raw: Arc<[u8]>,
+    version_motor: Arc<str>,
+    policy_id: Arc<str>,
+    ruta_manifiesto_root: Option<String>,
+    ruta_invariantes_root: Option<String>,
+}
+
+struct FuenteRaw {
+    bytes: Arc<[u8]>,
+    ruta_root: Option<String>,
 }
 
 impl fmt::Debug for CapturaSnapshotRaw {
@@ -74,6 +87,22 @@ impl Snapshot {
     /// Bytes exactos del programa de invariantes capturado.
     pub(crate) fn invariantes_raw(&self) -> &[u8] {
         &self.invariantes_raw
+    }
+
+    pub(crate) fn version_motor(&self) -> &str {
+        &self.version_motor
+    }
+
+    pub(crate) fn policy_id(&self) -> &str {
+        &self.policy_id
+    }
+
+    pub(crate) fn ruta_manifiesto_root(&self) -> Option<&str> {
+        self.ruta_manifiesto_root.as_deref()
+    }
+
+    pub(crate) fn ruta_invariantes_root(&self) -> Option<&str> {
+        self.ruta_invariantes_root.as_deref()
     }
 
     /// Estructura del bundle parseada desde los bytes de `entradas`.
@@ -192,14 +221,14 @@ where
     let raiz = ruta_absoluta_lexica(raiz)?;
     let entradas = inventariar_root_con_lector(&raiz, &mut leer)?;
     let mut cache_externa = HashMap::new();
-    let manifiesto_raw = bytes_fuente(
+    let manifiesto = bytes_fuente(
         &raiz,
         ruta_manifiesto,
         &entradas,
         &mut cache_externa,
         &mut leer,
     )?;
-    let invariantes_raw = bytes_fuente(
+    let invariantes = bytes_fuente(
         &raiz,
         ruta_invariantes,
         &entradas,
@@ -210,16 +239,47 @@ where
     let token = calcular_token_snapshot(
         version_motor,
         policy_id,
-        &manifiesto_raw,
-        &invariantes_raw,
+        &manifiesto.bytes,
+        &invariantes.bytes,
         &entradas,
     )?;
 
     Ok(CapturaSnapshotRaw {
         token,
         entradas,
-        manifiesto_raw,
-        invariantes_raw,
+        manifiesto_raw: manifiesto.bytes,
+        invariantes_raw: invariantes.bytes,
+        version_motor: Arc::from(version_motor),
+        policy_id: Arc::from(policy_id),
+        ruta_manifiesto_root: manifiesto.ruta_root,
+        ruta_invariantes_root: invariantes.ruta_root,
+    })
+}
+
+/// Reinterpreta el inventario ya recapturado de un sibling con la misma
+/// configuración raw e identidad de motor/política que originaron `original`.
+/// No vuelve a leer root ni rutas de configuración. La recaptura del inventario
+/// sigue siendo path-based: esto no ancla el objeto filesystem ni elimina TOCTOU.
+pub(crate) fn materializar_desde_entradas(
+    original: &Snapshot,
+    entradas: Vec<EntradaSnapshot>,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let token = calcular_token_snapshot(
+        original.version_motor(),
+        original.policy_id(),
+        original.manifiesto_raw(),
+        original.invariantes_raw(),
+        &entradas,
+    )?;
+    materializar(CapturaSnapshotRaw {
+        token,
+        entradas,
+        manifiesto_raw: Arc::clone(&original.manifiesto_raw),
+        invariantes_raw: Arc::clone(&original.invariantes_raw),
+        version_motor: Arc::clone(&original.version_motor),
+        policy_id: Arc::clone(&original.policy_id),
+        ruta_manifiesto_root: original.ruta_manifiesto_root.clone(),
+        ruta_invariantes_root: original.ruta_invariantes_root.clone(),
     })
 }
 
@@ -232,6 +292,10 @@ fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
         entradas,
         manifiesto_raw,
         invariantes_raw,
+        version_motor,
+        policy_id,
+        ruta_manifiesto_root,
+        ruta_invariantes_root,
     } = raw;
     let manifiesto_texto =
         std::str::from_utf8(&manifiesto_raw).map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
@@ -254,6 +318,10 @@ fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
         entradas,
         manifiesto_raw,
         invariantes_raw,
+        version_motor,
+        policy_id,
+        ruta_manifiesto_root,
+        ruta_invariantes_root,
         estructura,
         fuentes_invariantes,
     })
@@ -265,7 +333,7 @@ fn bytes_fuente<F>(
     entradas: &[EntradaSnapshot],
     cache_externa: &mut HashMap<PathBuf, Arc<[u8]>>,
     leer: &mut F,
-) -> Result<Arc<[u8]>, ErrorSnapshot>
+) -> Result<FuenteRaw, ErrorSnapshot>
 where
     F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
 {
@@ -277,7 +345,10 @@ where
     if let Some(relativa) = relativa_lexica.as_deref()
         && let Some(bytes) = bytes_entrada(entradas, relativa)
     {
-        return Ok(bytes);
+        return Ok(FuenteRaw {
+            bytes,
+            ruta_root: Some(relativa.to_owned()),
+        });
     }
 
     #[cfg(windows)]
@@ -291,7 +362,11 @@ where
         let archivo_real = fs::canonicalize(&absoluta).map_err(|_| ErrorSnapshot::Io)?;
         if archivo_real.starts_with(&raiz_real) {
             let relativa = ruta_relativa(&raiz_real, &archivo_real)?;
-            return bytes_entrada(entradas, &relativa).ok_or(ErrorSnapshot::Io);
+            let bytes = bytes_entrada(entradas, &relativa).ok_or(ErrorSnapshot::Io)?;
+            return Ok(FuenteRaw {
+                bytes,
+                ruta_root: Some(relativa),
+            });
         }
     }
 
@@ -303,11 +378,17 @@ where
     #[cfg(not(windows))]
     validar_archivo_sin_enlaces(&absoluta)?;
     if let Some(bytes) = cache_externa.get(&absoluta) {
-        return Ok(Arc::clone(bytes));
+        return Ok(FuenteRaw {
+            bytes: Arc::clone(bytes),
+            ruta_root: None,
+        });
     }
     let bytes: Arc<[u8]> = Arc::from(leer(&absoluta)?);
     cache_externa.insert(absoluta, Arc::clone(&bytes));
-    Ok(bytes)
+    Ok(FuenteRaw {
+        bytes,
+        ruta_root: None,
+    })
 }
 
 fn ruta_relativa(raiz: &Path, absoluta: &Path) -> Result<String, ErrorSnapshot> {
@@ -415,6 +496,10 @@ ignorados = ["ignored.md"]
         assert_eq!(lecturas.len(), 3);
         assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
         assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.version_motor(), "engine-test/1");
+        assert_eq!(snapshot.policy_id(), "policy-test/1");
+        assert_eq!(snapshot.ruta_manifiesto_root(), Some("manifest.toml"));
+        assert_eq!(snapshot.ruta_invariantes_root(), Some("invariants.smt2"));
         assert_eq!(snapshot.estructura().nodos().count(), 1);
         assert!(snapshot.fuentes_invariantes().is_empty());
         assert!(!format!("{snapshot:?}").contains("snapshot-test"));

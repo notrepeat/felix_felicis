@@ -12,9 +12,10 @@ use universo_core::BundlePath;
 
 use crate::serializar::DocumentoCandidato;
 
-use super::captura::Snapshot;
+use super::captura::{Snapshot, materializar_desde_entradas};
+use super::inventario::{inventariar_root_con_lector, leer_archivo_regular};
 use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
-use super::snapshot::{EntradaSnapshot, TipoEntradaSnapshot};
+use super::snapshot::{EntradaSnapshot, ErrorSnapshot, TipoEntradaSnapshot};
 
 #[cfg(windows)]
 use std::cmp::Ordering;
@@ -31,6 +32,7 @@ pub(crate) enum ErrorPlanStaging {
     ColisionCaseInsensitive,
     ConflictoArchivoDirectorio,
     ColisionAuxiliarAdministrado,
+    ConfiguracionEnConflicto,
     SnapshotInconsistente,
 }
 
@@ -42,6 +44,7 @@ impl ErrorPlanStaging {
             Self::ColisionCaseInsensitive => "stage_case_insensitive_collision",
             Self::ConflictoArchivoDirectorio => "stage_file_directory_conflict",
             Self::ColisionAuxiliarAdministrado => "stage_managed_auxiliary_collision",
+            Self::ConfiguracionEnConflicto => "stage_configuration_collision",
             Self::SnapshotInconsistente => "stage_snapshot_inconsistent",
         }
     }
@@ -73,6 +76,8 @@ enum CodigoEscrituraStage {
     TipoNoAdmitido,
     ConflictoEntrada,
     ColisionesAgotadas,
+    Snapshot(ErrorSnapshot),
+    InventarioInconsistente,
 }
 
 #[allow(dead_code)] // Lo consume el flujo apply en la siguiente unidad.
@@ -86,6 +91,8 @@ impl CodigoEscrituraStage {
             Self::TipoNoAdmitido => "stage_entry_type_not_allowed",
             Self::ConflictoEntrada => "stage_create_conflict",
             Self::ColisionesAgotadas => "stage_name_collision",
+            Self::Snapshot(error) => error.codigo(),
+            Self::InventarioInconsistente => "stage_inventory_mismatch",
         }
     }
 }
@@ -95,12 +102,17 @@ impl CodigoEscrituraStage {
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
 pub(crate) struct StagePropio {
     ruta: PathBuf,
+    stage_id: String,
 }
 
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
 impl StagePropio {
     pub(crate) fn ruta(&self) -> &Path {
         &self.ruta
+    }
+
+    pub(crate) fn stage_id(&self) -> &str {
+        &self.stage_id
     }
 }
 
@@ -200,7 +212,9 @@ pub(crate) fn planificar_staging(
         .nodos()
         .map(|(_, nodo)| nodo.path.clone())
         .collect::<Vec<_>>();
-    planificar_staging_desde_inventario(snapshot.entradas(), &managed_old, documentos)
+    let plan = planificar_staging_desde_inventario(snapshot.entradas(), &managed_old, documentos)?;
+    validar_configuracion_en_plan(snapshot, &plan)?;
+    Ok(plan)
 }
 
 /// Materializa un plan desde los buffers raw en un sibling nuevo. El parent
@@ -209,9 +223,152 @@ pub(crate) fn planificar_staging(
 #[allow(dead_code)] // Se integra a apply en la siguiente unidad.
 pub(crate) fn materializar_staging(
     ubicacion: &UbicacionRaiz,
+    snapshot: &Snapshot,
     plan: &PlanStaging,
-) -> Result<StagePropio, ErrorEscrituraStage> {
-    materializar_staging_con(ubicacion, plan, generar_id_stage, escribir_archivo_nuevo)
+) -> Result<(StagePropio, Snapshot), ErrorEscrituraStage> {
+    materializar_staging_y_recargar_con(
+        ubicacion,
+        snapshot,
+        plan,
+        generar_id_stage,
+        escribir_archivo_nuevo,
+        leer_archivo_regular,
+    )
+}
+
+/// Escribe el sibling, recaptura su inventario real una sola vez y materializa
+/// desde esos mismos buffers junto con la configuración raw/versionada del
+/// snapshot original. Esta ruta sigue siendo path-based y no cierra TOCTOU:
+/// U7 deberá aportar operaciones relativas a handles antes de publicar.
+fn materializar_staging_y_recargar_con<G, W, R>(
+    ubicacion: &UbicacionRaiz,
+    snapshot: &Snapshot,
+    plan: &PlanStaging,
+    siguiente_id: G,
+    escribir_archivo: W,
+    leer_archivo: R,
+) -> Result<(StagePropio, Snapshot), ErrorEscrituraStage>
+where
+    G: FnMut() -> Result<String, CodigoEscrituraStage>,
+    W: FnMut(&Path, &[u8]) -> Result<(), CodigoEscrituraStage>,
+    R: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let stage = materializar_staging_con(ubicacion, plan, siguiente_id, escribir_archivo)?;
+    match recargar_staging_con_lector(snapshot, plan, &stage, leer_archivo) {
+        Ok(snapshot_recapturado) => Ok((stage, snapshot_recapturado)),
+        Err(codigo) => Err(ErrorEscrituraStage {
+            codigo,
+            stage_parcial: Some(stage),
+        }),
+    }
+}
+
+fn recargar_staging_con_lector<R>(
+    snapshot: &Snapshot,
+    plan: &PlanStaging,
+    stage: &StagePropio,
+    leer_archivo: R,
+) -> Result<Snapshot, CodigoEscrituraStage>
+where
+    R: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let recapturadas =
+        inventariar_root_con_lector(stage.ruta(), leer_archivo).map_err(mapear_error_snapshot)?;
+    let objetivo = inventario_objetivo(plan)?;
+    if !inventarios_iguales(&recapturadas, &objetivo) {
+        return Err(CodigoEscrituraStage::InventarioInconsistente);
+    }
+    materializar_desde_entradas(snapshot, recapturadas).map_err(mapear_error_snapshot)
+}
+
+fn mapear_error_snapshot(error: ErrorSnapshot) -> CodigoEscrituraStage {
+    match error {
+        ErrorSnapshot::EnlaceNoPermitido => CodigoEscrituraStage::EnlaceNoPermitido,
+        ErrorSnapshot::TipoNoAdmitido => CodigoEscrituraStage::TipoNoAdmitido,
+        otro => CodigoEscrituraStage::Snapshot(otro),
+    }
+}
+
+fn inventario_objetivo(plan: &PlanStaging) -> Result<Vec<EntradaSnapshot>, CodigoEscrituraStage> {
+    let mut entradas = Vec::with_capacity(plan.entradas_objetivo.len());
+    for entrada in &plan.entradas_objetivo {
+        let capturada = match entrada.fuente {
+            FuenteEntradaStage::Directorio => EntradaSnapshot::directorio(&entrada.ruta),
+            FuenteEntradaStage::Auxiliar(indice) => plan
+                .auxiliares
+                .get(indice)
+                .filter(|auxiliar| {
+                    auxiliar.tipo() == TipoEntradaSnapshot::Archivo
+                        && auxiliar.bytes().is_some()
+                        && auxiliar.ruta() == entrada.ruta
+                })
+                .cloned()
+                .ok_or(CodigoEscrituraStage::Plan(
+                    ErrorPlanStaging::SnapshotInconsistente,
+                ))?,
+            FuenteEntradaStage::DocumentoNuevo(indice) => {
+                let documento = plan
+                    .managed_new
+                    .get(indice)
+                    .ok_or(CodigoEscrituraStage::Plan(
+                        ErrorPlanStaging::SnapshotInconsistente,
+                    ))?;
+                if ruta_documento(documento.path()) != entrada.ruta {
+                    return Err(CodigoEscrituraStage::Plan(
+                        ErrorPlanStaging::SnapshotInconsistente,
+                    ));
+                }
+                EntradaSnapshot::archivo(&entrada.ruta, documento.contenido().as_bytes().to_vec())
+            }
+        };
+        entradas.push(capturada);
+    }
+    entradas.sort_by(|a, b| a.ruta().as_bytes().cmp(b.ruta().as_bytes()));
+    Ok(entradas)
+}
+
+fn inventarios_iguales(actual: &[EntradaSnapshot], esperado: &[EntradaSnapshot]) -> bool {
+    actual.len() == esperado.len()
+        && actual.iter().zip(esperado).all(|(actual, esperado)| {
+            actual.ruta() == esperado.ruta()
+                && actual.tipo() == esperado.tipo()
+                && actual.bytes() == esperado.bytes()
+        })
+}
+
+fn validar_configuracion_en_plan(
+    snapshot: &Snapshot,
+    plan: &PlanStaging,
+) -> Result<(), ErrorPlanStaging> {
+    for (ruta, bytes) in [
+        (snapshot.ruta_manifiesto_root(), snapshot.manifiesto_raw()),
+        (snapshot.ruta_invariantes_root(), snapshot.invariantes_raw()),
+    ] {
+        let Some(ruta) = ruta else {
+            continue;
+        };
+        let Some(entrada) = plan
+            .entradas_objetivo
+            .iter()
+            .find(|entrada| entrada.ruta == ruta)
+        else {
+            return Err(ErrorPlanStaging::ConfiguracionEnConflicto);
+        };
+        let conservada = match entrada.fuente {
+            FuenteEntradaStage::Auxiliar(indice) => {
+                plan.auxiliares.get(indice).and_then(EntradaSnapshot::bytes)
+            }
+            FuenteEntradaStage::DocumentoNuevo(indice) => plan
+                .managed_new
+                .get(indice)
+                .map(|documento| documento.contenido().as_bytes()),
+            FuenteEntradaStage::Directorio => None,
+        };
+        if conservada != Some(bytes) {
+            return Err(ErrorPlanStaging::ConfiguracionEnConflicto);
+        }
+    }
+    Ok(())
 }
 
 #[allow(dead_code)] // Se mantiene como seam de fault injection para pruebas.
@@ -253,6 +410,7 @@ where
             Ok(()) => {
                 let stage = StagePropio {
                     ruta: ruta.as_path().to_path_buf(),
+                    stage_id: id,
                 };
                 if let Err(codigo) = validar_directorio_stage(stage.ruta()) {
                     return Err(ErrorEscrituraStage {
@@ -854,6 +1012,28 @@ ignorados = ["ignored.md"]
         (temp, snapshot)
     }
 
+    fn stage_para_recarga(
+        snapshot: &Snapshot,
+        root: &Path,
+        id: &str,
+    ) -> (PlanStaging, StagePropio) {
+        let plan = planificar_staging(
+            snapshot,
+            &[documento("knowledge/a", "---\ntype: a\ntitle: A\n---\n")],
+        )
+        .unwrap();
+        let ubicacion = UbicacionRaiz::nueva(root).unwrap();
+        let mut ids = [id].into_iter();
+        let stage = materializar_staging_con(
+            &ubicacion,
+            &plan,
+            || Ok(ids.next().unwrap().to_owned()),
+            escribir_archivo_nuevo,
+        )
+        .unwrap();
+        (plan, stage)
+    }
+
     #[test]
     fn crea_sibling_unico_y_reintenta_colision_sin_tocar_el_objeto_anterior() {
         let temp = tempdir().unwrap();
@@ -1267,6 +1447,107 @@ ignorados = ["ignored.md"]
             resultado.auxiliares[1].bytes(),
             Some([0, 255, 17].as_slice())
         );
+    }
+
+    #[test]
+    fn inventario_real_del_stage_rechaza_corrupcion_omisiones_extras_y_tipos() {
+        for escenario in [
+            "success",
+            "corrupcion",
+            "missing",
+            "extra-file",
+            "extra-dir",
+            "type",
+        ] {
+            let (temp, snapshot) = snapshot_minimo();
+            let root = temp.path().join("bundle");
+            let original = fs::read(root.join("knowledge/a.md")).unwrap();
+            let (plan, stage) = stage_para_recarga(&snapshot, &root, "readback-test");
+
+            match escenario {
+                "success" => {}
+                "corrupcion" => fs::write(stage.ruta().join("knowledge/a.md"), b"corrupt").unwrap(),
+                "missing" => fs::remove_file(stage.ruta().join("knowledge/a.md")).unwrap(),
+                "extra-file" => fs::write(stage.ruta().join("extra.bin"), b"extra").unwrap(),
+                "extra-dir" => fs::create_dir(stage.ruta().join("extra-empty")).unwrap(),
+                "type" => {
+                    fs::remove_dir(stage.ruta().join("empty")).unwrap();
+                    fs::write(stage.ruta().join("empty"), b"wrong type").unwrap();
+                }
+                _ => unreachable!(),
+            }
+
+            let resultado =
+                recargar_staging_con_lector(&snapshot, &plan, &stage, leer_archivo_regular);
+            if escenario == "success" {
+                let recargado = match resultado {
+                    Ok(recargado) => recargado,
+                    Err(error) => panic!("recarga inesperadamente fallida: {}", error.codigo()),
+                };
+                assert_eq!(recargado.estructura().nodos().count(), 1);
+                assert_eq!(recargado.token(), snapshot.token());
+            } else {
+                let error = resultado.unwrap_err();
+                assert_eq!(error.codigo(), "stage_inventory_mismatch", "{escenario}");
+                assert!(!error.codigo().contains("corrupt"));
+                assert!(!error.codigo().contains("extra"));
+            }
+            assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), original);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recarga_stage_rechaza_symlink_y_preserva_root() {
+        use std::os::unix::fs::symlink;
+
+        let (temp, snapshot) = snapshot_minimo();
+        let root = temp.path().join("bundle");
+        let original = fs::read(root.join("knowledge/a.md")).unwrap();
+        let (plan, stage) = stage_para_recarga(&snapshot, &root, "symlink-test");
+        let externo = temp.path().join("outside.bin");
+        fs::write(&externo, b"PRIVATE-SYMLINK-CANARY").unwrap();
+        fs::remove_file(stage.ruta().join("payload.bin")).unwrap();
+        symlink(&externo, stage.ruta().join("payload.bin")).unwrap();
+
+        let error = recargar_staging_con_lector(&snapshot, &plan, &stage, leer_archivo_regular)
+            .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_link_not_allowed");
+        assert!(!format!("{error:?} {error}").contains("PRIVATE-SYMLINK-CANARY"));
+        assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), original);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recarga_stage_rechaza_junction_y_preserva_root() {
+        use std::process::Command;
+
+        let (temp, snapshot) = snapshot_minimo();
+        let root = temp.path().join("bundle");
+        let original = fs::read(root.join("knowledge/a.md")).unwrap();
+        let (plan, stage) = stage_para_recarga(&snapshot, &root, "junction-test");
+        let externo = temp.path().join("outside-dir");
+        fs::create_dir(&externo).unwrap();
+        fs::write(externo.join("canary.bin"), b"junction target").unwrap();
+        fs::remove_dir(stage.ruta().join("empty")).unwrap();
+        let salida = Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(stage.ruta().join("empty"))
+            .arg(&externo)
+            .output()
+            .unwrap();
+        assert!(salida.status.success(), "mklink /J must create a junction");
+
+        let error = recargar_staging_con_lector(&snapshot, &plan, &stage, leer_archivo_regular)
+            .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_link_not_allowed");
+        assert_eq!(
+            fs::read(externo.join("canary.bin")).unwrap(),
+            b"junction target"
+        );
+        assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), original);
     }
 
     #[test]
