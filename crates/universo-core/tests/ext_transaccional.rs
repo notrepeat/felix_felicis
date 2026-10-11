@@ -1,6 +1,6 @@
 use universo_core::{
-    Atomo, BundlePath, ClaseOperacion, Delta, ErrorCandidato, Estructura, Etiqueta, Sorte,
-    construir_candidato,
+    Atomo, BundlePath, ClaseOperacion, Delta, ErrorCandidato, Estructura, Etiqueta, IdArista,
+    Sorte, Sujeto, construir_candidato,
 };
 
 fn p(texto: &str) -> BundlePath {
@@ -179,4 +179,89 @@ fn valores_ext_conflictivos_en_el_mismo_sujeto_rechazan_redactados() {
     ));
     assert_redactado(&error, &["n/nodo", "alto", "bajo"]);
     assert_eq!(snapshot.atomos(), antes);
+}
+
+#[test]
+fn ext_invalido_junto_a_edge_valido_no_muta_el_snapshot() {
+    let (mut snapshot, nodo, otro) = base();
+    let arista = snapshot
+        .insertar_arista(nodo, otro, Sorte::nuevo("rel"), Etiqueta::nuevo("relación"))
+        .unwrap();
+    let edge = snapshot
+        .atomos()
+        .into_iter()
+        .find(|atomo| matches!(atomo, Atomo::Edge { id, .. } if snapshot.arista(arista).is_some_and(|a| id.ordinal == a.ordinal)))
+        .unwrap();
+    let antes = snapshot.atomos();
+    let delta = Delta::nuevo(
+        [Atomo::Ext {
+            predicado: "PREDICADO_PRIVADO".into(),
+            sujeto: p("n/nodo"),
+            constante: "VALOR_PRIVADO".into(),
+        }],
+        [edge],
+    )
+    .unwrap();
+
+    let error = construir_candidato(&snapshot, &delta).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::Ext
+        }
+    ));
+    assert_redactado(&error, &["PREDICADO_PRIVADO", "n/nodo", "VALOR_PRIVADO"]);
+    assert_eq!(snapshot.atomos(), antes);
+    assert!(snapshot.arista(arista).is_some());
+    snapshot.verificar_representacion().unwrap();
+}
+
+#[test]
+fn edge_y_ext_validos_se_componen_en_el_mismo_candidato() {
+    let (snapshot, _, _) = base();
+    let origen = p("n/nodo");
+    let destino = p("n/otro");
+    let sorte = Sorte::nuevo("rel");
+    let id = IdArista {
+        origen: origen.clone(),
+        sorte: sorte.clone(),
+        destino: destino.clone(),
+        ordinal: 0,
+    };
+    let delta = Delta::nuevo(
+        [
+            Atomo::Edge {
+                id: id.clone(),
+                origen,
+                destino,
+                sorte,
+            },
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(id),
+                etiqueta: Etiqueta::nuevo("relación"),
+            },
+            ext("n/nodo", "alto"),
+        ],
+        [],
+    )
+    .unwrap();
+
+    let candidato = construir_candidato(&snapshot, &delta).unwrap();
+    let salida = candidato.estructura();
+    let nodo = salida.por_path(&p("n/nodo")).unwrap();
+
+    assert_eq!(salida.len_aristas(), 1);
+    assert_eq!(
+        salida.atributos(nodo).get("Nivel").map(String::as_str),
+        Some("alto")
+    );
+    assert_eq!(snapshot.len_aristas(), 0);
+    assert!(
+        !snapshot
+            .atomos()
+            .iter()
+            .any(|atomo| matches!(atomo, Atomo::Ext { .. }))
+    );
+    salida.verificar_representacion().unwrap();
 }
