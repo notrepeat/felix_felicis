@@ -103,28 +103,15 @@ fn haslab_nodo_no_admite_retiro_aislado_ni_retiro_inexacto() {
     let (snapshot, _, _, _) = base();
     let antes = snapshot.atomos();
     let retiros = [
-        (haslab("n/hijo", "hijo"), true),
-        (haslab("n/hijo", "PRIV_LABEL"), false),
-        (haslab("n/PRIV_NODE", "hijo"), false),
+        (haslab("n/hijo", "hijo"), "label_replacement_required"),
+        (haslab("n/hijo", "PRIV_LABEL"), "remove_not_found"),
+        (haslab("n/PRIV_NODE", "hijo"), "remove_not_found"),
     ];
-    for (retiro, add_conflict) in retiros {
+    for (retiro, codigo) in retiros {
         let delta = Delta::nuevo([], [retiro]).unwrap();
         let error = construir_candidato(&snapshot, &delta).unwrap_err();
-        if add_conflict {
-            assert!(matches!(
-                &error,
-                ErrorCandidato::AddConflict {
-                    clase: ClaseOperacion::HasLab
-                }
-            ));
-        } else {
-            assert!(matches!(
-                &error,
-                ErrorCandidato::RemoveNotFound {
-                    clase: ClaseOperacion::HasLab
-                }
-            ));
-        }
+        assert_eq!(error.codigo(), codigo);
+        assert_eq!(error.clase(), Some(ClaseOperacion::HasLab));
         assert_redactado(&error, &["PRIV_LABEL", "PRIV_NODE"]);
         assert_eq!(snapshot.atomos(), antes);
     }

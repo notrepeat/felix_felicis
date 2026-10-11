@@ -183,8 +183,9 @@ fn detector_deja_validar_labels_ausentes_y_huerfanos_al_constructor() {
     assert!(!resultado.hay_conflictos());
     assert!(matches!(
         error,
-        ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab
+        ErrorCandidato::InvalidOperation {
+            clase: ClaseOperacion::HasLab,
+            codigo: "label_missing"
         }
     ));
 
@@ -209,8 +210,9 @@ fn detector_deja_validar_labels_ausentes_y_huerfanos_al_constructor() {
     assert!(!resultado.hay_conflictos());
     assert!(matches!(
         error,
-        ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab
+        ErrorCandidato::InvalidOperation {
+            clase: ClaseOperacion::HasLab,
+            codigo: "label_orphan"
         }
     ));
 }

@@ -253,8 +253,9 @@ fn haslab_de_arista_exige_edge_del_mismo_handle_y_label_exacta() {
     .unwrap();
     assert!(matches!(
         construir_candidato(&snapshot, &solo_label),
-        Err(ErrorCandidato::AddConflict {
+        Err(ErrorCandidato::InvalidOperation {
             clase: ClaseOperacion::HasLab,
+            codigo: "label_replacement_required",
         })
     ));
 
@@ -386,16 +387,18 @@ fn alta_edge_exige_label_y_rechaza_huerfano_o_varios_labels_distintos() {
     let sin_label = Delta::nuevo([edge.clone()], []).unwrap();
     assert!(matches!(
         construir_candidato(&snapshot, &sin_label),
-        Err(ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab
+        Err(ErrorCandidato::InvalidOperation {
+            clase: ClaseOperacion::HasLab,
+            codigo: "label_missing",
         })
     ));
 
     let huerfano = Delta::nuevo([haslab_add(id.clone(), "huerfano")], []).unwrap();
     assert!(matches!(
         construir_candidato(&snapshot, &huerfano),
-        Err(ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab
+        Err(ErrorCandidato::InvalidOperation {
+            clase: ClaseOperacion::HasLab,
+            codigo: "label_orphan",
         })
     ));
 
@@ -622,8 +625,9 @@ fn label_distinta_sin_remove_y_remove_sin_add_rechazan_sin_mutar_ni_filtrar() {
     .unwrap();
     assert!(matches!(
         construir_candidato(&snapshot, &retiro_sin_alta),
-        Err(ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab
+        Err(ErrorCandidato::InvalidOperation {
+            clase: ClaseOperacion::HasLab,
+            codigo: "label_replacement_required",
         })
     ));
     assert_eq!(snapshot.atomos(), antes);

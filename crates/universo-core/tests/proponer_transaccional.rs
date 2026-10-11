@@ -202,7 +202,7 @@ fn retiros_invalidos_edge_invalido_haslab_ausente_huerfano_y_ciclo_siguen_tecnic
                 destino: p("n/PRIVATE_C"),
                 sorte: Sorte::nuevo("rel"),
             }]),
-            "add_conflict",
+            "label_missing",
             universo_core::ClaseOperacion::HasLab,
         ),
         (
@@ -215,7 +215,7 @@ fn retiros_invalidos_edge_invalido_haslab_ausente_huerfano_y_ciclo_siguen_tecnic
                 }),
                 etiqueta: Etiqueta::nuevo("PRIVATE_ORPHAN_LABEL"),
             }]),
-            "add_conflict",
+            "label_orphan",
             universo_core::ClaseOperacion::HasLab,
         ),
         (
@@ -292,11 +292,23 @@ fn invariantes_tecnicos_distinguen_expansion_evaluacion_y_candidato() {
     let snapshot = base();
     let antes = snapshot.atomos();
     let vacio = Delta::nuevo([], []).unwrap();
-    let expansion =
-        proponer(&snapshot, &vacio, &fuentes("(Type @n/PRIVATE_MISSING a)")).unwrap_err();
+    let expansion = proponer(
+        &snapshot,
+        &vacio,
+        &fuentes("; PRIVATE_COMMENT_CANARY\n(Type @n/PRIVATE_MISSING PRIVATE_FORMULA_CANARY)"),
+    )
+    .unwrap_err();
     assert_eq!(expansion.etapa(), EtapaErrorPropuesta::Expansion);
     assert_eq!(expansion.codigo(), "invalid_invariant_statement");
-    assert_redactado(&expansion, &["PRIVATE_MISSING"]);
+    assert_redactado(
+        &expansion,
+        &[
+            "PRIVATE_MISSING",
+            "PRIVATE_FORMULA_CANARY",
+            "PRIVATE_COMMENT_CANARY",
+            "(Type",
+        ],
+    );
 
     let candidato = proponer(
         &snapshot,
@@ -326,6 +338,26 @@ fn agotamiento_de_evaluacion_es_error_tecnico_redactado() {
 
     assert_eq!(error.etapa(), EtapaErrorPropuesta::Evaluacion);
     assert_eq!(error.codigo(), "evaluation_budget_exhausted");
+    assert_redactado(&error, &["nodo-0000", "(forall"]);
+}
+
+#[test]
+fn error_de_evaluacion_no_expone_path_label_formula_ni_comentario() {
+    let snapshot = base();
+    let fuentes =
+        fuentes("; PRIVATE_COMMENT_CANARY\n(HasLab @n/PRIVATE_A \"PRIVATE_LABEL_CANARY\")");
+    let error = proponer(&snapshot, &Delta::nuevo([], []).unwrap(), &fuentes).unwrap_err();
+    assert_eq!(error.etapa(), EtapaErrorPropuesta::Evaluacion);
+    assert_eq!(error.codigo(), "label_unavailable");
+    assert_redactado(
+        &error,
+        &[
+            "PRIVATE_A",
+            "PRIVATE_LABEL_CANARY",
+            "PRIVATE_COMMENT_CANARY",
+            "(HasLab",
+        ],
+    );
 }
 
 #[test]
@@ -362,6 +394,18 @@ fn etiquetas_iguales_en_sujetos_distintos_se_admiten_y_el_resultado_es_determini
         unreachable!();
     };
     assert_eq!(candidato.estructura().atomos(), otra.estructura().atomos());
+    let estructura = candidato.estructura();
+    let origen = estructura.por_path(&p("n/PRIVATE_A")).unwrap();
+    let destino = estructura.por_path(&p("n/PRIVATE_C")).unwrap();
+    let etiqueta = estructura
+        .salientes(origen)
+        .iter()
+        .find_map(|handle| {
+            let arista = estructura.arista(*handle)?;
+            (arista.destino == destino).then_some(arista.etiqueta.como_str())
+        })
+        .unwrap();
+    assert_eq!(etiqueta, "PRIVATE_SHARED_LABEL");
     assert_eq!(snapshot.atomos(), antes);
 }
 

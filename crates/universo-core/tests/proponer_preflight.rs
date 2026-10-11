@@ -1,5 +1,5 @@
 use universo_core::{
-    Atomo, BundlePath, ClaseOperacion, Delta, ErrorPropuesta, Estructura, Etiqueta,
+    Atomo, BundlePath, ClaseOperacion, Delta, ErrorPropuesta, Estructura, Etiqueta, IdArista,
     ResultadoPropuesta, Sorte, Sujeto, proponer,
 };
 
@@ -48,7 +48,30 @@ fn parent(hijo: &str, padre: &str) -> Atomo {
     }
 }
 
-fn assert_tecnico(snapshot: &Estructura, delta: Delta, codigo: &str, canarios: &[&str]) {
+fn edge(origen: &str, destino: &str, ordinal: u32) -> Atomo {
+    let origen = p(origen);
+    let destino = p(destino);
+    let sorte = Sorte::nuevo("rel");
+    let id = IdArista {
+        origen: origen.clone(),
+        sorte: sorte.clone(),
+        destino: destino.clone(),
+        ordinal,
+    };
+    Atomo::Edge {
+        id,
+        origen,
+        destino,
+        sorte,
+    }
+}
+
+fn assert_tecnico(
+    snapshot: &Estructura,
+    delta: Delta,
+    codigo: &str,
+    canarios: &[&str],
+) -> ErrorPropuesta {
     let antes = snapshot.atomos();
     let error = proponer(snapshot, &delta, &[]).unwrap_err();
     assert_eq!(error.codigo(), codigo);
@@ -58,6 +81,7 @@ fn assert_tecnico(snapshot: &Estructura, delta: Delta, codigo: &str, canarios: &
         assert!(!format!("{error} {error:?}").contains(canario));
     }
     assert_eq!(snapshot.atomos(), antes);
+    error
 }
 
 #[test]
@@ -135,4 +159,91 @@ fn error_propuesta_no_contiene_causa_sensible_en_debug_ni_display() {
     let salida = format!("{error} {error:?}");
     assert!(!salida.contains("AUSENTE_PRIVADO"));
     assert!(!salida.contains("ETIQUETA_PRIVADA"));
+}
+
+#[test]
+fn etiquetas_incompletas_son_tecnicas_aunque_coexistan_conflictos() {
+    let snapshot = base();
+    let falta_label = Delta::nuevo(
+        [parent("n/hijo", "n/otro"), edge("n/raiz", "n/otro", 0)],
+        [],
+    )
+    .unwrap();
+    let error = assert_tecnico(
+        &snapshot,
+        falta_label,
+        "label_missing",
+        &["n/raiz", "n/otro"],
+    );
+    assert_eq!(error.clase(), Some(ClaseOperacion::HasLab));
+
+    let id_huerfana = IdArista {
+        origen: p("n/raiz"),
+        sorte: Sorte::nuevo("rel"),
+        destino: p("n/otro"),
+        ordinal: 7,
+    };
+    let huerfana = Delta::nuevo(
+        [
+            parent("n/hijo", "n/otro"),
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(id_huerfana),
+                etiqueta: Etiqueta::nuevo("LABEL_HUERFANA_PRIVADA"),
+            },
+        ],
+        [],
+    )
+    .unwrap();
+    let error = assert_tecnico(
+        &snapshot,
+        huerfana,
+        "label_orphan",
+        &["LABEL_HUERFANA_PRIVADA", "n/otro"],
+    );
+    assert_eq!(error.clase(), Some(ClaseOperacion::HasLab));
+
+    let mut snapshot_con_arista = base();
+    let origen = snapshot_con_arista.por_path(&p("n/raiz")).unwrap();
+    let destino = snapshot_con_arista.por_path(&p("n/otro")).unwrap();
+    snapshot_con_arista
+        .insertar_arista(
+            origen,
+            destino,
+            Sorte::nuevo("rel"),
+            Etiqueta::nuevo("EDGE_LABEL_PRIVADA"),
+        )
+        .unwrap();
+    let retiro_edge = Delta::nuevo(
+        [parent("n/hijo", "n/otro")],
+        [Atomo::HasLab {
+            sujeto: Sujeto::Arista(IdArista {
+                origen: p("n/raiz"),
+                sorte: Sorte::nuevo("rel"),
+                destino: p("n/otro"),
+                ordinal: 0,
+            }),
+            etiqueta: Etiqueta::nuevo("EDGE_LABEL_PRIVADA"),
+        }],
+    )
+    .unwrap();
+    let error = assert_tecnico(
+        &snapshot_con_arista,
+        retiro_edge,
+        "label_replacement_required",
+        &["EDGE_LABEL_PRIVADA", "n/otro"],
+    );
+    assert_eq!(error.clase(), Some(ClaseOperacion::HasLab));
+
+    let retiro_nodo = Delta::nuevo(
+        [parent("n/hijo", "n/otro")],
+        [haslab("n/hijo", "HIJO_PRIVADO")],
+    )
+    .unwrap();
+    let error = assert_tecnico(
+        &snapshot,
+        retiro_nodo,
+        "label_replacement_required",
+        &["HIJO_PRIVADO", "n/otro"],
+    );
+    assert_eq!(error.clase(), Some(ClaseOperacion::HasLab));
 }
