@@ -4,12 +4,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use universo_core::BundlePath;
 
 use crate::serializar::DocumentoCandidato;
 
 use super::captura::Snapshot;
+use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
 use super::snapshot::{EntradaSnapshot, TipoEntradaSnapshot};
 
 #[cfg(windows)]
@@ -59,6 +63,98 @@ impl fmt::Display for ErrorPlanStaging {
 
 impl std::error::Error for ErrorPlanStaging {}
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Lo consume el flujo apply en la siguiente unidad.
+enum CodigoEscrituraStage {
+    Plan(ErrorPlanStaging),
+    Aleatorio,
+    Io,
+    EnlaceNoPermitido,
+    TipoNoAdmitido,
+    ConflictoEntrada,
+    ColisionesAgotadas,
+}
+
+#[allow(dead_code)] // Lo consume el flujo apply en la siguiente unidad.
+impl CodigoEscrituraStage {
+    const fn codigo(self) -> &'static str {
+        match self {
+            Self::Plan(error) => error.codigo(),
+            Self::Aleatorio => "stage_random_unavailable",
+            Self::Io => "stage_io",
+            Self::EnlaceNoPermitido => "stage_link_not_allowed",
+            Self::TipoNoAdmitido => "stage_entry_type_not_allowed",
+            Self::ConflictoEntrada => "stage_create_conflict",
+            Self::ColisionesAgotadas => "stage_name_collision",
+        }
+    }
+}
+
+/// Sibling stage creado exclusivamente por este módulo. Su dueño debe decidir
+/// cleanup; no hay Drop/remove_dir_all basado solo en el nombre path-based.
+#[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
+pub(crate) struct StagePropio {
+    ruta: PathBuf,
+}
+
+#[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
+impl StagePropio {
+    pub(crate) fn ruta(&self) -> &Path {
+        &self.ruta
+    }
+}
+
+impl fmt::Debug for StagePropio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("StagePropio { ruta: [redacted] }")
+    }
+}
+
+/// Error estable/redactado. Si `stage_parcial` existe, el llamador posee el
+/// sibling creado y puede conservarlo para cleanup posterior verificable.
+#[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
+pub(crate) struct ErrorEscrituraStage {
+    codigo: CodigoEscrituraStage,
+    stage_parcial: Option<StagePropio>,
+}
+
+#[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
+impl ErrorEscrituraStage {
+    pub(crate) const fn codigo(&self) -> &'static str {
+        self.codigo.codigo()
+    }
+
+    pub(crate) fn stage_parcial(&self) -> Option<&StagePropio> {
+        self.stage_parcial.as_ref()
+    }
+
+    fn nuevo(codigo: CodigoEscrituraStage) -> Self {
+        Self {
+            codigo,
+            stage_parcial: None,
+        }
+    }
+}
+
+impl fmt::Debug for ErrorEscrituraStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ErrorEscrituraStage")
+            .field(&self.codigo())
+            .finish()
+    }
+}
+
+impl fmt::Display for ErrorEscrituraStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorEscrituraStage {}
+
+#[allow(dead_code)] // La integración transaccional consume el límite de retry.
+const INTENTOS_STAGE: usize = 16;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FuenteEntradaStage {
     Directorio,
@@ -107,6 +203,95 @@ pub(crate) fn planificar_staging(
     planificar_staging_desde_inventario(snapshot.entradas(), &managed_old, documentos)
 }
 
+#[allow(dead_code)] // Se consume desde materializar_staging.
+fn crear_stage_unico<G>(
+    ubicacion: &UbicacionRaiz,
+    siguiente_id: &mut G,
+) -> Result<StagePropio, ErrorEscrituraStage>
+where
+    G: FnMut() -> Result<String, CodigoEscrituraStage>,
+{
+    for _ in 0..INTENTOS_STAGE {
+        let id = siguiente_id().map_err(ErrorEscrituraStage::nuevo)?;
+        let ruta = ubicacion.stage(&id).map_err(|_| {
+            ErrorEscrituraStage::nuevo(CodigoEscrituraStage::Plan(ErrorPlanStaging::RutaInvalida))
+        })?;
+        match fs::create_dir(ruta.as_path()) {
+            Ok(()) => {
+                let stage = StagePropio {
+                    ruta: ruta.as_path().to_path_buf(),
+                };
+                if let Err(codigo) = validar_directorio_stage(stage.ruta()) {
+                    return Err(ErrorEscrituraStage {
+                        codigo,
+                        stage_parcial: Some(stage),
+                    });
+                }
+                return Ok(stage);
+            }
+            // Never inspect, reuse, or remove a preexisting object. It may be
+            // a file, link, reparse point, or another transaction's stage.
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(ErrorEscrituraStage::nuevo(CodigoEscrituraStage::Io)),
+        }
+    }
+    Err(ErrorEscrituraStage::nuevo(
+        CodigoEscrituraStage::ColisionesAgotadas,
+    ))
+}
+
+#[allow(dead_code)] // Se consume desde materializar_staging.
+fn generar_id_stage() -> Result<String, CodigoEscrituraStage> {
+    let mut aleatorio = [0_u8; 16];
+    getrandom::fill(&mut aleatorio).map_err(|_| CodigoEscrituraStage::Aleatorio)?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut id = String::with_capacity(aleatorio.len() * 2);
+    for byte in aleatorio {
+        id.push(HEX[(byte >> 4) as usize] as char);
+        id.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    Ok(id)
+}
+
+#[allow(dead_code)] // Se consume desde materializar_staging.
+fn escribir_archivo_nuevo(path: &Path, bytes: &[u8]) -> Result<(), CodigoEscrituraStage> {
+    let mut archivo = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(mapear_error_creacion)?;
+    let metadata = archivo.metadata().map_err(|_| CodigoEscrituraStage::Io)?;
+    if metadata_es_enlace_o_reparse(&metadata) {
+        return Err(CodigoEscrituraStage::EnlaceNoPermitido);
+    }
+    if !metadata.is_file() {
+        return Err(CodigoEscrituraStage::TipoNoAdmitido);
+    }
+    archivo
+        .write_all(bytes)
+        .map_err(|_| CodigoEscrituraStage::Io)
+}
+
+#[allow(dead_code)] // Se consume desde el escritor del stage.
+fn mapear_error_creacion(error: std::io::Error) -> CodigoEscrituraStage {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        CodigoEscrituraStage::ConflictoEntrada
+    } else {
+        CodigoEscrituraStage::Io
+    }
+}
+
+#[allow(dead_code)] // Se consume desde el escritor del stage.
+fn validar_directorio_stage(path: &Path) -> Result<(), CodigoEscrituraStage> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| CodigoEscrituraStage::Io)?;
+    if metadata_es_enlace_o_reparse(&metadata) {
+        return Err(CodigoEscrituraStage::EnlaceNoPermitido);
+    }
+    if !metadata.is_dir() {
+        return Err(CodigoEscrituraStage::TipoNoAdmitido);
+    }
+    Ok(())
+}
 fn planificar_staging_desde_inventario(
     entradas: &[EntradaSnapshot],
     managed_old: &[BundlePath],
@@ -483,6 +668,25 @@ ignorados = ["ignored.md"]
         (temp, snapshot)
     }
 
+#[test]
+fn crea_sibling_unico_y_reintenta_colision_sin_tocar_el_objeto_anterior() {
+    let temp = tempdir().unwrap();
+    let raiz = temp.path().join("bundle");
+    let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+    let colision = ubicacion.stage("occupied").unwrap();
+    fs::write(colision.as_path(), b"preexisting").unwrap();
+    let mut ids = ["occupied", "fresh"].into_iter();
+
+    let stage =
+        crear_stage_unico(&ubicacion, &mut || Ok(ids.next().unwrap().to_owned())).unwrap();
+
+    let parent = fs::canonicalize(temp.path()).unwrap();
+    assert_eq!(stage.ruta().parent(), Some(parent.as_path()));
+    assert_eq!(fs::read(colision.as_path()).unwrap(), b"preexisting");
+    assert!(stage.ruta().is_dir());
+    assert_ne!(stage.ruta(), colision.as_path());
+    assert!(!raiz.exists());
+}
     #[test]
     fn planifica_deterministicamente_y_preserva_directorios_y_auxiliares() {
         let entradas = vec![
