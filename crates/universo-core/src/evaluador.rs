@@ -4,7 +4,9 @@
 //! finitos de nodos y aristas, y evalúa cada conectivo según Tarski. No usa
 //! los índices de átomos ni instala abreviaturas para `tc Parent`.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::atomos::IdArista;
 use crate::estructura::Estructura;
@@ -219,6 +221,15 @@ impl std::fmt::Debug for ResultadoTrazable {
     }
 }
 
+/// Resultado trazable acompañado por el consumo determinista real de ambos
+/// presupuestos internos del evaluador.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResultadoTrazableMedido {
+    pub resultado: ResultadoTrazable,
+    pub unidades_semanticas: u64,
+    pub unidades_evidencia: u64,
+}
+
 /// Error al evaluar una fórmula que no está bien formada sobre la firma de
 /// la estructura dada, o que no es una oración cerrada.
 #[derive(Clone, PartialEq, Eq)]
@@ -366,16 +377,82 @@ impl std::fmt::Display for ErrorEvaluacion {
 
 impl std::error::Error for ErrorEvaluacion {}
 
+/// Error de la API de trazabilidad con presupuesto global y consumo parcial
+/// observado antes de detenerse. El total semántico más evidencial nunca
+/// supera el límite de la llamada; el árbol de evidencia fallido no se devuelve.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ErrorEvaluacionMedida {
+    pub error: ErrorEvaluacion,
+    pub unidades_semanticas: u64,
+    pub unidades_evidencia: u64,
+    pub unidades_consumidas: u64,
+}
+
+impl std::fmt::Debug for ErrorEvaluacionMedida {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ErrorEvaluacionMedida")
+            .field("error", &self.error)
+            .field("unidades_semanticas", &self.unidades_semanticas)
+            .field("unidades_evidencia", &self.unidades_evidencia)
+            .field("unidades_consumidas", &self.unidades_consumidas)
+            .finish()
+    }
+}
+
+impl std::fmt::Display for ErrorEvaluacionMedida {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for ErrorEvaluacionMedida {}
+
+#[derive(Clone, Copy)]
+struct ContadorGlobal {
+    restante: u64,
+    unidades_semanticas: u64,
+    unidades_evidencia: u64,
+}
+
+impl ContadorGlobal {
+    fn nuevo(limite: u64) -> Self {
+        Self {
+            restante: limite,
+            unidades_semanticas: 0,
+            unidades_evidencia: 0,
+        }
+    }
+
+    fn consumir(&mut self, cantidad: u64, semantica: bool) -> bool {
+        if self.restante < cantidad {
+            return false;
+        }
+        let destino = if semantica {
+            &mut self.unidades_semanticas
+        } else {
+            &mut self.unidades_evidencia
+        };
+        let Some(consumidas) = destino.checked_add(cantidad) else {
+            return false;
+        };
+        self.restante -= cantidad;
+        *destino = consumidas;
+        true
+    }
+}
+
 struct Presupuesto {
     limite: u64,
     restante: u64,
+    total_compartido: Option<Rc<Cell<ContadorGlobal>>>,
 }
 
 impl Presupuesto {
-    fn nuevo(limite: u64) -> Self {
+    fn con_total(limite: u64, total_compartido: Option<Rc<Cell<ContadorGlobal>>>) -> Self {
         Self {
             limite,
             restante: limite,
+            total_compartido,
         }
     }
 
@@ -385,21 +462,36 @@ impl Presupuesto {
                 limite: self.limite,
             });
         }
+        if let Some(total) = &self.total_compartido {
+            let mut contador = total.get();
+            if !contador.consumir(cantidad, true) {
+                return Err(ErrorEvaluacion::PresupuestoAgotado {
+                    limite: self.limite,
+                });
+            }
+            total.set(contador);
+        }
         self.restante -= cantidad;
         Ok(())
+    }
+
+    fn consumidas(&self) -> u64 {
+        self.limite - self.restante
     }
 }
 
 struct PresupuestoEvidencia {
     limite: u64,
     restante: u64,
+    total_compartido: Option<Rc<Cell<ContadorGlobal>>>,
 }
 
 impl PresupuestoEvidencia {
-    fn nuevo(limite: u64) -> Self {
+    fn con_total(limite: u64, total_compartido: Option<Rc<Cell<ContadorGlobal>>>) -> Self {
         Self {
             limite,
             restante: limite,
+            total_compartido,
         }
     }
 
@@ -409,8 +501,21 @@ impl PresupuestoEvidencia {
                 limite: self.limite,
             });
         }
+        if let Some(total) = &self.total_compartido {
+            let mut contador = total.get();
+            if !contador.consumir(cantidad, false) {
+                return Err(ErrorEvaluacion::PresupuestoEvidenciaAgotado {
+                    limite: self.limite,
+                });
+            }
+            total.set(contador);
+        }
         self.restante -= cantidad;
         Ok(())
+    }
+
+    fn consumidas(&self) -> u64 {
+        self.limite - self.restante
     }
 }
 
@@ -434,6 +539,13 @@ impl ModoEvidencia {
     fn consumir_bytes(&mut self, bytes: usize) -> Result<(), ErrorEvaluacion> {
         self.consumir(u64::try_from(bytes).unwrap_or(u64::MAX))
     }
+
+    fn consumidas(&self) -> u64 {
+        match self {
+            Self::Omitir => 0,
+            Self::Capturar(presupuesto) => presupuesto.consumidas(),
+        }
+    }
 }
 
 fn preparar_evaluacion(
@@ -441,7 +553,16 @@ fn preparar_evaluacion(
     estructura: &Estructura,
     limite: u64,
 ) -> Result<Presupuesto, ErrorEvaluacion> {
-    let mut presupuesto = Presupuesto::nuevo(limite);
+    preparar_evaluacion_con_total(formula, estructura, limite, None)
+}
+
+fn preparar_evaluacion_con_total(
+    formula: &Formula,
+    estructura: &Estructura,
+    limite: u64,
+    total_compartido: Option<Rc<Cell<ContadorGlobal>>>,
+) -> Result<Presupuesto, ErrorEvaluacion> {
+    let mut presupuesto = Presupuesto::con_total(limite, total_compartido);
     validar_formula(
         formula,
         estructura,
@@ -560,8 +681,83 @@ pub fn evaluar_trazable_con_presupuestos(
     limite_evaluacion: u64,
     limite_evidencia: u64,
 ) -> Result<ResultadoTrazable, ErrorEvaluacion> {
-    let mut presupuesto = preparar_evaluacion(formula, estructura, limite_evaluacion)?;
-    let mut modo_evidencia = ModoEvidencia::Capturar(PresupuestoEvidencia::nuevo(limite_evidencia));
+    evaluar_trazable_con_presupuestos_medidos(
+        formula,
+        estructura,
+        limite_evaluacion,
+        limite_evidencia,
+    )
+    .map(|resultado| resultado.resultado)
+}
+
+/// Variante medida de [`evaluar_trazable_con_presupuestos`].
+///
+/// Devuelve las unidades efectivamente consumidas por el preflight/evaluación
+/// semántica y por la materialización de evidencia. Los presupuestos son
+/// independientes y cada contador corresponde a su categoría, incluso si el
+/// resultado semántico es `true`.
+pub fn evaluar_trazable_con_presupuestos_medidos(
+    formula: &Formula,
+    estructura: &Estructura,
+    limite_evaluacion: u64,
+    limite_evidencia: u64,
+) -> Result<ResultadoTrazableMedido, ErrorEvaluacion> {
+    evaluar_trazable_medido_interno(
+        formula,
+        estructura,
+        limite_evaluacion,
+        limite_evidencia,
+        None,
+    )
+}
+
+/// Evalúa y mide con una única bolsa compartida por preflight, semántica y
+/// materialización de evidencia. Cada categoría la descuenta en tiempo real,
+/// así que su consumo combinado nunca supera `limite_total`; si se agota, el
+/// error informa cuánto se consumió y descarta cualquier evidencia parcial.
+pub fn evaluar_trazable_con_presupuesto_total_medido(
+    formula: &Formula,
+    estructura: &Estructura,
+    limite_total: u64,
+) -> Result<ResultadoTrazableMedido, ErrorEvaluacionMedida> {
+    let total_compartido = Rc::new(Cell::new(ContadorGlobal::nuevo(limite_total)));
+    match evaluar_trazable_medido_interno(
+        formula,
+        estructura,
+        limite_total,
+        limite_total,
+        Some(total_compartido.clone()),
+    ) {
+        Ok(resultado) => Ok(resultado),
+        Err(error) => {
+            let contador = total_compartido.get();
+            Err(ErrorEvaluacionMedida {
+                error,
+                unidades_semanticas: contador.unidades_semanticas,
+                unidades_evidencia: contador.unidades_evidencia,
+                unidades_consumidas: limite_total - contador.restante,
+            })
+        }
+    }
+}
+
+fn evaluar_trazable_medido_interno(
+    formula: &Formula,
+    estructura: &Estructura,
+    limite_evaluacion: u64,
+    limite_evidencia: u64,
+    total_compartido: Option<Rc<Cell<ContadorGlobal>>>,
+) -> Result<ResultadoTrazableMedido, ErrorEvaluacion> {
+    let mut presupuesto = preparar_evaluacion_con_total(
+        formula,
+        estructura,
+        limite_evaluacion,
+        total_compartido.clone(),
+    )?;
+    let mut modo_evidencia = ModoEvidencia::Capturar(PresupuestoEvidencia::con_total(
+        limite_evidencia,
+        total_compartido,
+    ));
     // La envoltura pública también cuenta como una entrada y se cobra antes
     // de materializar el árbol que se devolvería dentro de ella.
     modo_evidencia.consumir(1)?;
@@ -575,9 +771,13 @@ pub fn evaluar_trazable_con_presupuestos(
     let evidencia = resultado
         .evidencia
         .expect("el modo trazable construye evidencia para toda fórmula visitada");
-    Ok(ResultadoTrazable {
-        valor: resultado.valor,
-        evidencia,
+    Ok(ResultadoTrazableMedido {
+        resultado: ResultadoTrazable {
+            valor: resultado.valor,
+            evidencia,
+        },
+        unidades_semanticas: presupuesto.consumidas(),
+        unidades_evidencia: modo_evidencia.consumidas(),
     })
 }
 

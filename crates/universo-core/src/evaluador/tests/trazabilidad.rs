@@ -2,9 +2,11 @@ use super::*;
 
 use crate::IdArista;
 use crate::evaluador::{
-    AsignacionCanonica, InstanciaCuantificada, LigaduraCanonica, PRESUPUESTO_EVIDENCIA_POR_DEFECTO,
-    ReglaEvidencia, ResultadoTrazable, TipoCuantificador, ValorLigadura, evaluar_trazable,
-    evaluar_trazable_con_presupuesto, evaluar_trazable_con_presupuestos,
+    AsignacionCanonica, ErrorEvaluacion, InstanciaCuantificada, LigaduraCanonica,
+    PRESUPUESTO_EVIDENCIA_POR_DEFECTO, ReglaEvidencia, ResultadoTrazable, TipoCuantificador,
+    ValorLigadura, evaluar_trazable, evaluar_trazable_con_presupuesto,
+    evaluar_trazable_con_presupuesto_total_medido, evaluar_trazable_con_presupuestos,
+    evaluar_trazable_con_presupuestos_medidos,
 };
 use crate::formula::{Formula, SorteVar, TerminoArista, TerminoNodo, Var};
 use crate::ids::AristaId;
@@ -822,6 +824,73 @@ fn error_de_presupuesto_no_publica_evidencia_parcial() {
             _ => panic!("la captura TC alteró el resultado del presupuesto semántico {limite}"),
         }
     }
+}
+
+#[test]
+fn presupuesto_global_medido_reporta_consumo_acotado_sin_evidencia_parcial() {
+    let estructura = mundo().estructura;
+    let formula = oracion("(forall ((testigo N)) (Type testigo a))");
+    let amplio = evaluar_trazable_con_presupuesto_total_medido(&formula, &estructura, 1_000_000)
+        .expect("el límite amplio debe permitir cálculo y evidencia");
+    assert!(!amplio.resultado.valor);
+
+    let total = amplio.unidades_semanticas + amplio.unidades_evidencia;
+    assert!(amplio.unidades_semanticas > 0);
+    assert!(amplio.unidades_evidencia > 0);
+
+    // Barre todos los límites insuficientes, incluido cero y exacto−1. Cada
+    // error expone solo contadores observados; no contiene resultado ni traza.
+    for limite in 0..total {
+        let error = evaluar_trazable_con_presupuesto_total_medido(&formula, &estructura, limite)
+            .expect_err("todo límite inferior al costo medido debe agotarse");
+        assert!(matches!(
+            &error.error,
+            ErrorEvaluacion::PresupuestoAgotado { .. }
+                | ErrorEvaluacion::PresupuestoEvidenciaAgotado { .. }
+        ));
+        assert!(
+            error.unidades_consumidas <= limite,
+            "el límite {limite} reportó {} unidades",
+            error.unidades_consumidas
+        );
+        assert_eq!(
+            error.unidades_consumidas,
+            error.unidades_semanticas + error.unidades_evidencia
+        );
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        assert!(!debug.contains("n/root"));
+        assert!(!display.contains("n/root"));
+    }
+
+    let exacto = evaluar_trazable_con_presupuesto_total_medido(&formula, &estructura, total)
+        .expect("el límite exacto debe permitir cálculo y evidencia completos");
+    assert_eq!(exacto, amplio);
+    assert_eq!(
+        exacto.unidades_semanticas + exacto.unidades_evidencia,
+        total
+    );
+
+    // Los wrappers legacy conservan decisión y evidencia con presupuestos
+    // predeterminados o explícitos suficientemente amplios.
+    assert_eq!(
+        evaluar_trazable(&formula, &estructura).unwrap(),
+        amplio.resultado
+    );
+    assert_eq!(
+        evaluar_trazable_con_presupuesto(&formula, &estructura, 1_000_000).unwrap(),
+        amplio.resultado
+    );
+    assert_eq!(
+        evaluar_trazable_con_presupuestos(&formula, &estructura, 1_000_000, 1_000_000).unwrap(),
+        amplio.resultado
+    );
+    assert_eq!(
+        evaluar_trazable_con_presupuestos_medidos(&formula, &estructura, 1_000_000, 1_000_000)
+            .unwrap()
+            .resultado,
+        amplio.resultado
+    );
 }
 
 #[test]

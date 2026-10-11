@@ -16,11 +16,13 @@ pub use anexo::{Anexo, Entrada};
 pub use atomos::{Atomo, ErrorAtomo, IdArista, Sujeto};
 pub use estructura::{Arista, ErrorEstructura, Estructura, Nodo};
 pub use evaluador::{
-    AsignacionCanonica, ConstructorAtomico, ErrorEvaluacion, EvidenciaEvaluacion,
-    InstanciaCuantificada, LigaduraCanonica, PRESUPUESTO_EVALUACION_POR_DEFECTO,
-    PRESUPUESTO_EVIDENCIA_POR_DEFECTO, ReglaEvidencia, ResultadoTrazable, TipoCuantificador,
-    ValorLigadura, evaluar, evaluar_con_presupuesto, evaluar_trazable,
-    evaluar_trazable_con_presupuesto, evaluar_trazable_con_presupuestos,
+    AsignacionCanonica, ConstructorAtomico, ErrorEvaluacion, ErrorEvaluacionMedida,
+    EvidenciaEvaluacion, InstanciaCuantificada, LigaduraCanonica,
+    PRESUPUESTO_EVALUACION_POR_DEFECTO, PRESUPUESTO_EVIDENCIA_POR_DEFECTO, ReglaEvidencia,
+    ResultadoTrazable, ResultadoTrazableMedido, TipoCuantificador, ValorLigadura, evaluar,
+    evaluar_con_presupuesto, evaluar_trazable, evaluar_trazable_con_presupuesto,
+    evaluar_trazable_con_presupuesto_total_medido, evaluar_trazable_con_presupuestos,
+    evaluar_trazable_con_presupuestos_medidos,
 };
 pub use formula::{
     DominioEsquema, Formula, Sentencia, SorteVar, SujetoTermino, TerminoArista, TerminoConstExt,
