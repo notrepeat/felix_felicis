@@ -25,6 +25,9 @@ use super::inventario::{
 use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
 use super::snapshot::{EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot};
 
+#[cfg(test)]
+mod stage_bundle_transaccional;
+
 #[cfg(windows)]
 use std::cmp::Ordering;
 
