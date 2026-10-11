@@ -91,8 +91,14 @@ fn cargar_journal_prepared_canonico_lo_liga_al_parent_anclado() {
     let bytes = expected.encode().unwrap();
     fs::write(nombre_journal(&root), &bytes).unwrap();
 
-    let actual = capability.cargar_canonico().unwrap().unwrap();
+    let (identity, actual) = capability.cargar_canonico().unwrap().unwrap();
+    let (identity_raw, _) = capability.abrir_y_leer_canonico().unwrap().unwrap();
 
+    assert_eq!(identity, identity_raw);
+    assert_eq!(
+        format!("{identity:?}"),
+        "IdentidadArchivoJournal([redacted])"
+    );
     assert_eq!(actual, expected);
     assert!(actual.parent() == &parent);
     assert_eq!(actual.state(), JournalState::Prepared);

@@ -234,8 +234,10 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     /// Carga el journal canónico y lo liga a la identidad del parent retenido.
     /// Solo la ausencia del nombre devuelve `None`; bytes inválidos o una
     /// identidad distinta fallan cerrados con errores estables y redactados.
-    pub(crate) fn cargar_canonico(&self) -> Result<Option<Journal>, ErrorJournalAnclado> {
-        let Some((_, bytes)) = self.abrir_y_leer_canonico()? else {
+    pub(crate) fn cargar_canonico(
+        &self,
+    ) -> Result<Option<(IdentidadArchivoJournal, Journal)>, ErrorJournalAnclado> {
+        let Some((identidad_archivo, bytes)) = self.abrir_y_leer_canonico()? else {
             return Ok(None);
         };
         let journal = Journal::parse(&bytes).map_err(ErrorJournalAnclado::InvalidJournal)?;
@@ -246,7 +248,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         if journal.parent() != &parent_esperado {
             return Err(ErrorJournalAnclado::ParentIdentityMismatch);
         }
-        Ok(Some(journal))
+        Ok(Some((identidad_archivo, journal)))
     }
 
     fn validar_parent(&self) -> Result<(), ErrorJournalAnclado> {
