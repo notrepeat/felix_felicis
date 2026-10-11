@@ -602,4 +602,120 @@ ignorados = ["ignored.md"]
         assert!(!format!("{error:?}").contains("PRIVATE-CANARY"));
         assert!(!error.to_string().contains("PRIVATE-CANARY"));
     }
+
+    #[test]
+    #[ignore = "harness runtime; ejecutar en release con --ignored --nocapture"]
+    fn runtime_snapshot_mide_bundles_de_1_10_y_100_mib() {
+        use std::io::Write;
+        use std::time::Instant;
+
+        const MIB: usize = 1024 * 1024;
+        const DOCUMENTO: &str = "---\ntype: a\ntitle: A\n---\n";
+        const MOTOR: &str = "runtime/1";
+        const POLITICA: &str = "policy/1";
+
+        fn escribir_payload(path: &Path, bytes: usize) {
+            let mut archivo = fs::File::create(path).unwrap();
+            let mut bloque = [0_u8; 64 * 1024];
+            for (indice, byte) in bloque.iter_mut().enumerate() {
+                *byte = (indice % 251) as u8;
+            }
+            let mut restantes = bytes;
+            while restantes > 0 {
+                let tamano = restantes.min(bloque.len());
+                archivo.write_all(&bloque[..tamano]).unwrap();
+                restantes -= tamano;
+            }
+        }
+
+        fn bytes_archivos(snapshot: &Snapshot) -> usize {
+            snapshot
+                .entradas()
+                .iter()
+                .filter_map(EntradaSnapshot::bytes)
+                .map(|bytes| bytes.len())
+                .sum()
+        }
+
+        fn firma_estructura(snapshot: &Snapshot) -> Vec<String> {
+            snapshot
+                .estructura()
+                .atomos()
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        }
+
+        for mib in [1, 10, 100] {
+            let bytes_objetivo = mib * MIB;
+            let temporal = tempdir().unwrap();
+            let raiz = temporal.path();
+            fs::create_dir(raiz.join("knowledge")).unwrap();
+            fs::create_dir(raiz.join("aux")).unwrap();
+            fs::write(raiz.join("manifest.toml"), MANIFIESTO).unwrap();
+            fs::write(raiz.join("invariants.smt2"), "\n").unwrap();
+            fs::write(raiz.join("knowledge/a.md"), DOCUMENTO).unwrap();
+
+            let base = MANIFIESTO.len() + 1 + DOCUMENTO.len();
+            assert!(bytes_objetivo > base);
+            escribir_payload(&raiz.join("aux/payload.bin"), bytes_objetivo - base);
+
+            let inicio = Instant::now();
+            let snapshot = capturar_snapshot(
+                raiz,
+                &raiz.join("manifest.toml"),
+                &raiz.join("invariants.smt2"),
+                MOTOR,
+                POLITICA,
+            )
+            .unwrap();
+            let captura = inicio.elapsed();
+
+            assert_eq!(snapshot.entradas().len(), 6, "inventario y directorios");
+            assert_eq!(bytes_archivos(&snapshot), bytes_objetivo, "bytes exactos");
+            assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+            assert_eq!(snapshot.invariantes_raw(), b"\n");
+            assert_eq!(snapshot.estructura().nodos().count(), 1);
+            assert_eq!(snapshot.fuentes_invariantes().len(), 0);
+            let firma = firma_estructura(&snapshot);
+            let token = snapshot.token();
+
+            let inicio_framing = Instant::now();
+            let token_recalculado = calcular_token_snapshot(
+                MOTOR,
+                POLITICA,
+                snapshot.manifiesto_raw(),
+                snapshot.invariantes_raw(),
+                snapshot.entradas(),
+            )
+            .unwrap();
+            let framing = inicio_framing.elapsed();
+            assert_eq!(token_recalculado, token, "framing sobre buffers capturados");
+            drop(snapshot);
+
+            let inicio_replay = Instant::now();
+            let replay = capturar_snapshot(
+                raiz,
+                &raiz.join("manifest.toml"),
+                &raiz.join("invariants.smt2"),
+                MOTOR,
+                POLITICA,
+            )
+            .unwrap();
+            let duracion_replay = inicio_replay.elapsed();
+            assert_eq!(replay.token(), token, "replay del token");
+            assert_eq!(bytes_archivos(&replay), bytes_objetivo, "replay de bytes");
+            assert_eq!(replay.estructura().nodos().count(), 1);
+            assert_eq!(firma_estructura(&replay), firma, "replay de estructura");
+
+            let mb_por_segundo = bytes_objetivo as f64 / captura.as_secs_f64() / 1_000_000.0;
+            let porcentaje_framing = framing.as_secs_f64() / captura.as_secs_f64() * 100.0;
+            println!(
+                "Runtime U4: {mib} MiB, bytes={bytes_objetivo}, captura={:.3} ms, MB/s={mb_por_segundo:.2}, framing={:.3} ms ({porcentaje_framing:.1}% de captura), replay={:.3} ms, token/replay/estructura=OK (orientativo; sin SLA)",
+                captura.as_secs_f64() * 1_000.0,
+                framing.as_secs_f64() * 1_000.0,
+                duracion_replay.as_secs_f64() * 1_000.0,
+            );
+        }
+    }
 }
