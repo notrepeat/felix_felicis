@@ -1,7 +1,5 @@
-use super::renombrar_test_support::{
-    rename_backup_name, rename_identity, saltar_sin_file_id,
-};
 use super::renombrar::ErrorRenombrarAnclado;
+use super::renombrar_test_support::{rename_backup_name, rename_identity, saltar_sin_file_id};
 use super::{DirectorioAnclado, UbicacionRaiz};
 use std::ffi::OsStr;
 use tempfile::tempdir;
