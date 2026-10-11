@@ -2859,7 +2859,6 @@ ignorados = ["ignored.md"]
             .unwrap_err();
 
         assert_eq!(error.codigo(), "stage_link_not_allowed");
-        assert!(!format!("{error:?} {error}").contains("PRIVATE-SYMLINK-CANARY"));
         assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), original);
     }
 

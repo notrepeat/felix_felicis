@@ -4,8 +4,9 @@ use std::fs::File;
 use fs_at::{OpenOptions as OpenOptionsAt, OpenOptionsWriteMode};
 
 use super::{
-    DirectorioAnclado, EntradaLecturaAnclada, ErrorDirectorioAnclado, clonar_handle,
-    mapear_error_creacion, mapear_io, metadata_directorio, metadata_es_reparse, validar_componente,
+    DirectorioAnclado, EntradaLecturaAnclada, ErrorDirectorioAnclado, TipoEntradaAnclada,
+    clasificar_entrada_sin_seguir, clonar_handle, mapear_error_creacion, mapear_io,
+    metadata_directorio, metadata_es_reparse, validar_componente,
 };
 
 impl DirectorioAnclado {
@@ -39,36 +40,34 @@ impl DirectorioAnclado {
             .raiz
             .as_ref()
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
-        let mut opciones = OpenOptionsAt::default();
-        opciones.read(true).follow(false);
-        #[cfg(unix)]
-        {
-            use fs_at::os::unix::OpenOptionsExt;
-            opciones.custom_flags(libc::O_NONBLOCK);
-        }
-        let entrada = opciones
-            .open_at(raiz, componente)
-            .map_err(mapear_apertura_sin_seguir)?;
-        let metadata = entrada.metadata().map_err(mapear_io)?;
-        if metadata.file_type().is_symlink() || metadata_es_reparse(&metadata) {
-            return Err(ErrorDirectorioAnclado::EnlaceNoPermitido);
-        }
-        if metadata.is_dir() {
-            let identidad_parent = metadata_directorio(raiz)?;
-            let identidad_raiz = metadata_directorio(&entrada)?;
-            Ok(EntradaLecturaAnclada::Directorio(Self {
-                parent: clonar_handle(raiz)?,
-                basename: componente.to_os_string(),
-                raiz: Some(entrada),
-                identidad_parent,
-                identidad_raiz: Some(identidad_raiz),
-                permite_escritura: false,
-                puede_crear_stage_sibling: false,
-            }))
-        } else if metadata.is_file() {
-            Ok(EntradaLecturaAnclada::Archivo(entrada))
-        } else {
-            Err(ErrorDirectorioAnclado::TipoNoAdmitido)
+        match clasificar_entrada_sin_seguir(raiz, componente)? {
+            TipoEntradaAnclada::Directorio => {
+                let mut opciones = OpenOptionsAt::default();
+                opciones.read(true).follow(false);
+                let entrada = opciones
+                    .open_dir_at(raiz, componente)
+                    .map_err(mapear_apertura_sin_seguir)?;
+                let identidad_parent = metadata_directorio(raiz)?;
+                let identidad_raiz = metadata_directorio(&entrada)?;
+                Ok(EntradaLecturaAnclada::Directorio(Self {
+                    parent: clonar_handle(raiz)?,
+                    basename: componente.to_os_string(),
+                    raiz: Some(entrada),
+                    identidad_parent,
+                    identidad_raiz: Some(identidad_raiz),
+                    permite_escritura: false,
+                    puede_crear_stage_sibling: false,
+                }))
+            }
+            TipoEntradaAnclada::Archivo => {
+                let mut opciones = OpenOptionsAt::default();
+                opciones.read(true).follow(false);
+                let entrada = opciones
+                    .open_at(raiz, componente)
+                    .map_err(mapear_apertura_sin_seguir)?;
+                metadata_archivo_regular(&entrada)?;
+                Ok(EntradaLecturaAnclada::Archivo(entrada))
+            }
         }
     }
 
@@ -161,13 +160,11 @@ impl DirectorioAnclado {
             .raiz
             .as_ref()
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
+        if clasificar_entrada_sin_seguir(raiz, componente)? != TipoEntradaAnclada::Archivo {
+            return Err(ErrorDirectorioAnclado::TipoNoAdmitido);
+        }
         let mut opciones = OpenOptionsAt::default();
         opciones.read(true).follow(false);
-        #[cfg(unix)]
-        {
-            use fs_at::os::unix::OpenOptionsExt;
-            opciones.custom_flags(libc::O_NONBLOCK);
-        }
         let archivo = opciones
             .open_at(raiz, componente)
             .map_err(mapear_error_creacion)?;
