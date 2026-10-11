@@ -8,3 +8,4 @@ pub(crate) mod inventario;
 pub mod lock;
 pub(crate) mod raiz;
 pub mod snapshot;
+pub(crate) mod stage;
