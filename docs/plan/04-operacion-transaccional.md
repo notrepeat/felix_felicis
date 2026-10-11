@@ -445,7 +445,10 @@ Chain strategy: feature-branch-chain
   `inventario_completo_arbol_y_artifacts_tras_restart` compara el mapa
   completo de árbol y artefactos sibling tras reinicio, incluidos cleanup en
   `prepared`/`backup_ready`. Runtime: recovery y commit de 100 MiB,
-  ms/renombre; rollback: old en prepared/backup_ready, new validado en
+  ms/renombre. En Unix, el precheck de identidad antes de `unlinkat` reduce
+  pero no elimina la carrera ante mutación hostil del namespace; el lock solo
+  garantiza coordinación entre escritores Felix cooperantes. Rollback: old en
+  prepared/backup_ready, new validado en
   installed/committed. Objetivo por slice: <400 líneas authored.
 - [ ] 8 — CLI simulate: `crates/universo-cli/src/propose.rs`.
   Test `crates/universo-cli/tests/propose_transaccional.rs`

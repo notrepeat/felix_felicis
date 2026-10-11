@@ -361,6 +361,8 @@ fn quitar_temporal(
     let nombre = CString::new(nombre.as_bytes()).map_err(|_| ErrorJournalAnclado::Io)?;
     // SAFETY: `nombre` is a validated NUL-terminated component and `parent`
     // remains open. The caller re-opened and identity-checked this name first.
+    // This identity precheck narrows, but cannot atomically close, races with
+    // hostile namespace mutation; the lock coordinates cooperative Felix writers only.
     let resultado = unsafe { libc::unlinkat(parent.as_raw_fd(), nombre.as_ptr(), 0) };
     if resultado == 0 {
         Ok(())
