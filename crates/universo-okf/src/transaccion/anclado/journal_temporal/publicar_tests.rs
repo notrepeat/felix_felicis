@@ -61,10 +61,15 @@ fn identidad_incorrecta_conserva_temporal_y_no_crea_canonico() {
     let otro = temp.path().join("other");
     fs::write(&otro, b"other identity").unwrap();
 
+    let mut syscall_invocado = false;
     assert_eq!(
-        capability.publicar(identidad(&otro)),
+        capability.publicar_con(identidad(&otro), |_, _| {
+            syscall_invocado = true;
+            Err(ErrorJournalAnclado::Io)
+        }),
         ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::IdentityMismatch)
     );
+    assert!(!syscall_invocado);
     assert_eq!(fs::read(temporal).unwrap(), bytes);
     assert!(!journal.exists());
 }
@@ -341,27 +346,57 @@ fn error_de_publicacion_con_observaciones_inciertas_preserva_evidencia() {
 
 #[test]
 fn conflictos_de_cleanup_confirmado_y_limpieza_indeterminada_son_outcomes() {
-    let conflicto = ErrorJournalAnclado::IdentityMismatch;
-    assert!(matches!(
-        super::resultado_con_limpieza_confirmada(
-            super::EstadoLimpiezaPublicacion::Conflicto(conflicto),
-            DeteccionPublicacionJournal::Nuevo,
+    for limpieza in [
+        super::EstadoLimpiezaPublicacion::Completa,
+        super::EstadoLimpiezaPublicacion::Pendiente,
+        super::EstadoLimpiezaPublicacion::Conflicto(ErrorJournalAnclado::IdentityMismatch),
+        super::EstadoLimpiezaPublicacion::Indeterminada,
+    ] {
+        assert_eq!(
+            super::resultado_con_limpieza_confirmada(limpieza, DeteccionPublicacionJournal::Nuevo,),
+            ResultadoPublicacionJournal::Confirmado {
+                deteccion: DeteccionPublicacionJournal::Nuevo,
+                limpieza,
+            }
+        );
+    }
+}
+
+#[test]
+fn clasificador_post_intento_es_total_y_conservador() {
+    use super::{ClasificacionErrorPostIntento as C, clasificar_error_post_intento as clasificar};
+
+    assert_eq!(
+        clasificar(ErrorJournalAnclado::Io, Ok(true), None),
+        C::Confirmado
+    );
+    assert_eq!(
+        clasificar(ErrorJournalAnclado::Io, Ok(false), Some(Ok(true))),
+        C::NoAplicado(ErrorJournalAnclado::Io)
+    );
+    assert_eq!(
+        clasificar(
+            ErrorJournalAnclado::CanonicalConflict,
+            Err(ErrorJournalAnclado::RegularFileRequired),
+            Some(Err(ErrorJournalAnclado::Io)),
         ),
-        ResultadoPublicacionJournal::Confirmado {
-            deteccion: DeteccionPublicacionJournal::Nuevo,
-            limpieza: super::super::LimpiezaConfirmadaJournal::Conflicto(error),
-        } if error == conflicto
-    ));
-    assert!(matches!(
-        super::resultado_con_limpieza_confirmada(
-            super::EstadoLimpiezaPublicacion::Indeterminada,
-            DeteccionPublicacionJournal::YaExistia,
+        C::NoAplicado(ErrorJournalAnclado::RegularFileRequired)
+    );
+    for (canonico, temporal) in [
+        (Ok(false), None),
+        (Ok(false), Some(Ok(false))),
+        (Ok(false), Some(Err(ErrorJournalAnclado::Io))),
+        (Err(ErrorJournalAnclado::Io), Some(Ok(true))),
+        (
+            Err(ErrorJournalAnclado::IdentityMismatch),
+            Some(Err(ErrorJournalAnclado::Io)),
         ),
-        ResultadoPublicacionJournal::Confirmado {
-            deteccion: DeteccionPublicacionJournal::YaExistia,
-            limpieza: super::super::LimpiezaConfirmadaJournal::Indeterminada,
-        }
-    ));
+    ] {
+        assert!(matches!(
+            clasificar(ErrorJournalAnclado::Io, canonico, temporal),
+            C::Indeterminado(_)
+        ));
+    }
 }
 
 #[cfg(any(unix, windows))]
