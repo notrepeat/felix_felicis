@@ -1,6 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::{AristaId, Atomo, Delta, Estructura, LadoDelta, Sujeto};
+use crate::{
+    AristaId, Atomo, BundlePath, Delta, Estructura, Etiqueta, IdArista, LadoDelta, Sorte, Sujeto,
+};
 
 use super::aristas;
 
@@ -37,6 +39,9 @@ pub enum ErrorCandidato {
     RemoveNotFound {
         clase: ClaseOperacion,
     },
+    AddConflict {
+        clase: ClaseOperacion,
+    },
     SnapshotInconsistente,
 }
 
@@ -47,6 +52,7 @@ impl std::fmt::Display for ErrorCandidato {
                 write!(f, "unsupported_operation: {lado} {clase}")
             }
             Self::RemoveNotFound { clase } => write!(f, "remove_not_found: {clase}"),
+            Self::AddConflict { clase } => write!(f, "add_conflict: {clase}"),
             Self::SnapshotInconsistente => f.write_str("candidate_error: snapshot_inconsistent"),
         }
     }
@@ -80,16 +86,25 @@ impl Candidato {
     }
 }
 
-/// Construye un candidato aislado; este primer slice solo retira aristas.
+/// Construye un candidato aislado con retiros y altas `Edge`/`HasLab` de arista.
 pub fn construir_candidato(
     snapshot: &Estructura,
     delta: &Delta,
 ) -> Result<Candidato, ErrorCandidato> {
-    if let Some(atomo) = delta.agregar().first() {
-        return Err(ErrorCandidato::UnsupportedOperation {
-            lado: LadoDelta::Add,
-            clase: clase(atomo),
-        });
+    for atomo in delta.agregar() {
+        if !matches!(
+            atomo,
+            Atomo::Edge { .. }
+                | Atomo::HasLab {
+                    sujeto: Sujeto::Arista(_),
+                    ..
+                }
+        ) {
+            return Err(ErrorCandidato::UnsupportedOperation {
+                lado: LadoDelta::Add,
+                clase: clase(atomo),
+            });
+        }
     }
     for atomo in delta.retirar() {
         if !matches!(
@@ -153,7 +168,150 @@ pub fn construir_candidato(
     let handles: Vec<_> = aristas_retiradas.into_iter().collect();
     aristas::retirar_lote(&mut estructura, &handles)
         .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
+    aplicar_altas(&mut estructura, delta.agregar())?;
     Ok(Candidato { estructura })
+}
+
+type GrupoArista = (BundlePath, Sorte, BundlePath);
+
+fn aplicar_altas(estructura: &mut Estructura, atomos: &[Atomo]) -> Result<(), ErrorCandidato> {
+    let mut grupos = BTreeMap::<GrupoArista, Vec<&Atomo>>::new();
+    let mut etiquetas = HashMap::<IdArista, Vec<&Etiqueta>>::new();
+    let mut identidades_edge = HashSet::<IdArista>::new();
+
+    for atomo in atomos {
+        match atomo {
+            Atomo::Edge {
+                id,
+                origen,
+                destino,
+                sorte,
+            } => {
+                if id.origen != *origen || id.destino != *destino || id.sorte != *sorte {
+                    return Err(ErrorCandidato::AddConflict {
+                        clase: ClaseOperacion::Edge,
+                    });
+                }
+                if !identidades_edge.insert(id.clone()) {
+                    return Err(ErrorCandidato::AddConflict {
+                        clase: ClaseOperacion::Edge,
+                    });
+                }
+                grupos
+                    .entry((origen.clone(), sorte.clone(), destino.clone()))
+                    .or_default()
+                    .push(atomo);
+            }
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(id),
+                etiqueta,
+            } => etiquetas.entry(id.clone()).or_default().push(etiqueta),
+            _ => unreachable!("las altas se validaron antes de agrupar"),
+        }
+    }
+
+    if etiquetas
+        .keys()
+        .any(|identidad| !identidades_edge.contains(identidad))
+    {
+        return Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab,
+        });
+    }
+
+    for ((origen_path, sorte, destino_path), mut altas) in grupos {
+        // Atomo se ordena por su texto canónico, donde #10 precede a #2.
+        // El contrato operativo exige ordinal numérico.
+        altas.sort_by_key(|atomo| match atomo {
+            Atomo::Edge { id, .. } => id.ordinal,
+            _ => unreachable!("el grupo solo contiene altas Edge"),
+        });
+
+        let origen = estructura
+            .por_path(&origen_path)
+            .ok_or(ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::Edge,
+            })?;
+        let destino = estructura
+            .por_path(&destino_path)
+            .ok_or(ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::Edge,
+            })?;
+        let supervivientes = estructura
+            .salientes(origen)
+            .iter()
+            .filter(|handle| {
+                estructura
+                    .arista(**handle)
+                    .is_some_and(|arista| arista.tipo == sorte && arista.destino == destino)
+            })
+            .count();
+        let mut nuevas = 0usize;
+
+        for atomo in altas {
+            let Atomo::Edge { id, .. } = atomo else {
+                unreachable!("el grupo solo contiene altas Edge")
+            };
+            let etiquetas_edge = etiquetas.remove(id).ok_or(ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::HasLab,
+            })?;
+            if etiquetas_edge.len() != 1 {
+                return Err(ErrorCandidato::AddConflict {
+                    clase: ClaseOperacion::HasLab,
+                });
+            }
+            let etiqueta = etiquetas_edge[0];
+            if etiqueta.como_str().contains(['\n', '\r']) {
+                return Err(ErrorCandidato::AddConflict {
+                    clase: ClaseOperacion::HasLab,
+                });
+            }
+
+            let ordinal = usize::try_from(id.ordinal).map_err(|_| ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::Edge,
+            })?;
+            if ordinal < supervivientes {
+                let existente =
+                    aristas::resolver(estructura, id).ok_or(ErrorCandidato::AddConflict {
+                        clase: ClaseOperacion::Edge,
+                    })?;
+                if estructura
+                    .arista(existente)
+                    .is_none_or(|arista| arista.etiqueta != *etiqueta)
+                {
+                    return Err(ErrorCandidato::AddConflict {
+                        clase: ClaseOperacion::HasLab,
+                    });
+                }
+                continue;
+            }
+
+            let esperado =
+                supervivientes
+                    .checked_add(nuevas)
+                    .ok_or(ErrorCandidato::AddConflict {
+                        clase: ClaseOperacion::Edge,
+                    })?;
+            if ordinal != esperado {
+                return Err(ErrorCandidato::AddConflict {
+                    clase: ClaseOperacion::Edge,
+                });
+            }
+            estructura
+                .insertar_arista(origen, destino, sorte.clone(), (*etiqueta).clone())
+                .map_err(|_| ErrorCandidato::AddConflict {
+                    clase: ClaseOperacion::Edge,
+                })?;
+            nuevas += 1;
+        }
+    }
+
+    if !etiquetas.is_empty() {
+        return Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab,
+        });
+    }
+    Ok(())
 }
 
 fn clase(atomo: &Atomo) -> ClaseOperacion {
