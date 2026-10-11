@@ -1028,6 +1028,7 @@ dependencies = [
  "toml",
  "universo-core",
  "universo-testkit",
+ "windows-sys",
 ]
 
 [[package]]

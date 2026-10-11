@@ -15,7 +15,8 @@ pub(crate) enum ErrorRaiz {
     TipoNoAdmitido,
 }
 
-/// Raíz existente, no enlazada en su componente final y canonizada una vez.
+/// Raíz existente, con todos sus componentes inspeccionados sin seguir enlaces
+/// y canonizada una vez.
 pub(crate) struct RaizValidada {
     ruta: PathBuf,
     parent: PathBuf,
@@ -23,12 +24,15 @@ pub(crate) struct RaizValidada {
 }
 
 impl RaizValidada {
-    /// Inspecciona la entrada sin seguir el componente final y conserva su
-    /// identidad canónica para derivar todos los artefactos sibling.
+    /// Inspecciona cada componente sin seguir enlaces y conserva la identidad
+    /// canónica para derivar todos los artefactos sibling.
     pub(crate) fn nueva(ruta: &Path) -> Result<Self, ErrorRaiz> {
-        let absoluta = ruta_absoluta_lexica(ruta)?;
-        validar_directorio_final(&absoluta)?;
+        let absoluta = ruta_absoluta(ruta)?;
+        validar_componentes_sin_enlaces(&absoluta)?;
 
+        // Canonizar la ruta original, no una reducción léxica: el sistema de
+        // archivos define la semántica de `..`. La inspección previa garantiza
+        // que ningún componente recorrido haya sido un symlink/reparse point.
         let canonica = fs::canonicalize(&absoluta).map_err(|_| ErrorRaiz::Io)?;
         validar_directorio_final(&canonica)?;
 
@@ -66,7 +70,11 @@ impl RaizValidada {
     }
 }
 
-fn ruta_absoluta_lexica(ruta: &Path) -> Result<PathBuf, ErrorRaiz> {
+fn ruta_absoluta(ruta: &Path) -> Result<PathBuf, ErrorRaiz> {
+    if ruta.as_os_str().is_empty() {
+        return Err(ErrorRaiz::TipoNoAdmitido);
+    }
+
     let ruta = if ruta.is_absolute() {
         ruta.to_path_buf()
     } else {
@@ -75,22 +83,46 @@ fn ruta_absoluta_lexica(ruta: &Path) -> Result<PathBuf, ErrorRaiz> {
             .join(ruta)
     };
 
-    let mut normalizada = PathBuf::new();
-    for componente in ruta.components() {
-        match componente {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !normalizada.pop() {
-                    return Err(ErrorRaiz::TipoNoAdmitido);
-                }
-            }
-            otro => normalizada.push(otro.as_os_str()),
-        }
+    if !ruta.is_absolute() {
+        return Err(ErrorRaiz::TipoNoAdmitido);
     }
-    Ok(normalizada)
+
+    Ok(ruta)
 }
 
-fn validar_directorio_final(ruta: &Path) -> Result<(), ErrorRaiz> {
+/// Inspecciona cada prefijo antes de resolver el siguiente componente. En
+/// particular, un symlink antes de `..` se rechaza antes de que `..` pueda
+/// cambiar su significado. El recorrido léxico solo se usa para inspeccionar
+/// prefijos ya comprobados; la ruta final se canoniza con semántica del SO.
+fn validar_componentes_sin_enlaces(ruta: &Path) -> Result<(), ErrorRaiz> {
+    let mut recorrido = PathBuf::new();
+    let mut profundidad = 0usize;
+
+    for componente in ruta.components() {
+        match componente {
+            Component::Prefix(prefijo) => recorrido.push(prefijo.as_os_str()),
+            Component::RootDir => {
+                recorrido.push(componente.as_os_str());
+                validar_directorio_sin_enlace(&recorrido)?;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if profundidad > 0 {
+                    recorrido.pop();
+                    profundidad -= 1;
+                }
+            }
+            Component::Normal(nombre) => {
+                recorrido.push(nombre);
+                validar_directorio_sin_enlace(&recorrido)?;
+                profundidad += 1;
+            }
+        }
+    }
+    validar_directorio_sin_enlace(&recorrido)
+}
+
+fn validar_directorio_sin_enlace(ruta: &Path) -> Result<(), ErrorRaiz> {
     let metadata = fs::symlink_metadata(ruta).map_err(|_| ErrorRaiz::Io)?;
     if metadata_es_enlace_o_reparse(&metadata) {
         return Err(ErrorRaiz::EnlaceNoPermitido);
@@ -99,6 +131,10 @@ fn validar_directorio_final(ruta: &Path) -> Result<(), ErrorRaiz> {
         return Err(ErrorRaiz::TipoNoAdmitido);
     }
     Ok(())
+}
+
+fn validar_directorio_final(ruta: &Path) -> Result<(), ErrorRaiz> {
+    validar_directorio_sin_enlace(ruta)
 }
 
 pub(crate) fn metadata_es_enlace_o_reparse(metadata: &Metadata) -> bool {
@@ -139,6 +175,21 @@ mod tests {
             directa.ruta_lock().file_name().unwrap(),
             OsString::from(".bundle.felix.lock")
         );
+    }
+
+    #[test]
+    fn alias_parent_converge_sin_enlaces() {
+        let temp = tempdir().unwrap();
+        let desvio = temp.path().join("desvio");
+        let raiz = temp.path().join("bundle");
+        fs::create_dir(&desvio).unwrap();
+        fs::create_dir(&raiz).unwrap();
+
+        let directa = RaizValidada::nueva(&raiz).unwrap();
+        let alias = RaizValidada::nueva(&desvio.join("..").join("bundle")).unwrap();
+
+        assert_eq!(directa.ruta(), alias.ruta());
+        assert_eq!(directa.ruta_lock(), alias.ruta_lock());
     }
 
     #[cfg(unix)]
