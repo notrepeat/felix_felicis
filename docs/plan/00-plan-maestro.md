@@ -13,6 +13,7 @@ resultado de un agente en escenarios reproducibles.
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
 | Progreso | 3/9 fases completas; fases 01–03 cerradas con evidencia reproducible. `cargo test --workspace` pasa en HEAD `ccd54b5`. |
+| Foco actual | Fase 04: cerrar root canónico, orden de aristas/Ext/labels, API core/OKF y privacidad CLI. |
 | Última actualización | 2026-10-10 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -51,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | pendiente | 03 | Ningún rechazo modifica el estado vigente. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Ningún rechazo modifica el estado vigente. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -84,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Continuar [04 — Operación transaccional](04-operacion-transaccional.md).
+Foco actual: cerrar el contrato de [04 — Operación transaccional](04-operacion-transaccional.md).
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
