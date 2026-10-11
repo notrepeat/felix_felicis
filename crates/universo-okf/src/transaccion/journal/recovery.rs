@@ -158,3 +158,7 @@ pub(crate) fn decide_recovery(
 #[cfg(test)]
 #[path = "recovery/critical_tests.rs"]
 mod critical_tests;
+
+#[cfg(test)]
+#[path = "recovery/truth_table.rs"]
+mod truth_table;
