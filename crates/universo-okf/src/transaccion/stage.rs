@@ -1349,7 +1349,11 @@ fn directorios_padre(mut ruta: &str) -> Vec<&str> {
 mod tests {
     use super::*;
     use crate::serializar::{ParentOverride, serializar_candidato};
-    use crate::transaccion::captura::{capturar_snapshot, materializar_desde_entradas};
+    use crate::transaccion::anclado::DirectorioAnclado;
+    use crate::transaccion::captura::{
+        ConfigRawCapturada, capturar_snapshot, capturar_snapshot_con_cas_anclado,
+        materializar_desde_entradas,
+    };
     use std::fs;
     use tempfile::{TempDir, tempdir};
     use universo_core::{Atomo, Delta, Etiqueta, Sujeto, construir_candidato};
@@ -1426,6 +1430,387 @@ ignorados = ["ignored.md"]
         (temp, snapshot)
     }
 
+    fn snapshot_anclado_con_auxiliares() -> (TempDir, DirectorioAnclado, Snapshot, PathBuf, PathBuf)
+    {
+        let (temp, _) = snapshot_minimo();
+        let raiz = temp.path().join("bundle");
+        fs::create_dir_all(raiz.join("assets")).unwrap();
+        fs::write(raiz.join("assets/data.bin"), [0, 255, 17]).unwrap();
+        fs::write(raiz.join("assets/empty.bin"), []).unwrap();
+        let manifiesto = temp.path().join("manifest.toml");
+        let invariantes = temp.path().join("invariants.smt2");
+        let snapshot_path =
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1").unwrap();
+        let ancla =
+            DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&raiz).unwrap()).unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(&manifiesto).unwrap(),
+            fs::read(&invariantes).unwrap(),
+            None,
+            None,
+        );
+        let snapshot = capturar_snapshot_con_cas_anclado(
+            &ancla,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            snapshot_path.token(),
+        )
+        .unwrap();
+        (temp, ancla, snapshot, manifiesto, invariantes)
+    }
+
+    fn candidato_y_plan(snapshot: &Snapshot) -> (Candidato, PlanStaging) {
+        let candidato = construir_candidato(snapshot.estructura(), &Delta::default()).unwrap();
+        let documentos = serializar_candidato(snapshot.estructura(), &candidato, &[]).unwrap();
+        let plan = planificar_staging(snapshot, &documentos).unwrap();
+        (candidato, plan)
+    }
+
+    #[test]
+    fn crea_sibling_anclado_y_conserva_identity_del_objeto() {
+        let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let (stage, componente) = ancla
+            .crear_stage_sibling("identity-probe")
+            .unwrap_or_else(|_| panic!("crear sibling anclado"));
+        let ruta = temp.path().join(&componente);
+        let reabierto =
+            DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+
+        assert_eq!(stage.componente(), componente);
+        assert_eq!(stage.identidad_parent(), ancla.identidad_parent());
+        assert_eq!(stage.identidad_raiz(), reabierto.identidad_raiz());
+        assert!(ruta.is_dir());
+    }
+
+    #[test]
+    fn materializa_stage_anclado_raw_y_liga_recibo_a_identidad() {
+        let (temp, ancla, snapshot, manifiesto, invariantes) = snapshot_anclado_con_auxiliares();
+        let raiz = temp.path().join("bundle");
+        let token_raiz =
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
+                .unwrap()
+                .token();
+        let candidato = candidato_con_titulo_en(&snapshot, "knowledge/a", "A", "Anchor Edited");
+        let documentos = serializar_candidato(snapshot.estructura(), &candidato, &[]).unwrap();
+        let plan = planificar_staging(&snapshot, &documentos).unwrap();
+        let identidad_root = ancla.identidad_raiz();
+
+        let stage = materializar_staging_anclado(&ancla, &snapshot, &plan, &candidato).unwrap();
+        let ruta_stage = temp.path().join(stage.componente());
+        let recibo = stage.recibo().unwrap();
+        let reabierto =
+            DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta_stage).unwrap())
+                .unwrap();
+
+        assert_eq!(recibo.stage_id(), stage.stage_id());
+        assert_eq!(recibo.identidad(), Some(stage.identidad()));
+        assert_eq!(recibo.identidad(), reabierto.identidad_raiz());
+        assert_eq!(
+            recibo.snapshot(),
+            recargar_staging_anclado(&snapshot, &plan, &stage)
+                .unwrap_or_else(|_| panic!("el stage recién materializado debe recargar"))
+                .token()
+        );
+        assert!(ruta_stage.join("empty").is_dir());
+        assert!(ruta_stage.join("assets").is_dir());
+        assert_eq!(
+            fs::read(ruta_stage.join("assets/data.bin")).unwrap(),
+            [0, 255, 17]
+        );
+        assert_eq!(fs::read(ruta_stage.join("assets/empty.bin")).unwrap(), b"");
+        assert_eq!(
+            fs::read(ruta_stage.join("documento.md.tmp")).unwrap(),
+            b"sentinel"
+        );
+        assert!(
+            String::from_utf8(fs::read(ruta_stage.join("knowledge/a.md")).unwrap())
+                .unwrap()
+                .contains("Anchor Edited")
+        );
+        assert_ne!(recibo.snapshot(), snapshot.token());
+        assert_eq!(ancla.identidad_raiz(), identidad_root);
+        assert_eq!(
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
+                .unwrap()
+                .token(),
+            token_raiz
+        );
+    }
+
+    #[test]
+    fn rechaza_snapshot_de_otra_raiz_antes_de_crear_stage_anclado() {
+        let (temp_raiz, ancla_raiz, snapshot_raiz, manifiesto, invariantes) =
+            snapshot_anclado_con_auxiliares();
+        let (_temp_otra, _ancla_otra, snapshot_otra, _, _) = snapshot_anclado_con_auxiliares();
+        let (candidato_otra, plan_otra) = candidato_y_plan(&snapshot_otra);
+        let identidad_raiz = ancla_raiz.identidad_raiz();
+        let token_raiz = snapshot_raiz.token();
+
+        let error =
+            materializar_staging_anclado(&ancla_raiz, &snapshot_otra, &plan_otra, &candidato_otra)
+                .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_root_mismatch");
+        assert!(error.stage_anclado_parcial().is_none());
+        assert_eq!(ancla_raiz.identidad_raiz(), identidad_raiz);
+        assert_eq!(
+            capturar_snapshot(
+                &temp_raiz.path().join("bundle"),
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap()
+            .token(),
+            token_raiz
+        );
+        assert!(temp_raiz.path().read_dir().unwrap().all(|entrada| {
+            !entrada
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".bundle.felix.stage.")
+        }));
+    }
+
+    #[test]
+    fn stages_anclados_equivalentes_comparten_token_pero_no_identidad_y_redactan() {
+        let (temp, ancla, snapshot, manifiesto, invariantes) = snapshot_anclado_con_auxiliares();
+        let raiz = temp.path().join("bundle");
+        let (candidato, plan) = candidato_y_plan(&snapshot);
+        let uno = materializar_staging_anclado(&ancla, &snapshot, &plan, &candidato).unwrap();
+        let dos = materializar_staging_anclado(&ancla, &snapshot, &plan, &candidato).unwrap();
+        let recibo_uno = uno.recibo().unwrap();
+        let recibo_dos = dos.recibo().unwrap();
+
+        assert_ne!(uno.stage_id(), dos.stage_id());
+        assert_ne!(uno.identidad(), dos.identidad());
+        assert_eq!(recibo_uno.stage_id(), uno.stage_id());
+        assert_eq!(recibo_dos.stage_id(), dos.stage_id());
+        assert_eq!(recibo_uno.identidad(), Some(uno.identidad()));
+        assert_eq!(recibo_dos.identidad(), Some(dos.identidad()));
+        assert_eq!(recibo_uno.snapshot(), recibo_dos.snapshot());
+        for (stage, recibo) in [(&uno, recibo_uno), (&dos, recibo_dos)] {
+            let visible = format!("{recibo:?} {recibo} {:?}", stage.identidad());
+            assert!(!visible.contains(stage.stage_id()));
+            assert!(!visible.contains(&recibo.snapshot().to_hex()));
+            assert!(!format!("{stage:?}").contains(stage.stage_id()));
+        }
+        assert_eq!(
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
+                .unwrap()
+                .token(),
+            snapshot.token()
+        );
+    }
+
+    #[test]
+    fn reintenta_colision_de_stage_anclado_sin_alterar_objeto_existente() {
+        let (temp, ancla, snapshot, _, _) = snapshot_anclado_con_auxiliares();
+        let (candidato, plan) = candidato_y_plan(&snapshot);
+        let colision = temp.path().join(".bundle.felix.stage.occupied");
+        fs::create_dir(&colision).unwrap();
+        fs::write(colision.join("canary.bin"), b"preexisting").unwrap();
+        let mut ids = ["occupied", "fresh"].into_iter();
+
+        let stage = materializar_staging_anclado_y_recargar_con(&ancla, &snapshot, &plan, || {
+            Ok(ids.next().unwrap().to_owned())
+        })
+        .unwrap()
+        .0;
+
+        assert_eq!(stage.stage_id(), "fresh");
+        assert!(temp.path().join(stage.componente()).is_dir());
+        assert_eq!(
+            fs::read(colision.join("canary.bin")).unwrap(),
+            b"preexisting"
+        );
+        assert!(materializar_staging_anclado(&ancla, &snapshot, &plan, &candidato).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reintenta_colision_symlink_del_stage_anclado_sin_seguirla() {
+        use std::os::unix::fs::symlink;
+
+        let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let destino = temp.path().join("outside");
+        fs::create_dir(&destino).unwrap();
+        fs::write(destino.join("canary.bin"), b"external untouched").unwrap();
+        let colision = temp.path().join(".bundle.felix.stage.linked");
+        symlink(&destino, &colision).unwrap();
+        let mut ids = ["linked", "fresh-link"].into_iter();
+
+        let stage =
+            crear_stage_anclado_unico(&ancla, &mut || Ok(ids.next().unwrap().to_owned())).unwrap();
+
+        assert_eq!(stage.stage_id(), "fresh-link");
+        assert!(
+            fs::symlink_metadata(&colision)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(temp.path().join(stage.componente()).is_dir());
+        assert_eq!(
+            fs::read(destino.join("canary.bin")).unwrap(),
+            b"external untouched"
+        );
+        assert!(!destino.join("created.txt").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reintenta_colision_junction_del_stage_anclado_sin_seguirla() {
+        let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let destino = temp.path().join("outside");
+        fs::create_dir(&destino).unwrap();
+        fs::write(destino.join("canary.bin"), b"external untouched").unwrap();
+        let colision = temp.path().join(".bundle.felix.stage.linked");
+        let resultado = std::process::Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(&colision)
+            .arg(&destino)
+            .output()
+            .unwrap();
+        assert!(
+            resultado.status.success(),
+            "mklink /J must create a junction"
+        );
+        let mut ids = ["linked", "fresh-link"].into_iter();
+
+        let stage =
+            crear_stage_anclado_unico(&ancla, &mut || Ok(ids.next().unwrap().to_owned())).unwrap();
+
+        assert_eq!(stage.stage_id(), "fresh-link");
+        assert!(metadata_es_enlace_o_reparse(
+            &fs::symlink_metadata(&colision).unwrap()
+        ));
+        assert!(temp.path().join(stage.componente()).is_dir());
+        assert_eq!(
+            fs::read(destino.join("canary.bin")).unwrap(),
+            b"external untouched"
+        );
+        assert!(!destino.join("created.txt").exists());
+    }
+
+    #[test]
+    fn recarga_anclada_rechaza_corrupcion_falta_y_entrada_extra() {
+        for caso in ["corruption", "missing", "extra"] {
+            let (_temp, ancla, snapshot, _, _) = snapshot_anclado_con_auxiliares();
+            let (_, plan) = candidato_y_plan(&snapshot);
+            let mut ids = [caso].into_iter();
+            let stage = crear_staging_anclado_con(&ancla, &snapshot, &plan, || {
+                Ok(ids.next().unwrap().to_owned())
+            })
+            .unwrap();
+            let ruta_stage = _temp.path().join(stage.componente());
+            match caso {
+                "corruption" => fs::write(ruta_stage.join("assets/data.bin"), b"tampered").unwrap(),
+                "missing" => fs::remove_file(ruta_stage.join("assets/data.bin")).unwrap(),
+                "extra" => fs::write(ruta_stage.join("unexpected.bin"), b"extra").unwrap(),
+                _ => unreachable!(),
+            }
+
+            assert_eq!(
+                recargar_staging_anclado(&snapshot, &plan, &stage)
+                    .unwrap_err()
+                    .codigo(),
+                "stage_inventory_mismatch",
+                "caso {caso}"
+            );
+        }
+    }
+
+    #[test]
+    fn candidato_semantico_distinto_no_emite_recibo_en_stage_anclado() {
+        let (temp, ancla, snapshot, manifiesto, invariantes) = snapshot_anclado_con_auxiliares();
+        let raiz = temp.path().join("bundle");
+        let token_raiz = snapshot.token();
+        let candidato = candidato_con_titulo_en(&snapshot, "knowledge/a", "A", "Anchor Edited");
+        let mut documentos = serializar_candidato(snapshot.estructura(), &candidato, &[]).unwrap();
+        let indice = documentos
+            .iter()
+            .position(|doc| doc.path().como_str() == "knowledge/a")
+            .unwrap();
+        documentos[indice] = documento(
+            "knowledge/a",
+            &documentos[indice]
+                .contenido()
+                .replace("Anchor Edited", "Wrong candidate"),
+        );
+        let plan = planificar_staging(&snapshot, &documentos).unwrap();
+
+        let error = materializar_staging_anclado(&ancla, &snapshot, &plan, &candidato).unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_candidate_mismatch");
+        let parcial = error.stage_anclado_parcial().unwrap();
+        assert!(parcial.recibo().is_none());
+        assert!(!format!("{error:?} {error}").contains("Wrong candidate"));
+        assert_eq!(
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
+                .unwrap()
+                .token(),
+            token_raiz
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_anclado_sigue_parent_handle_tras_reemplazar_ancestro() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let moved = temp.path().join("parent-moved");
+        let outside = temp.path().join("outside");
+        let root = parent.join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        fs::write(outside.join("canary.bin"), b"external untouched").unwrap();
+        let manifiesto = temp.path().join("manifest.toml");
+        let invariantes = temp.path().join("invariants.smt2");
+        fs::write(
+            &manifiesto,
+            "version = \"anchor-stage/1\"\n\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n\n[layout]\ndirectorios = [\"knowledge\"]\nsin_iota = []\nignorados = []\n",
+        )
+        .unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        let snapshot_path =
+            capturar_snapshot(&root, &manifiesto, &invariantes, "engine/1", "policy/1").unwrap();
+        let ancla =
+            DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&root).unwrap()).unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(&manifiesto).unwrap(),
+            fs::read(&invariantes).unwrap(),
+            None,
+            None,
+        );
+        let snapshot = capturar_snapshot_con_cas_anclado(
+            &ancla,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            snapshot_path.token(),
+        )
+        .unwrap();
+        let (candidato, plan) = candidato_y_plan(&snapshot);
+
+        fs::rename(&parent, &moved).unwrap();
+        symlink(&outside, &parent).unwrap();
+        let stage = materializar_staging_anclado(&ancla, &snapshot, &plan, &candidato).unwrap();
+
+        assert!(moved.join(stage.componente()).is_dir());
+        assert!(!outside.join(stage.componente()).exists());
+        assert_eq!(
+            fs::read(outside.join("canary.bin")).unwrap(),
+            b"external untouched"
+        );
+    }
+
     fn snapshot_con_parent() -> (TempDir, Snapshot, PathBuf, PathBuf) {
         snapshot_con_parent_version("stage-parent/1")
     }
@@ -1463,10 +1848,19 @@ ignorados = ["ignored.md"]
     }
 
     fn candidato_con_titulo(snapshot: &Snapshot, titulo: &str) -> Candidato {
-        let path = BundlePath::nuevo("knowledge/index").unwrap();
+        candidato_con_titulo_en(snapshot, "knowledge/index", "Root", titulo)
+    }
+
+    fn candidato_con_titulo_en(
+        snapshot: &Snapshot,
+        ruta: &str,
+        titulo_anterior: &str,
+        titulo: &str,
+    ) -> Candidato {
+        let path = BundlePath::nuevo(ruta).unwrap();
         let anterior = Atomo::HasLab {
             sujeto: Sujeto::Nodo(path.clone()),
-            etiqueta: Etiqueta::nuevo("Root"),
+            etiqueta: Etiqueta::nuevo(titulo_anterior),
         };
         let nuevo = Atomo::HasLab {
             sujeto: Sujeto::Nodo(path),
