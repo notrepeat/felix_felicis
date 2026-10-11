@@ -18,6 +18,9 @@ use crate::invariante::expansion::ResultadoExpansionFuente;
 mod presencia;
 pub use presencia::CorePresencia;
 use presencia::{ErrorPresencia, ResultadoPresencia, extraer_core_presencia};
+mod brecha;
+pub use brecha::{AtomoBrecha, Brecha, ClaseBrecha, ConteosBrecha, FormaBrecha, FormaPositiva};
+use brecha::{ErrorBrecha, extraer_brecha};
 
 /// Máximo predeterminado de explicaciones al enumerar.
 pub const MAX_EXPLICACIONES_POR_DEFECTO: usize = 100;
@@ -88,6 +91,7 @@ pub struct ObjetoExplicacion {
     pub procedencia: ProcedenciaExplicacion,
     pub counterexample: Contraejemplo,
     core: Option<CorePresencia>,
+    gap: Option<Box<Brecha>>,
 }
 
 impl ObjetoExplicacion {
@@ -99,6 +103,13 @@ impl ObjetoExplicacion {
     pub fn core_presencia(&self) -> Option<&CorePresencia> {
         self.core.as_ref()
     }
+
+    /// Devuelve el componente opcional `gap`, limitado al fragmento seguro
+    /// implementado por [`Brecha`]. Los bindings sensibles solo se obtienen
+    /// mediante el accesor explícito [`Brecha::asignacion_universal_sensible`].
+    pub fn gap(&self) -> Option<&Brecha> {
+        self.gap.as_deref()
+    }
 }
 
 impl fmt::Debug for ObjetoExplicacion {
@@ -107,6 +118,7 @@ impl fmt::Debug for ObjetoExplicacion {
             .field("procedencia", &self.procedencia)
             .field("counterexample", &"[redactado]")
             .field("tiene_core_presencia", &self.core.is_some())
+            .field("tiene_gap", &self.gap.is_some())
             .finish()
     }
 }
@@ -359,11 +371,23 @@ pub fn explicar_con_presupuesto_y_consumos(
                         estructura,
                         &mut presupuesto,
                     )?;
+                    let brecha = extraer_brecha(
+                        &oracion.formula,
+                        &traza.evidencia,
+                        estructura,
+                        &mut presupuesto,
+                    )
+                    .map_err(|error| match error {
+                        ErrorBrecha::PresupuestoAgotado { limite } => {
+                            ErrorVeredicto::PresupuestoAgotado { limite }
+                        }
+                    })?;
                     consumir_presupuesto(&mut presupuesto)?;
                     let objeto = clasificar_objeto(
                         ProcedenciaExplicacion::from(oracion),
                         traza.evidencia,
                         core,
+                        brecha,
                     );
                     return Ok(medido(
                         ResultadoExplicaciones::Decision(Some(objeto)),
@@ -397,11 +421,23 @@ pub fn explicar_con_presupuesto_y_consumos(
                     estructura,
                     &mut presupuesto,
                 )?;
+                let brecha = extraer_brecha(
+                    &oracion.formula,
+                    &traza.evidencia,
+                    estructura,
+                    &mut presupuesto,
+                )
+                .map_err(|error| match error {
+                    ErrorBrecha::PresupuestoAgotado { limite } => {
+                        ErrorVeredicto::PresupuestoAgotado { limite }
+                    }
+                })?;
                 consumir_presupuesto(&mut presupuesto)?;
                 objetos.push(clasificar_objeto(
                     ProcedenciaExplicacion::from(oracion),
                     traza.evidencia,
                     core,
+                    brecha,
                 ));
             }
             Ok(medido(
@@ -499,11 +535,13 @@ fn clasificar_objeto(
     procedencia: ProcedenciaExplicacion,
     evidencia: EvidenciaEvaluacion,
     core: Option<CorePresencia>,
+    brecha: Option<Brecha>,
 ) -> ObjetoExplicacion {
     ObjetoExplicacion {
         procedencia,
         counterexample: Contraejemplo { evidencia },
         core,
+        gap: brecha.map(Box::new),
     }
 }
 
