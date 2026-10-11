@@ -58,6 +58,8 @@ impl ErrorJournalAnclado {
 
 #[path = "journal_temporal/publicar.rs"]
 mod publicar;
+#[path = "journal_temporal/reemplazar.rs"]
+mod reemplazar;
 
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +91,28 @@ pub(crate) enum CausaIndeterminacionPublicacionJournal {
         canonico: Result<bool, ErrorJournalAnclado>,
         temporal: Option<Result<bool, ErrorJournalAnclado>>,
     },
+    ReemplazoNoDemostrable {
+        intento: EstadoIntentoReemplazoJournal,
+        canonico: EstadoObservacionReemplazoJournal,
+        temporal: EstadoObservacionReemplazoJournal,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EstadoIntentoReemplazoJournal {
+    NoInvocado,
+    Exito,
+    Error(ErrorJournalAnclado),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EstadoObservacionReemplazoJournal {
+    Ausente,
+    CoincideAnterior,
+    CoincideCandidato,
+    IdentidadDistinta,
+    RegistroDistinto,
+    NoVerificable(ErrorJournalAnclado),
 }
 
 impl fmt::Debug for ErrorJournalAnclado {

@@ -303,14 +303,23 @@ pub(super) fn raiz_es_remota(_ruta: &std::path::Path) -> bool {
     false
 }
 
+pub(super) fn reemplazar_plataforma(
+    parent: &File,
+    fuente: &OsStr,
+    canonico: &OsStr,
+    handle_fuente: &File,
+) -> Result<(), ErrorJournalAnclado> {
+    publicar_plataforma_modo(parent, fuente, canonico, handle_fuente, true)
+}
+
 #[cfg(unix)]
-fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
+pub(super) fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
     abrir_entrada_relativa(parent, nombre, TipoEntradaAnclada::Archivo)
         .map_err(mapear_error_temporal)
 }
 
 #[cfg(windows)]
-fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
+pub(super) fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
     use fs_at::os::windows::OpenOptionsExt;
     use std::path::Path;
     use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES, FILE_READ_DATA};
@@ -325,7 +334,7 @@ fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnc
 }
 
 #[cfg(not(any(unix, windows)))]
-fn abrir_temporal(_parent: &File, _nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
+pub(super) fn abrir_temporal(_parent: &File, _nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
     Err(ErrorJournalAnclado::Io)
 }
 
@@ -336,7 +345,7 @@ fn mapear_error_temporal(error: ErrorDirectorioAnclado) -> ErrorJournalAnclado {
     }
 }
 
-fn mapear_error_canonico(error: ErrorDirectorioAnclado) -> ErrorJournalAnclado {
+pub(super) fn mapear_error_canonico(error: ErrorDirectorioAnclado) -> ErrorJournalAnclado {
     match error {
         ErrorDirectorioAnclado::Io => ErrorJournalAnclado::Io,
         ErrorDirectorioAnclado::ComponenteInvalido => ErrorJournalAnclado::Io,
