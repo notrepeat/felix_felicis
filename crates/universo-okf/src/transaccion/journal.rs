@@ -138,13 +138,7 @@ impl JournalState {
         if *self == next {
             return Ok(());
         }
-        let expected = match self {
-            Self::Prepared => Self::BackupReady,
-            Self::BackupReady => Self::Installed,
-            Self::Installed => Self::Committed,
-            Self::Committed => return Err(JournalError::InvalidTransition),
-        };
-        if next != expected {
+        if (*self).successor() != Some(next) {
             return Err(JournalError::InvalidTransition);
         }
         *self = next;
@@ -370,17 +364,27 @@ mod tests {
         let mut journal = record();
         assert_eq!(journal.advance(JournalState::Prepared), Ok(()));
 
-        let mut state = JournalState::Prepared;
-        assert!(state.advance(JournalState::Installed).is_err());
-        for next in [
+        let states = [
+            JournalState::Prepared,
             JournalState::BackupReady,
             JournalState::Installed,
             JournalState::Committed,
-        ] {
-            assert!(state.advance(next).is_ok());
-            assert_eq!(state.advance(next), Ok(()));
+        ];
+        for original in states {
+            for next in states {
+                let mut state = original;
+                let expected = original == next || original.successor() == Some(next);
+                let result = state.advance(next);
+
+                assert_eq!(result.is_ok(), expected, "{original:?} -> {next:?}");
+                if expected {
+                    assert_eq!(state, next);
+                } else {
+                    assert_eq!(result, Err(JournalError::InvalidTransition));
+                    assert_eq!(state, original);
+                }
+            }
         }
-        assert!(state.advance(JournalState::Prepared).is_err());
     }
 
     #[test]
