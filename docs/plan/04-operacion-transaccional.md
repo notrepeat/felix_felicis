@@ -24,10 +24,10 @@ delta (tipo, etiqueta, padre e incidencia). Esta asignación de alcance cierra
 el criterio 17 de fase 03; no afirma que la detección o diagnóstico ya estén
 implementados.
 
-Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; la
-Unidad 4 aporta identidad raw y CAS antes del parseo, no un flujo de apply.
-Fase 04 sigue en curso y ahora trabaja la Unidad 5. La primitiva U4 no escribe
-archivos ni publica candidatos.
+Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; U5
+conserva avance parcial y U6 está cerrada para root anclado y staging. Fase 04
+sigue en curso: lock, captura y staging aún no están conectados a apply ni
+publican candidatos.
 
 ## Decisiones de contrato v1
 
@@ -78,8 +78,9 @@ archivos ni publica candidatos.
   calcula desde esos bytes, el token esperado se compara antes del parseo y la
   materialización usa los mismos buffers. Una diferencia produce `stale`
   fijo/redactado antes de parsear manifiesto, invariantes o bundle. Esta
-  primitiva no escribe ni publica; la captura por ruta aún tiene límite TOCTOU
-  y no puede conectarse a apply hasta que U6 aporte un root anclado.
+  primitiva no escribe ni publica; la captura por ruta aún tiene límite TOCTOU.
+  U6 aporta acceso anclado para el root, pero el CAS sigue sin integrarse a
+  apply.
 - Cargar y serializar `Parent` requiere opt-in por `layout.parent_key`. La
   Unidad 3 cierra la carga exacta, raíz explícita, fallback legacy y
   serialización determinista del candidato a documentos en memoria. Esto no
@@ -332,9 +333,9 @@ Chain strategy: feature-branch-chain
   `pub(crate)`: leen una vez a buffers inmutables, comparan la identidad antes
   de parsear y materializan desde esos mismos buffers. La diferencia devuelve
   `stale` fijo/redactado; no se escribe ni publica nada. La captura por ruta
-  conserva límite TOCTOU, por lo que no puede alimentar apply hasta el root
-  anclado de U6. La CLI todavía no invoca `to_hex()`; su opt-in será
-  `--emit-snapshot-token`.
+  conserva límite TOCTOU; U6 aporta acceso anclado para root y staging, pero
+  la captura/CAS siguen sin integrarse a apply. La CLI todavía no invoca
+  `to_hex()`; su opt-in será `--emit-snapshot-token`.
 
   Harness release verificado en Windows `x86_64-pc-windows-msvc`, Rust/Cargo
   1.88.0:
@@ -356,8 +357,9 @@ Chain strategy: feature-branch-chain
   proceso. La prueba de contención del registro confirma una adquisición por
   proceso en escenarios de 2 y 8 escritores. Es avance parcial: apply aún no
   integra lock, recovery-before-CAS ni retención hasta cleanup; la inspección
-  de raíz por ruta no cierra la sustitución concurrente de ancestros. U6
-  diseñará el root anclado para resolver ese límite.
+  de raíz por ruta no cierra la sustitución concurrente de ancestros. U6 ya
+  aporta una capability anclada para las operaciones de staging; falta integrar
+  estas primitivas al flujo de apply.
 
   Muestra release multiproceso más reciente en este checkout:
 
@@ -374,15 +376,64 @@ Chain strategy: feature-branch-chain
   ```text
   cargo test --locked --release -p universo-okf --test writer_lock_transaccional runtime_lock_mide_contencion_multiproceso -- --ignored --nocapture
   ```
-- [ ] 6 — Root y builder de staging: `crates/universo-okf/src/transaccion/stage.rs`.
-  Test `crates/universo-okf/tests/stage_bundle_transaccional.rs`
-  (`cargo test -p universo-okf --test stage_bundle_transaccional`) rechaza
-  root symlink/junction/reparse, verifica aliases al mismo parent+basename
-  canónico y rechaza cualquier symlink/junction/reparse dentro de root para
-  apply. Copia solo archivos regulares/directorios auxiliares byte a byte;
-  reload/compara candidato. Runtime: 10.000 auxiliares/100 MiB, MB/s y bytes
-  copiados; rollback: borrar staging, raíz intacta. Objetivo por slice:
-  <400 líneas authored.
+- [x] 6 — Root anclado y builder de staging:
+  `crates/universo-okf/src/transaccion/{anclado,stage}.rs`. El harness principal
+  es una prueba unitaria privada en
+  `crates/universo-okf/src/transaccion/stage/stage_bundle_transaccional.rs`,
+  registrada por `#[cfg(test)] mod stage_bundle_transaccional` en `stage.rs`;
+  no existe `tests/stage_bundle_transaccional.rs`. La prueba focal verifica el
+  sibling anclado, recibo ligado a identidad y snapshot, recarga, auxiliares
+  byte a byte, directorios vacíos, cleanup explícito y conservación del
+  token/identidad de root.
+
+  La evidencia complementaria está distribuida entre las pruebas de `raiz.rs`,
+  `anclado/tests.rs`, `stage.rs`, `inventario.rs` y
+  `tests/writer_lock_transaccional.rs`: aliases convergen a parent+basename
+  canónicos; root symlink se rechaza; en Windows,
+  `junction_root_se_rechaza_sin_seguirla` confirma el reparse point y conserva
+  el canary externo al fallar `LockEscritura::adquirir`, antes de iniciar
+  staging. También comprueba como guarda de efectos laterales que no aparezca
+  un sibling stage; no demuestra que el materializador haya sido llamado. La
+  cobertura del builder está separada en el harness focal. Las pruebas de
+  stage/inventario rechazan symlink/junction dentro del árbol, entradas no
+  regulares, corrupción, omisiones y extras; la recarga compara inventario y
+  candidato.
+
+  `StageAnclado` crea y limpia el sibling mediante handles y capacidad
+  explícita; el caller debe retener `LockEscritura` durante cleanup. El lock
+  serializa escritores Felix cooperantes y no excluye un proceso externo
+  hostil que modifique el filesystem. U6 no conecta captura, staging ni lock a
+  `apply`.
+
+  Comando focal correcto:
+
+  ```text
+  cargo test --locked -p universo-okf --lib transaccion::stage::stage_bundle_transaccional
+  ```
+
+  Rechazo Windows del root junction en la precondición del lock:
+
+  ```text
+  cargo test --locked -p universo-okf --test writer_lock_transaccional junction_root_se_rechaza_sin_seguirla
+  ```
+
+  Harness release ignorado, medido en Windows: 10.000 auxiliares,
+  104.857.600 bytes, 51.158,840 ms, 2,050 MB/s y 1,955 MiB/s. Es una muestra
+  orientativa, sin warmup ni distribución estadística; no define SLA. El
+  temporizador mide la materialización; captura, planificación y candidato se
+  preparan antes. El harness elimina staging y confirma que token e identidad
+  del root siguen intactos.
+
+  ```text
+  cargo test --locked --release -p universo-okf --lib transaccion::stage::stage_bundle_transaccional::runtime_staging_anclado_mide_10000_auxiliares_100_mib_exactos -- --ignored --nocapture
+  ```
+
+  Evidencia de implementación: anclado `8125508`/`2f55f5e`, staging y recibo
+  `f2739bd`/`c144d06`, cleanup `4786235`, harness `43c4f98`, fixes
+  `20ebc26`/`e31829d`/`6b4d98d` y test directo Windows `cddc3e3`. El commit de
+  cleanup suma 758 inserciones, por encima del objetivo de partición de
+  `<400 líneas authored`; se registra aquí sin afirmar que ese objetivo se
+  cumplió.
 - [ ] 7 — Journal, commit y recovery: `crates/universo-okf/src/transaccion/journal.rs`,
   `crates/universo-okf/src/transaccion/publisher.rs`.
   Test `crates/universo-okf/tests/journal_recuperacion_transaccional.rs`
@@ -441,7 +492,7 @@ Chain strategy: feature-branch-chain
 - [x] El candidato core construye cambios de `Parent` y `HasLab` de nodo; la
   serialización en memoria de `Parent` queda limitada a `layout.parent_key` y
   `serializar_candidato`.
-- [ ] Root symlink/junction/reparse se rechaza; una raíz válida se canoniza
+- [x] Root symlink/junction/reparse se rechaza; una raíz válida se canoniza
   una vez y todos los artefactos sibling se derivan del parent+basename
   canónicos, de modo que aliases convergen.
 - [x] `add`/`remove` se comportan como parche transaccional explícito, sin
@@ -523,7 +574,8 @@ cargo test -p universo-core --test conflictos_delta
 cargo test -p universo-okf --test padre_persistible
 cargo test -p universo-okf --test snapshot_transaccional
 cargo test -p universo-okf --test writer_lock_transaccional
-cargo test -p universo-okf --test stage_bundle_transaccional
+cargo test --locked -p universo-okf --lib transaccion::stage::stage_bundle_transaccional
+cargo test --locked -p universo-okf --test writer_lock_transaccional junction_root_se_rechaza_sin_seguirla
 cargo test -p universo-okf --test journal_recuperacion_transaccional
 cargo test -p universo-cli --test propose_transaccional
 cargo test -p universo-cli --test apply_transaccional
@@ -591,6 +643,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | Verificación en HEAD `27289a9` | `cargo test --locked -p universo-okf --test padre_persistible` 16 passed/1 ignored; `cargo test --locked --workspace --all-targets`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check` y `python tools/check_public_boundary.py` pasan. | Unidad 3 cerrada para carga y serialización en memoria; apply/publicación siguen pendientes. |
 | 2026-10-11 | Verificación integrada en HEAD `2475dc3` (sobre `61b22fd`) | Workspace 377 passed/5 ignored; `snapshot_transaccional` 2/2; captura 8/8 y harness 1 ignored; clippy, fmt y `check_public_boundary.py` pasan. `2475dc3` solo califica métricas, sin agregar pruebas. | U4 cerrada como primitiva interna; U5 conserva avance parcial. |
 | 2026-10-11 | Harness U5 en HEAD `2475dc3` | 2 writers: total 103,390 ms, espera 55,635/27,817/54,842 ms, 5 busy de 7 (71,4%); 8 writers: total 413,403 ms, espera 1.423,391/177,924/363,207 ms, 92 busy de 100 (92,0%). Máximo de intervalos marcados: 1 en ambos escenarios. | Una muestra release orientativa; los marcadores no cubren toda la vida del lock. |
+| 2026-10-11 | `43c4f98`, `cddc3e3`; verificación en HEAD `cddc3e3` | Harness privado `stage_bundle_transaccional`: 10.000 auxiliares, 104.857.600 bytes, 51.158,840 ms, 2,050 MB/s y 1,955 MiB/s. El test Windows confirma root junction/reparse y canary intacto al rechazar el lock, antes del staging; el test focal, workspace, clippy, fmt y frontera pública pasan. | U6 cerrada para root anclado/staging; no conecta a apply. Runtime orientativo, sin SLA. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
@@ -598,9 +651,10 @@ cargo test -p universo-cli --test docs_transaccional
 | 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada como unidad; Unidad 2 añadió `Parent`/`HasLab` nodo y propuesta core. Construcción `Type`, apply/publicación filesystem, stale de extremo a extremo y CLI siguen fuera |
 | 2 | Core `nodos`, `conflictos` y `propuesta`: Parent/HasLab de nodo, conflictos funcionales y veredicto puro | Cerrada en core; Unidad 3 añade carga/serialización `Parent` en memoria; `Type` en `proponer`, filesystem, stale de extremo a extremo y CLI siguen pendientes |
 | 3 | OKF `padre_persistible`: carga optativa y serialización determinista de `Parent` a documentos en memoria | Cerrada; no incluye escritura en filesystem ni publicación |
-| 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. Límite TOCTOU queda para root anclado en U6 |
-| 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery; root anclado corresponde a U6 |
-| 6–7 | `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
+| 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. La captura por ruta conserva TOCTOU; el root anclado de U6 está probado por separado |
+| 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
+| 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
+| 7 | `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 
 ## Siguiente fase

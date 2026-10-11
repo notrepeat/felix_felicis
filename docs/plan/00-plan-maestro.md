@@ -12,8 +12,8 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0–4 cerradas en sus límites; U5 tiene avance parcial. Verificación integrada en HEAD `2475dc3`. |
-| Foco actual | Fase 04, Unidad 5: integrar lock single-writer al flujo transaccional. U4 solo entrega snapshot raw y CAS interno antes del parseo; siguen pendientes root anclado U6, `Type`, apply/publicación filesystem y hardening del presupuesto agregado. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0–4 y U6 están cerradas en sus límites; U5 conserva avance parcial. Verificación focal e integrada de U6 en HEAD `cddc3e3`. |
+| Foco actual | Fase 04, Unidad 7: journal, commit y recovery. U5 sigue parcial; U6 entrega root anclado y staging, sin conexión a apply. `Type`, apply/publicación filesystem y hardening del presupuesto agregado siguen pendientes. |
 | Última actualización | 2026-10-11 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0–4 cerradas en sus límites; U4 calcula identidad raw e informa `stale` antes del parseo, sin escritura ni publicación. U5 aporta lock/root validation parcial; apply, root anclado U6, `Type`, staging, recovery y CLI siguen pendientes. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | U0–U4 y U6 cerradas en sus límites; U5 conserva avance parcial. U6 entrega root anclado y staging con harness runtime; no se conecta a apply. U7–U10, `Type`, publicación filesystem y CLI siguen pendientes. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: continuar la Unidad 5 de [04 — Operación transaccional](04-operacion-transaccional.md), integrar el lock al flujo transaccional. U4 cierra captura raw y CAS interno; la captura aún requiere un root anclado por U6. Apply, escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
+Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. U5 permanece parcial. U6 aporta root anclado y staging, pero lock, captura y staging aún no están conectados a apply. Apply, escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -232,7 +232,23 @@ Unidad 5 tiene avance parcial, no está cerrada. El harness release de locks
 registró en una muestra: 2 writers, 5 busy/7 intentos (71,4%) y espera máxima
 54,842 ms; 8 writers, 92 busy/100 (92,0%) y espera máxima 363,207 ms. El máximo
 de intervalos marcados fue 1 en ambos escenarios; el marcador no cubre la vida
-completa del guard. El root anclado queda para U6 por el límite TOCTOU de la
-inspección por ruta. Apply/publicador filesystem, hashes antes/después, staging,
-journal/recovery, CLI y soporte transaccional de `Type` siguen pendientes. El
-presupuesto agregado de evaluación tampoco tiene aún una cota global.
+completa del guard. `LockEscritura` serializa escritores Felix cooperantes; no
+excluye un proceso externo hostil que modifique el filesystem.
+
+Unidad 6 queda cerrada para root anclado y staging. El harness privado real
+`crates/universo-okf/src/transaccion/stage/stage_bundle_transaccional.rs`
+midió 10.000 auxiliares y 104.857.600 bytes en 51.158,840 ms (2,050 MB/s;
+1,955 MiB/s). Es una muestra orientativa, sin SLA; el tiempo cubre la
+materialización del staging y excluye captura, planificación y candidato. El
+rollback limpia el sibling y confirma token e identidad de root intactos.
+Pruebas de aliases, recarga y cleanup acompañan al harness. El test Windows
+`junction_root_se_rechaza_sin_seguirla` confirma el root reparse y canary
+externo intacto cuando falla la adquisición del lock, antes de staging; la
+ausencia observada de un sibling es una guarda de efectos laterales, no prueba
+de que se haya llamado al materializador. El test focal, workspace, clippy,
+fmt y frontera pública pasan en HEAD `cddc3e3`.
+
+U6 no conecta lock, captura ni staging a apply. Fase 04 sigue en curso; U7–U10,
+apply/publicador filesystem, journal/recovery, CLI y soporte transaccional de
+`Type` siguen pendientes. El presupuesto agregado de evaluación tampoco tiene
+aún una cota global.
