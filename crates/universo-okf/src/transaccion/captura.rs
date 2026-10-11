@@ -18,7 +18,7 @@ use universo_core::{Estructura, SentenciaFuente, parsear_programa};
 use crate::bundle::{directorio_layout_seguro, parsear_bundle};
 use crate::manifiesto_toml::parsear_manifiesto;
 
-use super::anclado::DirectorioAnclado;
+use super::anclado::{DirectorioAnclado, IdentidadDirectorio};
 use super::inventario::{
     inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
     ruta_absoluta_lexica, validar_archivo_sin_enlaces,
@@ -36,6 +36,7 @@ pub(crate) struct Snapshot {
     invariantes_raw: Arc<[u8]>,
     version_motor: Arc<str>,
     policy_id: Arc<str>,
+    identidad_root: Option<IdentidadDirectorio>,
     ruta_manifiesto_root: Option<String>,
     ruta_invariantes_root: Option<String>,
     estructura: Estructura,
@@ -51,6 +52,7 @@ pub(crate) struct CapturaSnapshotRaw {
     invariantes_raw: Arc<[u8]>,
     version_motor: Arc<str>,
     policy_id: Arc<str>,
+    identidad_root: Option<IdentidadDirectorio>,
     ruta_manifiesto_root: Option<String>,
     ruta_invariantes_root: Option<String>,
 }
@@ -58,12 +60,15 @@ pub(crate) struct CapturaSnapshotRaw {
 /// Bytes raw de configuración que ya fueron capturados y permanecen
 /// inmutables durante el cálculo del token y la materialización.
 ///
-/// Si una fuente está fuera del root, sus bytes deben venir de una futura
-/// capability de lectura externa anclada; este contenedor no valida origen.
+/// Las rutas opcionales son procedencia root-relativa, nunca rutas a reabrir.
+/// Si son `None`, los bytes se consideran externos y ya capturados por quien
+/// posee la capability de lectura correspondiente.
 #[derive(Clone)]
 pub(crate) struct ConfigRawCapturada {
     manifiesto_raw: Arc<[u8]>,
     invariantes_raw: Arc<[u8]>,
+    ruta_manifiesto_root: Option<String>,
+    ruta_invariantes_root: Option<String>,
 }
 
 impl ConfigRawCapturada {
@@ -71,10 +76,14 @@ impl ConfigRawCapturada {
     pub(crate) fn nueva(
         manifiesto_raw: impl Into<Arc<[u8]>>,
         invariantes_raw: impl Into<Arc<[u8]>>,
+        ruta_manifiesto_root: Option<String>,
+        ruta_invariantes_root: Option<String>,
     ) -> Self {
         Self {
             manifiesto_raw: manifiesto_raw.into(),
             invariantes_raw: invariantes_raw.into(),
+            ruta_manifiesto_root,
+            ruta_invariantes_root,
         }
     }
 }
@@ -123,6 +132,10 @@ impl Snapshot {
 
     pub(crate) fn policy_id(&self) -> &str {
         &self.policy_id
+    }
+
+    pub(crate) fn identidad_root(&self) -> Option<IdentidadDirectorio> {
+        self.identidad_root
     }
 
     pub(crate) fn ruta_manifiesto_root(&self) -> Option<&str> {
@@ -204,7 +217,20 @@ pub(crate) fn capturar_snapshot_raw_anclado(
     version_motor: &str,
     policy_id: &str,
 ) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
+    let captura =
+        capturar_snapshot_raw_anclado_sin_validar(raiz, configuracion, version_motor, policy_id)?;
+    validar_procedencia(&captura)?;
+    Ok(captura)
+}
+
+fn capturar_snapshot_raw_anclado_sin_validar(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
     let entradas = inventariar_root_anclado(raiz.clonar().map_err(|_| ErrorSnapshot::Io)?)?;
+    let identidad_root = raiz.identidad_raiz().ok_or(ErrorSnapshot::RaizInvalida)?;
     let token = calcular_token_snapshot(
         version_motor,
         policy_id,
@@ -220,8 +246,9 @@ pub(crate) fn capturar_snapshot_raw_anclado(
         invariantes_raw: configuracion.invariantes_raw,
         version_motor: Arc::from(version_motor),
         policy_id: Arc::from(policy_id),
-        ruta_manifiesto_root: None,
-        ruta_invariantes_root: None,
+        identidad_root: Some(identidad_root),
+        ruta_manifiesto_root: configuracion.ruta_manifiesto_root,
+        ruta_invariantes_root: configuracion.ruta_invariantes_root,
     })
 }
 
@@ -309,6 +336,7 @@ where
         invariantes_raw: invariantes.bytes,
         version_motor: Arc::from(version_motor),
         policy_id: Arc::from(policy_id),
+        identidad_root: None,
         ruta_manifiesto_root: manifiesto.ruta_root,
         ruta_invariantes_root: invariantes.ruta_root,
     })
@@ -336,6 +364,7 @@ pub(crate) fn materializar_desde_entradas(
         invariantes_raw: Arc::clone(&original.invariantes_raw),
         version_motor: Arc::clone(&original.version_motor),
         policy_id: Arc::clone(&original.policy_id),
+        identidad_root: original.identidad_root,
         ruta_manifiesto_root: original.ruta_manifiesto_root.clone(),
         ruta_invariantes_root: original.ruta_invariantes_root.clone(),
     })
@@ -352,9 +381,17 @@ fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
         invariantes_raw,
         version_motor,
         policy_id,
+        identidad_root,
         ruta_manifiesto_root,
         ruta_invariantes_root,
     } = raw;
+    validar_procedencia_campos(
+        &entradas,
+        &manifiesto_raw,
+        &invariantes_raw,
+        ruta_manifiesto_root.as_deref(),
+        ruta_invariantes_root.as_deref(),
+    )?;
     let manifiesto_texto =
         std::str::from_utf8(&manifiesto_raw).map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
     let manifiesto =
@@ -378,11 +415,50 @@ fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
         invariantes_raw,
         version_motor,
         policy_id,
+        identidad_root,
         ruta_manifiesto_root,
         ruta_invariantes_root,
         estructura,
         fuentes_invariantes,
     })
+}
+
+fn validar_procedencia(raw: &CapturaSnapshotRaw) -> Result<(), ErrorSnapshot> {
+    validar_procedencia_campos(
+        &raw.entradas,
+        &raw.manifiesto_raw,
+        &raw.invariantes_raw,
+        raw.ruta_manifiesto_root.as_deref(),
+        raw.ruta_invariantes_root.as_deref(),
+    )
+}
+
+fn validar_procedencia_campos(
+    entradas: &[EntradaSnapshot],
+    manifiesto_raw: &[u8],
+    invariantes_raw: &[u8],
+    ruta_manifiesto_root: Option<&str>,
+    ruta_invariantes_root: Option<&str>,
+) -> Result<(), ErrorSnapshot> {
+    if ruta_manifiesto_root.is_some() && ruta_manifiesto_root == ruta_invariantes_root {
+        return Err(ErrorSnapshot::BundleInvalido);
+    }
+    for (ruta, bytes) in [
+        (ruta_manifiesto_root, manifiesto_raw),
+        (ruta_invariantes_root, invariantes_raw),
+    ] {
+        if let Some(ruta) = ruta {
+            let coincide = entradas.iter().any(|entrada| {
+                entrada.ruta() == ruta
+                    && entrada.tipo() == TipoEntradaSnapshot::Archivo
+                    && entrada.bytes() == Some(bytes)
+            });
+            if !coincide {
+                return Err(ErrorSnapshot::BundleInvalido);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn bytes_fuente<F>(
@@ -608,8 +684,12 @@ ignorados = ["ignored.md"]
 
         let por_path =
             capturar_snapshot(root.path(), &manifest, &invariants, "engine/1", "policy/1").unwrap();
-        let configuracion =
-            ConfigRawCapturada::nueva(fs::read(&manifest).unwrap(), fs::read(&invariants).unwrap());
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(&manifest).unwrap(),
+            fs::read(&invariants).unwrap(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        );
         let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
         let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
 
@@ -626,6 +706,8 @@ ignorados = ["ignored.md"]
             .unwrap();
 
             assert_eq!(anclado.token(), por_path.token());
+            assert!(anclado.identidad_root().is_some());
+            assert!(por_path.identidad_root().is_none());
             assert_eq!(anclado.manifiesto_raw(), por_path.manifiesto_raw());
             assert_eq!(anclado.invariantes_raw(), por_path.invariantes_raw());
             assert_eq!(
@@ -651,6 +733,28 @@ ignorados = ["ignored.md"]
                 por_path.estructura().atomos()
             );
         }
+
+        let casos_invalidos = [
+            ConfigRawCapturada::nueva(
+                fs::read(&manifest).unwrap(),
+                b"\n".as_slice(),
+                Some("manifest.toml".to_owned()),
+                Some("manifest.toml".to_owned()),
+            ),
+            ConfigRawCapturada::nueva(
+                b"PRIVATE-CANARY mismatched config".as_slice(),
+                b"\n".as_slice(),
+                Some("manifest.toml".to_owned()),
+                Some("invariants.smt2".to_owned()),
+            ),
+        ];
+        for config in casos_invalidos {
+            let error =
+                capturar_snapshot_raw_anclado(&ancla, config, "engine/1", "policy/1").unwrap_err();
+            assert_eq!(error, ErrorSnapshot::BundleInvalido);
+            assert!(!format!("{error:?}").contains("PRIVATE-CANARY"));
+            assert!(!error.to_string().contains("manifest.toml"));
+        }
     }
 
     #[test]
@@ -666,8 +770,12 @@ ignorados = ["ignored.md"]
         fs::write(&manifest, MANIFIESTO).unwrap();
         fs::write(&invariants, "\n").unwrap();
 
-        let configuracion =
-            ConfigRawCapturada::nueva(fs::read(&manifest).unwrap(), fs::read(&invariants).unwrap());
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(&manifest).unwrap(),
+            fs::read(&invariants).unwrap(),
+            None,
+            None,
+        );
         fs::write(&manifest, b"PRIVATE-CANARY invalid manifest").unwrap();
         fs::write(&invariants, b"PRIVATE-CANARY invalid invariants").unwrap();
 
@@ -713,6 +821,8 @@ ignorados = ["ignored.md"]
         let configuracion = ConfigRawCapturada::nueva(
             fs::read(root.join("manifest.toml")).unwrap(),
             fs::read(root.join("invariants.smt2")).unwrap(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
         );
         let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
         let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
@@ -767,6 +877,8 @@ ignorados = ["ignored.md"]
         let configuracion = ConfigRawCapturada::nueva(
             fs::read(root.join("manifest.toml")).unwrap(),
             fs::read(root.join("invariants.smt2")).unwrap(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
         );
         let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
         let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
