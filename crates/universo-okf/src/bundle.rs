@@ -368,6 +368,12 @@ pub fn parsear_bundle(
             ));
         }
 
+        if !matches!(&padre_frontmatter, PadreFrontmatter::InferenciaLegacy)
+            && let Err(err) = estructura.marcar_parent_frontmatter_explicito(id)
+        {
+            errores.push(error(None, None, Regla::Estructura, err.to_string()));
+        }
+
         cargados.push(NodoCargado {
             id,
             path: archivo.path.clone(),

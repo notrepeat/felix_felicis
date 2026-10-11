@@ -56,6 +56,7 @@ pub struct Estructura {
     indice_case: HashMap<String, NodoId>,
     atributos: SecondaryMap<NodoId, BTreeMap<String, String>>,
     anexos: SecondaryMap<NodoId, Anexo>,
+    parent_frontmatter_explicito: HashSet<NodoId>,
 }
 
 /// Motivo de rechazo de una operación sobre `Estructura`.
@@ -162,6 +163,7 @@ impl Estructura {
             indice_case: HashMap::new(),
             atributos: SecondaryMap::new(),
             anexos: SecondaryMap::new(),
+            parent_frontmatter_explicito: HashSet::new(),
         })
     }
 
@@ -180,6 +182,7 @@ impl Estructura {
             indice_case: self.indice_case.clone(),
             atributos: self.atributos.clone(),
             anexos: self.anexos.clone(),
+            parent_frontmatter_explicito: self.parent_frontmatter_explicito.clone(),
         }
     }
 
@@ -381,6 +384,25 @@ impl Estructura {
         self.anexos.get(nodo)
     }
 
+    /// Indica si el documento declaró explícitamente la clave administrada
+    /// de `Parent` del manifiesto.
+    pub fn parent_frontmatter_explicito(&self, nodo: NodoId) -> bool {
+        self.parent_frontmatter_explicito.contains(&nodo)
+    }
+
+    /// Registra que el documento declaró explícitamente su clave administrada
+    /// de `Parent`, incluso cuando el valor declaraba una raíz vacía.
+    pub fn marcar_parent_frontmatter_explicito(
+        &mut self,
+        nodo: NodoId,
+    ) -> Result<(), ErrorEstructura> {
+        if !self.nodos.contains_key(nodo) {
+            return Err(ErrorEstructura::NodoInexistente);
+        }
+        self.parent_frontmatter_explicito.insert(nodo);
+        Ok(())
+    }
+
     /// Renombra un nodo: reescribe su path y los índices. El `NodoId`, sus
     /// aristas, su padre/hijos, sus atributos y su anexo quedan intactos.
     /// Mismas validaciones de path que `insertar_nodo`, salvo que una
@@ -549,6 +571,7 @@ impl Estructura {
 
         self.atributos.remove(id);
         self.anexos.remove(id);
+        self.parent_frontmatter_explicito.remove(&id);
         self.salientes.remove(id);
         self.entrantes.remove(id);
         self.indice.remove(&nodo.path);

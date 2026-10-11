@@ -1,5 +1,5 @@
 use universo_core::{BundlePath, ErrorManifiesto, Manifiesto};
-use universo_okf::{Regla, parsear_bundle, parsear_manifiesto};
+use universo_okf::{Regla, parsear_bundle, parsear_manifiesto, serializar_nodo};
 use universo_testkit::manifiesto_minimo;
 
 fn doc(titulo: &str, extra: &str) -> String {
@@ -212,4 +212,60 @@ fn parent_key_usa_la_misma_gramatica_ascii_que_el_parser_frontmatter() {
         );
         assert!(parsear_manifiesto(&texto).is_err());
     }
+}
+
+#[test]
+fn serializar_y_recargar_conserva_parent_explicito_unicode_y_case() {
+    let archivos = vec![
+        ("n/Índice.md".into(), doc("Índice", "")),
+        ("n/hoja.md".into(), doc("Hoja", "parent: n/Índice\n")),
+    ];
+    let original = parsear_bundle(&archivos, manifiesto_con_parent_key()).unwrap();
+    let serializados = original
+        .nodos()
+        .map(|(id, nodo)| {
+            (
+                format!("{}.md", nodo.path.como_str()),
+                serializar_nodo(&original, id),
+            )
+        })
+        .collect::<Vec<_>>();
+    let recargado = parsear_bundle(&serializados, manifiesto_con_parent_key()).unwrap();
+
+    assert!(contiene_parent(&recargado, "n/hoja", "n/Índice"));
+    let hoja = recargado
+        .por_path(&BundlePath::nuevo("n/hoja").unwrap())
+        .unwrap();
+    assert!(serializar_nodo(&recargado, hoja).contains("parent: n/Índice\n"));
+}
+
+#[test]
+fn serializar_y_recargar_conserva_raiz_explicita_y_ausencia_legacy() {
+    let archivos = vec![
+        ("n/index.md".into(), doc("Raíz", "")),
+        ("n/sub/index.md".into(), doc("Sub", "parent: \"\"\n")),
+        ("n/sub/hoja.md".into(), doc("Hoja", "")),
+    ];
+    let original = parsear_bundle(&archivos, manifiesto_con_parent_key()).unwrap();
+    let serializados = original
+        .nodos()
+        .map(|(id, nodo)| {
+            (
+                format!("{}.md", nodo.path.como_str()),
+                serializar_nodo(&original, id),
+            )
+        })
+        .collect::<Vec<_>>();
+    let recargado = parsear_bundle(&serializados, manifiesto_con_parent_key()).unwrap();
+
+    assert!(!contiene_parent(&recargado, "n/sub/index", "n/index"));
+    assert!(contiene_parent(&recargado, "n/sub/hoja", "n/sub/index"));
+    let sub = recargado
+        .por_path(&BundlePath::nuevo("n/sub/index").unwrap())
+        .unwrap();
+    let hoja = recargado
+        .por_path(&BundlePath::nuevo("n/sub/hoja").unwrap())
+        .unwrap();
+    assert!(serializar_nodo(&recargado, sub).contains("parent: \"\"\n"));
+    assert!(!serializar_nodo(&recargado, hoja).contains("parent:"));
 }

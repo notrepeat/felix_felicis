@@ -72,6 +72,17 @@ pub fn escalar_salida(valor: &str) -> String {
 /// Texto completo del archivo `.md` de un nodo, en forma canónica (spec
 /// §4.3). Devuelve la cadena vacía si `id` está stale.
 pub fn serializar_nodo(u: &Estructura, id: NodoId) -> String {
+    serializar_nodo_con_parent(u, id, None)
+}
+
+/// El `Some` externo fuerza la declaración administrada de Parent, incluido
+/// `Some(None)` para persistir una raíz explícita. Sin override, conserva la
+/// distinción entre frontmatter Parent explícito e inferencia legacy.
+fn serializar_nodo_con_parent(
+    u: &Estructura,
+    id: NodoId,
+    parent_override: Option<Option<&universo_core::BundlePath>>,
+) -> String {
     let Some(nodo) = u.nodo(id) else {
         return String::new();
     };
@@ -105,6 +116,20 @@ pub fn serializar_nodo(u: &Estructura, id: NodoId) -> String {
         escalar_salida(nodo.etiqueta.como_str())
     ));
 
+    if let Some(clave) = manifiesto.layout.parent_key.as_deref() {
+        let padre_explicito = parent_override.or_else(|| {
+            u.parent_frontmatter_explicito(id).then(|| {
+                u.padre(id)
+                    .and_then(|padre| u.nodo(padre))
+                    .map(|padre| &padre.path)
+            })
+        });
+        if let Some(padre) = padre_explicito {
+            let valor = padre.map_or("", universo_core::BundlePath::como_str);
+            fm.push_str(&format!("{clave}: {}\n", escalar_salida(valor)));
+        }
+    }
+
     // 3. Predicados de extensión en orden de declaración, solo los
     //    presentes.
     let atributos = u.atributos(id);
@@ -120,6 +145,9 @@ pub fn serializar_nodo(u: &Estructura, id: NodoId) -> String {
     //    ya emitido en el paso 1 cuando el nodo es Retirado).
     for entrada in &anexo.passthrough {
         if nodo.tipo == Sorte::nuevo("Retirado") && entrada.clave == "type" {
+            continue;
+        }
+        if manifiesto.layout.parent_key.as_deref() == Some(entrada.clave.as_str()) {
             continue;
         }
         fm.push_str(&entrada.crudo);
