@@ -223,6 +223,21 @@ pub(crate) fn capturar_snapshot_raw_anclado(
     Ok(captura)
 }
 
+/// Captura desde el handle root, compara CAS antes de validar procedencia o
+/// parsear configuración, y materializa desde los buffers ya capturados.
+pub(crate) fn capturar_snapshot_con_cas_anclado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let captura =
+        capturar_snapshot_raw_anclado_sin_validar(raiz, configuracion, version_motor, policy_id)?;
+    super::snapshot::comparar_snapshot_esperado(esperado, captura.token)?;
+    materializar(captura)
+}
+
 fn capturar_snapshot_raw_anclado_sin_validar(
     raiz: &DirectorioAnclado,
     configuracion: ConfigRawCapturada,
@@ -964,6 +979,74 @@ ignorados = ["ignored.md"]
                 },
             )
             .unwrap();
+        }
+    }
+
+    #[test]
+    fn cas_anclado_stale_precede_validacion_y_parseo_y_redacta_configuracion() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifest = root.path().join("manifest.toml");
+        let invariants = root.path().join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let validada = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        );
+        let esperado =
+            capturar_snapshot_raw_anclado(&ancla, validada.clone(), "engine/1", "policy/1")
+                .unwrap()
+                .token;
+        let snapshot = capturar_snapshot_con_cas_anclado(
+            &ancla,
+            validada.clone(),
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+        assert_eq!(snapshot.token(), esperado);
+        assert!(snapshot.identidad_root().is_some());
+
+        fs::write(&manifest, b"PRIVATE-MISMATCH-CANARY root bytes changed").unwrap();
+        let error =
+            capturar_snapshot_con_cas_anclado(&ancla, validada, "engine/1", "policy/1", esperado)
+                .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert!(!format!("{error:?}").contains("PRIVATE-MISMATCH-CANARY"));
+
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        for (manifiesto, invariantes, canary) in [
+            (
+                b"PRIVATE-MANIFEST-CANARY invalid".as_slice(),
+                b"\n".as_slice(),
+                "PRIVATE-MANIFEST-CANARY",
+            ),
+            (
+                MANIFIESTO.as_bytes(),
+                b"PRIVATE-INVARIANT-CANARY invalid".as_slice(),
+                "PRIVATE-INVARIANT-CANARY",
+            ),
+        ] {
+            let invalida = ConfigRawCapturada::nueva(manifiesto, invariantes, None, None);
+            let error = capturar_snapshot_con_cas_anclado(
+                &ancla, invalida, "engine/1", "policy/1", esperado,
+            )
+            .unwrap_err();
+            assert_eq!(error, ErrorSnapshot::Stale);
+            assert_eq!(error.to_string(), "stale");
+            assert!(!format!("{error:?}").contains(canary));
+            assert!(!error.to_string().contains(canary));
         }
     }
 
