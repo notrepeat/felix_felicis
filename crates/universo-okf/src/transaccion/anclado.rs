@@ -2,7 +2,8 @@
 //!
 //! `fs_at` 0.2.1 (Apache-2.0) provee las operaciones `*at` de Unix y su
 //! equivalente con `NtCreateFile` en Windows. Este módulo valida los handles
-//! devueltos; no expone rename, unlink ni cleanup.
+//! devueltos y no expone rename ni cleanup genérico; `StageAnclado` posee la
+//! única operación de borrado sibling explícita.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -16,7 +17,12 @@ use fs_at::OpenOptions as OpenOptionsAt;
 
 use super::raiz::{UbicacionRaiz, validar_basename_prospectivo};
 
+mod clasificar;
+mod limpieza;
 mod operaciones;
+
+pub(super) use clasificar::{TipoEntradaAnclada, clasificar_entrada_sin_seguir};
+pub(super) use limpieza::{ErrorLimpiezaAnclado, limpiar_stage_anclado};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ErrorDirectorioAnclado {

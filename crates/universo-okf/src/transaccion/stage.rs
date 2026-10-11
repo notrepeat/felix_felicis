@@ -3,18 +3,20 @@
 //! conservan identidad exacta y sensible a case, incluidos sus bytes Unicode.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use fs_at::OpenOptions as OpenOptionsAt;
 use universo_core::{Anexo, BundlePath, Candidato, Estructura};
 
 use crate::serializar::DocumentoCandidato;
 
 use super::anclado::{
-    DirectorioAnclado, ErrorCrearStageSibling, ErrorDirectorioAnclado, IdentidadDirectorio,
+    DirectorioAnclado, ErrorCrearStageSibling, ErrorDirectorioAnclado, ErrorLimpiezaAnclado,
+    IdentidadDirectorio,
 };
 use super::captura::{Snapshot, materializar_desde_entradas};
 use super::inventario::{
@@ -107,6 +109,26 @@ impl CodigoEscrituraStage {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Apply consume los códigos en la siguiente unidad.
+enum CodigoLimpiezaStage {
+    Io,
+    EnlaceNoPermitido,
+    TipoNoAdmitido,
+    IdentidadInconsistente,
+}
+
+impl CodigoLimpiezaStage {
+    const fn codigo(self) -> &'static str {
+        match self {
+            Self::Io => "stage_cleanup_io",
+            Self::EnlaceNoPermitido => "stage_cleanup_link_not_allowed",
+            Self::TipoNoAdmitido => "stage_cleanup_entry_type_not_allowed",
+            Self::IdentidadInconsistente => "stage_cleanup_identity_mismatch",
+        }
+    }
+}
+
 /// Sibling stage creado exclusivamente por este módulo. Su dueño debe decidir
 /// cleanup; no hay Drop/remove_dir_all basado solo en el nombre path-based.
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
@@ -117,11 +139,9 @@ pub(crate) struct StagePropio {
 }
 
 /// Sibling stage cuyo parent y directorio se mantienen abiertos desde su
-/// creación relativa al handle del root.
-///
-/// U7 debe usarlo bajo el mismo `LockGuard` desde recovery hasta cleanup y
-/// revalidar identidad antes de cualquier publicación. Esta unidad no mueve
-/// ni elimina el directorio.
+/// creación relativa al handle del root. Es la única capability que autoriza
+/// cleanup explícito del sibling después de revalidar su identidad.
+#[allow(dead_code)] // Apply/recovery consumen la capability anclada.
 pub(crate) struct StageAnclado {
     directorio: DirectorioAnclado,
     componente: OsString,
@@ -129,6 +149,45 @@ pub(crate) struct StageAnclado {
     identidad: Option<IdentidadDirectorio>,
     recibo: Option<ReciboStage>,
 }
+
+/// Error de cleanup redactado que devuelve la capability para permitir un
+/// retry después de un borrado parcial.
+#[allow(dead_code)] // El llamador de cleanup recupera el stage si falla.
+pub(crate) struct ErrorLimpiezaStage {
+    codigo: CodigoLimpiezaStage,
+    stage: Box<StageAnclado>,
+}
+
+#[allow(dead_code)] // El llamador de cleanup recupera el stage si falla.
+impl ErrorLimpiezaStage {
+    pub(crate) const fn codigo(&self) -> &'static str {
+        self.codigo.codigo()
+    }
+
+    pub(crate) fn stage_parcial(&self) -> &StageAnclado {
+        &self.stage
+    }
+
+    pub(crate) fn recuperar_stage(self) -> StageAnclado {
+        *self.stage
+    }
+}
+
+impl fmt::Debug for ErrorLimpiezaStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ErrorLimpiezaStage")
+            .field(&self.codigo())
+            .finish()
+    }
+}
+
+impl fmt::Display for ErrorLimpiezaStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorLimpiezaStage {}
 
 /// Identidad interna del objeto stage y del inventario raw recargado.
 #[allow(dead_code)] // El journal/commit consume identidad y token en U7.
@@ -165,8 +224,14 @@ impl fmt::Display for ReciboStage {
     }
 }
 
-#[allow(dead_code)] // U7 consumirá la capability anclada para publicar/recuperar.
+#[allow(dead_code)] // Apply/recovery integran staging en la siguiente unidad.
 impl StageAnclado {
+    pub(super) fn partes_cleanup(
+        &self,
+    ) -> (&DirectorioAnclado, &OsStr, Option<IdentidadDirectorio>) {
+        (&self.directorio, &self.componente, self.identidad)
+    }
+
     pub(crate) fn stage_id(&self) -> &str {
         &self.stage_id
     }
@@ -187,6 +252,38 @@ impl StageAnclado {
         self.directorio
             .clonar()
             .map_err(mapear_error_directorio_stage)
+    }
+
+    /// Elimina el stage solo después de validar parent, handle y basename.
+    /// El llamador debe retener `LockEscritura` durante cleanup: ese lock
+    /// coordina writers Felix cooperantes, no procesos externos hostiles.
+    /// Un error conserva el stage, incluso si hubo borrado parcial, dentro del
+    /// error para que el llamador pueda reintentar.
+    pub(crate) fn limpiar(self) -> Result<(), ErrorLimpiezaStage> {
+        self.limpiar_con(|parent, componente, es_directorio| {
+            let opciones = OpenOptionsAt::default();
+            let resultado = if es_directorio {
+                opciones.rmdir_at(parent, Path::new(componente))
+            } else {
+                opciones.unlink_at(parent, Path::new(componente))
+            };
+            resultado.map_err(|_| ErrorDirectorioAnclado::Io)
+        })
+    }
+
+    fn limpiar_con<F>(self, mut eliminar: F) -> Result<(), ErrorLimpiezaStage>
+    where
+        F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
+    {
+        let resultado = super::anclado::limpiar_stage_anclado(&self, &mut eliminar)
+            .map_err(mapear_error_limpieza_stage);
+        match resultado {
+            Ok(()) => Ok(()),
+            Err(codigo) => Err(ErrorLimpiezaStage {
+                codigo,
+                stage: Box::new(self),
+            }),
+        }
     }
 }
 
@@ -570,6 +667,20 @@ fn mapear_error_directorio_stage(error: ErrorDirectorioAnclado) -> CodigoEscritu
         ErrorDirectorioAnclado::Io
         | ErrorDirectorioAnclado::RaizAusente
         | ErrorDirectorioAnclado::EntradaAusente => CodigoEscrituraStage::Io,
+    }
+}
+
+#[allow(dead_code)] // La integración de apply consume el resultado de cleanup.
+fn mapear_error_limpieza_stage(error: ErrorLimpiezaAnclado) -> CodigoLimpiezaStage {
+    match error {
+        ErrorLimpiezaAnclado::IdentidadInconsistente => CodigoLimpiezaStage::IdentidadInconsistente,
+        ErrorLimpiezaAnclado::Directorio(ErrorDirectorioAnclado::EnlaceNoPermitido) => {
+            CodigoLimpiezaStage::EnlaceNoPermitido
+        }
+        ErrorLimpiezaAnclado::Directorio(
+            ErrorDirectorioAnclado::TipoNoAdmitido | ErrorDirectorioAnclado::ComponenteInvalido,
+        ) => CodigoLimpiezaStage::TipoNoAdmitido,
+        ErrorLimpiezaAnclado::Directorio(_) => CodigoLimpiezaStage::Io,
     }
 }
 
@@ -1498,6 +1609,13 @@ ignorados = ["ignored.md"]
         (candidato, plan)
     }
 
+    fn stage_anclado_vacio() -> (TempDir, StageAnclado) {
+        let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let stage =
+            crear_stage_anclado_unico(&ancla, &mut || Ok("cleanup-stage".to_owned())).unwrap();
+        (temp, stage)
+    }
+
     #[test]
     fn crea_sibling_anclado_y_conserva_identity_del_objeto() {
         let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
@@ -1591,6 +1709,269 @@ ignorados = ["ignored.md"]
                 .token(),
             token_raiz
         );
+    }
+
+    #[test]
+    fn cleanup_explicito_elimina_arbol_stage_y_conserva_root() {
+        let (temp, ancla, snapshot, manifiesto, invariantes) = snapshot_anclado_con_auxiliares();
+        let raiz = temp.path().join("bundle");
+        let token_root =
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
+                .unwrap()
+                .token();
+        let (candidato, plan) = candidato_y_plan(&snapshot);
+        let stage = materializar_staging_anclado(&ancla, &snapshot, &plan, &candidato).unwrap();
+        let ruta_stage = temp.path().join(stage.componente());
+
+        assert!(ruta_stage.join("assets/data.bin").is_file());
+        assert_eq!(fs::read(ruta_stage.join("assets/empty.bin")).unwrap(), b"");
+        assert!(ruta_stage.join("empty").is_dir());
+        assert!(ruta_stage.join("knowledge/a.md").is_file());
+
+        stage.limpiar().unwrap();
+
+        assert!(!ruta_stage.exists());
+        assert_eq!(
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
+                .unwrap()
+                .token(),
+            token_root
+        );
+        assert_eq!(
+            fs::read(raiz.join("assets/data.bin")).unwrap(),
+            [0, 255, 17]
+        );
+    }
+
+    #[test]
+    fn cleanup_stage_vacio_y_drop_no_eliminan_sin_llamada_explicita() {
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        stage.limpiar().unwrap();
+        assert!(!ruta_stage.exists());
+
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        let sentinel = ruta_stage.join("partial.bin");
+        fs::write(&sentinel, b"keep partial stage").unwrap();
+        drop(stage);
+        assert_eq!(fs::read(sentinel).unwrap(), b"keep partial stage");
+        assert!(ruta_stage.is_dir());
+    }
+
+    #[test]
+    fn cleanup_rechaza_reemplazo_del_basename_sin_tocar_reemplazo() {
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        let movido = temp.path().join("moved-stage");
+        fs::rename(&ruta_stage, &movido).unwrap();
+        fs::create_dir(&ruta_stage).unwrap();
+        fs::write(ruta_stage.join("replacement.bin"), b"replacement canary").unwrap();
+
+        let error = stage.limpiar().unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_cleanup_identity_mismatch");
+        assert!(error.stage_parcial().identidad().is_some());
+        assert_eq!(
+            fs::read(ruta_stage.join("replacement.bin")).unwrap(),
+            b"replacement canary"
+        );
+        assert!(movido.is_dir());
+        drop(error);
+        assert!(ruta_stage.is_dir());
+        assert!(movido.is_dir());
+    }
+
+    #[test]
+    fn cleanup_rechaza_componente_que_no_corresponde_a_su_directorio() {
+        let (_temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let primero =
+            crear_stage_anclado_unico(&ancla, &mut || Ok("cleanup-first".to_owned())).unwrap();
+        let segundo =
+            crear_stage_anclado_unico(&ancla, &mut || Ok("cleanup-second".to_owned())).unwrap();
+        let forjado = StageAnclado {
+            directorio: primero.directorio.clonar().unwrap(),
+            componente: segundo.componente.clone(),
+            stage_id: primero.stage_id.clone(),
+            identidad: primero.identidad,
+            recibo: None,
+        };
+
+        let error = forjado.limpiar().unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_cleanup_identity_mismatch");
+        drop(error);
+        assert!(primero.directorio.identidad_raiz().is_some());
+        assert!(segundo.directorio.identidad_raiz().is_some());
+    }
+
+    #[test]
+    fn cleanup_rechaza_identidad_interna_forjada_sin_mutar_stages() {
+        let (_temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let primero =
+            crear_stage_anclado_unico(&ancla, &mut || Ok("cleanup-identity-a".to_owned())).unwrap();
+        let segundo =
+            crear_stage_anclado_unico(&ancla, &mut || Ok("cleanup-identity-b".to_owned())).unwrap();
+        let forjado = StageAnclado {
+            directorio: primero.directorio.clonar().unwrap(),
+            componente: primero.componente.clone(),
+            stage_id: primero.stage_id.clone(),
+            identidad: segundo.identidad,
+            recibo: None,
+        };
+
+        let error = forjado.limpiar().unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_cleanup_identity_mismatch");
+        drop(error);
+        assert!(primero.directorio.identidad_raiz().is_some());
+        assert!(segundo.directorio.identidad_raiz().is_some());
+    }
+
+    #[test]
+    fn cleanup_devuelve_capability_y_permite_retry_tras_fallo_parcial() {
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        fs::write(ruta_stage.join("a-first.bin"), b"remove first").unwrap();
+        fs::write(ruta_stage.join("b-second.bin"), b"keep until retry").unwrap();
+        let mut eliminaciones = 0;
+
+        let error = stage
+            .limpiar_con(|parent, componente, es_directorio| {
+                eliminaciones += 1;
+                if eliminaciones == 2 {
+                    return Err(ErrorDirectorioAnclado::Io);
+                }
+                let opciones = OpenOptionsAt::default();
+                let resultado = if es_directorio {
+                    opciones.rmdir_at(parent, Path::new(componente))
+                } else {
+                    opciones.unlink_at(parent, Path::new(componente))
+                };
+                resultado.map_err(|_| ErrorDirectorioAnclado::Io)
+            })
+            .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_cleanup_io");
+        assert!(error.stage_parcial().identidad().is_some());
+        assert!(!ruta_stage.join("a-first.bin").exists());
+        assert_eq!(
+            fs::read(ruta_stage.join("b-second.bin")).unwrap(),
+            b"keep until retry"
+        );
+        let stage = error.recuperar_stage();
+        stage.limpiar().unwrap();
+        assert!(!ruta_stage.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_preflight_rechaza_symlink_sin_mutar_y_preserva_canary_externo() {
+        use std::os::unix::fs::symlink;
+
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        let externo = temp.path().join("outside");
+        let enlace = ruta_stage.join("z-link");
+        fs::create_dir(&externo).unwrap();
+        fs::write(externo.join("canary.bin"), b"external canary").unwrap();
+        fs::write(ruta_stage.join("a-first.bin"), b"must remain").unwrap();
+        symlink(&externo, &enlace).unwrap();
+
+        let error = stage.limpiar().unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_cleanup_link_not_allowed");
+        assert!(ruta_stage.is_dir());
+        assert_eq!(
+            fs::read(ruta_stage.join("a-first.bin")).unwrap(),
+            b"must remain"
+        );
+        assert!(
+            fs::symlink_metadata(enlace)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read(externo.join("canary.bin")).unwrap(),
+            b"external canary"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cleanup_preflight_rechaza_junction_sin_mutar_y_preserva_canary_externo() {
+        use std::os::windows::fs::MetadataExt;
+        use std::process::Command;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        let externo = temp.path().join("outside");
+        let junction = ruta_stage.join("z-junction");
+        fs::create_dir(&externo).unwrap();
+        fs::write(externo.join("canary.bin"), b"external canary").unwrap();
+        fs::write(ruta_stage.join("a-first.bin"), b"must remain").unwrap();
+        let salida = Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&externo)
+            .output()
+            .unwrap();
+        assert!(salida.status.success(), "mklink /J must create a junction");
+
+        let error = stage.limpiar().unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_cleanup_link_not_allowed");
+        assert!(ruta_stage.is_dir());
+        assert_eq!(
+            fs::read(ruta_stage.join("a-first.bin")).unwrap(),
+            b"must remain"
+        );
+        assert_ne!(
+            fs::symlink_metadata(junction).unwrap().file_attributes()
+                & FILE_ATTRIBUTE_REPARSE_POINT,
+            0
+        );
+        assert_eq!(
+            fs::read(externo.join("canary.bin")).unwrap(),
+            b"external canary"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_preflight_rechaza_fifo_y_socket_sin_bloquear_ni_borrarlos() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::net::UnixListener;
+
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        let fifo = ruta_stage.join("pipe");
+        let c_fifo = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        let resultado = unsafe { libc::mkfifo(c_fifo.as_ptr(), 0o600) };
+        assert_eq!(resultado, 0, "mkfifo must create the special entry");
+        let error = stage.limpiar().unwrap_err();
+        assert!(matches!(
+            error.codigo(),
+            "stage_cleanup_entry_type_not_allowed" | "stage_cleanup_io"
+        ));
+        assert!(fifo.exists());
+        drop(error);
+
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        let socket = ruta_stage.join("socket");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let error = stage.limpiar().unwrap_err();
+        assert!(matches!(
+            error.codigo(),
+            "stage_cleanup_entry_type_not_allowed" | "stage_cleanup_io"
+        ));
+        assert!(socket.exists());
+        drop(error);
+        drop(listener);
     }
 
     #[test]
