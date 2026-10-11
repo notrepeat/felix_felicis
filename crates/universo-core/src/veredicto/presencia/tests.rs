@@ -40,6 +40,41 @@ fn estructura_con_hoja() -> Estructura {
     estructura
 }
 
+fn estructura_con_dos_hojas(reverse_insertion: bool, leaf_a_aplicable: bool) -> Estructura {
+    let mut estructura = Estructura::nueva(base()).unwrap();
+    let rows = [
+        ("n/root", "root-title"),
+        (
+            "n/leaf-a",
+            if leaf_a_aplicable {
+                "synthetic-label"
+            } else {
+                "nonmatching-label"
+            },
+        ),
+        ("n/leaf-b", "synthetic-label"),
+    ];
+    let order = if reverse_insertion {
+        [2, 1, 0]
+    } else {
+        [0, 1, 2]
+    };
+    let mut ids = [None; 3];
+    for index in order {
+        let (path_text, label) = rows[index];
+        ids[index] = Some(
+            estructura
+                .insertar_nodo(ruta(path_text), Sorte::nuevo("a"), Etiqueta::nuevo(label))
+                .unwrap(),
+        );
+    }
+    for id in ids.iter().skip(1).flatten().copied() {
+        estructura.asignar_padre(id, ids[0].unwrap()).unwrap();
+        estructura.asignar_atributo(id, "Nivel", "alto").unwrap();
+    }
+    estructura
+}
+
 fn formula(texto: &str) -> Formula {
     match parsear(texto).unwrap() {
         Sentencia::Oracion(formula) => formula,
@@ -68,10 +103,47 @@ fn parsear_hecho(texto: &str) -> Atomo {
     Atomo::parsear(texto).unwrap()
 }
 
-fn condicion_de_falsedad_satisfecha(requeridos: &[Atomo], subconjunto: &[Atomo]) -> bool {
-    requeridos
-        .iter()
-        .all(|requerido| subconjunto.contains(requerido))
+fn estructura_reducida_para_core(
+    hechos: &[Atomo],
+    path_raiz: &str,
+    path_hoja: &str,
+    etiqueta_hoja: &str,
+) -> Estructura {
+    let contiene = |texto: &str| hechos.contains(&parsear_hecho(texto));
+    let tiene_tipo = contiene(&format!("Type({path_hoja}, a)"));
+    let tiene_etiqueta = contiene(&format!("HasLab({path_hoja}, \"{etiqueta_hoja}\")"));
+    let tiene_padre = contiene(&format!("Parent({path_hoja}, {path_raiz})"));
+    let tiene_nivel = contiene(&format!("Nivel({path_hoja}, alto)"));
+
+    let mut estructura = Estructura::nueva(base()).unwrap();
+    let raiz = estructura
+        .insertar_nodo(
+            ruta(path_raiz),
+            Sorte::nuevo("a"),
+            // Mantiene el literal de HasLab en uso aun cuando se quitó del
+            // nodo asignado. La raíz no falsifica la fórmula porque no tiene
+            // el hecho Parent requerido por el cuerpo.
+            Etiqueta::nuevo(etiqueta_hoja),
+        )
+        .unwrap();
+    let hoja = estructura
+        .insertar_nodo(
+            ruta(path_hoja),
+            Sorte::nuevo(if tiene_tipo { "a" } else { "Retirado" }),
+            Etiqueta::nuevo(if tiene_etiqueta {
+                etiqueta_hoja
+            } else {
+                "unmatched-title"
+            }),
+        )
+        .unwrap();
+    if tiene_padre {
+        estructura.asignar_padre(hoja, raiz).unwrap();
+    }
+    if tiene_nivel {
+        estructura.asignar_atributo(hoja, "Nivel", "alto").unwrap();
+    }
+    estructura
 }
 
 #[test]
@@ -100,11 +172,14 @@ fn core_es_suficiente_irreducible_y_canonico_para_la_asignacion_fallida() {
     assert!(requeridos.iter().all(|hecho| hechos.contains(hecho)));
     assert!(hechos.windows(2).all(|par| par[0] <= par[1]));
 
-    assert!(condicion_de_falsedad_satisfecha(&requeridos, hechos));
+    let replay = estructura_reducida_para_core(hechos, "n/root", "n/leaf", "synthetic-label");
+    assert!(!crate::evaluador::evaluar(&formula, &replay).unwrap());
     for indice in 0..hechos.len() {
         let mut reducido = hechos.to_vec();
         reducido.remove(indice);
-        assert!(!condicion_de_falsedad_satisfecha(&requeridos, &reducido));
+        let replay_reducido =
+            estructura_reducida_para_core(&reducido, "n/root", "n/leaf", "synthetic-label");
+        assert!(crate::evaluador::evaluar(&formula, &replay_reducido).unwrap());
     }
 
     let debug = format!("{core:?}");
@@ -224,47 +299,13 @@ fn expansion_directa(formula: Formula, source_index: usize) -> ResultadoExpansio
     }
 }
 
-fn hay_violacion_presencia(hechos: &[Atomo], estructura: &Estructura) -> bool {
-    let path_raiz = ruta("n/PRIVATE_ROOT_CANARY");
-    let tipo_guarda = Sorte::nuevo("a");
-    let etiqueta_guarda = Etiqueta::nuevo("PRIVATE_LABEL_CANARY");
-
-    estructura.nodos().any(|(_, nodo)| {
-        let guarda_tipo = hechos.iter().any(|hecho| {
-            matches!(
-                hecho,
-                Atomo::Type { sujeto, sorte }
-                    if sujeto == &nodo.path && sorte == &tipo_guarda
-            )
-        });
-        let guarda_etiqueta = hechos.iter().any(|hecho| {
-            matches!(
-                hecho,
-                Atomo::HasLab {
-                    sujeto: SujetoAtomo::Nodo(sujeto),
-                    etiqueta,
-                } if sujeto == &nodo.path && etiqueta == &etiqueta_guarda
-            )
-        });
-        let patron = hechos.iter().any(|hecho| {
-            matches!(
-                hecho,
-                Atomo::Parent { hijo, padre }
-                    if hijo == &nodo.path && padre == &path_raiz
-            )
-        });
-
-        guarda_tipo && guarda_etiqueta && patron
-    })
-}
-
 #[test]
 fn explicar_extrae_core_suficiente_minimal_y_redactado_y_omite_formas_no_aplicables() {
     let estructura = estructura_para_core();
     let aplicable = formula(
         "(forall ((x N)) :guarda (and (Type x a) (HasLab x \"PRIVATE_LABEL_CANARY\")) (not (and (Parent x @n/PRIVATE_ROOT_CANARY))))",
     );
-    let entrada = expansion_directa(aplicable, 4);
+    let entrada = expansion_directa(aplicable.clone(), 4);
     let resultado = explicar(&entrada, &estructura, ModoExplicacion::Decidir).unwrap();
     let ResultadoExplicaciones::Decision(Some(objeto)) = resultado else {
         panic!("la fórmula universal aplicable es falsa en la hoja")
@@ -276,12 +317,24 @@ fn explicar_extrae_core_suficiente_minimal_y_redactado_y_omite_formas_no_aplicab
     // El getter es deliberadamente sensible; se usa aquí solo para replay.
     let hechos = core.atomos_sensibles();
     assert_eq!(hechos.len(), 3);
-    assert!(hay_violacion_presencia(hechos, &estructura));
+    let replay = estructura_reducida_para_core(
+        hechos,
+        "n/PRIVATE_ROOT_CANARY",
+        "n/PRIVATE_LEAF_CANARY",
+        "PRIVATE_LABEL_CANARY",
+    );
+    assert!(!crate::evaluador::evaluar(&aplicable, &replay).unwrap());
     for indice in 0..hechos.len() {
         let mut reducido = hechos.to_vec();
         reducido.remove(indice);
+        let replay_reducido = estructura_reducida_para_core(
+            &reducido,
+            "n/PRIVATE_ROOT_CANARY",
+            "n/PRIVATE_LEAF_CANARY",
+            "PRIVATE_LABEL_CANARY",
+        );
         assert!(
-            !hay_violacion_presencia(&reducido, &estructura),
+            crate::evaluador::evaluar(&aplicable, &replay_reducido).unwrap(),
             "quitar el hecho {indice} debe destruir la violación de esta asignación"
         );
     }
@@ -308,4 +361,147 @@ fn explicar_extrae_core_suficiente_minimal_y_redactado_y_omite_formas_no_aplicab
         panic!("la fórmula universal no aplicable también es falsa")
     };
     assert!(objeto.core_presencia().is_none());
+}
+
+fn extraer_core_de_instancia(
+    formula: &Formula,
+    instancia: &InstanciaCuantificada,
+    estructura: &Estructura,
+) -> CorePresencia {
+    let mut presupuesto = PresupuestoExplicacion::nuevo(1_000_000);
+    let ResultadoPresencia::Core(core) =
+        extraer_core_presencia(formula, instancia, estructura, &mut presupuesto).unwrap()
+    else {
+        panic!("cada asignación falsificante del fixture debe tener un core");
+    };
+    core
+}
+
+fn assert_core_minimal_para_leaf(formula: &Formula, core: &CorePresencia, path_leaf: &str) {
+    let requeridos = [
+        parsear_hecho(&format!("Type({path_leaf}, a)")),
+        parsear_hecho(&format!("HasLab({path_leaf}, \"synthetic-label\")")),
+        parsear_hecho(&format!("Parent({path_leaf}, n/root)")),
+        parsear_hecho(&format!("Nivel({path_leaf}, alto)")),
+    ];
+    let hechos = core.atomos_sensibles();
+    assert_eq!(hechos.len(), requeridos.len());
+    assert!(requeridos.iter().all(|hecho| hechos.contains(hecho)));
+    let replay = estructura_reducida_para_core(hechos, "n/root", path_leaf, "synthetic-label");
+    assert!(
+        !crate::evaluador::evaluar(formula, &replay).unwrap(),
+        "el snapshot reducido al core debe conservar el contraejemplo para {path_leaf}"
+    );
+    for indice in 0..hechos.len() {
+        let mut reducido = hechos.to_vec();
+        reducido.remove(indice);
+        let replay_reducido =
+            estructura_reducida_para_core(&reducido, "n/root", path_leaf, "synthetic-label");
+        assert!(
+            crate::evaluador::evaluar(formula, &replay_reducido).unwrap(),
+            "cada átomo del core para {path_leaf} debe ser necesario"
+        );
+    }
+}
+
+#[test]
+fn dos_asignaciones_incomparables_eligen_un_core_canonico_y_minimal() {
+    let formula = formula(
+        "(forall ((x N)) :guarda (and (Type x a) (HasLab x \"synthetic-label\")) (not (and (Parent x @n/root) (Nivel x alto))))",
+    );
+    let mut resultados = Vec::new();
+
+    for reverse_insertion in [false, true] {
+        let estructura_ambas_aplicables = estructura_con_dos_hojas(reverse_insertion, true);
+        let traza_primera = evaluar_trazable(&formula, &estructura_ambas_aplicables).unwrap();
+        assert!(!traza_primera.valor);
+        let primera = instancia_falsa(&formula, &estructura_ambas_aplicables);
+        let crate::evaluador::ValorLigadura::Nodo(path_primero) =
+            &primera.asignacion.ligaduras[0].valor
+        else {
+            panic!("la primera asignación debe ligar un nodo");
+        };
+        assert_eq!(path_primero.como_str(), "n/leaf-a");
+        let core_primero =
+            extraer_core_de_instancia(&formula, &primera, &estructura_ambas_aplicables);
+
+        // Una segunda evaluación real vuelve vacua la guarda de leaf-a, así
+        // que leaf-b es el primer binding falsificante de esa traza.
+        let estructura_solo_leaf_b_aplicable = estructura_con_dos_hojas(reverse_insertion, false);
+        let traza_segunda = evaluar_trazable(&formula, &estructura_solo_leaf_b_aplicable).unwrap();
+        assert!(!traza_segunda.valor);
+        let ReglaEvidencia::Cuantificador {
+            tipo: TipoCuantificador::ParaTodo,
+            instancias,
+            ..
+        } = &traza_segunda.evidencia.regla
+        else {
+            panic!("la traza real debe ser un cuantificador universal");
+        };
+        let leaf_a = instancias
+            .iter()
+            .find(|instancia| {
+                matches!(
+                    &instancia.asignacion.ligaduras[0].valor,
+                    crate::evaluador::ValorLigadura::Nodo(path)
+                        if path.como_str() == "n/leaf-a"
+                )
+            })
+            .expect("leaf-a debe aparecer en la traza vacua");
+        assert!(!leaf_a.guarda.as_deref().unwrap().valor);
+        assert!(leaf_a.valor, "una guarda falsa es vacua");
+
+        let segunda = instancia_falsa(&formula, &estructura_solo_leaf_b_aplicable);
+        let crate::evaluador::ValorLigadura::Nodo(path_segundo) =
+            &segunda.asignacion.ligaduras[0].valor
+        else {
+            panic!("la segunda asignación debe ligar un nodo");
+        };
+        assert_eq!(path_segundo.como_str(), "n/leaf-b");
+        let core_segundo =
+            extraer_core_de_instancia(&formula, &segunda, &estructura_solo_leaf_b_aplicable);
+
+        assert_core_minimal_para_leaf(&formula, &core_primero, "n/leaf-a");
+        assert_core_minimal_para_leaf(&formula, &core_segundo, "n/leaf-b");
+        assert!(
+            core_primero
+                .atomos_sensibles()
+                .iter()
+                .all(|hecho| !core_segundo.atomos_sensibles().contains(hecho)),
+            "los dos cores deben ser incomparables"
+        );
+        assert!(
+            core_segundo
+                .atomos_sensibles()
+                .iter()
+                .all(|hecho| !core_primero.atomos_sensibles().contains(hecho)),
+            "los dos cores deben ser incomparables"
+        );
+
+        let expansion = expansion_directa(formula.clone(), 0);
+        let resultado = explicar(
+            &expansion,
+            &estructura_ambas_aplicables,
+            ModoExplicacion::Enumerar {
+                maximo_resultados: 100,
+            },
+        )
+        .unwrap();
+        let ResultadoExplicaciones::Enumeracion {
+            objetos,
+            truncated: false,
+            reason: None,
+        } = resultado
+        else {
+            panic!("se esperaba la enumeración completa de una fórmula");
+        };
+        assert_eq!(objetos.len(), 1, "los otros cores no multiplican objetos");
+        let objeto = &objetos[0];
+        let core_elegido = objeto.core_presencia().expect("debe incluir un core");
+        assert_eq!(core_elegido, &core_primero);
+        assert!(objeto.gap().is_none());
+        resultados.push((core_elegido.clone(), core_segundo));
+    }
+
+    assert_eq!(resultados[0], resultados[1]);
 }

@@ -179,6 +179,58 @@ fn exists_falso_en_dominio_vacio_registra_cero_asignaciones_y_no_inventa_ids() {
     assert_eq!(brecha.asignacion_universal_sensible(), None);
 }
 
+#[test]
+fn fragmento_positivo_resume_tc_parent_edge_y_extension_sin_argumentos_crudos() {
+    let mut estructura = estructura(false);
+    let root = estructura.por_path(&path(ROOT_PATH)).unwrap();
+    let leaf = estructura.por_path(&path(LEAF_PATH)).unwrap();
+    estructura
+        .insertar_arista(
+            root,
+            leaf,
+            Sorte::nuevo("rel"),
+            Etiqueta::nuevo("PRIVATE_EDGE_LABEL_CANARY"),
+        )
+        .unwrap();
+
+    let casos = [
+        ("(exists ((x N)) (tc Parent x x))", AtomoBrecha::TcParent, 2),
+        (
+            "(exists ((e E)) (Edge e @n/a-PRIVATE_ROOT_CANARY @n/a-PRIVATE_ROOT_CANARY rel))",
+            AtomoBrecha::Edge,
+            1,
+        ),
+        ("(exists ((x N)) (Nivel x alto))", AtomoBrecha::Ext, 2),
+    ];
+
+    for (texto, predicado, candidatos) in casos {
+        let formula = formula(texto);
+        let traza = evaluar_trazable(&formula, &estructura).unwrap();
+        assert!(!traza.valor, "el fixture debe ser falso: {texto}");
+
+        let objeto = objeto_de_brecha(&formula, &estructura);
+        assert_eq!(objeto.counterexample.evidencia, traza.evidencia);
+        let brecha = objeto.gap().expect("el átomo positivo es elegible");
+        assert_eq!(brecha.clase, ClaseBrecha::ExistenciaSinTestigo);
+        assert_eq!(
+            brecha.conteos.candidatos_existencial_principal_evaluados,
+            candidatos
+        );
+        assert_eq!(
+            brecha.forma.cuerpo,
+            FormaPositiva::Atomo(predicado),
+            "la forma allowlisted debe conservar solo el constructor: {texto}"
+        );
+
+        let debug = format!("{brecha:?}");
+        let display = brecha.to_string();
+        for canario in [ROOT_PATH, LEAF_PATH, "PRIVATE_EDGE_LABEL_CANARY", "alto"] {
+            assert!(!debug.contains(canario));
+            assert!(!display.contains(canario));
+        }
+    }
+}
+
 fn brecha_para_toda_existe(reverse_insertion: bool) -> (Estructura, Brecha, EvidenciaEvaluacion) {
     let estructura = estructura_para_forall(reverse_insertion);
     let formula = formula(&format!(
@@ -255,6 +307,107 @@ fn forall_exists_usa_primera_guarda_verdadera_y_excluye_guardas_falsas() {
             .nodos()
             .any(|(candidate, _)| estructura.padre(candidate) == Some(leaf))
     );
+}
+
+fn estructura_para_dos_falsificantes(reverse_insertion: bool) -> Estructura {
+    let mut estructura = Estructura::nueva(base()).unwrap();
+    let rows = [
+        (ROOT_PATH, ROOT_LABEL),
+        ("n/m-PRIVATE_MIDDLE_CANARY", APPLICABLE_LABEL),
+        ("n/y-PRIVATE_FIRST_LEAF_CANARY", APPLICABLE_LABEL),
+        ("n/z-PRIVATE_SECOND_LEAF_CANARY", APPLICABLE_LABEL),
+    ];
+    let order = if reverse_insertion {
+        [3, 2, 1, 0]
+    } else {
+        [0, 1, 2, 3]
+    };
+    let mut ids = [None; 4];
+    for index in order {
+        let (path_text, label) = rows[index];
+        ids[index] = Some(
+            estructura
+                .insertar_nodo(path(path_text), Sorte::nuevo("a"), Etiqueta::nuevo(label))
+                .unwrap(),
+        );
+    }
+    estructura
+        .asignar_padre(ids[1].unwrap(), ids[0].unwrap())
+        .unwrap();
+    estructura
+        .asignar_padre(ids[2].unwrap(), ids[1].unwrap())
+        .unwrap();
+    estructura
+        .asignar_padre(ids[3].unwrap(), ids[1].unwrap())
+        .unwrap();
+    estructura
+}
+
+#[test]
+fn forall_exists_selecciona_el_primer_binding_falsificante_tras_vacuidad_y_cuerpo_verdadero() {
+    let formula = formula(&format!(
+        "(forall ((x N)) :guarda (HasLab x \"{APPLICABLE_LABEL}\") (exists ((y N)) (Parent y x)))"
+    ));
+
+    let mut resultados = Vec::new();
+    for reverse_insertion in [false, true] {
+        let estructura = estructura_para_dos_falsificantes(reverse_insertion);
+        let traza = evaluar_trazable(&formula, &estructura).unwrap();
+        assert!(!traza.valor);
+        let ReglaEvidencia::Cuantificador {
+            tipo: TipoCuantificador::ParaTodo,
+            instancias,
+            ..
+        } = &traza.evidencia.regla
+        else {
+            panic!("la evidencia debe ser un cuantificador universal");
+        };
+        assert_eq!(instancias.len(), 3, "el forall corta en el primer falso");
+        assert!(!instancias[0].guarda.as_deref().unwrap().valor);
+        assert!(instancias[0].cuerpo.is_none());
+        assert!(instancias[0].valor, "la guarda falsa es vacua");
+        assert!(instancias[1].guarda.as_deref().unwrap().valor);
+        assert!(instancias[1].cuerpo.as_deref().unwrap().valor);
+        assert!(instancias[1].valor);
+        assert!(instancias[2].guarda.as_deref().unwrap().valor);
+        assert!(!instancias[2].cuerpo.as_deref().unwrap().valor);
+        assert!(!instancias[2].valor);
+
+        let mut falsificantes: Vec<_> = estructura
+            .nodos()
+            .filter(|(_, nodo)| nodo.etiqueta.como_str() == APPLICABLE_LABEL)
+            .filter(|(id, _)| {
+                !estructura
+                    .nodos()
+                    .any(|(candidato, _)| estructura.padre(candidato) == Some(*id))
+            })
+            .map(|(_, nodo)| nodo.path.clone())
+            .collect();
+        falsificantes.sort();
+        assert_eq!(
+            falsificantes,
+            [
+                path("n/y-PRIVATE_FIRST_LEAF_CANARY"),
+                path("n/z-PRIVATE_SECOND_LEAF_CANARY"),
+            ],
+            "el fixture contiene dos bindings aplicables falsificantes"
+        );
+
+        let objeto = objeto_de_brecha(&formula, &estructura);
+        let brecha = objeto.gap().expect("el primer binding falso debe dar gap");
+        let asignacion = brecha
+            .asignacion_universal_sensible()
+            .expect("el gap conserva la asignación universal elegida");
+        let ValorLigadura::Nodo(asignada) = &asignacion.ligaduras[0].valor else {
+            panic!("el binding universal debe ser un nodo");
+        };
+        assert_eq!(asignada, &falsificantes[0]);
+        assert_eq!(brecha.conteos.asignaciones_universales_examinadas, 3);
+        assert_eq!(brecha.conteos.candidatos_existencial_principal_evaluados, 4);
+        resultados.push((objeto, traza.evidencia));
+    }
+
+    assert_eq!(resultados[0], resultados[1]);
 }
 
 #[test]
@@ -359,6 +512,63 @@ fn exists_anidado_positivo_se_resume_recursivamente() {
             cuerpo,
         } if **cuerpo == FormaPositiva::Atomo(AtomoBrecha::Parent)
     ));
+}
+
+#[test]
+fn forma_positiva_recursiva_resume_y_o_y_existe_con_guarda_y_redacta_datos() {
+    let estructura = estructura(false);
+    let formula = formula(&format!(
+        "(exists ((PRIVATE_X_CANARY N)) :guarda (Type PRIVATE_X_CANARY a) (and (or (Parent PRIVATE_X_CANARY PRIVATE_X_CANARY) (Parent PRIVATE_X_CANARY @{ROOT_PATH})) (exists ((PRIVATE_Y_CANARY N)) :guarda (HasLab PRIVATE_Y_CANARY \"{APPLICABLE_LABEL}\") (Parent PRIVATE_Y_CANARY PRIVATE_Y_CANARY))))"
+    ));
+    let traza = evaluar_trazable(&formula, &estructura).unwrap();
+    assert!(!traza.valor, "la obligación recursiva del fixture es falsa");
+
+    let objeto = objeto_de_brecha(&formula, &estructura);
+    assert_eq!(objeto.counterexample.evidencia, traza.evidencia);
+    let brecha = objeto
+        .gap()
+        .expect("Y/O/Existe positivo y guarda positiva pertenecen al fragmento");
+    assert_eq!(brecha.clase, ClaseBrecha::ExistenciaSinTestigo);
+    assert_eq!(brecha.conteos.nodos_disponibles, 2);
+    assert_eq!(brecha.conteos.aristas_disponibles, 0);
+    assert_eq!(brecha.conteos.candidatos_existencial_principal_evaluados, 2);
+    assert_eq!(brecha.conteos.asignaciones_universales_examinadas, 0);
+    assert_eq!(
+        brecha.forma.guarda,
+        Some(FormaPositiva::Atomo(AtomoBrecha::Type))
+    );
+    assert_eq!(
+        brecha.forma.cuerpo,
+        FormaPositiva::Y(vec![
+            FormaPositiva::O(vec![
+                FormaPositiva::Atomo(AtomoBrecha::Parent),
+                FormaPositiva::Atomo(AtomoBrecha::Parent),
+            ]),
+            FormaPositiva::Existe {
+                ligaduras_nodo: 1,
+                ligaduras_arista: 0,
+                guarda: Some(Box::new(FormaPositiva::Atomo(AtomoBrecha::HasLabNodo,))),
+                cuerpo: Box::new(FormaPositiva::Atomo(AtomoBrecha::Parent)),
+            },
+        ])
+    );
+
+    let debug_gap = format!("{brecha:?}");
+    let display_gap = brecha.to_string();
+    let debug_object = format!("{objeto:?}");
+    for canary in [
+        ROOT_PATH,
+        "PRIVATE_X_CANARY",
+        "PRIVATE_Y_CANARY",
+        APPLICABLE_LABEL,
+    ] {
+        assert!(!debug_gap.contains(canary), "Debug filtró {canary}");
+        assert!(!display_gap.contains(canary), "Display filtró {canary}");
+        assert!(
+            !debug_object.contains(canary),
+            "Debug del objeto filtró {canary}"
+        );
+    }
 }
 
 #[test]
