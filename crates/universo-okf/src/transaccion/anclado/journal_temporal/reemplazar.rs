@@ -304,3 +304,7 @@ fn es_conflicto_temporal(error: ErrorJournalAnclado) -> bool {
             | ErrorJournalAnclado::ReparseNotAllowed
     )
 }
+
+#[cfg(test)]
+#[path = "reemplazar_tests.rs"]
+mod tests;
