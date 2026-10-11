@@ -119,12 +119,12 @@ fn detector_mide_1000_conflictos_funcionales() {
     }
 
     let segundos = duracion.as_secs_f64().max(f64::MIN_POSITIVE);
-    let diagnosticos_s = resultado.total_conflictos() as f64 / segundos;
+    let conflictos_s = resultado.total_conflictos() as f64 / segundos;
     println!(
-        "runtime conflicts={} elapsed_ms={:.3} diagnosticos_s={:.1} summary_classes={} snapshot_fnv1a64_before={huella_antes:016x} snapshot_fnv1a64_after={huella_despues:016x}",
+        "runtime conflicts={} elapsed_ms={:.3} conflictos_s={:.1} summary_classes={} snapshot_unchanged=true",
         resultado.total_conflictos(),
         duracion.as_secs_f64() * 1_000.0,
-        diagnosticos_s,
+        conflictos_s,
         resultado.diagnosticos().len(),
     );
 }
