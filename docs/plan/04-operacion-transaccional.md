@@ -153,20 +153,23 @@ Chain strategy: feature-branch-chain
   claves JSON, duplicados, roundtrip, orden canónico y cargas de 1/100/10.000
   operaciones. Esa carga valida roundtrip, cantidad y bytes serializados; no
   registra µs/op. El parser/canonicalizador rechaza el delta completo antes de
-  construir el candidato, que corresponde a Unidad 1. Completada en los
-  commits `1074902ec4687af435f2772de77febd161a59e68` (240 líneas añadidas) y
+  construir el candidato, que corresponde a Unidad 1. Esta Unidad 0 quedó
+  completada en dos commits revisables: `1074902ec4687af435f2772de77febd161a59e68`
+  (240 líneas añadidas) y
   `a54688ca274fa46f1a6a438df7988c13ef1176de` (247 líneas añadidas), dos
   commits revisables de menos de 400 líneas cada uno y sin cambio de alcance.
-- [ ] 1 — Candidate, Edge y Ext: `crates/universo-core/src/transaccion/candidato.rs`,
+- [x] 1 — Candidate, Edge y Ext: `crates/universo-core/src/transaccion/candidato.rs`,
   `crates/universo-core/src/transaccion/aristas.rs`,
   `crates/universo-core/src/transaccion/ext.rs`.
-  Avance parcial: el core clona la estructura en un candidato aislado y admite
-  retiros y altas `Edge`/`HasLab` de arista. Resuelve los retiros contra el
-  snapshot a handles; luego retira en lote, compacta cada grupo preservando el
-  orden de supervivientes y conserva sus labels por handle. Las altas `Edge`
-  requieren un `HasLab` correspondiente y usan ordinales finales contiguos en
-  orden numérico; los grupos `(origen, tipo, destino)` se procesan de forma
-  independiente. Las mezclas remove/add también usan las posiciones finales.
+  Cerrada como unidad de construcción de candidatos; la fase 04 sigue en curso.
+  El core clona la estructura en un candidato aislado y admite retiros y altas
+  `Edge`/`HasLab` de arista, además de `Ext` de nodo. Resuelve los retiros de
+  arista contra el snapshot a handles; luego retira en lote, compacta cada
+  grupo preservando el orden de supervivientes y conserva sus labels por
+  handle. Las altas `Edge` requieren un `HasLab` correspondiente y usan
+  ordinales finales contiguos en orden numérico; los grupos
+  `(origen, tipo, destino)` se procesan de forma independiente. Las mezclas
+  remove/add también usan las posiciones finales.
 
   Un `HasLab` retirado identifica la etiqueta vigente por handle en el
   snapshot. Si el handle sobrevive, la etiqueta nueva se añade con su identidad
@@ -175,9 +178,13 @@ Chain strategy: feature-branch-chain
   idempotentemente con su `HasLab` exacto, y el delta vacío también es no-op.
   En cambio, el mismo `Edge` canónico en add y remove se rechaza por
   solapamiento en `Delta::nuevo`; no es necesario representar un no-op con ese
-  par de operaciones. `Type`, `Parent`, `Ext` y `HasLab` de nodo siguen
-  rechazados fail-closed como `unsupported_operation`; las invariantes
-  funcionales todavía no tienen ruta de evaluación/admisión.
+  par de operaciones. `Ext` requiere predicado declarado, sujeto nodo existente
+  y valor dentro del dominio declarado; reemplazar el valor del mismo
+  `(predicado, nodo)` exige retirar el valor vigente y añadir el nuevo. Las
+  altas idénticas son no-op y las bajas exigen la identidad exacta. `Type`,
+  `Parent` y `HasLab` de nodo siguen rechazados fail-closed como
+  `unsupported_operation`; los conflictos e invariantes funcionales todavía no
+  tienen ruta de evaluación/admisión.
 
   `crates/universo-core/tests/candidato_delta.rs`
   (`cargo test -p universo-core --test candidato_delta`) pasa 3/3 casos de
@@ -187,15 +194,32 @@ Chain strategy: feature-branch-chain
   retiros/altas, ordinales numéricos, ordinales finales en mezcla remove/add,
   grupos independientes, label vigente requerida, no-op exacto, reemplazo por
   handle snapshot→identidad final, fallo sin mutación y redacción. Las pruebas
-  también distinguen ordinales `#2`/`#10` con 11 aristas paralelas. Siguen
-  pendientes `crates/universo-core/tests/ext_transaccional.rs` y
-  `crates/universo-okf/tests/ext_roundtrip.rs`.
+  también distinguen ordinales `#2`/`#10` con 11 aristas paralelas.
+  `crates/universo-core/tests/ext_transaccional.rs`
+  (`cargo test -p universo-core --test ext_transaccional`) pasa 10/10 casos de
+  validación, reemplazo, idempotencia, rechazo redactado y composición; y
+  `crates/universo-okf/tests/ext_roundtrip.rs`
+  (`cargo test -p universo-okf --test ext_roundtrip`) pasa 3/3 casos de JSON,
+  serialización y recarga.
 
-  Runtime previsto: 10.000 átomos base + 1.000 cambios y grupos de
-  1/100/10.000 aristas, midiendo ms y bytes del candidato. No hay medidas aún:
-  resolver R retiros buscando cada identidad en una adyacencia de grado D puede
-  costar O(R×D); medir y decidir una optimización queda pendiente. Rollback
-  previsto: descartar candidato. Objetivo por slice: <400 líneas authored.
+  Runtime release de `candidato_runtime` (`cargo test -p universo-core
+  --release --test candidato_runtime -- --ignored --nocapture`): dos muestras
+  únicas independientes; ms, átomos y bytes canónicos UTF-8 de la estructura
+  candidata:
+
+  | Escenario | Muestra 1 | Muestra 2 | Átomos candidato | Bytes canónicos |
+  |---|---:|---:|---:|---:|
+  | `Ext`: 10.004 átomos base, 1.000 cambios, 2.000 átomos delta | 2,900 ms | 3,113 ms | 10.004 | 429.358 |
+  | `Edge`: grupo de 1, 1 cambio, 2 átomos delta | 0,014 ms | 0,016 ms | 4 | 78 |
+  | `Edge`: grupo de 100, 1 cambio, 2 átomos delta | 0,032 ms | 0,027 ms | 202 | 9.859 |
+  | `Edge`: grupo de 10.000, 1 cambio, 2 átomos delta | 1,912 ms | 1,736 ms | 20.002 | 1.027.755 |
+
+  Cada tiempo es una muestra sin warmup ni distribución estadística: la
+  variación observada confirma que estos valores son orientativos y no definen
+  SLA. Los bytes son la suma de strings canónicos UTF-8 de los átomos, no heap
+  ni tamaño del bundle. La medición de un retiro por grupo no descarta ni
+  optimiza el posible costo O(R×D) con muchos retiros. Rollback: descartar el
+  candidato. Los commits de la unidad se mantuvieron bajo 400 líneas authored.
 - [ ] 2 — Conflictos funcionales: `crates/universo-core/src/transaccion/conflictos.rs`.
   Test `crates/universo-core/tests/conflictos_delta.rs`
   (`cargo test -p universo-core --test conflictos_delta`) separa
@@ -287,22 +311,29 @@ Chain strategy: feature-branch-chain
 
 ## Criterios de aceptación
 
-- [ ] Un delta válido produce el candidato esperado.
+- [x] Para las operaciones soportadas por Unidad 0/1, un delta válido produce
+  el candidato esperado y no modifica el snapshot de entrada.
+- [ ] El candidato cubre las demás operaciones válidas de la transacción,
+  incluidas `Type`, `Parent` y `HasLab` de nodo.
 - [ ] Root symlink/junction/reparse se rechaza; una raíz válida se canoniza
   una vez y todos los artefactos sibling se derivan del parent+basename
   canónicos, de modo que aliases convergen.
-- [ ] `add`/`remove` se comportan como parche transaccional explícito, sin
+- [x] `add`/`remove` se comportan como parche transaccional explícito, sin
   atribuir al delta minimalidad o prioridad de AGM/R.
-- [ ] `add`/`remove` se canonicalizan con orden determinista; el solapamiento
-  se rechaza y un snapshot distinto se informa como `stale`.
-- [ ] Los retiros Edge/HasLab se resuelven a handles del snapshot antes de
+- [x] `add`/`remove` se canonicalizan con orden determinista y el solapamiento
+  se rechaza.
+- [ ] Un snapshot distinto se informa como `stale` antes de aplicar el delta.
+- [x] Los retiros Edge/HasLab se resuelven a handles del snapshot antes de
   mutar; las removals por `(origen, tipo, destino)` compactan supervivientes
   en orden snapshot. Adds canónicos exigen ordinales finales contiguos.
-- [ ] `Ext` valida predicado declarado/dominio; cambiar valor para
-  `(predicado, nodo)` exige remove+add. `HasLab` es funcional por sujeto;
-  etiquetas iguales en sujetos distintos se permiten salvo invariante.
-- [ ] Cambiar `HasLab` del mismo sujeto exige remove+add. `Parent` se persiste
-  solo con override de `BundlePath` exacto o raíz vacía; ausente produce
+- [x] `Ext` valida predicado declarado/dominio; cambiar valor para
+  `(predicado, nodo)` exige remove+add.
+- [ ] `HasLab` es funcional para todo tipo de sujeto; etiquetas iguales en
+  sujetos distintos se permiten salvo invariante.
+- [x] Cambiar `HasLab` de una arista exige remove+add y mantiene la asociación
+  por handle durante la compactación.
+- [ ] Cambiar `HasLab` de nodo exige remove+add. `Parent` se persiste solo con
+  override de `BundlePath` exacto o raíz vacía; ausente produce
   `parent_not_persistable`.
 - [ ] La salida separa error técnico de veredicto funcional y redacta valores
   privados por defecto.
@@ -311,7 +342,8 @@ Chain strategy: feature-branch-chain
   publicación bajo lock.
 - [ ] Los conflictos funcionales se distinguen de las violaciones de
   invariantes y se informan sin publicar valores privados por defecto.
-- [ ] Un delta rechazado no cambia memoria ni archivos.
+- [x] Un error al construir candidato no muta la estructura snapshot en memoria.
+- [ ] Un delta rechazado por la transacción completa no cambia los archivos.
 - [ ] Simulación no escribe y omite el token; `--emit-snapshot-token` lo
   entrega solo bajo solicitud. Apply usa el comando completo de arriba y
   reevalúa/revalida bajo lock.
@@ -331,9 +363,14 @@ Chain strategy: feature-branch-chain
   restos. Backup se elimina antes que journal y el journal al final. Testea
   crash/restart durante cleanup. No se afirma visibilidad continua ni
   recuperación garantizada ante pérdida de energía.
-- [ ] El mismo delta contra el mismo estado produce el mismo veredicto.
+- [x] El mismo delta y snapshot producen el mismo candidato para las
+  operaciones soportadas; los retiros de Edge son independientes del orden de
+  entrada.
+- [ ] El mismo delta contra el mismo estado produce el mismo veredicto
+  funcional.
 - [ ] Un delta contra un estado diferente se detecta y no se aplica a ciegas.
-- [ ] La optimización incremental queda diferida hasta tener mediciones.
+- [ ] Decidir optimización incremental con mediciones reproducibles y
+  suficientes; las muestras actuales son orientativas y no definen SLA.
 
 ## Prueba de seguridad central
 
@@ -374,14 +411,20 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | `9afb46405d8285259bfa621d570ae4c58cc893db` | Altas `Edge`/`HasLab` de arista; 166 añadidas/8 borradas (174 authored). | Aporte parcial a Unidad 1. |
 | 2026-10-11 | `fa710d474ab8abc22f0779437d283b6ad12331c6` | Casos de altas, no-op, grupos y mezcla remove/add; 253 líneas añadidas. | Aporte parcial a Unidad 1. |
 | 2026-10-11 | `826b3816f5b257707664567ebbee39ffe3be9d35` | Reemplazo de etiqueta por identidad final; 274 añadidas/24 borradas (298 authored). | Aporte parcial a Unidad 1. |
+| 2026-10-11 | `00c6b9690570de33e4853a78998127eb9b10ac38` | Aplicación transaccional de `Ext`; 342 añadidas/18 borradas (360 authored); `ext_transaccional` 10/10. | Unidad 1 cerrada en conjunto. |
+| 2026-10-11 | `1e7aa65aa641c80a0ad0ab9fed2eb7ccd4cb81d4` | Roundtrips transaccionales de `Ext`; 165 añadidas/2 borradas (167 authored); `ext_roundtrip` 3/3. | Unidad 1 cerrada en conjunto. |
+| 2026-10-11 | `3b148913dee4af1d3cbfcbc7ae5dbf7769361833` | Clasificación de retiros `Ext`; 182 añadidas/24 borradas (206 authored). | Unidad 1 cerrada en conjunto. |
+| 2026-10-11 | `59dc0dd23fca6da6ced96f06de709a7b66489e49` | Prueba release de runtime para `Ext` y grupos `Edge`; 213 líneas añadidas. | Dos muestras únicas orientativas; no constituyen SLA. |
 | 2026-10-11 | Verificación en HEAD `f42cdb9` | Workspace, clippy, fmt y frontera pública pasan en el HEAD de código; enlaces, frontera, fmt y diff pasan tras editar los planes. | Aprobada; no incluye medición de rendimiento. |
 | 2026-10-11 | Verificación en HEAD `826b381` | `delta_aristas` 14/14, `candidato_delta` 3/3, workspace, clippy, fmt y frontera pública pasan; diff y enlaces pasan tras editar los planes. | Aprobada; runtime sigue pendiente. |
+| 2026-10-11 | Verificación en HEAD `59dc0dd` | `candidato_delta` 3/3, `delta_aristas` 14/14, `ext_transaccional` 10/10, `ext_roundtrip` 3/3; workspace, clippy, fmt y frontera pública pasan. Tras editar, enlaces locales y `git diff --check` pasan. | Unidad 1 cerrada; fase 04 sigue en curso. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
-| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, ordinales finales y reemplazo de etiqueta por handles | Parcial; `Type`, `Parent`, `Ext`, `HasLab` de nodo, invariantes funcionales y rendimiento pendientes |
-| 2–4 | Core `ext_transaccional`, `conflictos_delta`; OKF `ext_roundtrip`, `padre_persistible`, `snapshot_transaccional` | Pendiente |
+| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada; siguen pendientes `Type`, `Parent`, `HasLab` de nodo, conflictos/invariantes funcionales, stale y publicación |
+| 2 | Core `conflictos_delta`: conflictos funcionales separados de invariantes | Pendiente; siguiente unidad |
+| 3–4 | OKF `padre_persistible`, `snapshot_transaccional` | Pendiente |
 | 5–7 | `writer_lock_transaccional`, `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 

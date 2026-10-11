@@ -12,8 +12,8 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidad 0 completada y Unidad 1 con avance parcial; `cargo test --workspace` pasa en HEAD `826b381`. |
-| Foco actual | Fase 04, Unidad 1: candidato, Edge y Ext. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0 y 1 completadas; `cargo test --workspace` pasa en HEAD `59dc0dd`. |
+| Foco actual | Fase 04, Unidad 2: conflictos funcionales. |
 | Última actualización | 2026-10-11 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidad 0 completada; Unidad 1 avanza parcialmente con candidato aislado y altas/retiros Edge/HasLab de arista; la transacción completa sigue pendiente. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0 y 1 completadas: contrato delta v1 y candidato aislado con Edge/HasLab de arista y Ext; stale, conflictos/invariantes, Parent, persistencia y CLI siguen pendientes. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: cerrar el contrato de [04 — Operación transaccional](04-operacion-transaccional.md).
+Foco actual: avanzar la Unidad 2 de [04 — Operación transaccional](04-operacion-transaccional.md), que implementará conflictos funcionales.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -146,36 +146,31 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `9afb46405d8285259bfa621d570ae4c58cc893db` | Altas `Edge`/`HasLab` de arista | 166 añadidas/8 borradas (174 authored). |
 | `fa710d474ab8abc22f0779437d283b6ad12331c6` | Casos de altas, no-op, grupos y mezcla remove/add | 253 líneas añadidas; `delta_aristas` alcanza 14 casos. |
 | `826b3816f5b257707664567ebbee39ffe3be9d35` | Reemplazo de etiqueta por identidad final | 274 añadidas/24 borradas (298 authored); `delta_aristas` 14/14. |
+| `00c6b9690570de33e4853a78998127eb9b10ac38` | Aplicación transaccional de `Ext` | 342 añadidas/18 borradas (360 authored); `ext_transaccional` 10/10. |
+| `1e7aa65aa641c80a0ad0ab9fed2eb7ccd4cb81d4` | Roundtrips transaccionales de `Ext` | 165 añadidas/2 borradas (167 authored); `ext_roundtrip` 3/3. |
+| `3b148913dee4af1d3cbfcbc7ae5dbf7769361833` | Clasificación de retiros `Ext` | 182 añadidas/24 borradas (206 authored). |
+| `59dc0dd23fca6da6ced96f06de709a7b66489e49` | Runtime release de construcción de candidatos | 213 líneas; dos muestras únicas por escenario. Ext 2,900/3,113 ms; Edge 1/100/10.000: 0,014/0,016; 0,032/0,027; 1,912/1,736 ms. Conteos y bytes canónicos comunes en [04](04-operacion-transaccional.md). |
 
-El objeto JSON tiene la forma exacta
+El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
-canonicaliza y deduplica repeticiones; el parser JSON rechaza átomos repetidos,
-claves ausentes o desconocidas y claves duplicadas. Los predicados reservados
-`Type`, `Edge`, `Parent` y `HasLab` también se rechazan como `Ext`.
+canonicaliza y deduplica repeticiones; el parser JSON rechaza duplicados en las
+listas, claves ausentes/desconocidas y claves duplicadas. Los casos focalizados
+también prueban colisiones con los predicados reservados `Type`, `Edge`,
+`Parent` y `HasLab`.
 
-La Unidad 0 quedó completada en dos commits revisables, ambos bajo 400 líneas
-y sin cambio de alcance. `cargo test --workspace`,
+Esta Unidad 0 quedó completada en dos commits revisables, ambos bajo 400 líneas
+y sin cambio de alcance; sus pruebas focalizadas fueron 6 de core y 5 de OKF.
+La Unidad 1 quedó completada como construcción aislada de candidatos para
+`Edge`/`HasLab` de arista y `Ext`. En HEAD `59dc0dd` pasan
+`candidato_delta` 3/3, `delta_aristas` 14/14, `ext_transaccional` 10/10,
+`ext_roundtrip` 3/3, `cargo test --workspace`,
 `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo fmt --all -- --check` y `python tools/check_public_boundary.py` pasaron
-en el commit de implementación `a54688c`. Tras editar los planes pasaron la
-verificación de enlaces Markdown locales, frontera pública, fmt y
-`git diff --check`. La prueba de carga verifica roundtrip, cantidad y bytes
-serializados; no recoge mediciones de µs/op. La fase 04 conserva estado en
-curso y el progreso maestro permanece en 3/9.
-
-Unidad 1 tiene un avance parcial: el candidato admite altas/retiros `Edge` y
-`HasLab` de arista. Resuelve retiros a handles del snapshot, compacta grupos y
-ordena altas por ordinal final numérico y contiguo; cada alta `Edge` requiere
-su `HasLab`. Un `Edge` vigente puede añadirse como no-op con su etiqueta exacta,
-y el delta vacío también es no-op. La misma identidad canónica `Edge` en
-add/remove sigue siendo un solapamiento rechazado, por lo que no se usa ese par
-para expresar un no-op. Los cambios de etiqueta usan remove+add `HasLab`; al
-compactar, la baja identifica el handle en el snapshot y el alta su identidad
-final. `Type`, `Parent`, `Ext` y `HasLab` de nodo siguen fail-closed; la
-evaluación de invariantes funcionales y runtime quedan pendientes. En HEAD
-`826b381` pasan `delta_aristas` 14/14, `candidato_delta` 3/3,
-`cargo test --workspace`, clippy, fmt y frontera pública. Tras editar los
-planes pasan enlaces locales, frontera, fmt y diff. `Type`, `Parent`, `Ext` y
-`HasLab` de nodo siguen fail-closed; la admisión funcional y las mediciones de
-rendimiento quedan pendientes. El posible costo O(R×D) sigue sin medir; la
-optimización se decidirá con mediciones.
+`cargo fmt --all -- --check` y `python tools/check_public_boundary.py`.
+Después de editar los planes pasan también enlaces Markdown locales y
+`git diff --check`. El runtime tiene dos muestras únicas por escenario; la
+variación observada es orientativa, sin warmup, distribución estadística ni
+SLA. Los bytes informados son strings canónicos UTF-8, no heap ni bundle; los
+valores completos están en [04 — Operación transaccional](04-operacion-transaccional.md).
+Fase 04 continúa en curso y el progreso maestro permanece en 3/9. Sigue la
+Unidad 2; conflictos/invariantes, stale, Parent, persistencia y CLI continúan
+pendientes.
