@@ -15,6 +15,8 @@ use fs_at::OpenOptions as OpenOptionsAt;
 
 use super::raiz::{UbicacionRaiz, validar_basename_prospectivo};
 
+mod operaciones;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ErrorDirectorioAnclado {
     Io,
