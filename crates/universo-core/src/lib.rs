@@ -42,7 +42,8 @@ pub use sexpr::{ErrorAutoria, MotivoAutoria, SentenciaFuente, parsear, parsear_p
 pub use tipos::{Etiqueta, Sorte};
 pub use transaccion::{
     Candidato, ClaseConflicto, ClaseOperacion, DiagnosticoConflicto, ErrorCandidato,
-    ResultadoConflictos, construir_candidato, detectar_conflictos_funcionales,
+    ErrorPropuesta, EtapaErrorPropuesta, ProcedenciaInvariante, ResultadoConflictos,
+    ResultadoPropuesta, construir_candidato, detectar_conflictos_funcionales, proponer,
 };
 pub use veredicto::{
     Contraejemplo, ErrorVeredicto, MAX_EXPLICACIONES_POR_DEFECTO, ModoExplicacion,
