@@ -1,12 +1,9 @@
 //! Captura inmutable del bundle y de sus entradas raw de configuración.
 //!
 //! Esta etapa rechaza enlaces observables y parsea solo desde buffers ya
-//! capturados. El recorrido actual usa APIs por ruta: detecta enlaces que
-//! existen al inspeccionar y no sigue el archivo final al abrir, pero no
-//! neutraliza un reemplazo concurrente de un directorio ancestro entre esas
-//! operaciones. Por eso el módulo y su API siguen internos. Apply no puede
-//! llamar esta captura hasta que U6 le pase un root anclado y validado; el
-//! lock de U5 coordina escritores del producto, pero no elimina ese TOCTOU.
+//! capturados. La captura por ruta conserva el límite TOCTOU de su backend; la
+//! variante anclada inventaría desde un handle root y materializa desde buffers
+//! raw. Las APIs siguen internas mientras apply no coordina lock y contexto.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -21,9 +18,10 @@ use universo_core::{Estructura, SentenciaFuente, parsear_programa};
 use crate::bundle::{directorio_layout_seguro, parsear_bundle};
 use crate::manifiesto_toml::parsear_manifiesto;
 
+use super::anclado::DirectorioAnclado;
 use super::inventario::{
-    inventariar_root_con_lector, leer_archivo_regular, ruta_absoluta_lexica,
-    validar_archivo_sin_enlaces,
+    inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
+    ruta_absoluta_lexica, validar_archivo_sin_enlaces,
 };
 use super::snapshot::{
     EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_token_snapshot,
@@ -46,7 +44,7 @@ pub(crate) struct Snapshot {
 
 /// Identidad del bundle calculada sobre buffers capturados, aún sin parsear.
 /// Solo la capa de transacción puede compararla y luego materializarla.
-struct CapturaSnapshotRaw {
+pub(crate) struct CapturaSnapshotRaw {
     token: SnapshotToken,
     entradas: Vec<EntradaSnapshot>,
     manifiesto_raw: Arc<[u8]>,
@@ -55,6 +53,36 @@ struct CapturaSnapshotRaw {
     policy_id: Arc<str>,
     ruta_manifiesto_root: Option<String>,
     ruta_invariantes_root: Option<String>,
+}
+
+/// Bytes raw de configuración que ya fueron capturados y permanecen
+/// inmutables durante el cálculo del token y la materialización.
+///
+/// Si una fuente está fuera del root, sus bytes deben venir de una futura
+/// capability de lectura externa anclada; este contenedor no valida origen.
+#[derive(Clone)]
+pub(crate) struct ConfigRawCapturada {
+    manifiesto_raw: Arc<[u8]>,
+    invariantes_raw: Arc<[u8]>,
+}
+
+impl ConfigRawCapturada {
+    /// Conserva los bytes ya leídos sin guardar rutas que puedan reabrirse.
+    pub(crate) fn nueva(
+        manifiesto_raw: impl Into<Arc<[u8]>>,
+        invariantes_raw: impl Into<Arc<[u8]>>,
+    ) -> Self {
+        Self {
+            manifiesto_raw: manifiesto_raw.into(),
+            invariantes_raw: invariantes_raw.into(),
+        }
+    }
+}
+
+impl fmt::Debug for ConfigRawCapturada {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ConfigRawCapturada { .. }")
+    }
 }
 
 struct FuenteRaw {
@@ -127,8 +155,8 @@ impl fmt::Debug for Snapshot {
 /// Toda entrada regular del root se lee una vez a un buffer raw; manifiesto,
 /// invariantes y Markdown se parsean desde esos mismos buffers. Las rutas de
 /// configuración externas al root también se leen una sola vez y se rechazan
-/// cuando algún componente observado es un symlink o reparse point. No usar
-/// desde apply hasta recibir un root anclado por el guard de U6.
+/// cuando algún componente observado es un symlink o reparse point. Apply usa
+/// la variante anclada cuando la operación requiere identidad de root estable.
 pub(crate) fn capturar_snapshot(
     raiz: &Path,
     ruta_manifiesto: &Path,
@@ -146,8 +174,8 @@ pub(crate) fn capturar_snapshot(
 }
 
 /// Captura, compara el token antes de parsear y materializa únicamente si el
-/// snapshot sigue siendo el esperado. Apply debe usar esta ruta tras adquirir
-/// su lock y ejecutar recovery; la captura aún conserva el límite TOCTOU de U6.
+/// snapshot sigue siendo el esperado. Esta variante por ruta es para
+/// simulación y tests; apply usa la variante que recibe un root anclado.
 pub(crate) fn capturar_snapshot_con_cas(
     raiz: &Path,
     ruta_manifiesto: &Path,
@@ -167,8 +195,38 @@ pub(crate) fn capturar_snapshot_con_cas(
     materializar(captura)
 }
 
+/// Captura el inventario desde un directorio ya abierto y combina sus bytes
+/// con configuración raw capturada previamente. No acepta rutas ni reabre el
+/// root; manifiesto e invariantes se parsearán después desde estos mismos bytes.
+pub(crate) fn capturar_snapshot_raw_anclado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
+    let entradas = inventariar_root_anclado(raiz.clonar().map_err(|_| ErrorSnapshot::Io)?)?;
+    let token = calcular_token_snapshot(
+        version_motor,
+        policy_id,
+        &configuracion.manifiesto_raw,
+        &configuracion.invariantes_raw,
+        &entradas,
+    )?;
+
+    Ok(CapturaSnapshotRaw {
+        token,
+        entradas,
+        manifiesto_raw: configuracion.manifiesto_raw,
+        invariantes_raw: configuracion.invariantes_raw,
+        version_motor: Arc::from(version_motor),
+        policy_id: Arc::from(policy_id),
+        ruta_manifiesto_root: None,
+        ruta_invariantes_root: None,
+    })
+}
+
 /// Lee las entradas y configura la identidad solo desde sus buffers raw. Debe
-/// seguir privada hasta que U6 aporte un root anclado que cierre el TOCTOU.
+/// seguir privada para la captura por ruta usada en simulación y tests.
 fn capturar_snapshot_raw(
     raiz: &Path,
     ruta_manifiesto: &Path,
@@ -449,6 +507,7 @@ fn archivos_markdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transaccion::raiz::UbicacionRaiz;
     use std::collections::HashMap;
     use std::fs;
     use tempfile::tempdir;
@@ -531,6 +590,203 @@ ignorados = ["ignored.md"]
         let snapshot = materializar(raw).unwrap();
         assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
         assert_eq!(snapshot.estructura().nodos().count(), 1);
+    }
+
+    #[test]
+    fn captura_anclada_coincide_con_path_y_repite_inventario_por_handle() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifest = root.path().join("manifest.toml");
+        let invariants = root.path().join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+
+        let por_path =
+            capturar_snapshot(root.path(), &manifest, &invariants, "engine/1", "policy/1").unwrap();
+        let configuracion =
+            ConfigRawCapturada::nueva(fs::read(&manifest).unwrap(), fs::read(&invariants).unwrap());
+        let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+
+        for _ in 0..2 {
+            let anclado = materializar(
+                capturar_snapshot_raw_anclado(
+                    &ancla,
+                    configuracion.clone(),
+                    "engine/1",
+                    "policy/1",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            assert_eq!(anclado.token(), por_path.token());
+            assert_eq!(anclado.manifiesto_raw(), por_path.manifiesto_raw());
+            assert_eq!(anclado.invariantes_raw(), por_path.invariantes_raw());
+            assert_eq!(
+                anclado
+                    .entradas()
+                    .iter()
+                    .map(EntradaSnapshot::ruta)
+                    .collect::<Vec<_>>(),
+                por_path
+                    .entradas()
+                    .iter()
+                    .map(EntradaSnapshot::ruta)
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                anclado
+                    .entradas()
+                    .windows(2)
+                    .all(|par| { par[0].ruta().as_bytes() < par[1].ruta().as_bytes() })
+            );
+            assert_eq!(
+                anclado.estructura().atomos(),
+                por_path.estructura().atomos()
+            );
+        }
+    }
+
+    #[test]
+    fn captura_anclada_usa_config_raw_capturada_aunque_cambien_sus_fuentes() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let source = temp.path().join("config-source");
+        fs::create_dir(&source).unwrap();
+        let manifest = source.join("manifest.toml");
+        let invariants = source.join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+
+        let configuracion =
+            ConfigRawCapturada::nueva(fs::read(&manifest).unwrap(), fs::read(&invariants).unwrap());
+        fs::write(&manifest, b"PRIVATE-CANARY invalid manifest").unwrap();
+        fs::write(&invariants, b"PRIVATE-CANARY invalid invariants").unwrap();
+
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(
+                &DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap(),
+                configuracion,
+                "engine/1",
+                "policy/1",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+        assert!(!format!("{snapshot:?}").contains("PRIVATE-CANARY"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captura_anclada_no_sigue_un_ancestro_reemplazado_por_enlace() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let moved = temp.path().join("parent-moved");
+        let outside = temp.path().join("outside");
+        let root = parent.join("stable").join("bundle");
+        let outside_root = outside.join("stable").join("bundle");
+        fs::create_dir(&parent).unwrap();
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.join("invariants.smt2"), "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        fs::create_dir_all(&outside_root).unwrap();
+        fs::write(
+            outside_root.join("external-canary.bin"),
+            b"EXTERNAL-ROOT-CANARY",
+        )
+        .unwrap();
+
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(root.join("manifest.toml")).unwrap(),
+            fs::read(root.join("invariants.smt2")).unwrap(),
+        );
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+
+        fs::rename(&parent, &moved).unwrap();
+        crear_junction(&parent, &outside);
+
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(&ancla, configuracion, "engine/1", "policy/1").unwrap(),
+        )
+        .unwrap();
+        let rutas = snapshot
+            .entradas()
+            .iter()
+            .map(EntradaSnapshot::ruta)
+            .collect::<Vec<_>>();
+
+        assert!(rutas.contains(&"knowledge"));
+        assert!(rutas.contains(&"knowledge/a.md"));
+        assert!(!rutas.iter().any(|ruta| ruta.contains("external-canary")));
+        assert_eq!(
+            fs::read(outside_root.join("external-canary.bin")).unwrap(),
+            b"EXTERNAL-ROOT-CANARY"
+        );
+        assert_eq!(
+            fs::read(moved.join("stable/bundle/knowledge/a.md")).unwrap(),
+            b"---\ntype: a\ntitle: A\n---\n"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn handle_root_impide_reemplazar_su_ancestro_y_preserva_canary() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let moved = temp.path().join("parent-moved");
+        let outside = temp.path().join("outside");
+        let root = parent.join("bundle");
+        let outside_root = outside.join("bundle");
+        fs::create_dir(&parent).unwrap();
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.join("invariants.smt2"), "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        fs::create_dir_all(&outside_root).unwrap();
+        fs::write(
+            outside_root.join("external-canary.bin"),
+            b"EXTERNAL-ROOT-CANARY",
+        )
+        .unwrap();
+
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(root.join("manifest.toml")).unwrap(),
+            fs::read(root.join("invariants.smt2")).unwrap(),
+        );
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+
+        let error = fs::rename(&parent, &moved).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(&ancla, configuracion, "engine/1", "policy/1").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            snapshot
+                .entradas()
+                .iter()
+                .all(|entrada| !entrada.ruta().contains("external-canary"))
+        );
+        assert_eq!(
+            fs::read(outside_root.join("external-canary.bin")).unwrap(),
+            b"EXTERNAL-ROOT-CANARY"
+        );
     }
 
     #[test]
@@ -989,5 +1245,10 @@ ignorados = ["ignored.md"]
                 duracion_replay.as_secs_f64() * 1_000.0,
             );
         }
+    }
+
+    #[cfg(unix)]
+    fn crear_junction(enlace: &Path, destino: &Path) {
+        std::os::unix::fs::symlink(destino, enlace).unwrap();
     }
 }

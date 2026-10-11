@@ -103,6 +103,17 @@ impl DirectorioAnclado {
         self.identidad_raiz
     }
 
+    /// Duplica los handles sin resolver nuevamente la ubicación por ruta.
+    pub(crate) fn clonar(&self) -> Result<Self, ErrorDirectorioAnclado> {
+        Ok(Self {
+            parent: clonar_handle(&self.parent)?,
+            basename: self.basename.clone(),
+            raiz: self.raiz.as_ref().map(clonar_handle).transpose()?,
+            identidad_parent: self.identidad_parent,
+            identidad_raiz: self.identidad_raiz,
+        })
+    }
+
     /// Reabre la raíz después de recovery usando el parent ya anclado.
     pub(crate) fn abrir_raiz(&self) -> Result<Self, ErrorDirectorioAnclado> {
         let raiz = abrir_directorio_hijo(&self.parent, &self.basename)?;
