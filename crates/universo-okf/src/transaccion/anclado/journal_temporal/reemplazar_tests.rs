@@ -210,3 +210,6 @@ fn directorio_canonico_en_conflicto_preserva_canaries_y_no_invoca_syscall() {
 
 #[path = "reemplazar_outcome_tests.rs"]
 mod outcome_tests;
+
+#[path = "reemplazar_platform_tests.rs"]
+mod platform_tests;
