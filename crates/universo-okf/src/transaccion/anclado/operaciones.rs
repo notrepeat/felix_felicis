@@ -3,6 +3,7 @@ use std::fs::File;
 
 use fs_at::{OpenOptions as OpenOptionsAt, OpenOptionsWriteMode};
 
+use super::abrir::abrir_entrada_relativa;
 use super::{
     DirectorioAnclado, EntradaLecturaAnclada, ErrorDirectorioAnclado, TipoEntradaAnclada,
     clasificar_entrada_sin_seguir, clonar_handle, mapear_error_creacion, mapear_io,
@@ -42,11 +43,8 @@ impl DirectorioAnclado {
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
         match clasificar_entrada_sin_seguir(raiz, componente)? {
             TipoEntradaAnclada::Directorio => {
-                let mut opciones = OpenOptionsAt::default();
-                opciones.read(true).follow(false);
-                let entrada = opciones
-                    .open_dir_at(raiz, componente)
-                    .map_err(mapear_apertura_sin_seguir)?;
+                let entrada =
+                    abrir_entrada_relativa(raiz, componente, TipoEntradaAnclada::Directorio)?;
                 let identidad_parent = metadata_directorio(raiz)?;
                 let identidad_raiz = metadata_directorio(&entrada)?;
                 Ok(EntradaLecturaAnclada::Directorio(Self {
@@ -60,11 +58,8 @@ impl DirectorioAnclado {
                 }))
             }
             TipoEntradaAnclada::Archivo => {
-                let mut opciones = OpenOptionsAt::default();
-                opciones.read(true).follow(false);
-                let entrada = opciones
-                    .open_at(raiz, componente)
-                    .map_err(mapear_apertura_sin_seguir)?;
+                let entrada =
+                    abrir_entrada_relativa(raiz, componente, TipoEntradaAnclada::Archivo)?;
                 metadata_archivo_regular(&entrada)?;
                 Ok(EntradaLecturaAnclada::Archivo(entrada))
             }
@@ -163,11 +158,7 @@ impl DirectorioAnclado {
         if clasificar_entrada_sin_seguir(raiz, componente)? != TipoEntradaAnclada::Archivo {
             return Err(ErrorDirectorioAnclado::TipoNoAdmitido);
         }
-        let mut opciones = OpenOptionsAt::default();
-        opciones.read(true).follow(false);
-        let archivo = opciones
-            .open_at(raiz, componente)
-            .map_err(mapear_error_creacion)?;
+        let archivo = abrir_entrada_relativa(raiz, componente, TipoEntradaAnclada::Archivo)?;
         metadata_archivo_regular(&archivo)?;
         Ok(archivo)
     }
@@ -214,17 +205,4 @@ fn validar_componente_lectura(componente: &str) -> Result<&OsStr, ErrorDirectori
         return Err(ErrorDirectorioAnclado::ComponenteInvalido);
     }
     Ok(OsStr::new(componente))
-}
-
-fn mapear_apertura_sin_seguir(error: std::io::Error) -> ErrorDirectorioAnclado {
-    #[cfg(unix)]
-    if error.raw_os_error() == Some(libc::ELOOP) {
-        return ErrorDirectorioAnclado::EnlaceNoPermitido;
-    }
-    #[cfg(windows)]
-    // fs_at reports a reparse point rejected by follow(false) as Win32 1921.
-    if error.raw_os_error() == Some(1921) {
-        return ErrorDirectorioAnclado::EnlaceNoPermitido;
-    }
-    mapear_io(error)
 }

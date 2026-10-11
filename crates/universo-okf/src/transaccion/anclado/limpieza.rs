@@ -1,11 +1,8 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io;
-use std::path::Path;
-
-use fs_at::OpenOptions as OpenOptionsAt;
 
 use super::super::stage::StageAnclado;
+use super::abrir::abrir_entrada_relativa;
 use super::{
     ErrorDirectorioAnclado, IdentidadDirectorio, TipoEntradaAnclada, clasificar_entrada_sin_seguir,
     mapear_io, metadata_directorio, metadata_es_reparse, validar_componente,
@@ -196,11 +193,7 @@ fn abrir_directorio_sin_seguir(
     componente: &OsStr,
 ) -> Result<File, ErrorLimpiezaAnclado> {
     validar_componente(componente).map_err(ErrorLimpiezaAnclado::Directorio)?;
-    let mut opciones = OpenOptionsAt::default();
-    opciones.read(true).follow(false);
-    let directorio = opciones
-        .open_dir_at(parent, Path::new(componente))
-        .map_err(mapear_apertura_sin_seguir)
+    let directorio = abrir_entrada_relativa(parent, componente, TipoEntradaAnclada::Directorio)
         .map_err(ErrorLimpiezaAnclado::Directorio)?;
     metadata_directorio(&directorio).map_err(ErrorLimpiezaAnclado::Directorio)?;
     Ok(directorio)
@@ -219,11 +212,7 @@ fn abrir_entrada_sin_seguir(
             ErrorDirectorioAnclado::TipoNoAdmitido,
         ));
     }
-    let mut opciones = OpenOptionsAt::default();
-    opciones.read(true).follow(false);
-    let entrada = opciones
-        .open_at(parent, Path::new(componente))
-        .map_err(mapear_apertura_sin_seguir)
+    let entrada = abrir_entrada_relativa(parent, componente, TipoEntradaAnclada::Archivo)
         .map_err(ErrorLimpiezaAnclado::Directorio)?;
     let metadata = entrada
         .metadata()
@@ -250,16 +239,4 @@ fn validar_identidad(
         return Err(ErrorLimpiezaAnclado::IdentidadInconsistente);
     }
     Ok(())
-}
-
-fn mapear_apertura_sin_seguir(error: io::Error) -> ErrorDirectorioAnclado {
-    #[cfg(unix)]
-    if error.raw_os_error() == Some(libc::ELOOP) {
-        return ErrorDirectorioAnclado::EnlaceNoPermitido;
-    }
-    #[cfg(windows)]
-    if error.raw_os_error() == Some(1921) {
-        return ErrorDirectorioAnclado::EnlaceNoPermitido;
-    }
-    mapear_io(error)
 }

@@ -17,6 +17,7 @@ use fs_at::OpenOptions as OpenOptionsAt;
 
 use super::raiz::{UbicacionRaiz, validar_basename_prospectivo};
 
+mod abrir;
 mod clasificar;
 mod limpieza;
 mod operaciones;

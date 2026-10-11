@@ -256,7 +256,11 @@ impl StageAnclado {
 
     /// Elimina el stage solo después de validar parent, handle y basename.
     /// El llamador debe retener `LockEscritura` durante cleanup: ese lock
-    /// coordina writers Felix cooperantes, no procesos externos hostiles.
+    /// coordina solo writers Felix cooperantes, no procesos externos. Un
+    /// proceso externo puede mover un subdirectorio ya validado fuera del
+    /// stage; operaciones relativas a su handle podrían mutarlo antes de que
+    /// la revalidación detecte el cambio. Ese escenario queda fuera del
+    /// contrato.
     /// Un error conserva el stage, incluso si hubo borrado parcial, dentro del
     /// error para que el llamador pueda reintentar.
     pub(crate) fn limpiar(self) -> Result<(), ErrorLimpiezaStage> {
