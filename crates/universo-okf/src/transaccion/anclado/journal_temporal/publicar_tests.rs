@@ -1,5 +1,5 @@
-use super::super::ResultadoPublicacionJournal;
-use super::super::{ErrorJournalAnclado, IdentidadArchivoJournal, JournalTemporalAnclado};
+use super::super::{DeteccionPublicacionJournal, ErrorJournalAnclado, IdentidadArchivoJournal};
+use super::super::{JournalTemporalAnclado, ResultadoPublicacionJournal};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::{anclado::journal_temporal::identidad_archivo, raiz::UbicacionRaiz};
 use std::fs::{self, File};
@@ -28,6 +28,10 @@ fn identidad(path: &Path) -> IdentidadArchivoJournal {
     identidad_archivo(&File::open(path).unwrap()).unwrap()
 }
 
+fn confirmado(resultado: ResultadoPublicacionJournal) -> bool {
+    matches!(resultado, ResultadoPublicacionJournal::Confirmado { .. })
+}
+
 #[test]
 fn publicar_preserva_bytes_e_identidad_y_quita_temporal() {
     let temp = tempdir().unwrap();
@@ -38,10 +42,7 @@ fn publicar_preserva_bytes_e_identidad_y_quita_temporal() {
     let esperada = capability.crear_nuevo(bytes).unwrap();
     let journal = nombre_journal(&root);
 
-    assert_eq!(
-        capability.publicar(esperada).unwrap(),
-        ResultadoPublicacionJournal::Publicado
-    );
+    assert!(confirmado(capability.publicar(esperada)));
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(journal).unwrap(), bytes);
     assert!(!nombre_temporal(temp.path()).exists());
@@ -61,8 +62,8 @@ fn identidad_incorrecta_conserva_temporal_y_no_crea_canonico() {
     fs::write(&otro, b"other identity").unwrap();
 
     assert_eq!(
-        capability.publicar(identidad(&otro)).unwrap_err(),
-        ErrorJournalAnclado::IdentityMismatch
+        capability.publicar(identidad(&otro)),
+        ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::IdentityMismatch)
     );
     assert_eq!(fs::read(temporal).unwrap(), bytes);
     assert!(!journal.exists());
@@ -82,8 +83,8 @@ fn archivo_canonico_en_conflicto_conserva_ambos_canaries() {
     fs::write(&journal, bytes_canonicos).unwrap();
 
     assert_eq!(
-        capability.publicar(esperada).unwrap_err(),
-        ErrorJournalAnclado::CanonicalConflict
+        capability.publicar(esperada),
+        ResultadoPublicacionJournal::NoAplicado(ErrorJournalAnclado::CanonicalConflict)
     );
     assert_eq!(fs::read(temporal).unwrap(), bytes_temporal);
     assert_eq!(fs::read(journal).unwrap(), bytes_canonicos);
@@ -103,8 +104,8 @@ fn directorio_canonico_en_conflicto_conserva_canaries() {
     fs::write(journal.join("canary"), b"directory canary").unwrap();
 
     assert_eq!(
-        capability.publicar(esperada).unwrap_err(),
-        ErrorJournalAnclado::RegularFileRequired
+        capability.publicar(esperada),
+        ResultadoPublicacionJournal::NoAplicado(ErrorJournalAnclado::RegularFileRequired)
     );
     assert_eq!(fs::read(temporal).unwrap(), bytes_temporal);
     assert_eq!(
@@ -122,10 +123,10 @@ fn fuente_ausente_falla_con_codigo_estable() {
     let mut lock = LockEscritura::adquirir(&root).unwrap();
     let capability = lock.journal_temporal_anclado().unwrap();
 
-    let error = capability.publicar(identidad(&otro)).unwrap_err();
-    assert_eq!(error, ErrorJournalAnclado::SourceMissing);
-    assert_eq!(error.codigo(), "journal_source_missing");
-    assert_eq!(error.to_string(), "journal_source_missing");
+    assert_eq!(
+        capability.publicar(identidad(&otro)),
+        ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::SourceMissing)
+    );
     assert!(!nombre_journal(&root).exists());
 }
 
@@ -157,8 +158,8 @@ fn raiz_unc_rechaza_publicacion_sin_tocar_temporal_ni_canonico() {
     capability.raiz_remota = super::raiz_es_remota(unc);
 
     assert_eq!(
-        capability.publicar(esperada).unwrap_err(),
-        ErrorJournalAnclado::RemoteUnsupported
+        capability.publicar(esperada),
+        ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::RemoteUnsupported)
     );
     assert_eq!(identidad(&temporal), esperada);
     assert_eq!(fs::read(&temporal).unwrap(), bytes_temporales);
@@ -179,10 +180,7 @@ fn reintento_despues_de_linkat_ve_el_mismo_inode_y_limpia_temporal() {
     let esperada = capability.crear_nuevo(bytes).unwrap();
     fs::hard_link(&temporal, &journal).unwrap();
 
-    assert_eq!(
-        capability.publicar(esperada).unwrap(),
-        ResultadoPublicacionJournal::YaPublicado
-    );
+    assert!(confirmado(capability.publicar(esperada)));
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(journal).unwrap(), bytes);
     assert!(!temporal.exists());
@@ -209,18 +207,17 @@ fn fallo_de_cleanup_despues_de_linkat_devuelve_publicado_pendiente() {
     )
     .unwrap();
     let mut cleanup_llamado = false;
-    let resultado = capability
-        .resultado_despues_de_commit(esperada, |_, _| {
+    let resultado = capability.resultado_despues_de_commit(
+        esperada,
+        DeteccionPublicacionJournal::Nuevo,
+        |_, _| {
             cleanup_llamado = true;
             super::EstadoLimpiezaPublicacion::Pendiente
-        })
-        .unwrap();
+        },
+    );
 
     assert!(cleanup_llamado);
-    assert_eq!(
-        resultado,
-        ResultadoPublicacionJournal::PublicadoTemporalPendiente
-    );
+    assert!(confirmado(resultado));
     assert_eq!(identidad(&temporal), esperada);
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(temporal).unwrap(), bytes);
@@ -249,18 +246,20 @@ fn linkat_exitoso_con_verificacion_ausente_o_incierta_es_indeterminado() {
         )
         .unwrap();
         let mut cleanup_llamado = false;
-        let resultado = capability
-            .resultado_despues_de_commit_observando(
-                esperada,
-                |_, _| observacion,
-                |_, _| {
-                    cleanup_llamado = true;
-                    super::EstadoLimpiezaPublicacion::Pendiente
-                },
-            )
-            .unwrap();
+        let resultado = capability.resultado_despues_de_commit_observando(
+            esperada,
+            |_, _| observacion,
+            DeteccionPublicacionJournal::Nuevo,
+            |_, _| {
+                cleanup_llamado = true;
+                super::EstadoLimpiezaPublicacion::Pendiente
+            },
+        );
 
-        assert_eq!(resultado, ResultadoPublicacionJournal::Indeterminado);
+        assert!(matches!(
+            resultado,
+            ResultadoPublicacionJournal::Indeterminado { .. }
+        ));
         assert!(!cleanup_llamado);
         assert_eq!(identidad(&temporal), esperada);
         assert_eq!(identidad(&journal), esperada);
@@ -289,11 +288,9 @@ fn efecto_de_publicacion_seguido_de_error_se_confirma_como_ya_publicado() {
         &fuente,
     )
     .unwrap();
-    let resultado = capability
-        .resolver_error_publicacion(esperada, ErrorJournalAnclado::Io)
-        .unwrap();
+    let resultado = capability.resolver_error_publicacion(esperada, ErrorJournalAnclado::Io);
 
-    assert_eq!(resultado, ResultadoPublicacionJournal::YaPublicado);
+    assert!(confirmado(resultado));
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(journal).unwrap(), bytes);
     assert!(!temporal.exists());
@@ -313,26 +310,27 @@ fn error_de_publicacion_con_observaciones_inciertas_preserva_evidencia() {
     let mut temporal_observado = false;
     let mut limpieza_llamada = false;
 
-    let resultado = capability
-        .resolver_error_publicacion_observando(
-            esperada,
-            ErrorJournalAnclado::Io,
-            |_, _| {
-                canonico_observado = true;
-                Err(ErrorJournalAnclado::Io)
-            },
-            |_, _| {
-                temporal_observado = true;
-                Err(ErrorJournalAnclado::Io)
-            },
-            |_, _| {
-                limpieza_llamada = true;
-                super::EstadoLimpiezaPublicacion::Completa
-            },
-        )
-        .unwrap();
+    let resultado = capability.resolver_error_publicacion_observando(
+        esperada,
+        ErrorJournalAnclado::Io,
+        |_, _| {
+            canonico_observado = true;
+            Err(ErrorJournalAnclado::Io)
+        },
+        |_, _| {
+            temporal_observado = true;
+            Err(ErrorJournalAnclado::Io)
+        },
+        |_, _| {
+            limpieza_llamada = true;
+            super::EstadoLimpiezaPublicacion::Completa
+        },
+    );
 
-    assert_eq!(resultado, ResultadoPublicacionJournal::Indeterminado);
+    assert!(matches!(
+        resultado,
+        ResultadoPublicacionJournal::Indeterminado { .. }
+    ));
     assert!(canonico_observado);
     assert!(temporal_observado);
     assert!(!limpieza_llamada);
@@ -344,27 +342,31 @@ fn error_de_publicacion_con_observaciones_inciertas_preserva_evidencia() {
 #[test]
 fn conflictos_de_cleanup_confirmado_y_limpieza_indeterminada_son_outcomes() {
     let conflicto = ErrorJournalAnclado::IdentityMismatch;
-    assert_eq!(
+    assert!(matches!(
         super::resultado_con_limpieza_confirmada(
             super::EstadoLimpiezaPublicacion::Conflicto(conflicto),
-            ResultadoPublicacionJournal::Publicado,
+            DeteccionPublicacionJournal::Nuevo,
         ),
-        Ok(ResultadoPublicacionJournal::PublicadoTemporalEnConflicto(
-            conflicto
-        ))
-    );
-    assert_eq!(
+        ResultadoPublicacionJournal::Confirmado {
+            deteccion: DeteccionPublicacionJournal::Nuevo,
+            limpieza: super::super::LimpiezaConfirmadaJournal::Conflicto(error),
+        } if error == conflicto
+    ));
+    assert!(matches!(
         super::resultado_con_limpieza_confirmada(
             super::EstadoLimpiezaPublicacion::Indeterminada,
-            ResultadoPublicacionJournal::YaPublicado,
+            DeteccionPublicacionJournal::YaExistia,
         ),
-        Ok(ResultadoPublicacionJournal::Indeterminado)
-    );
+        ResultadoPublicacionJournal::Confirmado {
+            deteccion: DeteccionPublicacionJournal::YaExistia,
+            limpieza: super::super::LimpiezaConfirmadaJournal::Indeterminada,
+        }
+    ));
 }
 
 #[cfg(any(unix, windows))]
 #[test]
-fn el_mismo_error_es_fallo_antes_del_commit_y_outcome_despues() {
+fn resolver_error_distingue_no_aplicado_de_commit_confirmado() {
     let error = ErrorJournalAnclado::IdentityMismatch;
 
     let temp = tempdir().unwrap();
@@ -377,9 +379,8 @@ fn el_mismo_error_es_fallo_antes_del_commit_y_outcome_despues() {
     let esperada = capability.crear_nuevo(bytes).unwrap();
     assert_eq!(
         capability.resolver_error_publicacion(esperada, error),
-        Err(error)
+        ResultadoPublicacionJournal::NoAplicado(error)
     );
-    assert_eq!(identidad(&temporal), esperada);
     assert_eq!(fs::read(&temporal).unwrap(), bytes);
     assert!(!journal.exists());
     drop(lock);
@@ -408,9 +409,10 @@ fn el_mismo_error_es_fallo_antes_del_commit_y_outcome_despues() {
     let outcome = capability.resolver_error_publicacion(esperada, error);
     assert_eq!(
         outcome,
-        Ok(ResultadoPublicacionJournal::PublicadoTemporalEnConflicto(
-            error
-        ))
+        ResultadoPublicacionJournal::Confirmado {
+            deteccion: DeteccionPublicacionJournal::YaExistia,
+            limpieza: super::super::LimpiezaConfirmadaJournal::Conflicto(error),
+        }
     );
     let debug = format!("{outcome:?}");
     assert!(debug.contains("journal_identity_mismatch"));
@@ -433,10 +435,7 @@ fn reintento_despues_de_rename_ve_canonico_esperado() {
     let esperada = capability.crear_nuevo(bytes).unwrap();
     fs::rename(&temporal, &journal).unwrap();
 
-    assert_eq!(
-        capability.publicar(esperada).unwrap(),
-        ResultadoPublicacionJournal::YaPublicado
-    );
+    assert!(confirmado(capability.publicar(esperada)));
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(journal).unwrap(), bytes);
     assert!(!temporal.exists());
@@ -476,8 +475,8 @@ fn junction_canonica_en_conflicto_conserva_temporal_y_canary() {
     }
 
     assert_eq!(
-        capability.publicar(esperada).unwrap_err(),
-        ErrorJournalAnclado::ReparseNotAllowed
+        capability.publicar(esperada),
+        ResultadoPublicacionJournal::NoAplicado(ErrorJournalAnclado::ReparseNotAllowed)
     );
     assert_eq!(fs::read(temporal).unwrap(), bytes_temporal);
     assert_eq!(fs::read(outside.join("canary")).unwrap(), b"outside canary");

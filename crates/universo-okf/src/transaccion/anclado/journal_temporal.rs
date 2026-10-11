@@ -59,13 +59,43 @@ impl ErrorJournalAnclado {
 #[path = "journal_temporal/publicar.rs"]
 mod publicar;
 
+#[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResultadoPublicacionJournal {
-    Publicado,
-    YaPublicado,
-    PublicadoTemporalPendiente,
-    PublicadoTemporalEnConflicto(ErrorJournalAnclado),
-    Indeterminado,
+    PrecondicionFallida(ErrorJournalAnclado),
+    NoAplicado(ErrorJournalAnclado),
+    Confirmado {
+        deteccion: DeteccionPublicacionJournal,
+        limpieza: LimpiezaConfirmadaJournal,
+    },
+    Indeterminado {
+        causa: CausaIndeterminacionPublicacionJournal,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeteccionPublicacionJournal {
+    Nuevo,
+    YaExistia,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LimpiezaConfirmadaJournal {
+    Completa,
+    Pendiente,
+    Conflicto(ErrorJournalAnclado),
+    Indeterminada,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CausaIndeterminacionPublicacionJournal {
+    CanonicoAusenteTrasExito,
+    CanonicoNoVerificable(ErrorJournalAnclado),
+    EstadoPosteriorNoDemostrable {
+        error_publicacion: ErrorJournalAnclado,
+        canonico: Result<bool, ErrorJournalAnclado>,
+        temporal: Option<Result<bool, ErrorJournalAnclado>>,
+    },
 }
 
 impl fmt::Debug for ErrorJournalAnclado {
