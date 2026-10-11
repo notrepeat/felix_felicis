@@ -1,4 +1,4 @@
-use super::super::{DeteccionPublicacionJournal, ErrorJournalAnclado, IdentidadArchivoJournal};
+use super::super::{ErrorJournalAnclado, IdentidadArchivoJournal};
 use super::super::{JournalTemporalAnclado, ResultadoPublicacionJournal};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::{anclado::journal_temporal::identidad_archivo, raiz::UbicacionRaiz};
@@ -212,14 +212,10 @@ fn fallo_de_cleanup_despues_de_linkat_devuelve_publicado_pendiente() {
     )
     .unwrap();
     let mut cleanup_llamado = false;
-    let resultado = capability.resultado_despues_de_commit(
-        esperada,
-        DeteccionPublicacionJournal::Nuevo,
-        |_, _| {
-            cleanup_llamado = true;
-            super::EstadoLimpiezaPublicacion::Pendiente
-        },
-    );
+    let resultado = capability.resultado_despues_de_commit(esperada, |_, _| {
+        cleanup_llamado = true;
+        super::EstadoLimpiezaPublicacion::Pendiente
+    });
 
     assert!(cleanup_llamado);
     assert!(confirmado(resultado));
@@ -254,7 +250,6 @@ fn linkat_exitoso_con_verificacion_ausente_o_incierta_es_indeterminado() {
         let resultado = capability.resultado_despues_de_commit_observando(
             esperada,
             |_, _| observacion,
-            DeteccionPublicacionJournal::Nuevo,
             |_, _| {
                 cleanup_llamado = true;
                 super::EstadoLimpiezaPublicacion::Pendiente
@@ -344,6 +339,115 @@ fn error_de_publicacion_con_observaciones_inciertas_preserva_evidencia() {
     assert!(!journal.exists());
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn cleanup_clasifica_conflictos_de_apertura_y_preserva_canaries() {
+    #[cfg(unix)]
+    let casos = [
+        (false, ErrorJournalAnclado::RegularFileRequired),
+        (true, ErrorJournalAnclado::ReparseNotAllowed),
+    ];
+    #[cfg(windows)]
+    let casos = [
+        (false, ErrorJournalAnclado::RegularFileRequired),
+        (true, ErrorJournalAnclado::ReparseNotAllowed),
+    ];
+    for (es_enlace, error) in casos {
+        let temp = tempdir().unwrap();
+        let root = crear_root(temp.path());
+        let mut lock = LockEscritura::adquirir(&root).unwrap();
+        let capability = lock.journal_temporal_anclado().unwrap();
+        let temporal = nombre_temporal(temp.path());
+        let journal = nombre_journal(&root);
+        let outside = temp.path().join("outside-canary");
+        let bytes = b"canonical remains committed";
+        let esperada = capability.crear_nuevo(bytes).unwrap();
+        let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
+        super::publicar_plataforma(
+            &capability.parent,
+            &capability.nombre,
+            &capability.nombre_journal,
+            &fuente,
+        )
+        .unwrap();
+        if temporal.exists() {
+            fs::remove_file(&temporal).unwrap();
+        }
+        if es_enlace {
+            #[cfg(unix)]
+            {
+                fs::write(&outside, b"outside canary").unwrap();
+                std::os::unix::fs::symlink(&outside, &temporal).unwrap();
+            }
+            #[cfg(windows)]
+            {
+                fs::create_dir(&outside).unwrap();
+                fs::write(outside.join("canary"), b"outside canary").unwrap();
+                let output = std::process::Command::new("cmd")
+                    .args(["/c", "mklink", "/J"])
+                    .arg(&temporal)
+                    .arg(&outside)
+                    .output()
+                    .expect("cmd crea junction temporal");
+                if !output.status.success() {
+                    let detalle = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    if detalle.to_ascii_lowercase().contains("privilege") {
+                        eprintln!(
+                            "SKIP explícito: Windows no concedió privilegio para la junction"
+                        );
+                        continue;
+                    }
+                    panic!("no se pudo crear junction: {detalle}");
+                }
+            }
+        } else {
+            fs::create_dir(&temporal).unwrap();
+            fs::write(temporal.join("canary"), b"directory canary").unwrap();
+        }
+
+        let resultado = capability
+            .resultado_despues_de_commit(esperada, |capability, identidad| {
+                capability.limpiar_temporal_si_coincide(identidad)
+            });
+        assert_eq!(
+            resultado,
+            ResultadoPublicacionJournal::Confirmado {
+                limpieza: super::super::LimpiezaConfirmadaJournal::Conflicto(error),
+            }
+        );
+        let debug = format!("{resultado:?}");
+        assert!(debug.contains(error.codigo()));
+        assert!(!debug.contains(temp.path().to_string_lossy().as_ref()));
+        assert_eq!(fs::read(&journal).unwrap(), bytes);
+        if es_enlace {
+            #[cfg(unix)]
+            {
+                assert!(
+                    fs::symlink_metadata(&temporal)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink()
+                );
+                assert_eq!(fs::read(outside).unwrap(), b"outside canary");
+            }
+            #[cfg(windows)]
+            {
+                assert!(temporal.exists());
+                assert_eq!(fs::read(outside.join("canary")).unwrap(), b"outside canary");
+            }
+        } else {
+            assert_eq!(
+                fs::read(temporal.join("canary")).unwrap(),
+                b"directory canary"
+            );
+        }
+    }
+}
+
 #[test]
 fn conflictos_de_cleanup_confirmado_y_limpieza_indeterminada_son_outcomes() {
     for limpieza in [
@@ -353,11 +457,8 @@ fn conflictos_de_cleanup_confirmado_y_limpieza_indeterminada_son_outcomes() {
         super::EstadoLimpiezaPublicacion::Indeterminada,
     ] {
         assert_eq!(
-            super::resultado_con_limpieza_confirmada(limpieza, DeteccionPublicacionJournal::Nuevo,),
-            ResultadoPublicacionJournal::Confirmado {
-                deteccion: DeteccionPublicacionJournal::Nuevo,
-                limpieza,
-            }
+            super::resultado_con_limpieza_confirmada(limpieza),
+            ResultadoPublicacionJournal::Confirmado { limpieza }
         );
     }
 }
@@ -445,7 +546,6 @@ fn resolver_error_distingue_no_aplicado_de_commit_confirmado() {
     assert_eq!(
         outcome,
         ResultadoPublicacionJournal::Confirmado {
-            deteccion: DeteccionPublicacionJournal::YaExistia,
             limpieza: super::super::LimpiezaConfirmadaJournal::Conflicto(error),
         }
     );

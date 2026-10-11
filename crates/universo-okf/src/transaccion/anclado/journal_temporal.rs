@@ -65,18 +65,11 @@ pub(crate) enum ResultadoPublicacionJournal {
     PrecondicionFallida(ErrorJournalAnclado),
     NoAplicado(ErrorJournalAnclado),
     Confirmado {
-        deteccion: DeteccionPublicacionJournal,
         limpieza: LimpiezaConfirmadaJournal,
     },
     Indeterminado {
         causa: CausaIndeterminacionPublicacionJournal,
     },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DeteccionPublicacionJournal {
-    Nuevo,
-    YaExistia,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -36,10 +36,9 @@ impl JournalTemporalAnclado<'_> {
             Ok(fuente) => fuente,
             Err(ErrorJournalAnclado::SourceMissing) => {
                 return match self.canonico_es(&esperada) {
-                    Ok(true) => resultado_con_limpieza_confirmada(
-                        EstadoLimpiezaPublicacion::Completa,
-                        DeteccionPublicacionJournal::YaExistia,
-                    ),
+                    Ok(true) => {
+                        resultado_con_limpieza_confirmada(EstadoLimpiezaPublicacion::Completa)
+                    }
                     Ok(false) => ResultadoPublicacionJournal::PrecondicionFallida(
                         ErrorJournalAnclado::SourceMissing,
                     ),
@@ -64,11 +63,9 @@ impl JournalTemporalAnclado<'_> {
         }
 
         match publicar(self, &fuente) {
-            Ok(()) => self.resultado_despues_de_commit(
-                esperada,
-                DeteccionPublicacionJournal::Nuevo,
-                |capability, identidad| capability.limpiar_temporal_si_coincide(identidad),
-            ),
+            Ok(()) => self.resultado_despues_de_commit(esperada, |capability, identidad| {
+                capability.limpiar_temporal_si_coincide(identidad)
+            }),
             Err(error) => self.resolver_error_publicacion(esperada, error),
         }
     }
@@ -76,13 +73,11 @@ impl JournalTemporalAnclado<'_> {
     fn resultado_despues_de_commit(
         &self,
         esperada: IdentidadArchivoJournal,
-        deteccion: DeteccionPublicacionJournal,
         limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> EstadoLimpiezaPublicacion,
     ) -> ResultadoPublicacionJournal {
         self.resultado_despues_de_commit_observando(
             esperada,
             |capability, identidad| capability.canonico_es(identidad),
-            deteccion,
             limpiar,
         )
     }
@@ -94,11 +89,10 @@ impl JournalTemporalAnclado<'_> {
             &Self,
             &IdentidadArchivoJournal,
         ) -> Result<bool, ErrorJournalAnclado>,
-        deteccion: DeteccionPublicacionJournal,
         limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> EstadoLimpiezaPublicacion,
     ) -> ResultadoPublicacionJournal {
         match observar_canonico(self, &esperada) {
-            Ok(true) => resultado_con_limpieza_confirmada(limpiar(self, esperada), deteccion),
+            Ok(true) => resultado_con_limpieza_confirmada(limpiar(self, esperada)),
             Ok(false) => ResultadoPublicacionJournal::Indeterminado {
                 causa: CausaIndeterminacionPublicacionJournal::CanonicoAusenteTrasExito,
             },
@@ -143,10 +137,9 @@ impl JournalTemporalAnclado<'_> {
             Some(observar_temporal(self, &esperada))
         };
         match clasificar_error_post_intento(error_publicacion, canonico, temporal) {
-            ClasificacionErrorPostIntento::Confirmado => resultado_con_limpieza_confirmada(
-                limpiar(self, esperada),
-                DeteccionPublicacionJournal::YaExistia,
-            ),
+            ClasificacionErrorPostIntento::Confirmado => {
+                resultado_con_limpieza_confirmada(limpiar(self, esperada))
+            }
             ClasificacionErrorPostIntento::NoAplicado(error) => {
                 ResultadoPublicacionJournal::NoAplicado(error)
             }
@@ -199,6 +192,9 @@ impl JournalTemporalAnclado<'_> {
         let archivo = match abrir_temporal(&self.parent, &self.nombre) {
             Ok(archivo) => archivo,
             Err(ErrorJournalAnclado::SourceMissing) => return EstadoLimpiezaPublicacion::Completa,
+            Err(error) if es_conflicto_temporal(error) => {
+                return EstadoLimpiezaPublicacion::Conflicto(error);
+            }
             Err(_) => return EstadoLimpiezaPublicacion::Indeterminada,
         };
         if let Err(error) = validar_archivo_regular(&archivo) {
@@ -268,12 +264,8 @@ fn indeterminado_despues_de_error(
 
 fn resultado_con_limpieza_confirmada(
     limpieza: EstadoLimpiezaPublicacion,
-    deteccion: DeteccionPublicacionJournal,
 ) -> ResultadoPublicacionJournal {
-    ResultadoPublicacionJournal::Confirmado {
-        deteccion,
-        limpieza,
-    }
+    ResultadoPublicacionJournal::Confirmado { limpieza }
 }
 
 fn es_conflicto_concreto(error: ErrorJournalAnclado) -> bool {
