@@ -37,6 +37,8 @@ implementados.
   `Parent` y `HasLab`.
 - Canonicalizar, deduplicar y ordenar las operaciones antes de evaluar. Una
   misma identidad canónica en `add` y `remove` es solapamiento y se rechaza.
+  Un `Edge` idéntico en ambos lados queda sujeto a la misma regla; el par se
+  rechaza como solapamiento, no se interpreta como una operación no-op.
   `apply` requiere el snapshot esperado; una identidad distinta es `stale`.
 - Antes de operar sobre `<raiz>`, inspeccionar sin seguir links y rechazar si
   la raíz proporcionada es symlink, junction o reparse point. Canonizar esa
@@ -52,7 +54,9 @@ implementados.
   `quitar_arista` ni usar ordinales previos a los retiros.
 - `HasLab` es funcional solo por sujeto; igual etiqueta en sujetos distintos
   se permite salvo invariante. Para cambiar la etiqueta del mismo sujeto,
-  retirar y añadir explícitamente.
+  retirar y añadir explícitamente. En aristas, el retiro usa su identidad del
+  snapshot y el alta de etiqueta usa la identidad final después de compactar
+  ordinales.
 - `Ext` requiere predicado declarado, sujeto nodo existente y constante de
   valor perteneciente al dominio declarado. Para el mismo par
   `(predicado, nodo)`, reemplazar un valor exige `remove` del valor vigente y
@@ -157,25 +161,34 @@ Chain strategy: feature-branch-chain
   `crates/universo-core/src/transaccion/aristas.rs`,
   `crates/universo-core/src/transaccion/ext.rs`.
   Avance parcial: el core clona la estructura en un candidato aislado y admite
-  solo retiros `Edge` y `HasLab` de arista. Resuelve cada identidad contra el
-  snapshot a handles, retira en lote, compacta los grupos afectados preservando
-  el orden de supervivientes y conserva sus labels por handle. Un retiro
-  `HasLab` solo se acepta si el mismo delta retira la arista del mismo handle y
-  la etiqueta coincide exactamente. El constructor rechaza como
-  `unsupported_operation` todo `add` y toda remoción fuera de esos casos,
-  incluidos `Ext`; no hay aún una ruta de admisión que evalúe invariantes
-  funcionales.
+  retiros y altas `Edge`/`HasLab` de arista. Resuelve los retiros contra el
+  snapshot a handles; luego retira en lote, compacta cada grupo preservando el
+  orden de supervivientes y conserva sus labels por handle. Las altas `Edge`
+  requieren un `HasLab` correspondiente y usan ordinales finales contiguos en
+  orden numérico; los grupos `(origen, tipo, destino)` se procesan de forma
+  independiente. Las mezclas remove/add también usan las posiciones finales.
+
+  Un `HasLab` retirado identifica la etiqueta vigente por handle en el
+  snapshot. Si el handle sobrevive, la etiqueta nueva se añade con su identidad
+  final, ya compactada. Para reemplazar una etiqueta se requiere remove+add de
+  `HasLab`; no se retira y reañade el `Edge`. Un `Edge` vigente puede añadirse
+  idempotentemente con su `HasLab` exacto, y el delta vacío también es no-op.
+  En cambio, el mismo `Edge` canónico en add y remove se rechaza por
+  solapamiento en `Delta::nuevo`; no es necesario representar un no-op con ese
+  par de operaciones. `Type`, `Parent`, `Ext` y `HasLab` de nodo siguen
+  rechazados fail-closed como `unsupported_operation`; las invariantes
+  funcionales todavía no tienen ruta de evaluación/admisión.
 
   `crates/universo-core/tests/candidato_delta.rs`
   (`cargo test -p universo-core --test candidato_delta`) pasa 3/3 casos de
   aislamiento, preservación de entrada y rechazo redactado de operaciones no
   soportadas. `crates/universo-core/tests/delta_aristas.rs`
-  (`cargo test -p universo-core --test delta_aristas`) pasa 5/5 casos de
-  retiros paralelos —incluidos los ordinales 1 y 10 entre 11 aristas—,
-  compactación, orden independiente de entrada, labels por handle, fallo sin
-  mutación y condición `HasLab`/`Edge` del mismo handle. El slice aún no cubre
-  los adds con ordinales finales contiguos, ni
-  `crates/universo-core/tests/ext_transaccional.rs` y
+  (`cargo test -p universo-core --test delta_aristas`) pasa 14/14 casos de
+  retiros/altas, ordinales numéricos, ordinales finales en mezcla remove/add,
+  grupos independientes, label vigente requerida, no-op exacto, reemplazo por
+  handle snapshot→identidad final, fallo sin mutación y redacción. Las pruebas
+  también distinguen ordinales `#2`/`#10` con 11 aristas paralelas. Siguen
+  pendientes `crates/universo-core/tests/ext_transaccional.rs` y
   `crates/universo-okf/tests/ext_roundtrip.rs`.
 
   Runtime previsto: 10.000 átomos base + 1.000 cambios y grupos de
@@ -358,12 +371,16 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | `2a49aed5c0c957e87abced7d0db0a2cd6c3d1677` | Candidato aislado y retiro de aristas en core; 364 añadidas/1 borrada (365 authored); `candidato_delta` 3/3. | Aporte parcial a Unidad 1. |
 | 2026-10-11 | `19d60627d0b2483a2dc5f266ceb360554f2781be` | Pruebas de retiros en lote; 203 líneas añadidas; `delta_aristas` 5/5. | Aporte parcial a Unidad 1. |
 | 2026-10-11 | `f42cdb929d45ffac95350cbefbc59d5d8ff042fc` | Aislamiento y rechazo fail-closed; 170 añadidas/18 borradas (188 authored). | Aporte parcial a Unidad 1. |
+| 2026-10-11 | `9afb46405d8285259bfa621d570ae4c58cc893db` | Altas `Edge`/`HasLab` de arista; 166 añadidas/8 borradas (174 authored). | Aporte parcial a Unidad 1. |
+| 2026-10-11 | `fa710d474ab8abc22f0779437d283b6ad12331c6` | Casos de altas, no-op, grupos y mezcla remove/add; 253 líneas añadidas. | Aporte parcial a Unidad 1. |
+| 2026-10-11 | `826b3816f5b257707664567ebbee39ffe3be9d35` | Reemplazo de etiqueta por identidad final; 274 añadidas/24 borradas (298 authored). | Aporte parcial a Unidad 1. |
 | 2026-10-11 | Verificación en HEAD `f42cdb9` | Workspace, clippy, fmt y frontera pública pasan en el HEAD de código; enlaces, frontera, fmt y diff pasan tras editar los planes. | Aprobada; no incluye medición de rendimiento. |
+| 2026-10-11 | Verificación en HEAD `826b381` | `delta_aristas` 14/14, `candidato_delta` 3/3, workspace, clippy, fmt y frontera pública pasan; diff y enlaces pasan tras editar los planes. | Aprobada; runtime sigue pendiente. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
-| 1 | Candidato aislado; retiros `Edge` y `HasLab` de arista resueltos a handles del snapshot, en lote y con compactación/labels por handle | Parcial; adds, `Ext`, invariantes funcionales y rendimiento pendientes |
+| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, ordinales finales y reemplazo de etiqueta por handles | Parcial; `Type`, `Parent`, `Ext`, `HasLab` de nodo, invariantes funcionales y rendimiento pendientes |
 | 2–4 | Core `ext_transaccional`, `conflictos_delta`; OKF `ext_roundtrip`, `padre_persistible`, `snapshot_transaccional` | Pendiente |
 | 5–7 | `writer_lock_transaccional`, `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |

@@ -12,7 +12,7 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fases 01–03 cerradas y fase 04 sigue en curso. Unidad 0 está cerrada con evidencia de implementación en `a54688c`; `cargo test --workspace` pasa. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidad 0 completada y Unidad 1 con avance parcial; `cargo test --workspace` pasa en HEAD `826b381`. |
 | Foco actual | Fase 04, Unidad 1: candidato, Edge y Ext. |
 | Última actualización | 2026-10-11 |
 
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidad 0 cerrada; Unidad 1 tiene un avance parcial de candidato aislado y retiros Edge/HasLab; la transacción completa sigue pendiente. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidad 0 completada; Unidad 1 avanza parcialmente con candidato aislado y altas/retiros Edge/HasLab de arista; la transacción completa sigue pendiente. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -143,6 +143,9 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `2a49aed5c0c957e87abced7d0db0a2cd6c3d1677` | Candidato aislado y retiro de aristas | 364 añadidas/1 borrada (365 authored); `candidato_delta` pasa 3/3. |
 | `19d60627d0b2483a2dc5f266ceb360554f2781be` | Pruebas de retiro en lote | 203 líneas añadidas; `delta_aristas` pasa 5/5. |
 | `f42cdb929d45ffac95350cbefbc59d5d8ff042fc` | Aislamiento y rechazo fail-closed | 170 añadidas/18 borradas (188 authored). |
+| `9afb46405d8285259bfa621d570ae4c58cc893db` | Altas `Edge`/`HasLab` de arista | 166 añadidas/8 borradas (174 authored). |
+| `fa710d474ab8abc22f0779437d283b6ad12331c6` | Casos de altas, no-op, grupos y mezcla remove/add | 253 líneas añadidas; `delta_aristas` alcanza 14 casos. |
+| `826b3816f5b257707664567ebbee39ffe3be9d35` | Reemplazo de etiqueta por identidad final | 274 añadidas/24 borradas (298 authored); `delta_aristas` 14/14. |
 
 El objeto JSON tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
@@ -150,22 +153,29 @@ canonicaliza y deduplica repeticiones; el parser JSON rechaza átomos repetidos,
 claves ausentes o desconocidas y claves duplicadas. Los predicados reservados
 `Type`, `Edge`, `Parent` y `HasLab` también se rechazan como `Ext`.
 
-La Unidad 0 planificada quedó en dos commits revisables, ambos bajo 400 líneas
+La Unidad 0 quedó completada en dos commits revisables, ambos bajo 400 líneas
 y sin cambio de alcance. `cargo test --workspace`,
 `cargo clippy --workspace --all-targets -- -D warnings`,
 `cargo fmt --all -- --check` y `python tools/check_public_boundary.py` pasaron
 en el commit de implementación `a54688c`. Tras editar los planes pasaron la
 verificación de enlaces Markdown locales, frontera pública, fmt y
 `git diff --check`. La prueba de carga verifica roundtrip, cantidad y bytes
-serializados; no recoge mediciones de µs/op. Solo se cierra Unidad 0: la fase
-04 conserva estado en curso y el progreso maestro permanece en 3/9.
+serializados; no recoge mediciones de µs/op. La fase 04 conserva estado en
+curso y el progreso maestro permanece en 3/9.
 
-Unidad 1 tiene un avance parcial: solo se admiten retiros `Edge` y `HasLab` de
-arista resueltos a handles del snapshot; los retiros se agrupan y compactan,
-conservando labels por handle. `HasLab` requiere retirar la misma arista y la
-etiqueta exacta. El constructor rechaza los adds y las operaciones fuera de
-este alcance; aún no hay una ruta de admisión que acepte `Ext` o evalúe
-invariantes funcionales. En HEAD `f42cdb9` pasaron workspace, clippy, fmt y
-frontera pública; tras editar los planes pasaron enlaces locales, frontera,
-fmt y diff. El posible costo O(R×D) sigue sin medir; la optimización se
-decidirá con mediciones.
+Unidad 1 tiene un avance parcial: el candidato admite altas/retiros `Edge` y
+`HasLab` de arista. Resuelve retiros a handles del snapshot, compacta grupos y
+ordena altas por ordinal final numérico y contiguo; cada alta `Edge` requiere
+su `HasLab`. Un `Edge` vigente puede añadirse como no-op con su etiqueta exacta,
+y el delta vacío también es no-op. La misma identidad canónica `Edge` en
+add/remove sigue siendo un solapamiento rechazado, por lo que no se usa ese par
+para expresar un no-op. Los cambios de etiqueta usan remove+add `HasLab`; al
+compactar, la baja identifica el handle en el snapshot y el alta su identidad
+final. `Type`, `Parent`, `Ext` y `HasLab` de nodo siguen fail-closed; la
+evaluación de invariantes funcionales y runtime quedan pendientes. En HEAD
+`826b381` pasan `delta_aristas` 14/14, `candidato_delta` 3/3,
+`cargo test --workspace`, clippy, fmt y frontera pública. Tras editar los
+planes pasan enlaces locales, frontera, fmt y diff. `Type`, `Parent`, `Ext` y
+`HasLab` de nodo siguen fail-closed; la admisión funcional y las mediciones de
+rendimiento quedan pendientes. El posible costo O(R×D) sigue sin medir; la
+optimización se decidirá con mediciones.
