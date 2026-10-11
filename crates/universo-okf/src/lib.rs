@@ -6,6 +6,7 @@ pub mod documento;
 pub mod errores;
 pub mod manifiesto_toml;
 pub mod serializar;
+pub mod transaccion;
 
 pub use bundle::{cargar_bundle, parsear_bundle};
 pub use delta::{ErrorDeltaJson, LadoDelta, parsear_delta_json_v1, serializar_delta_json_v1};
