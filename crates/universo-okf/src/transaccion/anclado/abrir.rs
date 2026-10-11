@@ -46,7 +46,8 @@ fn abrir_plataforma(
 
 #[cfg(unix)]
 fn flags_unix(tipo_esperado: TipoEntradaAnclada) -> libc::c_int {
-    let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+    let mut flags =
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
     if tipo_esperado == TipoEntradaAnclada::Directorio {
         flags |= libc::O_DIRECTORY;
     }
@@ -123,6 +124,7 @@ mod tests {
         let flags_archivo = flags_unix(TipoEntradaAnclada::Archivo);
         assert_ne!(flags_archivo & libc::O_NONBLOCK, 0);
         assert_ne!(flags_archivo & libc::O_NOFOLLOW, 0);
+        assert_ne!(flags_archivo & libc::O_NOCTTY, 0);
         assert_ne!(flags_archivo & libc::O_CLOEXEC, 0);
         assert_eq!(flags_archivo & libc::O_DIRECTORY, 0);
         let flags_directorio = flags_unix(TipoEntradaAnclada::Directorio);
