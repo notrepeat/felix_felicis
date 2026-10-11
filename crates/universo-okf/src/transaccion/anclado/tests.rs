@@ -88,40 +88,49 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
     let mut bytes = Vec::new();
     lectura.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"read");
-    let subdirectorio = ancla.crear_directorio("subdir").unwrap();
+    let (stage, componente_stage) = ancla.crear_stage_sibling("operaciones").unwrap();
+    let mut stage_file = stage.crear_nuevo("read.txt").unwrap();
+    stage_file.write_all(b"stage read").unwrap();
+    let subdirectorio = stage.crear_directorio("subdir").unwrap();
     assert!(matches!(
-        ancla.abrir_entrada_inventario("subdir").unwrap(),
+        stage.abrir_entrada_inventario("subdir").unwrap(),
         EntradaLecturaAnclada::Directorio(_)
     ));
     let mut nuevo = subdirectorio.crear_nuevo("new.txt").unwrap();
     nuevo.write_all(b"new").unwrap();
-    assert_eq!(std::fs::read(ruta.join("subdir/new.txt")).unwrap(), b"new");
-    assert!(ancla.abrir_archivo_regular("subdir").is_err());
-    assert!(ancla.abrir_directorio("read.txt").is_err());
+    assert_eq!(
+        std::fs::read(temp.path().join(componente_stage).join("subdir/new.txt")).unwrap(),
+        b"new"
+    );
+    assert!(stage.abrir_archivo_regular("subdir").is_err());
+    assert!(stage.abrir_directorio("read.txt").is_err());
 }
 
 #[test]
 fn colisiones_de_create_new_y_mkdir_preservan_contenido_existente() {
     let temp = tempdir().unwrap();
     let ruta = temp.path().join("bundle");
-    let directorio_existente = ruta.join("directorio-existente");
-    std::fs::create_dir_all(&directorio_existente).unwrap();
-    std::fs::write(ruta.join("archivo-existente.txt"), b"no modificar").unwrap();
+    std::fs::create_dir(&ruta).unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+    let (stage, componente_stage) = ancla.crear_stage_sibling("collision-probe").unwrap();
+    let stage_path = temp.path().join(componente_stage);
+    let directorio_existente = stage_path.join("directorio-existente");
+    std::fs::create_dir(&directorio_existente).unwrap();
+    std::fs::write(stage_path.join("archivo-existente.txt"), b"no modificar").unwrap();
     std::fs::write(
         directorio_existente.join("sentinel.txt"),
         b"directorio intacto",
     )
     .unwrap();
-    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
 
-    assert!(ancla.crear_nuevo("archivo-existente.txt").is_err());
-    assert!(ancla.crear_directorio("directorio-existente").is_err());
+    assert!(stage.crear_nuevo("archivo-existente.txt").is_err());
+    assert!(stage.crear_directorio("directorio-existente").is_err());
     assert_eq!(
-        std::fs::read(ruta.join("archivo-existente.txt")).unwrap(),
+        std::fs::read(stage_path.join("archivo-existente.txt")).unwrap(),
         b"no modificar"
     );
     assert_eq!(
-        std::fs::read(directorio_existente.join("sentinel.txt")).unwrap(),
+        std::fs::read(stage_path.join("directorio-existente/sentinel.txt")).unwrap(),
         b"directorio intacto"
     );
 }
@@ -217,15 +226,17 @@ fn identidad_parent_sobrevive_renombre_y_reemplazo_de_ancestro() {
     let mut bytes = Vec::new();
     sentinel.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"inside");
-    let mut created = raiz.crear_nuevo("created.txt").unwrap();
+    let (stage, componente_stage) = raiz.crear_stage_sibling("parent-swap").unwrap();
+    let mut created = stage.crear_nuevo("created.txt").unwrap();
     created.write_all(b"inside only").unwrap();
-    assert!(!replaced_root.join("created.txt").exists());
+    let stage_path = moved.join(&componente_stage);
+    assert!(!replaced_root.join(&componente_stage).exists());
     assert_eq!(
         std::fs::read(replaced_root.join("sentinel.txt")).unwrap(),
         b"external"
     );
     assert_eq!(
-        std::fs::read(moved.join("bundle/created.txt")).unwrap(),
+        std::fs::read(stage_path.join("created.txt")).unwrap(),
         b"inside only"
     );
 }
@@ -250,18 +261,20 @@ fn rechaza_ancestro_junction_y_archivos_a_traves_de_junction() {
     std::fs::create_dir(&root).unwrap();
     std::fs::create_dir(&outside).unwrap();
     std::fs::write(outside.join("sentinel.txt"), b"untouched").unwrap();
-    crear_junction(&root.join("junction"), &outside);
 
     let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&root).unwrap()).unwrap();
-    assert!(ancla.abrir_directorio("junction").is_err());
-    assert!(ancla.crear_directorio("junction").is_err());
-    assert!(ancla.abrir_archivo_regular("junction").is_err());
+    let (stage, componente_stage) = ancla.crear_stage_sibling("junction-probe").unwrap();
+    let stage_path = temp.path().join(componente_stage);
+    crear_junction(&stage_path.join("junction"), &outside);
+    assert!(stage.abrir_directorio("junction").is_err());
+    assert!(stage.crear_directorio("junction").is_err());
+    assert!(stage.abrir_archivo_regular("junction").is_err());
     assert!(
-        ancla
+        stage
             .abrir_archivo_regular("junction\\sentinel.txt")
             .is_err()
     );
-    assert!(ancla.crear_nuevo("junction\\created.txt").is_err());
+    assert!(stage.crear_nuevo("junction\\created.txt").is_err());
     assert_eq!(
         std::fs::read(outside.join("sentinel.txt")).unwrap(),
         b"untouched"
