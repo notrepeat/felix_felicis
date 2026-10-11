@@ -9,11 +9,15 @@ use std::fmt;
 
 use crate::estructura::Estructura;
 use crate::evaluador::{
-    ErrorEvaluacion, EvidenciaEvaluacion, ResultadoTrazable,
+    ErrorEvaluacion, EvidenciaEvaluacion, ReglaEvidencia, ResultadoTrazable, TipoCuantificador,
     evaluar_trazable_con_presupuesto_total_medido,
 };
 use crate::formula::Formula;
 use crate::invariante::expansion::ResultadoExpansionFuente;
+
+mod presencia;
+pub use presencia::CorePresencia;
+use presencia::{ErrorPresencia, ResultadoPresencia, extraer_core_presencia};
 
 /// Máximo predeterminado de explicaciones al enumerar.
 pub const MAX_EXPLICACIONES_POR_DEFECTO: usize = 100;
@@ -83,6 +87,18 @@ impl fmt::Debug for Contraejemplo {
 pub struct ObjetoExplicacion {
     pub procedencia: ProcedenciaExplicacion,
     pub counterexample: Contraejemplo,
+    core: Option<CorePresencia>,
+}
+
+impl ObjetoExplicacion {
+    /// Devuelve el core positivo cuando aplica el fragmento operacional.
+    ///
+    /// Los hechos solo se obtienen mediante el método explícitamente sensible
+    /// [`CorePresencia::atomos_sensibles`]; no aparecen en `Debug` ni en
+    /// `Display`.
+    pub fn core_presencia(&self) -> Option<&CorePresencia> {
+        self.core.as_ref()
+    }
 }
 
 impl fmt::Debug for ObjetoExplicacion {
@@ -90,6 +106,7 @@ impl fmt::Debug for ObjetoExplicacion {
         f.debug_struct("ObjetoExplicacion")
             .field("procedencia", &self.procedencia)
             .field("counterexample", &"[redactado]")
+            .field("tiene_core_presencia", &self.core.is_some())
             .finish()
     }
 }
@@ -336,9 +353,18 @@ pub fn explicar_con_presupuesto_y_consumos(
                 consumir_presupuesto(&mut presupuesto)?;
                 let traza = evaluar_traza(&oracion.formula, estructura, &mut presupuesto)?;
                 if !traza.valor {
+                    let core = extraer_core(
+                        &oracion.formula,
+                        &traza.evidencia,
+                        estructura,
+                        &mut presupuesto,
+                    )?;
                     consumir_presupuesto(&mut presupuesto)?;
-                    let objeto =
-                        clasificar_objeto(ProcedenciaExplicacion::from(oracion), traza.evidencia);
+                    let objeto = clasificar_objeto(
+                        ProcedenciaExplicacion::from(oracion),
+                        traza.evidencia,
+                        core,
+                    );
                     return Ok(medido(
                         ResultadoExplicaciones::Decision(Some(objeto)),
                         &presupuesto,
@@ -365,10 +391,17 @@ pub fn explicar_con_presupuesto_y_consumos(
                         &presupuesto,
                     ));
                 }
+                let core = extraer_core(
+                    &oracion.formula,
+                    &traza.evidencia,
+                    estructura,
+                    &mut presupuesto,
+                )?;
                 consumir_presupuesto(&mut presupuesto)?;
                 objetos.push(clasificar_objeto(
                     ProcedenciaExplicacion::from(oracion),
                     traza.evidencia,
+                    core,
                 ));
             }
             Ok(medido(
@@ -427,13 +460,50 @@ fn consumir_presupuesto(presupuesto: &mut PresupuestoExplicacion) -> Result<(), 
         .map_err(|limite| ErrorVeredicto::PresupuestoAgotado { limite })
 }
 
+fn extraer_core(
+    formula: &Formula,
+    evidencia: &EvidenciaEvaluacion,
+    estructura: &Estructura,
+    presupuesto: &mut PresupuestoExplicacion,
+) -> Result<Option<CorePresencia>, ErrorVeredicto> {
+    let (
+        Formula::ParaTodo { .. },
+        ReglaEvidencia::Cuantificador {
+            tipo: TipoCuantificador::ParaTodo,
+            instancias,
+            ..
+        },
+    ) = (formula, &evidencia.regla)
+    else {
+        return Ok(None);
+    };
+
+    for instancia in instancias {
+        consumir_presupuesto(presupuesto)?;
+        if !instancia.valor {
+            return match extraer_core_presencia(formula, instancia, estructura, presupuesto)
+                .map_err(|error| match error {
+                    ErrorPresencia::PresupuestoAgotado { limite } => {
+                        ErrorVeredicto::PresupuestoAgotado { limite }
+                    }
+                })? {
+                ResultadoPresencia::Core(core) => Ok(Some(core)),
+                ResultadoPresencia::NoAplicable => Ok(None),
+            };
+        }
+    }
+    Ok(None)
+}
+
 fn clasificar_objeto(
     procedencia: ProcedenciaExplicacion,
     evidencia: EvidenciaEvaluacion,
+    core: Option<CorePresencia>,
 ) -> ObjetoExplicacion {
     ObjetoExplicacion {
         procedencia,
         counterexample: Contraejemplo { evidencia },
+        core,
     }
 }
 
