@@ -49,6 +49,9 @@ fn child_runtime_contiende_por_writer_lock() {
         match LockEscritura::adquirir(&root) {
             Ok(guard) => {
                 let espera_us = espera_inicio.elapsed().as_micros();
+                // Estos marcadores cubren solo el tramo simulado: una pausa antes
+                // de enter o después de exit puede quedar fuera del rastro aunque
+                // el proceso todavía conserve el guard.
                 escribir_evento_runtime(&mut trace, worker as u8);
                 std::thread::sleep(Duration::from_millis(critical_ms));
                 escribir_evento_runtime(&mut trace, (writers + worker) as u8);
@@ -414,12 +417,12 @@ fn runtime_lock_scenario(writers: usize) {
         .unwrap_or_default();
     let events =
         std::fs::read(&trace_path).unwrap_or_else(|_| panic!("runtime event trace read failed"));
-    let (max_simultaneous, traced_acquisitions, trace_valid) =
-        resumir_eventos_runtime(&events, writers);
+    let (max_marked_critical_section, traced_acquisitions, trace_valid) =
+        resumir_tramos_marcados_runtime(&events, writers);
     let busy_rate = busy_attempts as f64 * 100.0 / attempts as f64;
 
     println!(
-        "Runtime lock: writers={writers}, total_ms={:.3}, wait_sum_ms={:.3}, wait_avg_ms={:.3}, wait_max_ms={:.3}, attempts={attempts}, busy_attempts={busy_attempts}, busy_rate={busy_rate:.1}%, acquisitions={acquisitions}, max_simultaneous={max_simultaneous}, critical_ms={RUNTIME_CRITICAL_MS} (release, orientativo, sin SLA)",
+        "Runtime lock: writers={writers}, total_ms={:.3}, wait_sum_ms={:.3}, wait_avg_ms={:.3}, wait_max_ms={:.3}, attempts={attempts}, busy_attempts={busy_attempts}, busy_rate={busy_rate:.1}%, acquisitions={acquisitions}, max_marked_critical_section={max_marked_critical_section}, critical_ms={RUNTIME_CRITICAL_MS} (release, orientativo, sin SLA; solo tramo marcado, no mide la vida completa del guard)",
         total.as_secs_f64() * 1_000.0,
         wait_total_us as f64 / 1_000.0,
         wait_total_us as f64 / writers as f64 / 1_000.0,
@@ -431,7 +434,10 @@ fn runtime_lock_scenario(writers: usize) {
         "event trace must cover each writer"
     );
     assert!(trace_valid, "runtime event trace is incomplete");
-    assert_eq!(max_simultaneous, 1, "writer critical sections overlapped");
+    assert_eq!(
+        max_marked_critical_section, 1,
+        "marked critical section intervals overlapped"
+    );
 }
 
 fn parse_runtime_metric(output: &Output) -> RuntimeWorkerMetric {
@@ -457,7 +463,7 @@ fn runtime_metric_value<T: std::str::FromStr>(line: &str, key: &str) -> T {
         .unwrap_or_else(|| panic!("runtime worker metric invalid"))
 }
 
-fn resumir_eventos_runtime(events: &[u8], writers: usize) -> (usize, usize, bool) {
+fn resumir_tramos_marcados_runtime(events: &[u8], writers: usize) -> (usize, usize, bool) {
     let mut active = vec![false; writers];
     let mut enters = vec![0; writers];
     let mut exits = vec![0; writers];
