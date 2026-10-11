@@ -220,8 +220,8 @@ cerrada en carga y serialización en memoria de `Parent`; el harness release
 anterior midió 1.791 ms para 1.000 cambios y overrides, sin medir escritura ni
 publicación filesystem.
 
-Unidad 4 queda cerrada como primitiva interna. En HEAD `2475dc3` (sin cambios
-de pruebas respecto de `61b22fd`) la verificación integrada registra workspace
+Unidad 4 queda cerrada como primitiva interna. En HEAD `2475dc3` (mismo conteo
+de pruebas que `61b22fd`) la verificación integrada registra workspace
 377 passed/5 ignored, snapshot focal 2/2 y captura 8/8 más 1 harness ignorado;
 clippy, fmt y frontera pública pasan. La captura lee una vez a buffers raw,
 incluye archivos y directorios vacíos, y compara el token antes de parsear; el
