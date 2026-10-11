@@ -664,3 +664,7 @@ mod renombrar_reparse_tests;
 #[cfg(all(test, unix))]
 #[path = "anclado/renombrar_parent_unix_tests.rs"]
 mod renombrar_parent_unix_tests;
+
+#[cfg(all(test, windows))]
+#[path = "anclado/renombrar_parent_windows_tests.rs"]
+mod renombrar_parent_windows_tests;
