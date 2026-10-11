@@ -386,23 +386,18 @@ fn parent_retiros_antes_de_altas_evitan_ciclo_transitorio() {
     let a = snapshot
         .insertar_nodo(p("n/a"), Sorte::nuevo("a"), Etiqueta::nuevo("a"))
         .unwrap();
-    let b = snapshot
-        .insertar_nodo(p("n/b"), Sorte::nuevo("b"), Etiqueta::nuevo("b"))
+    let z = snapshot
+        .insertar_nodo(p("n/z"), Sorte::nuevo("b"), Etiqueta::nuevo("z"))
         .unwrap();
-    let c = snapshot
-        .insertar_nodo(p("n/c"), Sorte::nuevo("b"), Etiqueta::nuevo("c"))
-        .unwrap();
-    snapshot.asignar_padre(a, b).unwrap();
-    snapshot.asignar_padre(b, c).unwrap();
+    snapshot.asignar_padre(z, a).unwrap();
     let antes = snapshot.atomos();
-    let delta = Delta::nuevo([parent("n/c", "n/a")], [parent("n/b", "n/c")]).unwrap();
+    let delta = Delta::nuevo([parent("n/a", "n/z")], [parent("n/z", "n/a")]).unwrap();
 
-    // La alta c -> a crearía a -> b -> c -> a hasta que se retire b -> c.
+    // La alta a -> z crea el ciclo z -> a -> z hasta que se retire z -> a.
     let candidato = construir_candidato(&snapshot, &delta).unwrap();
 
-    assert_eq!(candidato.estructura().padre(a), Some(b));
-    assert_eq!(candidato.estructura().padre(b), None);
-    assert_eq!(candidato.estructura().padre(c), Some(a));
+    assert_eq!(candidato.estructura().padre(a), Some(z));
+    assert_eq!(candidato.estructura().padre(z), None);
     assert_eq!(snapshot.atomos(), antes);
     candidato.estructura().verificar_representacion().unwrap();
 }
