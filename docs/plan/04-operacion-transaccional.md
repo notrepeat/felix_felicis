@@ -70,10 +70,10 @@ implementados.
   buffers inmutables; parsear desde esos mismos bytes y calcular el token
   desde ellos, sin relectura que permita TOCTOU. Simulación conserva lectura
   legacy de links; apply los rechaza antes del snapshot transaccional.
-- Persistir `Parent` requiere opt-in por la clave opcional `layout.parent_key`;
-  la semántica exacta del `BundlePath`, la inferencia legacy, raíz explícita y
-  validación contra el candidato quedan fijadas en la decisión de Unidad 3
-  descrita junto a su tarea. La persistencia aún no está implementada.
+- Cargar y serializar `Parent` requiere opt-in por `layout.parent_key`. La
+  Unidad 3 cierra la carga exacta, raíz explícita, fallback legacy y
+  serialización determinista del candidato a documentos en memoria. Esto no
+  escribe el bundle ni publica cambios; ver el alcance y los límites abajo.
 - La API pura de `universo-core` es
   `proponer(estructura, delta, invariantes) -> Result<ResultadoPropuesta, ErrorPropuesta>`;
   construye/evalúa candidato y separa errores técnicos del veredicto
@@ -185,8 +185,9 @@ Chain strategy: feature-branch-chain
   `Parent` y `HasLab` de nodo siguen rechazados fail-closed como
   `unsupported_operation` al cierre de Unidad 1. Unidad 2 añadió construcción
   core para `Parent` y `HasLab` de nodo y su evaluación mediante `proponer`;
-  `Type` sigue rechazado técnicamente. La persistencia de `Parent` corresponde
-  a Unidad 3.
+  `Type` sigue rechazado técnicamente. Unidad 3 incorpora la carga optativa y
+  serialización en memoria de `Parent`; la escritura y publicación filesystem
+  continúan pendientes.
 
   `crates/universo-core/tests/candidato_delta.rs`
   (`cargo test -p universo-core --test candidato_delta`) pasa 3/3 casos de
@@ -250,7 +251,8 @@ Chain strategy: feature-branch-chain
   del candidato y `proponer` clasifican etiquetas ausentes/huérfanas como
   errores técnicos. `proponer` informa conflictos antes de expandir/evaluar
   invariantes; el detector no aplica ni publica cambios. La persistencia
-  `Parent` queda para Unidad 3.
+  La carga y serialización en memoria de `Parent` se completan en Unidad 3;
+  escribir documentos al bundle y publicarlo sigue pendiente.
 
   Las pruebas finales pasan: `nodo_parent_transaccional` 13/13,
   `conflictos_delta` 13/13, `proponer_preflight` 4/4 y
@@ -276,24 +278,33 @@ Chain strategy: feature-branch-chain
   fórmula, no tiene una cota agregada para todas las fórmulas de una propuesta;
   definir y probar ese hardening sigue pendiente, sin promesa de costo global.
   Los commits del slice se mantuvieron bajo 400 líneas authored/churn.
-- [ ] 3 — Persistencia `Parent`: core `crates/universo-core/src/transaccion/padre.rs`
-  y `crates/universo-core/src/manifiesto.rs`; OKF
-  `crates/universo-okf/src/manifiesto_toml.rs`, `crates/universo-okf/src/bundle.rs`,
-  `crates/universo-okf/src/serializar.rs`. Test
-  `crates/universo-okf/tests/padre_persistible.rs`
-  (`cargo test -p universo-okf --test padre_persistible`) cubre BundlePath
-  exacto, raíz vacía, `parent_not_persistable` y carga/serialización. Runtime:
-  1.000 cambios, ms; rollback: conservar padre anterior. Decisión de Unidad 3,
-  aún no implementada: `Some(Some(path))` es el `BundlePath` lógico exacto del
-  padre, no una ruta nueva del hijo ni de almacenamiento; `Some(None)` es raíz.
-  El opt-in es la clave opcional de manifiesto `layout.parent_key`. Sin ella se
-  mantiene inferencia legacy y un cambio `Parent` no es persistible (`None`
-  devuelve `parent_not_persistable`). Con ella, frontmatter ausente cae a
-  inferencia legacy, una cadena no vacía declara el padre exacto y una cadena
-  vacía declara raíz explícita. El override debe coincidir con el `Parent`
-  final del candidato o producir un error redactado; no altera la semántica de
-  la relación. Unidad 3 permanece pendiente. Objetivo por slice: <400 líneas
-  authored.
+- [x] 3 — Carga y serialización en memoria de `Parent`. Código: core
+  `crates/universo-core/src/manifiesto.rs` y `crates/universo-core/src/estructura.rs`;
+  OKF `crates/universo-okf/src/manifiesto_toml.rs`, `bundle.rs`, `serializar.rs`
+  y `errores.rs`. Pruebas: `crates/universo-okf/tests/padre_persistible.rs`.
+  `layout.parent_key` es optativa y valida una clave de frontmatter. Sin ella
+  continúa la inferencia legacy y un cambio de `Parent` falla con
+  `parent_not_persistable`. Con ella, frontmatter ausente usa inferencia legacy,
+  una cadena no vacía declara el `BundlePath` lógico exacto y una cadena vacía
+  declara raíz explícita. El loader conserva si el `Parent` era explícito o
+  inferido. `serializar_candidato` es puro en memoria: devuelve documentos,
+  exige un override exacto solo por cada hijo cuyo `Parent` cambió, valida que
+  cada valor coincida con el `Parent` final (incluida la raíz `None`) y conserva
+  para los demás hijos la distinción explícito/inferido. Sus errores redactan
+  paths; roundtrips repetidos producen los mismos documentos. Esto no escribe
+  archivos, mide hashes de filesystem ni publica el candidato.
+
+  `cargo test --locked -p universo-okf --test padre_persistible`: 16 pasaron,
+  1 harness runtime quedó ignorado en la corrida focal. En el harness release,
+  1.000 cambios y 1.000 overrides dieron 1.791 ms en Windows
+  `x86_64-pc-windows-msvc`, Rust/Cargo 1.88.0. El intervalo mide solo
+  `serializar_candidato`; setup, segundo pase determinista y recarga ocurren
+  fuera. Es una muestra orientativa, sin SLA; no mide bytes escritos ni costo
+  de publicación. Los siete commits y la verificación completa de este cierre
+  figuran en el registro de evidencia. Siguen pendientes `Type`, snapshot/token
+  y stale, apply/publicador filesystem, hashes antes/después de una propuesta
+  rechazada, lock, staging, journal/recovery, CLI y una cota global del
+  presupuesto de evaluación.
 - [ ] 4 — Snapshot/stale: `crates/universo-okf/src/transaccion/snapshot.rs`.
   Test `crates/universo-okf/tests/snapshot_transaccional.rs`
   (`cargo test -p universo-okf --test snapshot_transaccional`) compara replay,
@@ -372,8 +383,11 @@ Chain strategy: feature-branch-chain
 
 - [x] Para las operaciones soportadas por Unidad 0/1, un delta válido produce
   el candidato esperado y no modifica el snapshot de entrada.
-- [ ] El candidato cubre las demás operaciones válidas de la transacción,
-  incluidas `Type`, `Parent` y `HasLab` de nodo.
+- [ ] La transacción implementa `Type`; sigue siendo una operación técnica no
+  soportada por `proponer`.
+- [x] El candidato core construye cambios de `Parent` y `HasLab` de nodo; la
+  serialización en memoria de `Parent` queda limitada a `layout.parent_key` y
+  `serializar_candidato`.
 - [ ] Root symlink/junction/reparse se rechaza; una raíz válida se canoniza
   una vez y todos los artefactos sibling se derivan del parent+basename
   canónicos, de modo que aliases convergen.
@@ -391,8 +405,10 @@ Chain strategy: feature-branch-chain
   sujetos distintos se permiten salvo invariante.
 - [x] Cambiar `HasLab` de una arista exige remove+add y mantiene la asociación
   por handle durante la compactación.
-- [ ] Cambiar `HasLab` de nodo exige remove+add. `Parent` se persiste solo con
-  override de `BundlePath` exacto o raíz vacía; ausente produce
+- [x] Cambiar `HasLab` de nodo exige remove+add.
+- [x] La serialización en memoria de un cambio `Parent` requiere `parent_key`
+  y un override cuyo `BundlePath` coincida exactamente con el candidato; `None`
+  representa raíz explícita. Sin la clave, el cambio devuelve
   `parent_not_persistable`.
 - [x] La salida separa error técnico de veredicto funcional y redacta valores
   privados por defecto.
@@ -491,18 +507,27 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | `9607a9a8191bbba3ae334178f5a61147359dc48e` | Clasificación técnica de `HasLab` incompleto; 49 añadidas/22 borradas (71 authored/churn). | Aporte a Unidad 2. |
 | 2026-10-11 | `12bcc314918a4b4738b582475a3e0b1d33ed5469` | Precedencia técnica y casos `HasLab`; 185 añadidas/37 borradas (222 authored/churn). | Aporte a Unidad 2. |
 | 2026-10-11 | `eb497cc2e60db1dd9e2df7397797855d142ce663` | Privacidad/agregación de `proponer`; 91 añadidas/7 borradas (98 authored/churn). | Unidad 2 cerrada en core. |
+| 2026-10-11 | `010ffaf976e8366f9f724989201b5f9cff488bec` | Añade opt-in `layout.parent_key` y carga configurada de `Parent`. | Inicio de Unidad 3. |
+| 2026-10-11 | `a79075172ce1a48e000eadfddde7a86cf56705ca` | Cubre semánticas de carga de `Parent` explícito e inferido. | Evidencia focal de Unidad 3. |
+| 2026-10-11 | `9b6243172ea591e7577e56dcff31535917030eb5` | Valida la gramática de `parent_key` en frontmatter. | Hardening del opt-in. |
+| 2026-10-11 | `b6dbf17467b97175c4380ad3f05208c7883f2b08` | Añade roundtrip del frontmatter `Parent` explícito. | Serialización de nodo y recarga. |
+| 2026-10-11 | `0ac65d8a7f48d1f7f1376c777c3e3ae2db785ed5` | Valida serialización en memoria de candidatos y overrides `Parent`. | Núcleo funcional de Unidad 3. |
+| 2026-10-11 | `7dc774726fe1ef89e06110af067cc2d2c37bff6e` | Cubre casos límite del serializador de candidatos `Parent`. | Complementa roundtrip, errores y redacción. |
+| 2026-10-11 | `27289a9a14d5fba8bc0e7b61726e58069bf5bd39` | Añade harness release de serialización `Parent`. | 1.791 ms para 1.000 cambios; solo mide `serializar_candidato`. |
 | 2026-10-11 | Verificación en HEAD `f42cdb9` | Workspace, clippy, fmt y frontera pública pasan en el HEAD de código; enlaces, frontera, fmt y diff pasan tras editar los planes. | Aprobada; no incluye medición de rendimiento. |
 | 2026-10-11 | Verificación en HEAD `826b381` | `delta_aristas` 14/14, `candidato_delta` 3/3, workspace, clippy, fmt y frontera pública pasan; diff y enlaces pasan tras editar los planes. | Aprobada; runtime sigue pendiente. |
 | 2026-10-11 | Verificación en HEAD `59dc0dd` | `candidato_delta` 3/3, `delta_aristas` 14/14, `ext_transaccional` 10/10, `ext_roundtrip` 3/3; workspace, clippy, fmt y frontera pública pasan. Tras editar, enlaces locales y `git diff --check` pasan. | Unidad 1 cerrada; fase 04 sigue en curso. |
 | 2026-10-11 | Verificación en HEAD `dfc359f` | `conflictos_delta` 13/13; workspace, clippy, fmt, frontera pública, enlaces locales y `git diff --check` pasan. | Avance parcial de Unidad 2; no se cierra veredicto ni invariantes. |
 | 2026-10-11 | Verificación en HEAD `eb497cc` | `nodo_parent_transaccional` 13/13, `conflictos_delta` 13/13, `proponer_preflight` 4/4, `proponer_transaccional` 10/10; workspace, clippy, fmt y frontera pública pasan; enlaces locales y diff tras editar. | Unidad 2 cerrada en core; persistencia Parent y resto de fase 04 pendientes. |
+| 2026-10-11 | Verificación en HEAD `27289a9` | `cargo test --locked -p universo-okf --test padre_persistible` 16 passed/1 ignored; `cargo test --locked --workspace --all-targets`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check` y `python tools/check_public_boundary.py` pasan. | Unidad 3 cerrada para carga y serialización en memoria; apply/publicación siguen pendientes. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
-| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada como unidad; Unidad 2 añadió `Parent`/`HasLab` nodo y propuesta core. Construcción `Type`, persistencia `Parent`, stale y publicación siguen fuera |
-| 2 | Core `nodos`, `conflictos` y `propuesta`: Parent/HasLab de nodo, conflictos funcionales y veredicto puro | Cerrada en core; persistencia Parent queda en Unidad 3; Type en `proponer`, filesystem, stale y CLI siguen pendientes |
-| 3–4 | OKF `padre_persistible`, `snapshot_transaccional` | Pendiente |
+| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada como unidad; Unidad 2 añadió `Parent`/`HasLab` nodo y propuesta core. Construcción `Type`, publicación filesystem, stale y CLI siguen fuera |
+| 2 | Core `nodos`, `conflictos` y `propuesta`: Parent/HasLab de nodo, conflictos funcionales y veredicto puro | Cerrada en core; Unidad 3 añade carga/serialización `Parent` en memoria; `Type` en `proponer`, filesystem, stale y CLI siguen pendientes |
+| 3 | OKF `padre_persistible`: carga optativa y serialización determinista de `Parent` a documentos en memoria | Cerrada; no incluye escritura en filesystem ni publicación |
+| 4 | OKF `snapshot_transaccional`: framing estable, replay y detección `stale` | Pendiente |
 | 5–7 | `writer_lock_transaccional`, `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 

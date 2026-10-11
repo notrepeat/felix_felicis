@@ -12,8 +12,8 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0, 1 y 2 completadas; `cargo test --workspace` pasa en HEAD `eb497cc`. |
-| Foco actual | Fase 04, Unidad 3: persistencia de `Parent`; el hardening de presupuesto agregado del evaluador también queda pendiente. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0–3 completadas en sus alcances documentados; verificación de workspace/clippy en HEAD `27289a9`. |
+| Foco actual | Fase 04, Unidad 4: snapshot y detección `stale`; también siguen pendientes `Type`, publicación filesystem y hardening del presupuesto agregado del evaluador. |
 | Última actualización | 2026-10-11 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0, 1 y 2 completadas en core: candidato `Parent`/`HasLab` de nodo, conflictos y `proponer`. `Parent` aún no se persiste; `Type` sigue técnico en `proponer`. Stale, filesystem, lock, recovery y CLI siguen pendientes. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0–3: candidato `Parent`/`HasLab` de nodo, conflictos, `proponer` y carga/serialización de `Parent` a documentos en memoria con opt-in. Unidad 3 no publica archivos. `Type`, snapshot/stale, filesystem, lock, staging, recovery y CLI siguen pendientes. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: continuar la Unidad 3 de [04 — Operación transaccional](04-operacion-transaccional.md) y persistir `Parent` según el contrato fijado. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
+Foco actual: continuar la Unidad 4 de [04 — Operación transaccional](04-operacion-transaccional.md), snapshot y detección `stale`. La Unidad 3 genera documentos de candidato en memoria; apply, escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -167,6 +167,13 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `9607a9a8191bbba3ae334178f5a61147359dc48e` | Clasificación técnica de `HasLab` incompleto | 49 añadidas/22 borradas (71 authored/churn). |
 | `12bcc314918a4b4738b582475a3e0b1d33ed5469` | Precedencia técnica y casos `HasLab` | 185 añadidas/37 borradas (222 authored/churn). |
 | `eb497cc2e60db1dd9e2df7397797855d142ce663` | Privacidad y agregación de `proponer` | 91 añadidas/7 borradas (98 authored/churn). |
+| `010ffaf976e8366f9f724989201b5f9cff488bec` | Añade opt-in `layout.parent_key` y carga configurada de `Parent`. |
+| `a79075172ce1a48e000eadfddde7a86cf56705ca` | Cubre carga de `Parent` explícito e inferido. |
+| `9b6243172ea591e7577e56dcff31535917030eb5` | Valida la gramática de `parent_key`. |
+| `b6dbf17467b97175c4380ad3f05208c7883f2b08` | Añade roundtrip de frontmatter `Parent` explícito. |
+| `0ac65d8a7f48d1f7f1376c777c3e3ae2db785ed5` | Valida serialización en memoria de candidatos y overrides `Parent`. |
+| `7dc774726fe1ef89e06110af067cc2d2c37bff6e` | Cubre casos límite del serializador de candidatos `Parent`. |
+| `27289a9a14d5fba8bc0e7b61726e58069bf5bd39` | Añade runtime harness; 1.791 ms en `serializar_candidato` para 1.000 cambios. |
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
@@ -195,8 +202,9 @@ Unidad 2 quedó cerrada en core. En HEAD `eb497cc` pasan
 fmt y frontera pública también pasan, y los enlaces locales y diff pasan tras
 editar los planes. La propuesta pura separa error técnico, conflicto funcional
 y rechazo por invariantes; expande/evalúa sobre el candidato y redacta la
-procedencia. `Parent` y `HasLab` de nodo se construyen en core, pero `Parent`
-no se persiste hasta Unidad 3. `Type` sigue técnico/unsupported en `proponer`
+procedencia. `Parent` y `HasLab` de nodo se construyen en core. Unidad 3 añade
+carga y serialización en memoria de `Parent` con `layout.parent_key`; no escribe
+archivos ni publica cambios. `Type` sigue técnico/unsupported en `proponer`
 y solo tiene detector standalone; los conflictos `Ext` siguen técnicos según
 Unidad 1. La incidencia v1 no es representable.
 
@@ -205,6 +213,21 @@ clases resumen y dos muestras únicas orientativas; confirma
 `snapshot_unchanged=true` sin emitir hashes. El presupuesto de evaluación es
 por fórmula, no una cota agregada por propuesta: hardening y medición global
 siguen pendientes, sin promesa de costo total. Todos los commits de los dos
-slices recientes se mantuvieron bajo 400 líneas authored/churn. Fase 04 sigue
-en curso y el progreso maestro permanece en 3/9; el siguiente paso es Unidad 3,
-persistencia `Parent` bajo el opt-in `layout.parent_key`.
+slices recientes se mantuvieron bajo 400 líneas authored/churn.
+
+Fase 04 sigue en curso y el progreso maestro permanece en 3/9. Unidad 3 queda
+cerrada en su límite de carga/serialización en memoria. En HEAD `27289a9`,
+`cargo test --locked -p universo-okf --test padre_persistible` pasó 16 casos y
+dejó 1 runtime harness ignorado; `cargo test --locked --workspace --all-targets`,
+`cargo clippy --locked --workspace --all-targets -- -D warnings`,
+`cargo fmt --all -- --check` y `python tools/check_public_boundary.py` también
+pasan. El harness release midió 1.791 ms para exactamente 1.000 cambios y
+1.000 overrides en Windows `x86_64-pc-windows-msvc` con Rust/Cargo 1.88.0; el
+intervalo mide solo `serializar_candidato`, con setup, segundo pase y recarga
+fuera. La muestra es orientativa y no constituye SLA; no mide escritura ni
+publicación filesystem.
+
+El siguiente paso es Unidad 4, snapshot/stale. Apply/publicador filesystem,
+hashes antes/después, lock, staging, journal/recovery, CLI y soporte
+transaccional de `Type` siguen pendientes. El presupuesto agregado de evaluación
+tampoco tiene aún una cota global.
