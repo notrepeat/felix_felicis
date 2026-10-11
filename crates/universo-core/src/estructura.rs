@@ -349,6 +349,17 @@ impl Estructura {
         Ok(())
     }
 
+    /// Quita un atributo ya validado por una operación transaccional.
+    pub(crate) fn quitar_atributo(&mut self, nodo: NodoId, predicado: &str) {
+        let vacio = self.atributos.get_mut(nodo).is_some_and(|atributos| {
+            atributos.remove(predicado);
+            atributos.is_empty()
+        });
+        if vacio {
+            self.atributos.remove(nodo);
+        }
+    }
+
     /// Los atributos asignados a un nodo (mapa vacío si no tiene o el id
     /// está stale).
     pub fn atributos(&self, nodo: NodoId) -> &BTreeMap<String, String> {

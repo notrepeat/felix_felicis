@@ -113,10 +113,9 @@ fn operacion_no_soportada_rechaza_sin_reflejar_datos_privados() {
     let (entrada, _, _, arista) = base();
     let antes = entrada.atomos();
     let delta = Delta::nuevo(
-        [Atomo::Ext {
-            predicado: "PRIVATE_PREDICATE".into(),
+        [Atomo::Type {
             sujeto: p("n/PRIVATE_PATH"),
-            constante: "PRIVATE_VALUE".into(),
+            sorte: Sorte::nuevo("PRIVATE_TYPE"),
         }],
         [edge(&entrada, arista)],
     )
@@ -127,12 +126,12 @@ fn operacion_no_soportada_rechaza_sin_reflejar_datos_privados() {
         error,
         ErrorCandidato::UnsupportedOperation {
             lado: LadoDelta::Add,
-            clase: ClaseOperacion::Ext
+            clase: ClaseOperacion::Type
         }
     ));
     let texto = format!("{error} {error:?}");
     assert!(texto.contains("unsupported_operation"));
-    for canario in ["PRIVATE_PREDICATE", "PRIVATE_PATH", "PRIVATE_VALUE"] {
+    for canario in ["PRIVATE_PATH", "PRIVATE_TYPE"] {
         assert!(!texto.contains(canario));
     }
     assert_eq!(entrada.atomos(), antes);
@@ -165,14 +164,6 @@ fn operaciones_fuera_de_alcance_se_rechazan_en_ambos_lados_y_sin_mutar() {
             },
             ClaseOperacion::HasLab,
         ),
-        (
-            Atomo::Ext {
-                predicado: "PRIVATE_PREDICATE".into(),
-                sujeto: p("n/PRIVATE_SUBJECT"),
-                constante: "PRIVATE_VALUE".into(),
-            },
-            ClaseOperacion::Ext,
-        ),
     ];
 
     for (atomo, clase) in casos {
@@ -196,9 +187,6 @@ fn operaciones_fuera_de_alcance_se_rechazan_en_ambos_lados_y_sin_mutar() {
                 "PRIVATE_PARENT",
                 "PRIVATE_NODE",
                 "PRIVATE_LABEL",
-                "PRIVATE_PREDICATE",
-                "PRIVATE_SUBJECT",
-                "PRIVATE_VALUE",
             ] {
                 assert!(!texto.contains(canario));
             }

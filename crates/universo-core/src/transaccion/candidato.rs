@@ -4,7 +4,7 @@ use crate::{
     AristaId, Atomo, BundlePath, Delta, Estructura, Etiqueta, IdArista, LadoDelta, Sorte, Sujeto,
 };
 
-use super::aristas;
+use super::{aristas, ext};
 
 /// Clase pública de operación, sin incluir identidades ni valores del átomo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,7 +86,8 @@ impl Candidato {
     }
 }
 
-/// Construye un candidato aislado con retiros y altas `Edge`/`HasLab` de arista.
+/// Construye un candidato aislado con retiros y altas `Edge`, `HasLab` de
+/// arista y `Ext`.
 pub fn construir_candidato(
     snapshot: &Estructura,
     delta: &Delta,
@@ -95,6 +96,7 @@ pub fn construir_candidato(
         if !matches!(
             atomo,
             Atomo::Edge { .. }
+                | Atomo::Ext { .. }
                 | Atomo::HasLab {
                     sujeto: Sujeto::Arista(_),
                     ..
@@ -110,6 +112,7 @@ pub fn construir_candidato(
         if !matches!(
             atomo,
             Atomo::Edge { .. }
+                | Atomo::Ext { .. }
                 | Atomo::HasLab {
                     sujeto: Sujeto::Arista(_),
                     ..
@@ -121,6 +124,10 @@ pub fn construir_candidato(
             });
         }
     }
+
+    // Las operaciones Ext y sus handles se resuelven contra el mismo
+    // snapshot antes de modificar el candidato aislado.
+    let cambios_ext = ext::preparar(snapshot, delta)?;
 
     let mut aristas_retiradas = HashSet::new();
     let mut etiquetas_retiradas = HashMap::<AristaId, Etiqueta>::new();
@@ -151,6 +158,7 @@ pub fn construir_candidato(
                 }
                 etiquetas_retiradas.insert(handle, etiqueta.clone());
             }
+            Atomo::Ext { .. } => {}
             _ => unreachable!("las operaciones se validaron antes de resolver handles"),
         }
     }
@@ -159,6 +167,7 @@ pub fn construir_candidato(
     aristas::retirar_lote(&mut estructura, &handles)
         .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
     aplicar_altas(&mut estructura, delta.agregar(), &etiquetas_retiradas)?;
+    ext::aplicar(&mut estructura, &cambios_ext)?;
     Ok(Candidato { estructura })
 }
 
@@ -196,6 +205,7 @@ fn aplicar_altas(
                     .or_default()
                     .push(atomo);
             }
+            Atomo::Ext { .. } => continue,
             Atomo::HasLab {
                 sujeto: Sujeto::Arista(id),
                 etiqueta,
