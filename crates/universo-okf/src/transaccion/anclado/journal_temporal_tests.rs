@@ -157,6 +157,107 @@ fn cargar_journal_rechaza_parent_distinto_sin_revelar_identidad() {
 }
 
 #[test]
+fn cargar_journal_temporal_redondo_prepared_y_siguiente_estado_con_identidad_del_handle() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let parent = capability.identidad_parent.journal_identity().unwrap();
+    let mut expected = journal_prueba(parent);
+    let identity_written = capability.crear_nuevo(&expected.encode().unwrap()).unwrap();
+
+    let (identity_prepared, prepared) = capability.cargar_temporal().unwrap();
+    assert_eq!(identity_prepared, identity_written);
+    assert_eq!(prepared, expected);
+    assert_eq!(prepared.state(), JournalState::Prepared);
+    assert_eq!(
+        format!("{identity_prepared:?}"),
+        "IdentidadArchivoJournal([redacted])"
+    );
+    assert_eq!(format!("{prepared:?}"), "Journal([redacted])");
+
+    expected.advance(JournalState::BackupReady).unwrap();
+    fs::write(nombre_temporal(temp.path()), expected.encode().unwrap()).unwrap();
+
+    let (identity_next, next) = capability.cargar_temporal().unwrap();
+    assert_eq!(identity_next, identity_written);
+    assert_eq!(next, expected);
+    assert_eq!(next.state(), JournalState::BackupReady);
+}
+
+#[test]
+fn cargar_journal_temporal_ausente_es_precondicion_source_missing() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+
+    let error = capability.cargar_temporal().unwrap_err();
+
+    assert_eq!(error, ErrorJournalAnclado::SourceMissing);
+    assert_eq!(error.to_string(), "journal_source_missing");
+    assert!(!format!("{error:?}").contains(root.to_string_lossy().as_ref()));
+    assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn cargar_journal_temporal_rechaza_malformado_no_canonico_y_oversize_redactado() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let parent = capability.identidad_parent.journal_identity().unwrap();
+    let canonical = journal_prueba(parent).encode().unwrap();
+    let malformed = b"malformed-temp-journal-canary".to_vec();
+    let noncanonical = [b" ".as_slice(), canonical.as_slice()].concat();
+
+    for bytes in [malformed, noncanonical] {
+        fs::write(nombre_temporal(temp.path()), &bytes).unwrap();
+        let error = capability.cargar_temporal().unwrap_err();
+        assert_eq!(
+            error,
+            ErrorJournalAnclado::InvalidJournal(JournalError::Malformed)
+        );
+        assert_eq!(error.to_string(), "journal_malformed");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!format!("{error:?}").contains(text.as_ref()));
+        assert!(!error.to_string().contains(text.as_ref()));
+        assert!(!format!("{error:?}").contains(root.to_string_lossy().as_ref()));
+        assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
+    }
+
+    let oversize = vec![b'x'; MAX_JOURNAL_BYTES + 1];
+    fs::write(nombre_temporal(temp.path()), &oversize).unwrap();
+    let error = capability.cargar_temporal().unwrap_err();
+    assert_eq!(error, ErrorJournalAnclado::TooLarge);
+    assert_eq!(error.to_string(), "journal_too_large");
+    assert!(!format!("{error:?}").contains(root.to_string_lossy().as_ref()));
+    assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn cargar_journal_temporal_rechaza_parent_distinto_sin_revelar_bytes() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let identity = capability.identidad_parent.journal_identity().unwrap();
+    let wrong_parent = identidad_distinta(&identity);
+    let bytes = journal_prueba(wrong_parent).encode().unwrap();
+    fs::write(nombre_temporal(temp.path()), &bytes).unwrap();
+
+    let error = capability.cargar_temporal().unwrap_err();
+
+    assert_eq!(error, ErrorJournalAnclado::ParentIdentityMismatch);
+    assert_eq!(error.to_string(), "journal_parent_identity_mismatch");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(!format!("{error:?}").contains(root.to_string_lossy().as_ref()));
+    assert!(!format!("{error:?}").contains(text.as_ref()));
+    assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
+    assert!(!error.to_string().contains(text.as_ref()));
+}
+
+#[test]
 fn journal_canonico_lee_desde_basename_de_raiz_y_devuelve_identidad_y_bytes() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("knowledge.v2");

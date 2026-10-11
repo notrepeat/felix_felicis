@@ -214,7 +214,10 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         self.validar_parent()?;
         let archivo =
             abrir_entrada_relativa(&self.parent, &self.nombre, TipoEntradaAnclada::Archivo)
-                .map_err(mapear_error_directorio)?;
+                .map_err(|error| match error {
+                    ErrorDirectorioAnclado::EntradaAusente => ErrorJournalAnclado::SourceMissing,
+                    otro => mapear_error_directorio(otro),
+                })?;
         validar_archivo_regular(&archivo)?;
         let identidad = identidad_archivo(&archivo)?;
         let mut bytes = Vec::with_capacity(MAX_JOURNAL_BYTES + 1);
@@ -265,7 +268,26 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         let Some((identidad_archivo, bytes)) = self.abrir_y_leer_canonico()? else {
             return Ok(None);
         };
-        let journal = Journal::parse(&bytes).map_err(ErrorJournalAnclado::InvalidJournal)?;
+        self.cargar_journal_leido(identidad_archivo, &bytes)
+            .map(Some)
+    }
+
+    /// Carga el temporal fijo y lo liga a la identidad del parent retenido.
+    /// La ausencia es un error de precondición; la identidad y el journal
+    /// corresponden al mismo handle y a los mismos bytes leídos.
+    pub(crate) fn cargar_temporal(
+        &self,
+    ) -> Result<(IdentidadArchivoJournal, Journal), ErrorJournalAnclado> {
+        let (identidad_archivo, bytes) = self.abrir_y_leer()?;
+        self.cargar_journal_leido(identidad_archivo, &bytes)
+    }
+
+    fn cargar_journal_leido(
+        &self,
+        identidad_archivo: IdentidadArchivoJournal,
+        bytes: &[u8],
+    ) -> Result<(IdentidadArchivoJournal, Journal), ErrorJournalAnclado> {
+        let journal = Journal::parse(bytes).map_err(ErrorJournalAnclado::InvalidJournal)?;
         let parent_esperado = self
             .identidad_parent
             .journal_identity()
@@ -273,7 +295,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         if journal.parent() != &parent_esperado {
             return Err(ErrorJournalAnclado::ParentIdentityMismatch);
         }
-        Ok(Some((identidad_archivo, journal)))
+        Ok((identidad_archivo, journal))
     }
 
     fn validar_parent(&self) -> Result<(), ErrorJournalAnclado> {
