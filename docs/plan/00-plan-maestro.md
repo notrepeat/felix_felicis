@@ -12,9 +12,9 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fases 01–03 cerradas con evidencia reproducible. `cargo test --workspace` pasa en HEAD `ccd54b5`. |
-| Foco actual | Fase 04: cerrar root canónico, orden de aristas/Ext/labels, API core/OKF y privacidad CLI. |
-| Última actualización | 2026-10-10 |
+| Progreso | 3/9 fases completas; fases 01–03 cerradas y fase 04 sigue en curso. Unidad 0 está cerrada con evidencia de implementación en `a54688c`; `cargo test --workspace` pasa. |
+| Foco actual | Fase 04, Unidad 1: candidato, Edge y Ext. |
+| Última actualización | 2026-10-11 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Ningún rechazo modifica el estado vigente. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidad 0 verifica el contrato typed y el parser JSON v1; la transacción completa sigue pendiente. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -133,3 +133,26 @@ abstracta y valores booleanos por instancia, ordinales/posiciones de fuente,
 conteos derivados y métricas deterministas. Errores v2 redactan paths y
 locations; errores legacy v1 conservan paths por compatibilidad. Un error de
 presupuesto de explicación devuelve status `error` y summary nulo.
+
+## Evidencia de fase 04 (en curso)
+
+| Commit | Alcance | Evidencia |
+|---|---|---|
+| `1074902ec4687af435f2772de77febd161a59e68` | Modelo typed y canonicalizador core | 240 líneas añadidas; `delta_transaccional` pasa 6 casos focalizados, incluidos deduplicación y rechazo de `Ext` con predicados reservados. |
+| `a54688ca274fa46f1a6a438df7988c13ef1176de` | Parser y serializador JSON v1 en OKF | 247 líneas añadidas; `delta_json_v1` pasa 5 casos focalizados, incluidos rechazo de duplicados y cargas 1/100/10.000. |
+
+El objeto JSON tiene la forma exacta
+`{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
+canonicaliza y deduplica repeticiones; el parser JSON rechaza átomos repetidos,
+claves ausentes o desconocidas y claves duplicadas. Los predicados reservados
+`Type`, `Edge`, `Parent` y `HasLab` también se rechazan como `Ext`.
+
+La Unidad 0 planificada quedó en dos commits revisables, ambos bajo 400 líneas
+y sin cambio de alcance. `cargo test --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all -- --check` y `python tools/check_public_boundary.py` pasaron
+en el commit de implementación `a54688c`. Tras editar los planes pasaron la
+verificación de enlaces Markdown locales, frontera pública, fmt y
+`git diff --check`. La prueba de carga verifica roundtrip, cantidad y bytes
+serializados; no recoge mediciones de µs/op. Solo se cierra Unidad 0: la fase
+04 conserva estado en curso y el progreso maestro permanece en 3/9.

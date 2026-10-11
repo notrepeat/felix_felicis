@@ -29,6 +29,12 @@ implementados.
 - `add`/`remove` es un parche transaccional explícito sobre un snapshot; es
   distinto de AGM/R y no afirma minimalidad ni prioridad. No se infieren
   operaciones a partir de un resultado deseado.
+- El JSON v1 tiene la forma exacta
+  `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
+  canonicaliza y deduplica átomos repetidos; el parser JSON rechaza átomos
+  repetidos en cada lista, claves desconocidas o ausentes y claves duplicadas.
+  No se aceptan colisiones `Ext` con los predicados reservados `Type`, `Edge`,
+  `Parent` y `HasLab`.
 - Canonicalizar, deduplicar y ordenar las operaciones antes de evaluar. Una
   misma identidad canónica en `add` y `remove` es solapamiento y se rechaza.
   `apply` requiere el snapshot esperado; una identidad distinta es `stale`.
@@ -130,7 +136,7 @@ Chain strategy: feature-branch-chain
 
 ## Unidades de trabajo
 
-- [ ] 0 — Contrato typed/canonicalizador core y parser JSON v1 OKF:
+- [x] 0 — Contrato typed/canonicalizador core y parser JSON v1 OKF:
   `crates/universo-core/src/delta.rs`, `crates/universo-core/src/lib.rs`,
   `crates/universo-okf/src/delta.rs`.
   Test `crates/universo-core/tests/delta_transaccional.rs`
@@ -138,9 +144,15 @@ Chain strategy: feature-branch-chain
   el modelo/canonicalizador typed, `add`, `remove`, solapamiento y orden.
   `crates/universo-okf/tests/delta_json_v1.rs`
   (`cargo test -p universo-okf --test delta_json_v1`) prueba parseo/errores
-  del JSON v1. Runtime: 1/100/10.000 ops, µs/op y bytes parseados; rollback:
-  rechazar delta completo antes de crear candidato. Objetivo por slice:
-  <400 líneas authored.
+  del JSON v1. Los 6 casos de core cubren orden/canonicalización, deduplicación,
+  solapamiento, redacción y predicados reservados; los 5 de OKF cubren forma y
+  claves JSON, duplicados, roundtrip, orden canónico y cargas de 1/100/10.000
+  operaciones. Esa carga valida roundtrip, cantidad y bytes serializados; no
+  registra µs/op. El parser/canonicalizador rechaza el delta completo antes de
+  construir el candidato, que corresponde a Unidad 1. Completada en los
+  commits `1074902ec4687af435f2772de77febd161a59e68` (240 líneas añadidas) y
+  `a54688ca274fa46f1a6a438df7988c13ef1176de` (247 líneas añadidas), dos
+  commits revisables de menos de 400 líneas cada uno y sin cambio de alcance.
 - [ ] 1 — Candidate, Edge y Ext: `crates/universo-core/src/transaccion/candidato.rs`,
   `crates/universo-core/src/transaccion/aristas.rs`,
   `crates/universo-core/src/transaccion/ext.rs`.
@@ -331,11 +343,11 @@ cargo test -p universo-cli --test docs_transaccional
 
 | Fecha | Commit/PR | Evidencia | Resultado |
 |---|---|---|---|
-| — | — | — | — |
+| 2026-10-11 | `1074902ec4687af435f2772de77febd161a59e68`, `a54688ca274fa46f1a6a438df7988c13ef1176de` | Unidad 0: 6 casos core y 5 OKF; workspace/clippy pasan en HEAD de implementación; fmt/frontera, enlaces locales y diff pasan tras editar los planes. | Aprobada; la prueba de carga no mide µs/op. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
-| 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización y solapamiento | Pendiente |
+| 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
 | 1–4 | Core `candidato_delta`, `delta_aristas` (≥11 paralelas #2/#10), `ext_transaccional`, `conflictos_delta`; OKF `ext_roundtrip`, `padre_persistible`, `snapshot_transaccional` | Pendiente |
 | 5–7 | `writer_lock_transaccional`, `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
