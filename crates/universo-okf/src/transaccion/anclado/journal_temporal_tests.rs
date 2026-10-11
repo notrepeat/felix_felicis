@@ -1,4 +1,7 @@
 use super::*;
+use crate::transaccion::journal::{
+    ArtifactFingerprint, DirectoryIdentity, Journal, JournalError, JournalState, RawTreeDigest,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
@@ -21,6 +24,51 @@ fn nombre_journal(root: &Path) -> PathBuf {
         .to_path_buf()
 }
 
+fn identidad_prueba(id: u64) -> DirectoryIdentity {
+    #[cfg(unix)]
+    {
+        DirectoryIdentity::unix(7, id)
+    }
+    #[cfg(windows)]
+    {
+        DirectoryIdentity::windows(7, format!("{id:032x}"))
+    }
+}
+
+fn fingerprint_prueba(id: u64, byte: char) -> ArtifactFingerprint {
+    ArtifactFingerprint::new(
+        identidad_prueba(id),
+        RawTreeDigest::from_hex(byte.to_string().repeat(64)).unwrap(),
+    )
+}
+
+fn journal_prueba(parent: DirectoryIdentity) -> Journal {
+    Journal::new(
+        "0123456789abcdef0123456789abcdef",
+        parent,
+        fingerprint_prueba(2, 'a'),
+        fingerprint_prueba(3, 'b'),
+    )
+    .unwrap()
+}
+
+fn identidad_distinta(identity: &DirectoryIdentity) -> DirectoryIdentity {
+    #[cfg(unix)]
+    {
+        let DirectoryIdentity::Unix { device, inode } = identity else {
+            unreachable!("journal identity uses the current platform");
+        };
+        DirectoryIdentity::unix(device ^ 1, *inode)
+    }
+    #[cfg(windows)]
+    {
+        let DirectoryIdentity::Windows { volume, file_id } = identity else {
+            unreachable!("journal identity uses the current platform");
+        };
+        DirectoryIdentity::windows(volume ^ 1, file_id.clone())
+    }
+}
+
 #[test]
 fn journal_canonico_ausente_devuelve_none() {
     let temp = tempdir().unwrap();
@@ -29,6 +77,77 @@ fn journal_canonico_ausente_devuelve_none() {
     let capability = lock.journal_temporal_anclado().unwrap();
 
     assert_eq!(capability.abrir_y_leer_canonico().unwrap(), None);
+    assert_eq!(capability.cargar_canonico().unwrap(), None);
+}
+
+#[test]
+fn cargar_journal_prepared_canonico_lo_liga_al_parent_anclado() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let parent = capability.identidad_parent.journal_identity().unwrap();
+    let expected = journal_prueba(parent.clone());
+    let bytes = expected.encode().unwrap();
+    fs::write(nombre_journal(&root), &bytes).unwrap();
+
+    let actual = capability.cargar_canonico().unwrap().unwrap();
+
+    assert_eq!(actual, expected);
+    assert!(actual.parent() == &parent);
+    assert_eq!(actual.state(), JournalState::Prepared);
+    assert_eq!(format!("{actual:?}"), "Journal([redacted])");
+}
+
+#[test]
+fn cargar_journal_rechaza_malformado_y_no_canonico_sin_revelar_bytes() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let parent = capability.identidad_parent.journal_identity().unwrap();
+    let canonical = journal_prueba(parent).encode().unwrap();
+    let malformed = b"malformed-journal-bytes-canary".to_vec();
+    let noncanonical = [b" ".as_slice(), canonical.as_slice()].concat();
+
+    for bytes in [malformed, noncanonical] {
+        fs::write(nombre_journal(&root), &bytes).unwrap();
+        let error = capability.cargar_canonico().unwrap_err();
+        assert_eq!(
+            error,
+            ErrorJournalAnclado::InvalidJournal(JournalError::Malformed)
+        );
+        assert_eq!(error.to_string(), "journal_malformed");
+        let debug = format!("{error:?}");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!debug.contains(text.as_ref()));
+        assert!(!error.to_string().contains(text.as_ref()));
+        assert!(!debug.contains(root.to_string_lossy().as_ref()));
+        assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
+    }
+}
+
+#[test]
+fn cargar_journal_rechaza_parent_distinto_sin_revelar_identidad() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let identity = capability.identidad_parent.journal_identity().unwrap();
+    let wrong_parent = identidad_distinta(&identity);
+    let bytes = journal_prueba(wrong_parent).encode().unwrap();
+    fs::write(nombre_journal(&root), &bytes).unwrap();
+
+    let error = capability.cargar_canonico().unwrap_err();
+
+    assert_eq!(error, ErrorJournalAnclado::ParentIdentityMismatch);
+    assert_eq!(error.to_string(), "journal_parent_identity_mismatch");
+    let debug = format!("{error:?}");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(!debug.contains(root.to_string_lossy().as_ref()));
+    assert!(!debug.contains(text.as_ref()));
+    assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
+    assert!(!error.to_string().contains(text.as_ref()));
 }
 
 #[test]
@@ -94,6 +213,10 @@ fn acepta_exactamente_max_journal_bytes_al_escribir_y_leer() {
     fs::write(journal, &bytes).unwrap();
     let (_, canonical_read) = capability.abrir_y_leer_canonico().unwrap().unwrap();
     assert_eq!(canonical_read, bytes);
+    assert_eq!(
+        capability.cargar_canonico().unwrap_err(),
+        ErrorJournalAnclado::InvalidJournal(JournalError::Malformed)
+    );
 }
 
 #[test]
@@ -127,6 +250,7 @@ fn rechaza_max_mas_uno_antes_de_crear_y_al_leer() {
     assert_eq!(error.codigo(), "journal_too_large");
     assert_eq!(error.to_string(), "journal_too_large");
     assert!(!format!("{error:?}").contains("bundle"));
+    assert_eq!(capability.cargar_canonico().unwrap_err(), error);
 }
 
 #[test]
@@ -156,6 +280,18 @@ fn codigos_de_error_journal_son_estables_y_redactados() {
         (
             ErrorJournalAnclado::RemoteUnsupported,
             "journal_remote_unsupported",
+        ),
+        (
+            ErrorJournalAnclado::ParentIdentityUnavailable,
+            "journal_parent_identity_unavailable",
+        ),
+        (
+            ErrorJournalAnclado::ParentIdentityMismatch,
+            "journal_parent_identity_mismatch",
+        ),
+        (
+            ErrorJournalAnclado::InvalidJournal(JournalError::Malformed),
+            "journal_malformed",
         ),
     ];
 
@@ -217,6 +353,11 @@ fn colision_con_directorio_no_lo_reemplaza_ni_sigue_y_preserva_canary() {
         capability.abrir_y_leer_canonico().unwrap_err(),
         ErrorJournalAnclado::RegularFileRequired
     );
+    let error = capability.cargar_canonico().unwrap_err();
+    assert_eq!(error, ErrorJournalAnclado::RegularFileRequired);
+    assert_eq!(error.to_string(), "journal_regular_file_required");
+    assert!(!format!("{error:?}").contains(root.to_string_lossy().as_ref()));
+    assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
     assert_eq!(
         fs::read(journal.join("canary")).unwrap(),
         b"canonical-directory-canary"
@@ -251,6 +392,11 @@ fn symlink_existente_no_se_reemplaza_ni_se_sigue_y_preserva_canary() {
         capability.abrir_y_leer_canonico().unwrap_err(),
         ErrorJournalAnclado::ReparseNotAllowed
     );
+    let error = capability.cargar_canonico().unwrap_err();
+    assert_eq!(error, ErrorJournalAnclado::ReparseNotAllowed);
+    assert_eq!(error.to_string(), "journal_reparse_not_allowed");
+    assert!(!format!("{error:?}").contains(root.to_string_lossy().as_ref()));
+    assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
     assert_eq!(fs::read(&target).unwrap(), b"outside-canary");
 }
 
@@ -302,6 +448,11 @@ fn junction_existente_no_se_reemplaza_ni_se_sigue_y_preserva_canary() {
         capability.abrir_y_leer_canonico().unwrap_err(),
         ErrorJournalAnclado::ReparseNotAllowed
     );
+    let error = capability.cargar_canonico().unwrap_err();
+    assert_eq!(error, ErrorJournalAnclado::ReparseNotAllowed);
+    assert_eq!(error.to_string(), "journal_reparse_not_allowed");
+    assert!(!format!("{error:?}").contains(root.to_string_lossy().as_ref()));
+    assert!(!error.to_string().contains(root.to_string_lossy().as_ref()));
     assert_eq!(fs::read(target.join("canary")).unwrap(), b"outside-canary");
 }
 

@@ -15,7 +15,7 @@ use super::{
     DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, TipoEntradaAnclada,
     metadata_directorio, validar_componente,
 };
-use crate::transaccion::journal::MAX_JOURNAL_BYTES;
+use crate::transaccion::journal::{Journal, JournalError, MAX_JOURNAL_BYTES};
 use crate::transaccion::lock::LockEscritura;
 
 /// Error estable y redactado para operaciones sobre archivos del journal.
@@ -31,6 +31,9 @@ pub(crate) enum ErrorJournalAnclado {
     IdentityMismatch,
     CanonicalConflict,
     RemoteUnsupported,
+    ParentIdentityUnavailable,
+    ParentIdentityMismatch,
+    InvalidJournal(JournalError),
 }
 
 impl ErrorJournalAnclado {
@@ -46,6 +49,9 @@ impl ErrorJournalAnclado {
             Self::IdentityMismatch => "journal_identity_mismatch",
             Self::CanonicalConflict => "journal_canonical_conflict",
             Self::RemoteUnsupported => "journal_remote_unsupported",
+            Self::ParentIdentityUnavailable => "journal_parent_identity_unavailable",
+            Self::ParentIdentityMismatch => "journal_parent_identity_mismatch",
+            Self::InvalidJournal(error) => error.code(),
         }
     }
 }
@@ -223,6 +229,24 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             return Err(ErrorJournalAnclado::TooLarge);
         }
         Ok(Some((identidad, bytes)))
+    }
+
+    /// Carga el journal canónico y lo liga a la identidad del parent retenido.
+    /// Solo la ausencia del nombre devuelve `None`; bytes inválidos o una
+    /// identidad distinta fallan cerrados con errores estables y redactados.
+    pub(crate) fn cargar_canonico(&self) -> Result<Option<Journal>, ErrorJournalAnclado> {
+        let Some((_, bytes)) = self.abrir_y_leer_canonico()? else {
+            return Ok(None);
+        };
+        let journal = Journal::parse(&bytes).map_err(ErrorJournalAnclado::InvalidJournal)?;
+        let parent_esperado = self
+            .identidad_parent
+            .journal_identity()
+            .ok_or(ErrorJournalAnclado::ParentIdentityUnavailable)?;
+        if journal.parent() != &parent_esperado {
+            return Err(ErrorJournalAnclado::ParentIdentityMismatch);
+        }
+        Ok(Some(journal))
     }
 
     fn validar_parent(&self) -> Result<(), ErrorJournalAnclado> {
