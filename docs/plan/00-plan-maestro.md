@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidad 0 verifica el contrato typed y el parser JSON v1; la transacción completa sigue pendiente. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidad 0 cerrada; Unidad 1 tiene un avance parcial de candidato aislado y retiros Edge/HasLab; la transacción completa sigue pendiente. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -140,6 +140,9 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 |---|---|---|
 | `1074902ec4687af435f2772de77febd161a59e68` | Modelo typed y canonicalizador core | 240 líneas añadidas; `delta_transaccional` pasa 6 casos focalizados, incluidos deduplicación y rechazo de `Ext` con predicados reservados. |
 | `a54688ca274fa46f1a6a438df7988c13ef1176de` | Parser y serializador JSON v1 en OKF | 247 líneas añadidas; `delta_json_v1` pasa 5 casos focalizados, incluidos rechazo de duplicados y cargas 1/100/10.000. |
+| `2a49aed5c0c957e87abced7d0db0a2cd6c3d1677` | Candidato aislado y retiro de aristas | 364 añadidas/1 borrada (365 authored); `candidato_delta` pasa 3/3. |
+| `19d60627d0b2483a2dc5f266ceb360554f2781be` | Pruebas de retiro en lote | 203 líneas añadidas; `delta_aristas` pasa 5/5. |
+| `f42cdb929d45ffac95350cbefbc59d5d8ff042fc` | Aislamiento y rechazo fail-closed | 170 añadidas/18 borradas (188 authored). |
 
 El objeto JSON tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
@@ -156,3 +159,13 @@ verificación de enlaces Markdown locales, frontera pública, fmt y
 `git diff --check`. La prueba de carga verifica roundtrip, cantidad y bytes
 serializados; no recoge mediciones de µs/op. Solo se cierra Unidad 0: la fase
 04 conserva estado en curso y el progreso maestro permanece en 3/9.
+
+Unidad 1 tiene un avance parcial: solo se admiten retiros `Edge` y `HasLab` de
+arista resueltos a handles del snapshot; los retiros se agrupan y compactan,
+conservando labels por handle. `HasLab` requiere retirar la misma arista y la
+etiqueta exacta. El constructor rechaza los adds y las operaciones fuera de
+este alcance; aún no hay una ruta de admisión que acepte `Ext` o evalúe
+invariantes funcionales. En HEAD `f42cdb9` pasaron workspace, clippy, fmt y
+frontera pública; tras editar los planes pasaron enlaces locales, frontera,
+fmt y diff. El posible costo O(R×D) sigue sin medir; la optimización se
+decidirá con mediciones.

@@ -156,22 +156,33 @@ Chain strategy: feature-branch-chain
 - [ ] 1 — Candidate, Edge y Ext: `crates/universo-core/src/transaccion/candidato.rs`,
   `crates/universo-core/src/transaccion/aristas.rs`,
   `crates/universo-core/src/transaccion/ext.rs`.
-  Tests `crates/universo-core/tests/candidato_delta.rs`
-  (`cargo test -p universo-core --test candidato_delta`) comparan el candidato
-  y preservación de entrada; `crates/universo-core/tests/delta_aristas.rs`
-  (`cargo test -p universo-core --test delta_aristas`) cubre tres paralelas
-  con remove ordinal 0 y al menos 11 paralelas para distinguir orden numérico
-  `#2`/`#10`, retiros en órdenes distintos, labels rebasadas, reconstrucción
-  por posiciones finales/handles y add/remove determinista con ordinales
-  contiguos; `crates/universo-core/tests/ext_transaccional.rs`
-  (`cargo test -p universo-core --test ext_transaccional`) cubre replace por
-  remove+add, remove, add, sujeto nodo existente y constante del dominio
-  declarado. `crates/universo-okf/tests/ext_roundtrip.rs`
-  (`cargo test -p universo-okf --test ext_roundtrip`) verifica roundtrip
-  serializado. Runtime: 10.000 átomos base + 1.000 cambios y grupos de
-  1/100/10.000 aristas; ms y bytes candidatos. Rollback: descartar candidato.
-  Objetivo por slice:
-  <400 líneas authored.
+  Avance parcial: el core clona la estructura en un candidato aislado y admite
+  solo retiros `Edge` y `HasLab` de arista. Resuelve cada identidad contra el
+  snapshot a handles, retira en lote, compacta los grupos afectados preservando
+  el orden de supervivientes y conserva sus labels por handle. Un retiro
+  `HasLab` solo se acepta si el mismo delta retira la arista del mismo handle y
+  la etiqueta coincide exactamente. El constructor rechaza como
+  `unsupported_operation` todo `add` y toda remoción fuera de esos casos,
+  incluidos `Ext`; no hay aún una ruta de admisión que evalúe invariantes
+  funcionales.
+
+  `crates/universo-core/tests/candidato_delta.rs`
+  (`cargo test -p universo-core --test candidato_delta`) pasa 3/3 casos de
+  aislamiento, preservación de entrada y rechazo redactado de operaciones no
+  soportadas. `crates/universo-core/tests/delta_aristas.rs`
+  (`cargo test -p universo-core --test delta_aristas`) pasa 5/5 casos de
+  retiros paralelos —incluidos los ordinales 1 y 10 entre 11 aristas—,
+  compactación, orden independiente de entrada, labels por handle, fallo sin
+  mutación y condición `HasLab`/`Edge` del mismo handle. El slice aún no cubre
+  los adds con ordinales finales contiguos, ni
+  `crates/universo-core/tests/ext_transaccional.rs` y
+  `crates/universo-okf/tests/ext_roundtrip.rs`.
+
+  Runtime previsto: 10.000 átomos base + 1.000 cambios y grupos de
+  1/100/10.000 aristas, midiendo ms y bytes del candidato. No hay medidas aún:
+  resolver R retiros buscando cada identidad en una adyacencia de grado D puede
+  costar O(R×D); medir y decidir una optimización queda pendiente. Rollback
+  previsto: descartar candidato. Objetivo por slice: <400 líneas authored.
 - [ ] 2 — Conflictos funcionales: `crates/universo-core/src/transaccion/conflictos.rs`.
   Test `crates/universo-core/tests/conflictos_delta.rs`
   (`cargo test -p universo-core --test conflictos_delta`) separa
@@ -344,11 +355,16 @@ cargo test -p universo-cli --test docs_transaccional
 | Fecha | Commit/PR | Evidencia | Resultado |
 |---|---|---|---|
 | 2026-10-11 | `1074902ec4687af435f2772de77febd161a59e68`, `a54688ca274fa46f1a6a438df7988c13ef1176de` | Unidad 0: 6 casos core y 5 OKF; workspace/clippy pasan en HEAD de implementación; fmt/frontera, enlaces locales y diff pasan tras editar los planes. | Aprobada; la prueba de carga no mide µs/op. |
+| 2026-10-11 | `2a49aed5c0c957e87abced7d0db0a2cd6c3d1677` | Candidato aislado y retiro de aristas en core; 364 añadidas/1 borrada (365 authored); `candidato_delta` 3/3. | Aporte parcial a Unidad 1. |
+| 2026-10-11 | `19d60627d0b2483a2dc5f266ceb360554f2781be` | Pruebas de retiros en lote; 203 líneas añadidas; `delta_aristas` 5/5. | Aporte parcial a Unidad 1. |
+| 2026-10-11 | `f42cdb929d45ffac95350cbefbc59d5d8ff042fc` | Aislamiento y rechazo fail-closed; 170 añadidas/18 borradas (188 authored). | Aporte parcial a Unidad 1. |
+| 2026-10-11 | Verificación en HEAD `f42cdb9` | Workspace, clippy, fmt y frontera pública pasan en el HEAD de código; enlaces, frontera, fmt y diff pasan tras editar los planes. | Aprobada; no incluye medición de rendimiento. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
-| 1–4 | Core `candidato_delta`, `delta_aristas` (≥11 paralelas #2/#10), `ext_transaccional`, `conflictos_delta`; OKF `ext_roundtrip`, `padre_persistible`, `snapshot_transaccional` | Pendiente |
+| 1 | Candidato aislado; retiros `Edge` y `HasLab` de arista resueltos a handles del snapshot, en lote y con compactación/labels por handle | Parcial; adds, `Ext`, invariantes funcionales y rendimiento pendientes |
+| 2–4 | Core `ext_transaccional`, `conflictos_delta`; OKF `ext_roundtrip`, `padre_persistible`, `snapshot_transaccional` | Pendiente |
 | 5–7 | `writer_lock_transaccional`, `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 
