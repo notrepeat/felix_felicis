@@ -202,6 +202,18 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         &self,
         bytes: &[u8],
     ) -> Result<IdentidadArchivoJournal, ErrorJournalAnclado> {
+        self.crear_nuevo_con(bytes, |archivo, bytes| {
+            archivo
+                .write_all(bytes)
+                .map_err(|_| ErrorJournalAnclado::Io)
+        })
+    }
+
+    fn crear_nuevo_con(
+        &self,
+        bytes: &[u8],
+        escribir: impl FnOnce(&mut File, &[u8]) -> Result<(), ErrorJournalAnclado>,
+    ) -> Result<IdentidadArchivoJournal, ErrorJournalAnclado> {
         if bytes.len() > MAX_JOURNAL_BYTES {
             return Err(ErrorJournalAnclado::TooLarge);
         }
@@ -212,6 +224,11 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             .write(OpenOptionsWriteMode::Write)
             .create_new(true)
             .follow(false);
+        #[cfg(unix)]
+        {
+            use fs_at::os::unix::OpenOptionsExt;
+            opciones.mode(0o600);
+        }
         #[cfg(windows)]
         {
             use fs_at::os::windows::OpenOptionsExt;
@@ -223,9 +240,11 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             .map_err(mapear_error_io)?;
         validar_archivo_regular(&archivo)?;
         let identidad = identidad_archivo(&archivo)?;
-        archivo
-            .write_all(bytes)
-            .map_err(|_| ErrorJournalAnclado::Io)?;
+        if let Err(error) = escribir(&mut archivo, bytes) {
+            drop(archivo);
+            let _ = self.limpiar_temporal_si_coincide(identidad);
+            return Err(error);
+        }
         drop(archivo);
         Ok(identidad)
     }

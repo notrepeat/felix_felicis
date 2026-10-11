@@ -303,6 +303,75 @@ fn crea_cierra_lee_desde_parent_anclado_y_conserva_identidad_del_handle() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn temporal_se_crea_con_permisos_restringidos_sin_cambiar_umask() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+
+    capability.crear_nuevo(b"private journal bytes").unwrap();
+
+    assert_eq!(
+        fs::metadata(temporal).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn fallo_de_escritura_limpia_solo_la_identidad_creada_y_preserva_el_error() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let mut identidad_escrita = None;
+
+    let error = capability
+        .crear_nuevo_con(b"partial journal", |archivo, _| {
+            identidad_escrita = Some(super::identidad_archivo(archivo).unwrap());
+            Err(ErrorJournalAnclado::Io)
+        })
+        .unwrap_err();
+
+    assert_eq!(error, ErrorJournalAnclado::Io);
+    assert!(identidad_escrita.is_some());
+    assert!(!temporal.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn cleanup_tras_fallo_de_escritura_preserva_reemplazo_conflictivo() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let replacement = b"replacement canary";
+    let mut identidad_original = None;
+
+    let error = capability
+        .crear_nuevo_con(b"partial journal", |archivo, _| {
+            identidad_original = Some(super::identidad_archivo(archivo).unwrap());
+            fs::remove_file(&temporal).unwrap();
+            fs::write(&temporal, replacement).unwrap();
+            Err(ErrorJournalAnclado::Io)
+        })
+        .unwrap_err();
+
+    assert_eq!(error, ErrorJournalAnclado::Io);
+    assert_ne!(
+        identidad_original.unwrap(),
+        super::identidad_archivo(&fs::File::open(&temporal).unwrap()).unwrap()
+    );
+    assert_eq!(fs::read(temporal).unwrap(), replacement);
+}
+
 #[test]
 fn acepta_exactamente_max_journal_bytes_al_escribir_y_leer() {
     let temp = tempdir().unwrap();
