@@ -78,7 +78,8 @@ impl LockEscritura {
         }
     }
 
-    /// Ruta de ubicación compuesta por parent canónico y basename exacto.
+    /// Ruta completa canónica si existe; si falta, parent canónico más el
+    /// basename prospectivo validado.
     pub fn raiz_canonica(&self) -> &Path {
         self.ubicacion.ruta()
     }
@@ -186,5 +187,28 @@ mod tests {
         let ubicacion_existente = UbicacionRaiz::nueva(&raiz).unwrap();
         assert_eq!(ubicacion_existente.lock().as_path(), lock_path);
         assert!(LockEscritura::adquirir_en(&ubicacion_existente).is_ok());
+    }
+
+    #[test]
+    fn location_ausente_y_root_aparecido_comparten_el_mismo_lock() {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        let ubicacion_ausente = UbicacionRaiz::nueva(&raiz).unwrap();
+        let guard = LockEscritura::adquirir_en(&ubicacion_ausente).unwrap();
+
+        fs::create_dir(&raiz).unwrap();
+        let ubicacion_existente = UbicacionRaiz::nueva(&raiz).unwrap();
+        assert_eq!(
+            ubicacion_ausente.lock().as_path(),
+            ubicacion_existente.lock().as_path()
+        );
+        assert!(matches!(
+            LockEscritura::adquirir_en(&ubicacion_existente),
+            Err(ErrorLockEscritura::Busy)
+        ));
+        assert_eq!(
+            guard.raiz_canonica(),
+            fs::canonicalize(&raiz).unwrap().as_path()
+        );
     }
 }

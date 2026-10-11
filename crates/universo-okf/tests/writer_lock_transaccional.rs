@@ -176,6 +176,21 @@ fn alias_parent_converge_en_el_mismo_lock() {
 }
 
 #[test]
+fn ruta_existente_terminada_en_parentdir_converge_en_el_mismo_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let child = root.join("child");
+    std::fs::create_dir_all(&child).unwrap();
+
+    let owner = LockEscritura::adquirir(&root).unwrap();
+    let alias = child.join("..");
+    let contender = LockEscritura::adquirir(alias).unwrap_err();
+
+    assert_eq!(owner.raiz_canonica(), std::fs::canonicalize(&root).unwrap());
+    assert_eq!(contender, ErrorLockEscritura::Busy);
+}
+
+#[test]
 fn ruta_vacia_y_archivo_devuelven_io_redactado_root_ausente_se_admite() {
     let temp = tempfile::tempdir().unwrap();
     let absent = temp.path().join("missing-root");
@@ -253,6 +268,61 @@ fn junction_root_se_rechaza_sin_seguirla() {
     assert_eq!(error, ErrorLockEscritura::Io);
     assert_eq!(error.to_string(), "writer_lock_io");
     assert!(!format!("{error:?}").contains(temp.path().to_string_lossy().as_ref()));
+}
+
+#[cfg(windows)]
+#[test]
+fn alias_final_con_punto_converge_en_el_mismo_lock() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    std::fs::create_dir(&root).unwrap();
+
+    let owner = LockEscritura::adquirir(&root).unwrap();
+    let alias = temp.path().join("bundle.");
+    let contender = LockEscritura::adquirir(alias).unwrap_err();
+
+    assert_eq!(owner.raiz_canonica(), std::fs::canonicalize(&root).unwrap());
+    assert_eq!(contender, ErrorLockEscritura::Busy);
+}
+
+#[cfg(windows)]
+#[test]
+fn alias_83_converge_si_el_volume_lo_expone() {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle-long-name-for-short-path");
+    std::fs::create_dir(&root).unwrap();
+    let root_wide = root
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut short_wide = vec![0u16; 32_768];
+    // SAFETY: both buffers are valid and the input path is NUL terminated.
+    let length = unsafe {
+        GetShortPathNameW(
+            root_wide.as_ptr(),
+            short_wide.as_mut_ptr(),
+            short_wide.len() as u32,
+        )
+    } as usize;
+    if length == 0 || length >= short_wide.len() {
+        eprintln!("skip: volume did not provide an 8.3 short path");
+        return;
+    }
+
+    let short_root = std::path::PathBuf::from(std::ffi::OsString::from_wide(&short_wide[..length]));
+    if short_root == root || !short_root.to_string_lossy().contains('~') {
+        eprintln!("skip: 8.3 short names are unavailable on this volume");
+        return;
+    }
+
+    let owner = LockEscritura::adquirir(&root).unwrap();
+    let contender = LockEscritura::adquirir(short_root).unwrap_err();
+    assert_eq!(owner.raiz_canonica(), std::fs::canonicalize(&root).unwrap());
+    assert_eq!(contender, ErrorLockEscritura::Busy);
 }
 
 fn preparar_alias_ancestro() -> (tempfile::TempDir, std::path::PathBuf) {

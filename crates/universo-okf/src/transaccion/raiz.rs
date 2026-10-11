@@ -17,9 +17,9 @@ pub(crate) enum ErrorRaiz {
 
 /// Ubicación path-based de una raíz y sus siblings transaccionales.
 ///
-/// El parent debe existir y se canoniza; el basename se conserva exactamente
-/// como componente final de la ruta solicitada. La raíz puede faltar durante
-/// recovery (por ejemplo, después de `root -> backup`). Esta inspección no
+/// El parent se canoniza y la ruta completa se canoniza cuando la raíz existe.
+/// Si falta durante recovery (por ejemplo, después de `root -> backup`), solo
+/// se conserva un basename prospectivo portable y seguro. Esta inspección no
 /// ancla el directorio ni elimina TOCTOU: la raíz abierta debe obtenerse desde
 /// esta ubicación después de recovery.
 #[derive(Clone)]
@@ -30,23 +30,21 @@ pub(crate) struct UbicacionRaiz {
 }
 
 impl UbicacionRaiz {
-    /// Valida el parent sin seguir enlaces, canoniza ese parent y permite que
-    /// la raíz todavía no exista.
+    /// Rechaza enlaces observados y canoniza la ruta completa si existe; si
+    /// falta, canoniza su parent y valida el basename prospectivo.
     pub(crate) fn nueva(ruta: &Path) -> Result<Self, ErrorRaiz> {
         let absoluta = ruta_absoluta(ruta)?;
-        let (parent_solicitado, basename) = separar_parent_y_basename(&absoluta)?;
-        validar_componentes_sin_enlaces(&parent_solicitado)?;
-
-        let parent = fs::canonicalize(&parent_solicitado).map_err(|_| ErrorRaiz::Io)?;
-        validar_directorio_sin_enlace(&parent)?;
-        let ruta = parent.join(&basename);
-        validar_raiz_si_existe(&ruta)?;
-
-        Ok(Self {
-            ruta,
-            parent,
-            basename,
-        })
+        match fs::symlink_metadata(&absoluta) {
+            Ok(metadata) => {
+                validar_metadata_raiz(&metadata)?;
+                validar_componentes_sin_enlaces(&absoluta)?;
+                Self::desde_raiz_existente(&absoluta)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Self::desde_raiz_prospectiva(&absoluta)
+            }
+            Err(_) => Err(ErrorRaiz::Io),
+        }
     }
 
     /// Ruta absoluta de la ubicación, compuesta por parent canónico y basename.
@@ -101,6 +99,44 @@ impl UbicacionRaiz {
         nombre.push(&self.basename);
         nombre.push(sufijo);
         self.parent.join(nombre)
+    }
+
+    fn desde_raiz_existente(ruta: &Path) -> Result<Self, ErrorRaiz> {
+        let ruta = fs::canonicalize(ruta).map_err(|_| ErrorRaiz::Io)?;
+        validar_directorio_final(&ruta)?;
+        let (parent, basename) = separar_parent_y_basename(&ruta)?;
+        Ok(Self {
+            ruta,
+            parent,
+            basename,
+        })
+    }
+
+    fn desde_raiz_prospectiva(ruta: &Path) -> Result<Self, ErrorRaiz> {
+        let (parent_solicitado, basename) = separar_parent_y_basename(ruta)?;
+        validar_componentes_sin_enlaces(&parent_solicitado)?;
+
+        let parent = fs::canonicalize(&parent_solicitado).map_err(|_| ErrorRaiz::Io)?;
+        validar_directorio_sin_enlace(&parent)?;
+        let ruta = parent.join(&basename);
+
+        // La canonización del parent puede hacer visible un destino que no
+        // estaba visible a través de un alias de parent en la primera stat.
+        match fs::symlink_metadata(&ruta) {
+            Ok(metadata) => {
+                validar_metadata_raiz(&metadata)?;
+                Self::desde_raiz_existente(&ruta)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                validar_basename_prospectivo(&basename)?;
+                Ok(Self {
+                    ruta,
+                    parent,
+                    basename,
+                })
+            }
+            Err(_) => Err(ErrorRaiz::Io),
+        }
     }
 }
 
@@ -178,16 +214,89 @@ fn separar_parent_y_basename(ruta: &Path) -> Result<(PathBuf, OsString), ErrorRa
     Ok((parent, basename))
 }
 
-fn validar_raiz_si_existe(ruta: &Path) -> Result<(), ErrorRaiz> {
-    match fs::symlink_metadata(ruta) {
-        Ok(metadata) if metadata_es_enlace_o_reparse(&metadata) => {
-            Err(ErrorRaiz::EnlaceNoPermitido)
-        }
-        Ok(metadata) if !metadata.is_dir() => Err(ErrorRaiz::TipoNoAdmitido),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(ErrorRaiz::Io),
+fn validar_metadata_raiz(metadata: &Metadata) -> Result<(), ErrorRaiz> {
+    if metadata_es_enlace_o_reparse(metadata) {
+        return Err(ErrorRaiz::EnlaceNoPermitido);
     }
+    if !metadata.is_dir() {
+        return Err(ErrorRaiz::TipoNoAdmitido);
+    }
+    Ok(())
+}
+
+fn validar_basename_prospectivo(basename: &std::ffi::OsStr) -> Result<(), ErrorRaiz> {
+    let nombre = basename.to_str().ok_or(ErrorRaiz::TipoNoAdmitido)?;
+    if nombre.is_empty()
+        || matches!(nombre, "." | "..")
+        || nombre.chars().any(|caracter| {
+            caracter.is_control()
+                || matches!(
+                    caracter,
+                    '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'
+                )
+        })
+        || es_nombre_dispositivo_windows(nombre)
+        || parece_alias_83_windows(nombre)
+    {
+        return Err(ErrorRaiz::TipoNoAdmitido);
+    }
+
+    #[cfg(windows)]
+    if nombre.ends_with(['.', ' ']) {
+        return Err(ErrorRaiz::TipoNoAdmitido);
+    }
+
+    Ok(())
+}
+
+fn es_nombre_dispositivo_windows(nombre: &str) -> bool {
+    let stem = nombre
+        .split('.')
+        .next()
+        .unwrap_or(nombre)
+        .trim_end_matches([' ', '.'])
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "CLOCK$"
+            | "CONIN$"
+            | "CONOUT$"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+            | "COM¹"
+            | "COM²"
+            | "COM³"
+            | "LPT¹"
+            | "LPT²"
+            | "LPT³"
+    )
+}
+
+fn parece_alias_83_windows(nombre: &str) -> bool {
+    let stem = nombre.split('.').next().unwrap_or(nombre);
+    stem.rsplit_once('~').is_some_and(|(_, sufijo)| {
+        !sufijo.is_empty() && sufijo.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 fn ruta_absoluta(ruta: &Path) -> Result<PathBuf, ErrorRaiz> {
@@ -253,7 +362,6 @@ fn validar_directorio_sin_enlace(ruta: &Path) -> Result<(), ErrorRaiz> {
     Ok(())
 }
 
-#[allow(dead_code)]
 fn validar_directorio_final(ruta: &Path) -> Result<(), ErrorRaiz> {
     validar_directorio_sin_enlace(ruta)
 }
@@ -409,5 +517,25 @@ mod tests {
             UbicacionRaiz::nueva(&alias),
             Err(ErrorRaiz::EnlaceNoPermitido)
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rechaza_basename_prospectivo_que_normaliza_o_reserva() {
+        let temp = tempdir().unwrap();
+
+        for nombre in [
+            "bundle.",
+            "bundle ",
+            "CON",
+            "CON.txt",
+            "COM1",
+            "LPT9",
+            "BUNDLE~1",
+            "bundle:name",
+        ] {
+            assert!(UbicacionRaiz::nueva(&temp.path().join(nombre)).is_err());
+        }
+        assert!(UbicacionRaiz::nueva(&temp.path().join("bundle-safe.v1")).is_ok());
     }
 }
