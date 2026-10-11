@@ -420,9 +420,11 @@ Chain strategy: feature-branch-chain
   Harness release ignorado, medido en Windows: 10.000 auxiliares,
   104.857.600 bytes, 51.158,840 ms, 2,050 MB/s y 1,955 MiB/s. Es una muestra
   orientativa, sin warmup ni distribución estadística; no define SLA. El
-  temporizador mide la materialización; captura, planificación y candidato se
-  preparan antes. El harness elimina staging y confirma que token e identidad
-  del root siguen intactos.
+  temporizador cubre el pipeline completo de `materializar_staging_anclado`:
+  crear y escribir staging, recargar e inventariar el bundle, validar el
+  candidato recargado y emitir el recibo. Captura, planificación y construcción
+  del candidato ocurren antes del intervalo medido. El harness elimina staging
+  y confirma que token e identidad del root siguen intactos.
 
   ```text
   cargo test --locked --release -p universo-okf --lib transaccion::stage::stage_bundle_transaccional::runtime_staging_anclado_mide_10000_auxiliares_100_mib_exactos -- --ignored --nocapture

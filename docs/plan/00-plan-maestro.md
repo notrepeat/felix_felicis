@@ -238,8 +238,10 @@ excluye un proceso externo hostil que modifique el filesystem.
 Unidad 6 queda cerrada para root anclado y staging. El harness privado real
 `crates/universo-okf/src/transaccion/stage/stage_bundle_transaccional.rs`
 midió 10.000 auxiliares y 104.857.600 bytes en 51.158,840 ms (2,050 MB/s;
-1,955 MiB/s). Es una muestra orientativa, sin SLA; el tiempo cubre la
-materialización del staging y excluye captura, planificación y candidato. El
+1,955 MiB/s). Es una muestra orientativa, sin SLA; el tiempo cubre el pipeline
+completo de `materializar_staging_anclado`: crear/escribir staging,
+recargar/inventariar el bundle, validar el candidato recargado y emitir el
+recibo. Excluye captura, planificación y construcción del candidato. El
 rollback limpia el sibling y confirma token e identidad de root intactos.
 Pruebas de aliases, recarga y cleanup acompañan al harness. El test Windows
 `junction_root_se_rechaza_sin_seguirla` confirma el root reparse y canary
