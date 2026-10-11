@@ -2,6 +2,8 @@
 
 // U4 prepara estas piezas internas; U5/U6 las conectan al guard transaccional.
 #[allow(dead_code)]
+pub(crate) mod anclado;
+#[allow(dead_code)]
 pub(crate) mod captura;
 #[allow(dead_code)]
 pub(crate) mod inventario;
