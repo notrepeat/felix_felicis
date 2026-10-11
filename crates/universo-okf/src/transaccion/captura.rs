@@ -13,6 +13,9 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(windows)]
+use std::fs;
+
 use universo_core::{Estructura, SentenciaFuente, parsear_programa};
 
 use crate::bundle::{directorio_layout_seguro, parsear_bundle};
@@ -173,23 +176,37 @@ where
     F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     let absoluta = ruta_absoluta_lexica(ruta)?;
-    if absoluta.starts_with(raiz) {
-        let relativa = absoluta
-            .strip_prefix(raiz)
-            .map_err(|_| ErrorSnapshot::RutaNoRepresentable)?
-            .to_str()
-            .ok_or(ErrorSnapshot::RutaNoUtf8)?
-            .replace('\\', "/");
-        return entradas
-            .iter()
-            .find(|entrada| {
-                entrada.ruta() == relativa && entrada.tipo() == TipoEntradaSnapshot::Archivo
-            })
-            .and_then(EntradaSnapshot::bytes)
-            .map(Arc::from)
-            .ok_or(ErrorSnapshot::Io);
+    let relativa_lexica = absoluta
+        .starts_with(raiz)
+        .then(|| ruta_relativa(raiz, &absoluta))
+        .transpose()?;
+    if let Some(relativa) = relativa_lexica.as_deref()
+        && let Some(bytes) = bytes_entrada(entradas, relativa)
+    {
+        return Ok(bytes);
     }
 
+    #[cfg(windows)]
+    {
+        // `Path::starts_with` compara componentes con caso exacto incluso en
+        // Windows. Resuelve la ruta solo después de rechazar reparse points,
+        // y usa el spelling real devuelto por el sistema únicamente para
+        // localizar el buffer ya leído; el token conserva la ruta inventariada.
+        validar_archivo_sin_enlaces(&absoluta)?;
+        let raiz_real = fs::canonicalize(raiz).map_err(|_| ErrorSnapshot::Io)?;
+        let archivo_real = fs::canonicalize(&absoluta).map_err(|_| ErrorSnapshot::Io)?;
+        if archivo_real.starts_with(&raiz_real) {
+            let relativa = ruta_relativa(&raiz_real, &archivo_real)?;
+            return bytes_entrada(entradas, &relativa).ok_or(ErrorSnapshot::Io);
+        }
+    }
+
+    #[cfg(not(windows))]
+    if relativa_lexica.is_some() {
+        return Err(ErrorSnapshot::Io);
+    }
+
+    #[cfg(not(windows))]
     validar_archivo_sin_enlaces(&absoluta)?;
     if let Some(bytes) = cache_externa.get(&absoluta) {
         return Ok(Arc::clone(bytes));
@@ -197,6 +214,25 @@ where
     let bytes: Arc<[u8]> = Arc::from(leer(&absoluta)?);
     cache_externa.insert(absoluta, Arc::clone(&bytes));
     Ok(bytes)
+}
+
+fn ruta_relativa(raiz: &Path, absoluta: &Path) -> Result<String, ErrorSnapshot> {
+    absoluta
+        .strip_prefix(raiz)
+        .map_err(|_| ErrorSnapshot::RutaNoRepresentable)?
+        .to_str()
+        .ok_or(ErrorSnapshot::RutaNoUtf8)
+        .map(|ruta| ruta.replace('\\', "/"))
+}
+
+fn bytes_entrada(entradas: &[EntradaSnapshot], relativa: &str) -> Option<Arc<[u8]>> {
+    entradas
+        .iter()
+        .find(|entrada| {
+            entrada.ruta() == relativa && entrada.tipo() == TipoEntradaSnapshot::Archivo
+        })
+        .and_then(EntradaSnapshot::bytes)
+        .map(Arc::from)
 }
 
 fn archivos_markdown(
@@ -329,6 +365,226 @@ ignorados = ["ignored.md"]
         fs::write(&invariants, "\n").unwrap();
         fs::create_dir(root.join("empty-dir")).unwrap();
         assert_ne!(base.token(), capturar().token());
+    }
+
+    #[test]
+    fn captura_detecta_altas_bajas_renombres_y_cambios_solo_de_case() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        let manifest = temp.path().join("manifest.toml");
+        let invariants = temp.path().join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+
+        let capturar =
+            || capturar_snapshot(&root, &manifest, &invariants, "engine/1", "policy/1").unwrap();
+        let base = capturar().token();
+
+        let archivo = root.join("auxiliar.bin");
+        fs::write(&archivo, []).unwrap();
+        let agregado = capturar().token();
+        assert_ne!(
+            base, agregado,
+            "agregar un archivo vacío debe cambiar el token"
+        );
+        fs::remove_file(&archivo).unwrap();
+        assert_eq!(
+            base,
+            capturar().token(),
+            "eliminar el archivo revierte el token"
+        );
+
+        let original = root.join("original.bin");
+        let renombrado = root.join("renombrado.bin");
+        fs::write(&original, [0, 255]).unwrap();
+        let antes_renombrar = capturar().token();
+        fs::rename(&original, &renombrado).unwrap();
+        assert_ne!(antes_renombrar, capturar().token());
+        fs::rename(&renombrado, &original).unwrap();
+        assert_eq!(antes_renombrar, capturar().token());
+
+        let mayusculas = root.join("Case.bin");
+        let intermedio = root.join("case-temp.bin");
+        let minusculas = root.join("case.bin");
+        fs::write(&mayusculas, [7]).unwrap();
+        let antes_case = capturar().token();
+        // El paso intermedio hace que el renombre solo de case funcione también
+        // en volúmenes Windows case-insensitive.
+        fs::rename(&mayusculas, &intermedio).unwrap();
+        fs::rename(&intermedio, &minusculas).unwrap();
+        assert_ne!(antes_case, capturar().token());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn alias_de_case_para_manifest_e_invariants_reusa_los_buffers_capturados() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        // Cambia también el case de los componentes del root: con el root
+        // lexical original, cambiar solo el nombre final no prueba el caso en
+        // que `starts_with` clasifica la fuente como externa.
+        let root_case_alias = PathBuf::from(root.path().to_string_lossy().to_ascii_uppercase());
+        let mut lecturas = HashMap::<PathBuf, usize>::new();
+        let snapshot = capturar_snapshot_con_lector(
+            root.path(),
+            &root_case_alias.join("MANIFEST.TOML"),
+            &root_case_alias.join("INVARIANTS.SMT2"),
+            "engine/1",
+            "policy/1",
+            |path| {
+                let real = fs::canonicalize(path).unwrap();
+                *lecturas.entry(real).or_default() += 1;
+                leer_archivo_regular(path)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(lecturas.len(), 3);
+        assert!(lecturas.values().all(|&count| count == 1));
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rechaza_links_usados_como_ruta_de_manifest_o_invariants() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let manifest_target = outside.join("manifest.toml");
+        let invariants_target = outside.join("invariants.smt2");
+        let manifest_link = temp.path().join("manifest-link.toml");
+        let invariants_link = temp.path().join("invariants-link.smt2");
+        fs::write(&manifest_target, MANIFIESTO).unwrap();
+        fs::write(&invariants_target, "\n").unwrap();
+        symlink(&manifest_target, &manifest_link).unwrap();
+        symlink(&invariants_target, &invariants_link).unwrap();
+
+        assert_eq!(
+            capturar_snapshot(
+                &root,
+                &manifest_link,
+                &invariants_target,
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+        assert_eq!(
+            capturar_snapshot(
+                &root,
+                &manifest_target,
+                &invariants_link,
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rechaza_reparse_points_en_root_y_en_rutas_de_configuracion() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+        use std::process::Command;
+
+        fn junction(enlace: &Path, destino: &Path) {
+            if let Err(error) = symlink_dir(destino, enlace) {
+                eprintln!("aviso: symlink_dir no disponible ({error}); se usa junction");
+                let resultado = Command::new("cmd")
+                    .args(["/c", "mklink", "/J"])
+                    .arg(enlace)
+                    .arg(destino)
+                    .output()
+                    .expect("cmd debe poder crear junctions");
+                assert!(
+                    resultado.status.success(),
+                    "no se pudo crear junction: {}",
+                    String::from_utf8_lossy(&resultado.stderr)
+                );
+            }
+        }
+
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        let config_target = temp.path().join("config-target");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&config_target).unwrap();
+        let manifest = config_target.join("manifest.toml");
+        let invariants = config_target.join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        let outside_file = temp.path().join("outside.bin");
+        fs::write(&outside_file, b"raw").unwrap();
+
+        let file_link = root.join("file-link.bin");
+        match symlink_file(&outside_file, &file_link) {
+            Ok(()) => {
+                assert_eq!(
+                    capturar_snapshot(&root, &manifest, &invariants, "engine/1", "policy/1")
+                        .unwrap_err(),
+                    ErrorSnapshot::EnlaceNoPermitido
+                );
+                fs::remove_file(file_link).unwrap();
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                eprintln!(
+                    "SKIP explícito: symlink_file no disponible ({error}); este subcaso no cuenta como cobertura"
+                );
+            }
+            Err(error) => panic!("no se pudo crear symlink_file: {error}"),
+        }
+
+        let root_link = root.join("directory-link");
+        junction(&root_link, &config_target);
+        assert_eq!(
+            capturar_snapshot(&root, &manifest, &invariants, "engine/1", "policy/1").unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+        fs::remove_dir(root_link).unwrap();
+
+        let alias = temp.path().join("config-alias");
+        junction(&alias, &config_target);
+        assert_eq!(
+            capturar_snapshot(
+                &root,
+                &alias.join("manifest.toml"),
+                &invariants,
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+        assert_eq!(
+            capturar_snapshot(
+                &root,
+                &manifest,
+                &alias.join("invariants.smt2"),
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
     }
 
     #[test]
