@@ -88,6 +88,10 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
     let mut bytes = Vec::new();
     lectura.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"read");
+    std::fs::create_dir(ruta.join("readonly")).unwrap();
+    let readonly = ancla.abrir_directorio("readonly").unwrap();
+    assert!(readonly.crear_nuevo("denied.txt").is_err());
+    assert!(readonly.crear_directorio("denied").is_err());
     let (stage, componente_stage) = ancla.crear_stage_sibling("operaciones").unwrap();
     let mut stage_file = stage.crear_nuevo("read.txt").unwrap();
     stage_file.write_all(b"stage read").unwrap();
@@ -104,6 +108,36 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
     );
     assert!(stage.abrir_archivo_regular("subdir").is_err());
     assert!(stage.abrir_directorio("read.txt").is_err());
+}
+
+#[test]
+fn fallo_al_reabrir_sibling_conserva_el_handle_creado() {
+    let temp = tempdir().unwrap();
+    let ruta = temp.path().join("bundle");
+    std::fs::create_dir(&ruta).unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+
+    let mut error = match ancla
+        .crear_stage_sibling_con("reopen-failure", |_, _, _| Err(ErrorDirectorioAnclado::Io))
+    {
+        Ok(_) => panic!("la falla de apertura debe propagarse"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
+    let (parcial, componente) = error
+        .tomar_parcial()
+        .unwrap_or_else(|| panic!("el error debe conservar el handle creado"));
+    let ruta_stage = temp.path().join(&componente);
+    let reabierto =
+        DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta_stage).unwrap()).unwrap();
+
+    assert_eq!(parcial.componente(), componente);
+    assert_eq!(parcial.identidad_raiz(), reabierto.identidad_raiz());
+    assert!(!parcial.permite_escritura);
+    assert!(parcial.crear_nuevo("denied.txt").is_err());
+    assert!(ruta_stage.is_dir());
+    assert!(!ruta_stage.join("denied.txt").exists());
 }
 
 #[test]

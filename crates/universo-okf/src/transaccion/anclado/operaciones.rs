@@ -62,6 +62,7 @@ impl DirectorioAnclado {
                 raiz: Some(entrada),
                 identidad_parent,
                 identidad_raiz: Some(identidad_raiz),
+                permite_escritura: false,
             }))
         } else if metadata.is_file() {
             Ok(EntradaLecturaAnclada::Archivo(entrada))
@@ -79,6 +80,31 @@ impl DirectorioAnclado {
             .raiz
             .as_ref()
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
+        let directorio = super::abrir_directorio_hijo(raiz, componente)?;
+        let identidad_parent = metadata_directorio(raiz)?;
+        let identidad_raiz = metadata_directorio(&directorio)?;
+        Ok(DirectorioAnclado {
+            parent: clonar_handle(raiz)?,
+            basename: componente.to_os_string(),
+            raiz: Some(directorio),
+            identidad_parent,
+            identidad_raiz: Some(identidad_raiz),
+            permite_escritura: false,
+        })
+    }
+
+    pub(crate) fn abrir_directorio_stage(
+        &self,
+        componente: &str,
+    ) -> Result<DirectorioAnclado, ErrorDirectorioAnclado> {
+        if !self.permite_escritura {
+            return Err(ErrorDirectorioAnclado::Io);
+        }
+        let componente = validar_componente(OsStr::new(componente))?;
+        let raiz = self
+            .raiz
+            .as_ref()
+            .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
         let directorio = super::abrir_directorio_hijo_stage_existente(raiz, componente)?;
         let identidad_parent = metadata_directorio(raiz)?;
         let identidad_raiz = metadata_directorio(&directorio)?;
@@ -88,6 +114,7 @@ impl DirectorioAnclado {
             raiz: Some(directorio),
             identidad_parent,
             identidad_raiz: Some(identidad_raiz),
+            permite_escritura: true,
         })
     }
 
@@ -95,6 +122,9 @@ impl DirectorioAnclado {
         &self,
         componente: &str,
     ) -> Result<DirectorioAnclado, ErrorDirectorioAnclado> {
+        if !self.permite_escritura {
+            return Err(ErrorDirectorioAnclado::Io);
+        }
         let componente = validar_componente(OsStr::new(componente))?;
         let raiz = self
             .raiz
@@ -114,6 +144,7 @@ impl DirectorioAnclado {
             raiz: Some(directorio),
             identidad_parent,
             identidad_raiz: Some(identidad_raiz),
+            permite_escritura: true,
         })
     }
 
@@ -141,6 +172,9 @@ impl DirectorioAnclado {
     }
 
     pub(crate) fn crear_nuevo(&self, componente: &str) -> Result<File, ErrorDirectorioAnclado> {
+        if !self.permite_escritura {
+            return Err(ErrorDirectorioAnclado::Io);
+        }
         let componente = validar_componente(OsStr::new(componente))?;
         let raiz = self
             .raiz

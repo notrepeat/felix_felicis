@@ -13,7 +13,9 @@ use universo_core::{Anexo, BundlePath, Candidato, Estructura};
 
 use crate::serializar::DocumentoCandidato;
 
-use super::anclado::{DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio};
+use super::anclado::{
+    DirectorioAnclado, ErrorCrearStageSibling, ErrorDirectorioAnclado, IdentidadDirectorio,
+};
 use super::captura::{Snapshot, materializar_desde_entradas};
 use super::inventario::{
     inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
@@ -124,7 +126,7 @@ pub(crate) struct StageAnclado {
     directorio: DirectorioAnclado,
     componente: OsString,
     stage_id: String,
-    identidad: IdentidadDirectorio,
+    identidad: Option<IdentidadDirectorio>,
     recibo: Option<ReciboStage>,
 }
 
@@ -173,7 +175,7 @@ impl StageAnclado {
         &self.componente
     }
 
-    pub(crate) fn identidad(&self) -> IdentidadDirectorio {
+    pub(crate) fn identidad(&self) -> Option<IdentidadDirectorio> {
         self.identidad
     }
 
@@ -373,9 +375,16 @@ pub(crate) fn materializar_staging_anclado(
             stage_anclado_parcial: Some(Box::new(stage)),
         });
     }
+    let Some(identidad) = stage.identidad else {
+        return Err(ErrorEscrituraStage {
+            codigo: CodigoEscrituraStage::Io,
+            stage_parcial: None,
+            stage_anclado_parcial: Some(Box::new(stage)),
+        });
+    };
     stage.recibo = Some(ReciboStage {
         stage_id: stage.stage_id.clone(),
-        identidad: Some(stage.identidad),
+        identidad: Some(identidad),
         snapshot: recapturado.token(),
     });
     Ok(stage)
@@ -442,23 +451,24 @@ where
         let stage_id = siguiente_id().map_err(ErrorEscrituraStage::nuevo)?;
         match raiz.crear_stage_sibling(&stage_id) {
             Ok((directorio, componente)) => {
-                let identidad = directorio
-                    .identidad_raiz()
-                    .ok_or_else(|| ErrorEscrituraStage::nuevo(CodigoEscrituraStage::Io))?;
-                return Ok(StageAnclado {
+                let stage = StageAnclado {
+                    identidad: directorio.identidad_raiz(),
                     directorio,
                     componente,
                     stage_id,
-                    identidad,
                     recibo: None,
-                });
+                };
+                if stage.identidad.is_none() {
+                    return Err(ErrorEscrituraStage {
+                        codigo: CodigoEscrituraStage::Io,
+                        stage_parcial: None,
+                        stage_anclado_parcial: Some(Box::new(stage)),
+                    });
+                }
+                return Ok(stage);
             }
-            Err(ErrorDirectorioAnclado::EntradaExistente) => {}
-            Err(error) => {
-                return Err(ErrorEscrituraStage::nuevo(mapear_error_directorio_stage(
-                    error,
-                )));
-            }
+            Err(error) if error.codigo() == ErrorDirectorioAnclado::EntradaExistente => {}
+            Err(error) => return Err(error_escritura_stage_desde_creacion(stage_id, error)),
         }
     }
     Err(ErrorEscrituraStage::nuevo(
@@ -483,7 +493,7 @@ fn escribir_plan_en_stage_anclado(
         let mut componentes = ruta.split('/').peekable();
         while let Some(componente) = componentes.next() {
             actual = if componentes.peek().is_some() {
-                actual.abrir_directorio(componente)
+                actual.abrir_directorio_stage(componente)
             } else {
                 actual.crear_directorio(componente)
             }
@@ -520,7 +530,7 @@ fn escribir_plan_en_stage_anclado(
         if let Some(padres) = padres {
             for componente in padres.split('/') {
                 directorio = directorio
-                    .abrir_directorio(componente)
+                    .abrir_directorio_stage(componente)
                     .map_err(mapear_error_directorio_stage)?;
             }
         }
@@ -560,6 +570,27 @@ fn mapear_error_directorio_stage(error: ErrorDirectorioAnclado) -> CodigoEscritu
         ErrorDirectorioAnclado::Io
         | ErrorDirectorioAnclado::RaizAusente
         | ErrorDirectorioAnclado::EntradaAusente => CodigoEscrituraStage::Io,
+    }
+}
+
+fn error_escritura_stage_desde_creacion(
+    stage_id: String,
+    mut error: ErrorCrearStageSibling,
+) -> ErrorEscrituraStage {
+    let codigo = mapear_error_directorio_stage(error.codigo());
+    let parcial = error
+        .tomar_parcial()
+        .map(|(directorio, componente)| StageAnclado {
+            identidad: directorio.identidad_raiz(),
+            directorio,
+            componente,
+            stage_id,
+            recibo: None,
+        });
+    ErrorEscrituraStage {
+        codigo,
+        stage_parcial: None,
+        stage_anclado_parcial: parcial.map(Box::new),
     }
 }
 
@@ -1484,6 +1515,30 @@ ignorados = ["ignored.md"]
     }
 
     #[test]
+    fn error_de_reapertura_conserva_stage_anclado_parcial_sin_recibo() {
+        let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let error_creacion = match ancla
+            .crear_stage_sibling_con("open-failure", |_, _, _| Err(ErrorDirectorioAnclado::Io))
+        {
+            Ok(_) => panic!("la falla de apertura debe propagarse"),
+            Err(error) => error,
+        };
+        let error = error_escritura_stage_desde_creacion("open-failure".to_owned(), error_creacion);
+
+        assert_eq!(error.codigo(), "stage_io");
+        let parcial = error.stage_anclado_parcial().unwrap();
+        let ruta_stage = temp.path().join(parcial.componente());
+        let reabierto =
+            DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta_stage).unwrap())
+                .unwrap();
+        assert_eq!(parcial.stage_id(), "open-failure");
+        assert_eq!(parcial.identidad(), reabierto.identidad_raiz());
+        assert!(parcial.recibo().is_none());
+        assert!(ruta_stage.is_dir());
+        assert!(!format!("{error:?} {error} {parcial:?}").contains("open-failure"));
+    }
+
+    #[test]
     fn materializa_stage_anclado_raw_y_liga_recibo_a_identidad() {
         let (temp, ancla, snapshot, manifiesto, invariantes) = snapshot_anclado_con_auxiliares();
         let raiz = temp.path().join("bundle");
@@ -1504,7 +1559,7 @@ ignorados = ["ignored.md"]
                 .unwrap();
 
         assert_eq!(recibo.stage_id(), stage.stage_id());
-        assert_eq!(recibo.identidad(), Some(stage.identidad()));
+        assert_eq!(recibo.identidad(), stage.identidad());
         assert_eq!(recibo.identidad(), reabierto.identidad_raiz());
         assert_eq!(
             recibo.snapshot(),
@@ -1589,8 +1644,8 @@ ignorados = ["ignored.md"]
         assert_ne!(uno.identidad(), dos.identidad());
         assert_eq!(recibo_uno.stage_id(), uno.stage_id());
         assert_eq!(recibo_dos.stage_id(), dos.stage_id());
-        assert_eq!(recibo_uno.identidad(), Some(uno.identidad()));
-        assert_eq!(recibo_dos.identidad(), Some(dos.identidad()));
+        assert_eq!(recibo_uno.identidad(), uno.identidad());
+        assert_eq!(recibo_dos.identidad(), dos.identidad());
         assert_eq!(recibo_uno.snapshot(), recibo_dos.snapshot());
         for (stage, recibo) in [(&uno, recibo_uno), (&dos, recibo_dos)] {
             let visible = format!("{recibo:?} {recibo} {:?}", stage.identidad());

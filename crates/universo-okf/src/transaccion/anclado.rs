@@ -29,6 +29,46 @@ pub(crate) enum ErrorDirectorioAnclado {
     EntradaExistente,
 }
 
+/// Conserva la capability del sibling si falla un paso posterior a mkdir.
+pub(crate) struct ErrorCrearStageSibling {
+    codigo: ErrorDirectorioAnclado,
+    parcial: Option<Box<(DirectorioAnclado, OsString)>>,
+}
+
+impl ErrorCrearStageSibling {
+    fn nuevo(codigo: ErrorDirectorioAnclado) -> Self {
+        Self {
+            codigo,
+            parcial: None,
+        }
+    }
+
+    fn con_parcial(
+        codigo: ErrorDirectorioAnclado,
+        directorio: DirectorioAnclado,
+        componente: OsString,
+    ) -> Self {
+        Self {
+            codigo,
+            parcial: Some(Box::new((directorio, componente))),
+        }
+    }
+
+    pub(crate) fn codigo(&self) -> ErrorDirectorioAnclado {
+        self.codigo
+    }
+
+    pub(crate) fn tomar_parcial(&mut self) -> Option<(DirectorioAnclado, OsString)> {
+        self.parcial.take().map(|parcial| *parcial)
+    }
+}
+
+impl fmt::Debug for ErrorCrearStageSibling {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ErrorCrearStageSibling([redacted])")
+    }
+}
+
 /// Identidad obtenida de metadata de un handle abierto, no de una ruta.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IdentidadDirectorio {
@@ -58,6 +98,7 @@ pub(crate) struct DirectorioAnclado {
     raiz: Option<File>,
     identidad_parent: IdentidadDirectorio,
     identidad_raiz: Option<IdentidadDirectorio>,
+    permite_escritura: bool,
 }
 
 /// Entrada de lectura clasificada desde el handle devuelto por fs_at.
@@ -93,6 +134,7 @@ impl DirectorioAnclado {
             raiz,
             identidad_parent,
             identidad_raiz,
+            permite_escritura: false,
         })
     }
 
@@ -116,6 +158,7 @@ impl DirectorioAnclado {
             raiz: self.raiz.as_ref().map(clonar_handle).transpose()?,
             identidad_parent: self.identidad_parent,
             identidad_raiz: self.identidad_raiz,
+            permite_escritura: self.permite_escritura,
         })
     }
 
@@ -129,6 +172,7 @@ impl DirectorioAnclado {
             raiz: Some(raiz),
             identidad_parent: self.identidad_parent,
             identidad_raiz: Some(identidad_raiz),
+            permite_escritura: false,
         })
     }
 
@@ -142,45 +186,128 @@ impl DirectorioAnclado {
     pub(crate) fn crear_stage_sibling(
         &self,
         stage_id: &str,
-    ) -> Result<(Self, OsString), ErrorDirectorioAnclado> {
+    ) -> Result<(Self, OsString), ErrorCrearStageSibling> {
+        self.crear_stage_sibling_con(stage_id, abrir_directorio_hijo_stage)
+    }
+
+    pub(super) fn crear_stage_sibling_con<F>(
+        &self,
+        stage_id: &str,
+        mut abrir: F,
+    ) -> Result<(Self, OsString), ErrorCrearStageSibling>
+    where
+        F: FnMut(&File, &OsStr, &File) -> Result<File, ErrorDirectorioAnclado>,
+    {
         if stage_id.is_empty()
             || !stage_id
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
         {
-            return Err(ErrorDirectorioAnclado::ComponenteInvalido);
+            return Err(ErrorCrearStageSibling::nuevo(
+                ErrorDirectorioAnclado::ComponenteInvalido,
+            ));
         }
         if self.raiz.is_none() {
-            return Err(ErrorDirectorioAnclado::RaizAusente);
+            return Err(ErrorCrearStageSibling::nuevo(
+                ErrorDirectorioAnclado::RaizAusente,
+            ));
         }
 
         let mut componente = OsString::from(".");
         componente.push(&self.basename);
         componente.push(".felix.stage.");
         componente.push(stage_id);
-        validar_componente(&componente)?;
+        validar_componente(&componente).map_err(ErrorCrearStageSibling::nuevo)?;
 
-        let identidad_parent = metadata_directorio(&self.parent)?;
+        let identidad_parent =
+            metadata_directorio(&self.parent).map_err(ErrorCrearStageSibling::nuevo)?;
         if identidad_parent != self.identidad_parent {
-            return Err(ErrorDirectorioAnclado::Io);
+            return Err(ErrorCrearStageSibling::nuevo(ErrorDirectorioAnclado::Io));
         }
+
+        // Clona antes de mkdir para que no haya ninguna operación fallible de
+        // ownership del parent después de crear el sibling.
+        let parent_stage = clonar_handle(&self.parent).map_err(ErrorCrearStageSibling::nuevo)?;
 
         let mut opciones = OpenOptionsAt::default();
         opciones.create_new(true);
         let creado = opciones
             .mkdir_at(&self.parent, Path::new(&componente))
-            .map_err(mapear_error_creacion)?;
+            .map_err(mapear_error_creacion)
+            .map_err(ErrorCrearStageSibling::nuevo)?;
+        let identidad_creado = match identidad_handle_creado(&creado) {
+            Ok(identidad) => Some(identidad),
+            Err(error) => {
+                let parcial = Self {
+                    parent: parent_stage,
+                    basename: componente.clone(),
+                    raiz: Some(creado),
+                    identidad_parent,
+                    identidad_raiz: None,
+                    permite_escritura: false,
+                };
+                return Err(ErrorCrearStageSibling::con_parcial(
+                    error, parcial, componente,
+                ));
+            }
+        };
         // `mkdir_at` returns a handle without all directory-add rights needed
         // by nested stage writes. Open the same sibling relative to the held
         // parent and fail closed unless its identity matches the created fd.
-        let directorio = abrir_directorio_hijo_stage(&self.parent, &componente, &creado)?;
-        let identidad_raiz = metadata_directorio(&directorio)?;
+        let directorio = match abrir(&self.parent, &componente, &creado) {
+            Ok(directorio) => directorio,
+            Err(error) => {
+                let parcial = Self {
+                    parent: parent_stage,
+                    basename: componente.clone(),
+                    raiz: Some(creado),
+                    identidad_parent,
+                    identidad_raiz: identidad_creado,
+                    permite_escritura: false,
+                };
+                return Err(ErrorCrearStageSibling::con_parcial(
+                    error, parcial, componente,
+                ));
+            }
+        };
+        let identidad_raiz = match metadata_directorio(&directorio) {
+            Ok(identidad) if Some(identidad) == identidad_creado => identidad,
+            Ok(_) => {
+                let parcial = Self {
+                    parent: parent_stage,
+                    basename: componente.clone(),
+                    raiz: Some(creado),
+                    identidad_parent,
+                    identidad_raiz: identidad_creado,
+                    permite_escritura: false,
+                };
+                return Err(ErrorCrearStageSibling::con_parcial(
+                    ErrorDirectorioAnclado::Io,
+                    parcial,
+                    componente,
+                ));
+            }
+            Err(error) => {
+                let parcial = Self {
+                    parent: parent_stage,
+                    basename: componente.clone(),
+                    raiz: Some(creado),
+                    identidad_parent,
+                    identidad_raiz: identidad_creado,
+                    permite_escritura: false,
+                };
+                return Err(ErrorCrearStageSibling::con_parcial(
+                    error, parcial, componente,
+                ));
+            }
+        };
         let stage = Self {
-            parent: clonar_handle(&self.parent)?,
+            parent: parent_stage,
             basename: componente.clone(),
             raiz: Some(directorio),
             identidad_parent,
             identidad_raiz: Some(identidad_raiz),
+            permite_escritura: true,
         };
         Ok((stage, componente))
     }
