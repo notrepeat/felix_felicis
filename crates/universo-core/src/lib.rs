@@ -13,6 +13,7 @@ pub mod manifiesto;
 pub mod path;
 pub mod sexpr;
 pub mod tipos;
+pub mod transaccion;
 pub mod veredicto;
 pub use anexo::{Anexo, Entrada};
 pub use atomos::{Atomo, ErrorAtomo, IdArista, Sujeto};
@@ -39,6 +40,7 @@ pub use manifiesto::{
 pub use path::{BundlePath, ErrorPath};
 pub use sexpr::{ErrorAutoria, MotivoAutoria, SentenciaFuente, parsear, parsear_programa};
 pub use tipos::{Etiqueta, Sorte};
+pub use transaccion::{Candidato, ClaseOperacion, ErrorCandidato, construir_candidato};
 pub use veredicto::{
     Contraejemplo, ErrorVeredicto, MAX_EXPLICACIONES_POR_DEFECTO, ModoExplicacion,
     ObjetoExplicacion, PRESUPUESTO_EXPLICACION_POR_DEFECTO, ProcedenciaExplicacion,

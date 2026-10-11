@@ -43,7 +43,7 @@ pub struct Arista {
 /// que puede desincronizarse por un error de esta implementación: por eso
 /// existe `verificar_representacion`, que lo comprueba contra la fuente de
 /// verdad.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Estructura {
     manifiesto: Manifiesto,
     nodos: SlotMap<NodoId, Nodo>,
@@ -429,6 +429,57 @@ impl Estructura {
         for (i, id) in ids.into_iter().enumerate() {
             self.aristas[id].ordinal = i as u32;
         }
+    }
+
+    /// Quita varias aristas por sus handles del snapshot y compacta una vez
+    /// cada grupo afectado, conservando el orden de sus supervivientes.
+    pub(crate) fn quitar_aristas_en_lote(
+        &mut self,
+        handles: &[AristaId],
+    ) -> Result<(), ErrorEstructura> {
+        if handles.iter().any(|id| !self.aristas.contains_key(*id)) {
+            return Err(ErrorEstructura::AristaInexistente);
+        }
+        let seleccionadas: HashSet<_> = handles.iter().copied().collect();
+        let mut grupos = Vec::<((NodoId, Sorte, NodoId), Vec<AristaId>)>::new();
+        let mut indice_grupo = HashMap::new();
+        for (id, arista) in self.aristas.iter() {
+            if !seleccionadas.contains(&id) {
+                continue;
+            }
+            let clave = (arista.origen, arista.tipo.clone(), arista.destino);
+            let indice = *indice_grupo.entry(clave.clone()).or_insert_with(|| {
+                grupos.push((clave, Vec::new()));
+                grupos.len() - 1
+            });
+            grupos[indice].1.push(id);
+        }
+
+        for ((origen, tipo, destino), retiradas) in grupos {
+            let retiradas_set: HashSet<_> = retiradas.iter().copied().collect();
+            for id in retiradas {
+                self.aristas.remove(id);
+            }
+            if let Some(salientes) = self.salientes.get_mut(origen) {
+                salientes.retain(|id| !retiradas_set.contains(id));
+            }
+            if let Some(entrantes) = self.entrantes.get_mut(destino) {
+                entrantes.retain(|id| !retiradas_set.contains(id));
+            }
+            let supervivientes: Vec<_> = self
+                .salientes(origen)
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let arista = &self.aristas[*id];
+                    arista.tipo == tipo && arista.destino == destino
+                })
+                .collect();
+            for (ordinal, id) in supervivientes.into_iter().enumerate() {
+                self.aristas[id].ordinal = ordinal as u32;
+            }
+        }
+        Ok(())
     }
 
     /// Quita un nodo en cascada (Def. 3): quita sus aristas incidentes, su
