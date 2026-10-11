@@ -50,6 +50,11 @@ pub struct DocumentoCandidato {
 }
 
 impl DocumentoCandidato {
+    #[cfg(test)]
+    pub(crate) fn nuevo(path: BundlePath, contenido: String) -> Self {
+        Self { path, contenido }
+    }
+
     /// Path lógico del nodo serializado.
     pub fn path(&self) -> &BundlePath {
         &self.path

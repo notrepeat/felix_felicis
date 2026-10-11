@@ -1,4 +1,6 @@
 //! Plan puro de staging desde inventario raw, sin raíz ni operaciones de filesystem.
+//! En Windows las colisiones usan `CompareStringOrdinal`; en Unix, los paths
+//! conservan identidad exacta y sensible a case, incluidos sus bytes Unicode.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -10,10 +12,19 @@ use crate::serializar::DocumentoCandidato;
 use super::captura::Snapshot;
 use super::snapshot::{EntradaSnapshot, TipoEntradaSnapshot};
 
+#[cfg(windows)]
+use std::cmp::Ordering;
+
+#[cfg(windows)]
+use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+#[cfg(windows)]
+use windows_sys::Win32::Globalization::{CSTR_GREATER_THAN, CSTR_LESS_THAN};
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorPlanStaging {
     RutaInvalida,
     EntradaDuplicada,
+    ColisionCaseInsensitive,
     ConflictoArchivoDirectorio,
     ColisionAuxiliarAdministrado,
     SnapshotInconsistente,
@@ -24,6 +35,7 @@ impl ErrorPlanStaging {
         match self {
             Self::RutaInvalida => "stage_path_invalid",
             Self::EntradaDuplicada => "stage_duplicate_entry",
+            Self::ColisionCaseInsensitive => "stage_case_insensitive_collision",
             Self::ConflictoArchivoDirectorio => "stage_file_directory_conflict",
             Self::ColisionAuxiliarAdministrado => "stage_managed_auxiliary_collision",
             Self::SnapshotInconsistente => "stage_snapshot_inconsistent",
@@ -198,6 +210,13 @@ fn planificar_staging_desde_inventario(
         }
     }
     validar_ancestros_destino(&destino)?;
+    #[cfg(windows)]
+    validar_colisiones_case_insensitive(
+        destino
+            .keys()
+            .map(String::as_str)
+            .chain(old.iter().map(String::as_str)),
+    )?;
 
     let mut directorios = destino
         .iter()
@@ -231,13 +250,80 @@ fn validar_ruta_relativa(ruta: &str) -> Result<(), ErrorPlanStaging> {
         || ruta.starts_with('/')
         || ruta.ends_with('/')
         || ruta.contains('\\')
+        || ruta.contains('\0')
         || ruta
             .split('/')
             .any(|segmento| matches!(segmento, "" | "." | ".."))
     {
         return Err(ErrorPlanStaging::RutaInvalida);
     }
+    #[cfg(windows)]
+    if matches!(
+        std::path::Path::new(ruta).components().next(),
+        Some(std::path::Component::Prefix(_))
+    ) {
+        return Err(ErrorPlanStaging::RutaInvalida);
+    }
     Ok(())
+}
+
+#[cfg(windows)]
+fn validar_colisiones_case_insensitive<'a>(
+    rutas: impl IntoIterator<Item = &'a str>,
+) -> Result<(), ErrorPlanStaging> {
+    let mut vistas = rutas
+        .into_iter()
+        .map(|ruta| (ruta, ruta.encode_utf16().collect::<Vec<_>>()))
+        .collect::<Vec<_>>();
+    if vistas
+        .iter()
+        .any(|(_, wide)| i32::try_from(wide.len()).is_err())
+    {
+        return Err(ErrorPlanStaging::RutaInvalida);
+    }
+    let mut fallo_comparacion = false;
+    vistas.sort_by(|(ruta_a, wide_a), (ruta_b, wide_b)| {
+        match ordinal_comparar_ignore_case(wide_a, wide_b) {
+            Some(Ordering::Equal) => ruta_a.cmp(ruta_b),
+            Some(orden) => orden,
+            None => {
+                fallo_comparacion = true;
+                ruta_a.cmp(ruta_b)
+            }
+        }
+    });
+    if fallo_comparacion {
+        return Err(ErrorPlanStaging::RutaInvalida);
+    }
+    for par in vistas.windows(2) {
+        if par[0].0 != par[1].0
+            && ordinal_comparar_ignore_case(&par[0].1, &par[1].1) == Some(Ordering::Equal)
+        {
+            return Err(ErrorPlanStaging::ColisionCaseInsensitive);
+        }
+    }
+    Ok(())
+}
+
+/// Windows collision policy: compare full paths with the OS ordinal-ignore-case
+/// API. Keep original path spellings; never fold or normalize Unicode locally.
+#[cfg(windows)]
+fn ordinal_comparar_ignore_case(a: &[u16], b: &[u16]) -> Option<Ordering> {
+    let Ok(a_len) = i32::try_from(a.len()) else {
+        return None;
+    };
+    let Ok(b_len) = i32::try_from(b.len()) else {
+        return None;
+    };
+    // The explicit lengths avoid relying on NUL termination; NUL itself is
+    // rejected by `validar_ruta_relativa`.
+    let resultado = unsafe { CompareStringOrdinal(a.as_ptr(), a_len, b.as_ptr(), b_len, 1) };
+    match resultado {
+        CSTR_LESS_THAN => Some(Ordering::Less),
+        CSTR_EQUAL => Some(Ordering::Equal),
+        CSTR_GREATER_THAN => Some(Ordering::Greater),
+        _ => None,
+    }
 }
 
 fn validar_ancestros_raw(
@@ -330,6 +416,22 @@ mod tests {
         EntradaSnapshot::archivo(ruta, bytes.to_vec())
     }
 
+    fn documento(ruta: &str, contenido: &str) -> DocumentoCandidato {
+        DocumentoCandidato::nuevo(BundlePath::nuevo(ruta).unwrap(), contenido.to_owned())
+    }
+
+    fn plan(
+        entradas: &[EntradaSnapshot],
+        old: &[&str],
+        nuevos: &[DocumentoCandidato],
+    ) -> Result<PlanStaging, ErrorPlanStaging> {
+        let managed_old = old
+            .iter()
+            .map(|ruta| BundlePath::nuevo(ruta).unwrap())
+            .collect::<Vec<_>>();
+        planificar_staging_desde_inventario(entradas, &managed_old, nuevos)
+    }
+
     fn rutas(plan: &PlanStaging) -> Vec<String> {
         plan.entradas_objetivo
             .iter()
@@ -369,5 +471,101 @@ mod tests {
         assert_eq!(primero.auxiliares[1].bytes(), Some([].as_slice()));
         assert_eq!(primero.auxiliares[2].ruta(), "documento.md.tmp");
         assert_eq!(primero.auxiliares[2].bytes(), Some(b"sentinel".as_slice()));
+    }
+
+    #[test]
+    fn clasifica_managed_y_retirados_desde_inventario_sintetico() {
+        let entradas = [directorio("docs"), archivo("docs/old.md", b"viejo")];
+        let nuevos = [
+            documento("docs/z", "último"),
+            documento("docs/new", "nuevo"),
+        ];
+        let resultado = plan(&entradas, &["docs/old"], &nuevos).unwrap();
+
+        assert_eq!(resultado.managed_old, ["docs/old.md"]);
+        assert_eq!(resultado.removed, ["docs/old.md"]);
+        assert_eq!(resultado.managed_new[0].path().como_str(), "docs/new");
+        assert_eq!(resultado.managed_new[1].path().como_str(), "docs/z");
+        assert_eq!(
+            rutas(&resultado),
+            [
+                "docs".to_owned(),
+                "docs/new.md".to_owned(),
+                "docs/z.md".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn errores_de_colision_y_path_son_estables_y_redactados() {
+        let auxiliares = [directorio("docs"), archivo("docs/doc.md", b"secreto")];
+        let error = plan(&auxiliares, &[], &[documento("docs/doc", "privado")]).unwrap_err();
+        assert_eq!(error.codigo(), "stage_managed_auxiliary_collision");
+        assert!(!format!("{error:?} {error}").contains("privado"));
+        assert!(!format!("{error:?} {error}").contains("docs/doc"));
+
+        assert_eq!(
+            plan(&[archivo("../secreto", b"x")], &[], &[])
+                .unwrap_err()
+                .codigo(),
+            "stage_path_invalid"
+        );
+        assert_eq!(
+            plan(&[archivo("/absoluto", b"x")], &[], &[])
+                .unwrap_err()
+                .codigo(),
+            "stage_path_invalid"
+        );
+        assert_eq!(
+            plan(&[archivo("con\0nul", b"x")], &[], &[])
+                .unwrap_err()
+                .codigo(),
+            "stage_path_invalid"
+        );
+        let duplicadas = [archivo("data.bin", b"a"), archivo("data.bin", b"b")];
+        assert_eq!(
+            plan(&duplicadas, &[], &[]).unwrap_err().codigo(),
+            "stage_duplicate_entry"
+        );
+        let file_dir = [archivo("node", b"archivo"), archivo("node/child.bin", b"x")];
+        assert_eq!(
+            plan(&file_dir, &[], &[]).unwrap_err().codigo(),
+            "stage_file_directory_conflict"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_preserva_unicode_y_case_exactos() {
+        let entradas = [archivo("ñ.txt", b"a"), archivo("Ñ.txt", b"b")];
+        let resultado = plan(&entradas, &[], &[]).unwrap();
+        assert_eq!(rutas(&resultado), ["Ñ.txt", "ñ.txt"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_detecta_colision_unicode_con_ordinal_ignore_case() {
+        let entradas = [archivo("café.md", b"a"), archivo("CAFÉ.md", b"b")];
+        let error = plan(&entradas, &[], &[]).unwrap_err();
+        assert_eq!(error.codigo(), "stage_case_insensitive_collision");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_detecta_managed_auxiliar_y_rename_solo_de_case() {
+        let auxiliar = [archivo("CAFÉ.md", b"auxiliar")];
+        let error = plan(&auxiliar, &[], &[documento("café", "privado")]).unwrap_err();
+        assert_eq!(error.codigo(), "stage_case_insensitive_collision");
+
+        let entradas = [directorio("docs"), archivo("docs/old.md", b"viejo")];
+        let error = plan(&entradas, &["docs/old"], &[documento("docs/OLD", "nuevo")]).unwrap_err();
+        assert_eq!(error.codigo(), "stage_case_insensitive_collision");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rechaza_prefijo_de_unidad_absoluto() {
+        let error = plan(&[archivo("C:/secreto.txt", b"x")], &[], &[]).unwrap_err();
+        assert_eq!(error.codigo(), "stage_path_invalid");
     }
 }
