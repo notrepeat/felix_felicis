@@ -1,15 +1,102 @@
 //! Serializador canónico: `Estructura` → texto de nodo `.md` / bundle en
 //! disco (spec §4.3, §4.4).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use universo_core::{Estructura, NodoId, Sorte};
+use universo_core::{BundlePath, Candidato, Estructura, NodoId, Sorte};
 
 use crate::errores::ErrorEscritura;
 
 /// Caracteres con los que un escalar literal no puede empezar (spec §4.3).
 const PRIMEROS_PROHIBIDOS: [char; 12] =
     ['"', '\'', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>'];
+
+/// Valor de persistencia del `Parent` final de un hijo que cambió.
+/// `padre: None` solicita persistir una raíz explícita.
+pub struct ParentOverride {
+    hijo: BundlePath,
+    padre: Option<BundlePath>,
+}
+
+impl ParentOverride {
+    /// Crea un override lógico para un hijo.
+    pub fn new(hijo: BundlePath, padre: Option<BundlePath>) -> Self {
+        Self { hijo, padre }
+    }
+
+    /// Hijo al que pertenece el override.
+    pub fn hijo(&self) -> &BundlePath {
+        &self.hijo
+    }
+
+    /// Padre lógico final, o `None` para raíz.
+    pub fn padre(&self) -> Option<&BundlePath> {
+        self.padre.as_ref()
+    }
+}
+
+impl std::fmt::Debug for ParentOverride {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ParentOverride { .. }")
+    }
+}
+
+/// Archivo `.md` candidato. Su formato de depuración omite path y contenido.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DocumentoCandidato {
+    path: BundlePath,
+    contenido: String,
+}
+
+impl DocumentoCandidato {
+    /// Path lógico del nodo serializado.
+    pub fn path(&self) -> &BundlePath {
+        &self.path
+    }
+
+    /// Contenido UTF-8 canónico del documento.
+    pub fn contenido(&self) -> &str {
+        &self.contenido
+    }
+}
+
+impl std::fmt::Debug for DocumentoCandidato {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DocumentoCandidato { .. }")
+    }
+}
+
+/// Error redactado al serializar un candidato de Parent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorSerializarCandidato {
+    ParentNoPersistible,
+    ParentOverrideRequerido,
+    ParentOverrideSobrante,
+    ParentOverrideNoCoincide,
+    SnapshotIncompatible,
+}
+
+impl ErrorSerializarCandidato {
+    /// Código estable y sin rutas ni contenido del bundle.
+    pub const fn codigo(self) -> &'static str {
+        match self {
+            Self::ParentNoPersistible => "parent_not_persistable",
+            Self::ParentOverrideRequerido => "parent_override_required",
+            Self::ParentOverrideSobrante => "parent_override_unexpected",
+            Self::ParentOverrideNoCoincide => "parent_override_mismatch",
+            Self::SnapshotIncompatible => "snapshot_incompatible",
+        }
+    }
+}
+
+impl std::fmt::Display for ErrorSerializarCandidato {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorSerializarCandidato {}
 
 /// `true` si `valor` puede escribirse literal (sin comillas): no vacío, no
 /// empieza ni termina en blanco, no empieza con uno de los caracteres de
@@ -192,6 +279,88 @@ fn serializar_nodo_con_parent(
     fm.push_str("---\n");
     fm.push_str(&anexo.cuerpo);
     fm
+}
+
+/// Serializa los documentos de un candidato sin acceder al filesystem.
+///
+/// El mapa de overrides debe nombrar exactamente los hijos cuyo `Parent`
+/// lógico cambió desde `snapshot`; cada valor debe ser el padre final del
+/// candidato, o `None` para persistir una raíz explícita. Los nodos sin
+/// cambio conservan si usaban una clave Parent explícita o inferencia legacy.
+pub fn serializar_candidato(
+    snapshot: &Estructura,
+    candidato: &Candidato,
+    overrides: &[ParentOverride],
+) -> Result<Vec<DocumentoCandidato>, ErrorSerializarCandidato> {
+    let estructura = candidato.estructura();
+    if snapshot.manifiesto() != estructura.manifiesto() {
+        return Err(ErrorSerializarCandidato::SnapshotIncompatible);
+    }
+
+    let padres_snapshot = padres_por_path(snapshot);
+    let padres_candidato = padres_por_path(estructura);
+    if padres_snapshot.keys().ne(padres_candidato.keys()) {
+        return Err(ErrorSerializarCandidato::SnapshotIncompatible);
+    }
+
+    let cambiados: BTreeSet<_> = padres_snapshot
+        .iter()
+        .filter_map(|(hijo, padre)| {
+            (padres_candidato.get(hijo) != Some(padre)).then_some(hijo.clone())
+        })
+        .collect();
+    if !cambiados.is_empty() && estructura.manifiesto().layout.parent_key.is_none() {
+        return Err(ErrorSerializarCandidato::ParentNoPersistible);
+    }
+
+    let mut por_hijo = BTreeMap::new();
+    for override_parent in overrides {
+        if por_hijo
+            .insert(override_parent.hijo.clone(), override_parent.padre.clone())
+            .is_some()
+        {
+            return Err(ErrorSerializarCandidato::ParentOverrideSobrante);
+        }
+    }
+    if cambiados.iter().any(|hijo| !por_hijo.contains_key(hijo)) {
+        return Err(ErrorSerializarCandidato::ParentOverrideRequerido);
+    }
+    if por_hijo.keys().any(|hijo| !cambiados.contains(hijo)) {
+        return Err(ErrorSerializarCandidato::ParentOverrideSobrante);
+    }
+    if por_hijo
+        .iter()
+        .any(|(hijo, padre)| padres_candidato.get(hijo) != Some(padre))
+    {
+        return Err(ErrorSerializarCandidato::ParentOverrideNoCoincide);
+    }
+
+    let mut nodos: Vec<_> = estructura.nodos().collect();
+    nodos.sort_by(|(_, a), (_, b)| a.path.cmp(&b.path));
+    Ok(nodos
+        .into_iter()
+        .map(|(id, nodo)| DocumentoCandidato {
+            path: nodo.path.clone(),
+            contenido: serializar_nodo_con_parent(
+                estructura,
+                id,
+                por_hijo.get(&nodo.path).map(|padre| padre.as_ref()),
+            ),
+        })
+        .collect())
+}
+
+fn padres_por_path(estructura: &Estructura) -> BTreeMap<BundlePath, Option<BundlePath>> {
+    estructura
+        .nodos()
+        .map(|(id, nodo)| {
+            let padre = estructura
+                .padre(id)
+                .and_then(|id_padre| estructura.nodo(id_padre))
+                .map(|nodo_padre| nodo_padre.path.clone());
+            (nodo.path.clone(), padre)
+        })
+        .collect()
 }
 
 /// Escribe `raiz/{path}.md` para cada nodo, creando directorios. Escritura

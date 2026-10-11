@@ -1,5 +1,10 @@
-use universo_core::{BundlePath, ErrorManifiesto, Manifiesto};
-use universo_okf::{Regla, parsear_bundle, parsear_manifiesto, serializar_nodo};
+use universo_core::{
+    Atomo, BundlePath, Candidato, Delta, ErrorManifiesto, Manifiesto, construir_candidato,
+};
+use universo_okf::{
+    DocumentoCandidato, ParentOverride, Regla, parsear_bundle, parsear_manifiesto,
+    serializar_candidato, serializar_nodo,
+};
 use universo_testkit::manifiesto_minimo;
 
 fn doc(titulo: &str, extra: &str) -> String {
@@ -15,6 +20,29 @@ fn manifiesto_con_parent_key() -> Manifiesto {
 fn contiene_parent(u: &universo_core::Estructura, hijo: &str, padre: &str) -> bool {
     let esperado = format!("Parent({hijo}, {padre})");
     u.atomos().iter().any(|atomo| atomo.to_string() == esperado)
+}
+
+fn parent(hijo: &str, padre: &str) -> Atomo {
+    Atomo::Parent {
+        hijo: BundlePath::nuevo(hijo).unwrap(),
+        padre: BundlePath::nuevo(padre).unwrap(),
+    }
+}
+
+fn construir(snapshot: &universo_core::Estructura, delta: &Delta) -> Candidato {
+    construir_candidato(snapshot, delta).unwrap()
+}
+
+fn archivos_de(documentos: &[DocumentoCandidato]) -> Vec<(String, String)> {
+    documentos
+        .iter()
+        .map(|documento| {
+            (
+                format!("{}.md", documento.path().como_str()),
+                documento.contenido().to_string(),
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -268,4 +296,117 @@ fn serializar_y_recargar_conserva_raiz_explicita_y_ausencia_legacy() {
         .unwrap();
     assert!(serializar_nodo(&recargado, sub).contains("parent: \"\"\n"));
     assert!(!serializar_nodo(&recargado, hoja).contains("parent:"));
+}
+
+#[test]
+fn candidato_parent_sin_parent_key_falla_con_codigo_estable_y_redactado() {
+    let archivos = vec![
+        ("n/sub/index.md".into(), doc("Índice", "")),
+        ("n/sub/hoja.md".into(), doc("Hoja", "")),
+    ];
+    let snapshot = parsear_bundle(&archivos, manifiesto_minimo()).unwrap();
+    assert!(contiene_parent(&snapshot, "n/sub/hoja", "n/sub/index"));
+    let delta = Delta::nuevo([], [parent("n/sub/hoja", "n/sub/index")]).unwrap();
+    let candidato = construir(&snapshot, &delta);
+
+    let error = serializar_candidato(&snapshot, &candidato, &[]).unwrap_err();
+    assert_eq!(error.codigo(), "parent_not_persistable");
+    let visible = format!("{error} {error:?}");
+    assert!(!visible.contains("n/sub/hoja"));
+    assert!(!visible.contains("n/sub/index"));
+}
+
+#[test]
+fn candidato_parent_exige_override_para_cada_cambio() {
+    let archivos = vec![
+        ("n/index.md".into(), doc("Índice", "")),
+        ("n/hoja.md".into(), doc("Hoja", "parent: n/index\n")),
+    ];
+    let snapshot = parsear_bundle(&archivos, manifiesto_con_parent_key()).unwrap();
+    let delta = Delta::nuevo([], [parent("n/hoja", "n/index")]).unwrap();
+    let candidato = construir(&snapshot, &delta);
+
+    let error = serializar_candidato(&snapshot, &candidato, &[]).unwrap_err();
+    assert_eq!(error.codigo(), "parent_override_required");
+}
+
+#[test]
+fn candidato_parent_reemplaza_y_quita_varios_hijos_con_roundtrip_determinista() {
+    let archivos = vec![
+        ("n/Old.md".into(), doc("Viejo", "")),
+        ("n/Árbol/Índice.md".into(), doc("Índice", "")),
+        (
+            "n/sub/reemplazo.md".into(),
+            doc("Reemplazo", "parent: n/Old\n"),
+        ),
+        (
+            "n/sub/retirado.md".into(),
+            doc("Retirado", "parent: n/Old\n"),
+        ),
+    ];
+    let snapshot = parsear_bundle(&archivos, manifiesto_con_parent_key()).unwrap();
+    let delta = Delta::nuevo(
+        [parent("n/sub/reemplazo", "n/Árbol/Índice")],
+        [
+            parent("n/sub/reemplazo", "n/Old"),
+            parent("n/sub/retirado", "n/Old"),
+        ],
+    )
+    .unwrap();
+    let candidato = construir(&snapshot, &delta);
+
+    let override_mal_case = ParentOverride::new(
+        BundlePath::nuevo("n/sub/reemplazo").unwrap(),
+        Some(BundlePath::nuevo("n/árbol/índice").unwrap()),
+    );
+    let error = serializar_candidato(
+        &snapshot,
+        &candidato,
+        &[
+            override_mal_case,
+            ParentOverride::new(BundlePath::nuevo("n/sub/retirado").unwrap(), None),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(error.codigo(), "parent_override_mismatch");
+    let visible = format!("{error} {error:?}");
+    assert!(!visible.contains("n/sub/reemplazo"));
+    assert!(!visible.contains("n/árbol/índice"));
+
+    let overrides = [
+        ParentOverride::new(
+            BundlePath::nuevo("n/sub/reemplazo").unwrap(),
+            Some(BundlePath::nuevo("n/Árbol/Índice").unwrap()),
+        ),
+        ParentOverride::new(BundlePath::nuevo("n/sub/retirado").unwrap(), None),
+    ];
+    let primera = serializar_candidato(&snapshot, &candidato, &overrides).unwrap();
+    let segunda = serializar_candidato(&snapshot, &candidato, &overrides).unwrap();
+    assert_eq!(primera, segunda);
+    let texto_debug = format!("{primera:?} {overrides:?}");
+    assert!(!texto_debug.contains("n/sub/reemplazo"));
+    assert!(!texto_debug.contains("parent: n/Árbol/Índice"));
+
+    let reemplazo = primera
+        .iter()
+        .find(|documento| documento.path().como_str() == "n/sub/reemplazo")
+        .unwrap();
+    let retirado = primera
+        .iter()
+        .find(|documento| documento.path().como_str() == "n/sub/retirado")
+        .unwrap();
+    assert!(reemplazo.contenido().contains("parent: n/Árbol/Índice\n"));
+    assert!(retirado.contenido().contains("parent: \"\"\n"));
+
+    let recargado = parsear_bundle(&archivos_de(&primera), manifiesto_con_parent_key()).unwrap();
+    assert!(contiene_parent(
+        &recargado,
+        "n/sub/reemplazo",
+        "n/Árbol/Índice"
+    ));
+    assert!(!contiene_parent(&recargado, "n/sub/retirado", "n/Old"));
+    let delta_vacio = Delta::nuevo(std::iter::empty::<Atomo>(), std::iter::empty()).unwrap();
+    let recargado_candidato = construir(&recargado, &delta_vacio);
+    let idempotente = serializar_candidato(&recargado, &recargado_candidato, &[]).unwrap();
+    assert_eq!(primera, idempotente);
 }

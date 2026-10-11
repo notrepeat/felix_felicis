@@ -14,4 +14,7 @@ pub use errores::{
     ErrorBundle, ErrorDocumento, ErrorEntrada, ErrorEscritura, ErrorManifiestoArchivo, Regla,
 };
 pub use manifiesto_toml::{cargar_manifiesto, parsear_manifiesto};
-pub use serializar::{escalar_salida, serializar_bundle, serializar_nodo};
+pub use serializar::{
+    DocumentoCandidato, ErrorSerializarCandidato, ParentOverride, escalar_salida,
+    serializar_bundle, serializar_candidato, serializar_nodo,
+};
