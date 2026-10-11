@@ -49,6 +49,34 @@ fn edge(snapshot: &Estructura, ordinal: u32) -> Atomo {
         .unwrap()
 }
 
+fn edge_add(origen: &str, destino: &str, sorte: &str, ordinal: u32) -> (IdArista, Atomo) {
+    let origen = p(origen);
+    let destino = p(destino);
+    let sorte = Sorte::nuevo(sorte);
+    let id = IdArista {
+        origen: origen.clone(),
+        sorte: sorte.clone(),
+        destino: destino.clone(),
+        ordinal,
+    };
+    (
+        id.clone(),
+        Atomo::Edge {
+            id,
+            origen,
+            destino,
+            sorte,
+        },
+    )
+}
+
+fn haslab_add(id: IdArista, etiqueta: &str) -> Atomo {
+    Atomo::HasLab {
+        sujeto: Sujeto::Arista(id),
+        etiqueta: Etiqueta::nuevo(etiqueta),
+    }
+}
+
 #[test]
 fn tres_paralelas_remove_cero_compacta_en_orden_y_conserva_labels_por_handle() {
     let (snapshot, origen, _, handles) = paralelas(3);
@@ -246,4 +274,229 @@ fn haslab_de_arista_exige_edge_del_mismo_handle_y_label_exacta() {
     ));
     assert!(!format!("{error} {error:?}").contains("PRIVATE_LABEL"));
     snapshot.verificar_representacion().unwrap();
+}
+
+#[test]
+fn once_altas_ordenan_ordinales_numericamente_y_asocian_labels_por_handle() {
+    let (snapshot, origen, _, _) = paralelas(0);
+    let antes = snapshot.atomos();
+    let mut add = Vec::new();
+    for ordinal in 0..11 {
+        let (id, edge) = edge_add("n/origen", "n/destino", "rel", ordinal);
+        add.push(edge);
+        let etiqueta = if ordinal == 10 {
+            "".to_string()
+        } else {
+            format!("nueva-{ordinal}")
+        };
+        add.push(haslab_add(id, &etiqueta));
+    }
+    let delta = Delta::nuevo(add.clone(), []).unwrap();
+    let delta_inverso = Delta::nuevo(add.into_iter().rev(), []).unwrap();
+    let salida = construir_candidato(&snapshot, &delta).unwrap();
+    let salida_inversa = construir_candidato(&snapshot, &delta_inverso).unwrap();
+
+    assert_eq!(
+        salida.estructura().atomos(),
+        salida_inversa.estructura().atomos()
+    );
+    let handles = salida.estructura().salientes(origen);
+    assert_eq!(handles.len(), 11);
+    for (ordinal, handle) in handles.iter().enumerate() {
+        let arista = salida.estructura().arista(*handle).unwrap();
+        assert_eq!(arista.ordinal, ordinal as u32);
+        let etiqueta = if ordinal == 10 {
+            "".to_string()
+        } else {
+            format!("nueva-{ordinal}")
+        };
+        assert_eq!(arista.etiqueta.como_str(), etiqueta);
+    }
+    assert_eq!(snapshot.atomos(), antes);
+    snapshot.verificar_representacion().unwrap();
+    salida.estructura().verificar_representacion().unwrap();
+    salida_inversa
+        .estructura()
+        .verificar_representacion()
+        .unwrap();
+}
+
+#[test]
+fn remove_y_add_usan_ordinales_finales_y_conservan_labels_por_handle() {
+    let (snapshot, origen, _, handles) = paralelas(3);
+    let (id_nueva, edge_nueva) = edge_add("n/origen", "n/destino", "rel", 2);
+    let delta = Delta::nuevo(
+        [edge_nueva, haslab_add(id_nueva, "nueva")],
+        [edge(&snapshot, 1)],
+    )
+    .unwrap();
+    let salida = construir_candidato(&snapshot, &delta).unwrap();
+    let orden = salida.estructura().salientes(origen);
+
+    assert_eq!(&orden[..2], &[handles[0], handles[2]]);
+    assert_eq!(salida.estructura().arista(handles[0]).unwrap().ordinal, 0);
+    assert_eq!(
+        salida
+            .estructura()
+            .arista(handles[0])
+            .unwrap()
+            .etiqueta
+            .como_str(),
+        "label-0"
+    );
+    assert_eq!(salida.estructura().arista(handles[2]).unwrap().ordinal, 1);
+    assert_eq!(
+        salida
+            .estructura()
+            .arista(handles[2])
+            .unwrap()
+            .etiqueta
+            .como_str(),
+        "label-2"
+    );
+    assert_eq!(salida.estructura().arista(orden[2]).unwrap().ordinal, 2);
+    assert_eq!(
+        salida
+            .estructura()
+            .arista(orden[2])
+            .unwrap()
+            .etiqueta
+            .como_str(),
+        "nueva"
+    );
+    assert_eq!(snapshot.arista(handles[1]).unwrap().ordinal, 1);
+    salida.estructura().verificar_representacion().unwrap();
+}
+
+#[test]
+fn alta_edge_exige_label_y_rechaza_huerfano_o_varios_labels_distintos() {
+    let (snapshot, _, _, _) = paralelas(0);
+    let antes = snapshot.atomos();
+    let (id, edge) = edge_add("n/origen", "n/destino", "rel", 0);
+    let sin_label = Delta::nuevo([edge.clone()], []).unwrap();
+    assert!(matches!(
+        construir_candidato(&snapshot, &sin_label),
+        Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab
+        })
+    ));
+
+    let huerfano = Delta::nuevo([haslab_add(id.clone(), "huerfano")], []).unwrap();
+    assert!(matches!(
+        construir_candidato(&snapshot, &huerfano),
+        Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab
+        })
+    ));
+
+    let conflictivo = Delta::nuevo(
+        [
+            edge,
+            haslab_add(id.clone(), "label-a"),
+            haslab_add(id, "label-b"),
+        ],
+        [],
+    )
+    .unwrap();
+    assert!(matches!(
+        construir_candidato(&snapshot, &conflictivo),
+        Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab
+        })
+    ));
+    assert_eq!(snapshot.atomos(), antes);
+    snapshot.verificar_representacion().unwrap();
+}
+
+#[test]
+fn alta_edge_rechaza_huecos_endpoints_y_tipos_ausentes_sin_revelar_paths() {
+    let (snapshot, _, _, _) = paralelas(0);
+    let antes = snapshot.atomos();
+    let (id_hueco, edge_hueco) = edge_add("n/origen", "n/destino", "rel", 1);
+    let hueco = Delta::nuevo([edge_hueco, haslab_add(id_hueco, "label")], []).unwrap();
+    assert!(matches!(
+        construir_candidato(&snapshot, &hueco),
+        Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::Edge
+        })
+    ));
+
+    let (id_ausente, edge_ausente) = edge_add("n/PRIVATE_ENDPOINT", "n/destino", "rel", 0);
+    let endpoint_ausente =
+        Delta::nuevo([edge_ausente, haslab_add(id_ausente, "PRIVATE_LABEL")], []).unwrap();
+    let error = construir_candidato(&snapshot, &endpoint_ausente).unwrap_err();
+    assert!(matches!(
+        error,
+        ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::Edge
+        }
+    ));
+    let texto = format!("{error} {error:?}");
+    assert!(!texto.contains("PRIVATE_ENDPOINT") && !texto.contains("PRIVATE_LABEL"));
+
+    let (id_tipo_ausente, edge_tipo_ausente) =
+        edge_add("n/origen", "n/destino", "PRIVATE_RELATION", 0);
+    let tipo_ausente = Delta::nuevo(
+        [edge_tipo_ausente, haslab_add(id_tipo_ausente, "label")],
+        [],
+    )
+    .unwrap();
+    let error = construir_candidato(&snapshot, &tipo_ausente).unwrap_err();
+    assert!(matches!(
+        error,
+        ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::Edge
+        }
+    ));
+    assert!(!format!("{error} {error:?}").contains("PRIVATE_RELATION"));
+    assert_eq!(snapshot.atomos(), antes);
+    snapshot.verificar_representacion().unwrap();
+}
+
+#[test]
+fn alta_idempotente_requiere_label_vigente_exacta_y_delta_vacio_es_noop() {
+    let (snapshot, _, _, _) = paralelas(2);
+    let antes = snapshot.atomos();
+    let vacio = Delta::nuevo([], []).unwrap();
+    assert_eq!(
+        construir_candidato(&snapshot, &vacio)
+            .unwrap()
+            .estructura()
+            .atomos(),
+        antes
+    );
+
+    let vigente = edge(&snapshot, 1);
+    let id = match &vigente {
+        Atomo::Edge { id, .. } => id.clone(),
+        _ => unreachable!(),
+    };
+    let etiqueta = snapshot
+        .arista(snapshot.salientes(snapshot.por_path(&p("n/origen")).unwrap())[1])
+        .unwrap()
+        .etiqueta
+        .clone();
+    let no_op = Delta::nuevo(
+        [vigente.clone(), haslab_add(id.clone(), etiqueta.como_str())],
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        construir_candidato(&snapshot, &no_op)
+            .unwrap()
+            .estructura()
+            .atomos(),
+        antes
+    );
+
+    let label_distinta = Delta::nuevo([vigente, haslab_add(id, "PRIVATE_LABEL")], []).unwrap();
+    let error = construir_candidato(&snapshot, &label_distinta).unwrap_err();
+    assert!(matches!(
+        error,
+        ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab
+        }
+    ));
+    assert!(!format!("{error} {error:?}").contains("PRIVATE_LABEL"));
+    assert_eq!(snapshot.atomos(), antes);
 }
