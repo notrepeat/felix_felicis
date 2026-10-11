@@ -2,14 +2,37 @@
 //!
 //! El inventario incluye archivos regulares y directorios, incluidos los
 //! vacíos. La identidad de ruta es UTF-8 exacto, separador `/`, sin casefold
-//! ni normalización Unicode. Staging añade el preflight bajo lock antes de
-//! usar esta API para apply.
+//! ni normalización Unicode. El backend por ruta conserva un límite TOCTOU.
 
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use super::snapshot::{EntradaSnapshot, ErrorSnapshot};
+
+enum EntradaAbierta<D, A> {
+    Directorio(D),
+    Archivo(A),
+}
+
+/// Único recorrido del inventario; los backends solo enumeran, abren y leen.
+trait BackendInventario {
+    type Directorio;
+    type Archivo;
+
+    fn nombres(
+        &mut self,
+        directorio: &mut Self::Directorio,
+    ) -> Result<Vec<std::ffi::OsString>, ErrorSnapshot>;
+
+    fn abrir(
+        &mut self,
+        directorio: &Self::Directorio,
+        nombre: &str,
+    ) -> Result<EntradaAbierta<Self::Directorio, Self::Archivo>, ErrorSnapshot>;
+
+    fn leer(&mut self, archivo: Self::Archivo) -> Result<Vec<u8>, ErrorSnapshot>;
+}
 
 /// Lee una vez cada archivo y devuelve el inventario ordenado por bytes UTF-8.
 pub(crate) fn inventariar_root(raiz: &Path) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
@@ -18,51 +41,112 @@ pub(crate) fn inventariar_root(raiz: &Path) -> Result<Vec<EntradaSnapshot>, Erro
 
 pub(crate) fn inventariar_root_con_lector<F>(
     raiz: &Path,
-    mut leer: F,
+    leer: F,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>
 where
     F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     let raiz = ruta_absoluta_lexica(raiz)?;
     validar_directorio_sin_enlaces(&raiz)?;
+    caminar_inventario(&mut BackendRuta { leer }, raiz)
+}
+
+fn caminar_inventario<B: BackendInventario>(
+    backend: &mut B,
+    raiz: B::Directorio,
+) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
     let mut pendientes = vec![(raiz, String::new())];
     let mut entradas = Vec::new();
 
-    while let Some((directorio, prefijo)) = pendientes.pop() {
-        validar_directorio_sin_enlaces(&directorio)?;
-        let leidos = fs::read_dir(&directorio).map_err(|_| ErrorSnapshot::Io)?;
-        for hijo in leidos {
-            let hijo = hijo.map_err(|_| ErrorSnapshot::Io)?;
-            let nombre = hijo
-                .file_name()
+    while let Some((mut directorio, prefijo)) = pendientes.pop() {
+        // El backend hace una sola enumeración y devuelve solo nombres. La
+        // validación de nombre y la ruta lógica son compartidas por ambos.
+        for nombre in backend.nombres(&mut directorio)? {
+            let nombre = nombre
                 .into_string()
                 .map_err(|_| ErrorSnapshot::RutaNoUtf8)?;
-            if nombre.contains('\\') {
-                return Err(ErrorSnapshot::RutaNoRepresentable);
-            }
+            validar_nombre_inventario(&nombre)?;
             let ruta = if prefijo.is_empty() {
-                nombre
+                nombre.clone()
             } else {
                 format!("{prefijo}/{nombre}")
             };
-            let camino = hijo.path();
-            let metadata = fs::symlink_metadata(&camino).map_err(|_| ErrorSnapshot::Io)?;
-            if es_enlace_o_reparse(&metadata) {
-                return Err(ErrorSnapshot::EnlaceNoPermitido);
-            }
-            if metadata.is_dir() {
-                entradas.push(EntradaSnapshot::directorio(ruta.clone()));
-                pendientes.push((camino, ruta));
-            } else if metadata.is_file() {
-                entradas.push(EntradaSnapshot::archivo(ruta, leer(&camino)?));
-            } else {
-                return Err(ErrorSnapshot::TipoNoAdmitido);
+
+            match backend.abrir(&directorio, &nombre)? {
+                EntradaAbierta::Directorio(hijo) => {
+                    entradas.push(EntradaSnapshot::directorio(ruta.clone()));
+                    pendientes.push((hijo, ruta));
+                }
+                EntradaAbierta::Archivo(archivo) => {
+                    entradas.push(EntradaSnapshot::archivo(ruta, backend.leer(archivo)?));
+                }
             }
         }
     }
 
     entradas.sort_by(|a, b| a.ruta().as_bytes().cmp(b.ruta().as_bytes()));
     Ok(entradas)
+}
+
+fn validar_nombre_inventario(nombre: &str) -> Result<(), ErrorSnapshot> {
+    if nombre.is_empty()
+        || matches!(nombre, "." | "..")
+        || nombre.contains('/')
+        || nombre.contains('\\')
+    {
+        return Err(ErrorSnapshot::RutaNoRepresentable);
+    }
+    Ok(())
+}
+
+struct BackendRuta<F> {
+    leer: F,
+}
+
+impl<F> BackendInventario for BackendRuta<F>
+where
+    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    type Directorio = PathBuf;
+    type Archivo = PathBuf;
+
+    fn nombres(
+        &mut self,
+        directorio: &mut Self::Directorio,
+    ) -> Result<Vec<std::ffi::OsString>, ErrorSnapshot> {
+        validar_directorio_sin_enlaces(directorio)?;
+        fs::read_dir(directorio)
+            .map_err(|_| ErrorSnapshot::Io)?
+            .map(|entrada| {
+                entrada
+                    .map(|entrada| entrada.file_name())
+                    .map_err(|_| ErrorSnapshot::Io)
+            })
+            .collect()
+    }
+
+    fn abrir(
+        &mut self,
+        directorio: &Self::Directorio,
+        nombre: &str,
+    ) -> Result<EntradaAbierta<Self::Directorio, Self::Archivo>, ErrorSnapshot> {
+        let camino = directorio.join(nombre);
+        let metadata = fs::symlink_metadata(&camino).map_err(|_| ErrorSnapshot::Io)?;
+        if es_enlace_o_reparse(&metadata) {
+            return Err(ErrorSnapshot::EnlaceNoPermitido);
+        }
+        if metadata.is_dir() {
+            Ok(EntradaAbierta::Directorio(camino))
+        } else if metadata.is_file() {
+            Ok(EntradaAbierta::Archivo(camino))
+        } else {
+            Err(ErrorSnapshot::TipoNoAdmitido)
+        }
+    }
+
+    fn leer(&mut self, archivo: Self::Archivo) -> Result<Vec<u8>, ErrorSnapshot> {
+        (self.leer)(&archivo)
+    }
 }
 
 pub(crate) fn ruta_absoluta_lexica(ruta: &Path) -> Result<PathBuf, ErrorSnapshot> {
