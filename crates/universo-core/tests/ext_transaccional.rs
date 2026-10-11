@@ -125,6 +125,64 @@ fn retiro_ausente_o_con_valor_incorrecto_es_remove_not_found_redactado() {
 }
 
 #[test]
+fn multiples_retiros_incluido_el_vigente_son_remove_not_found() {
+    let (mut snapshot, nodo, _) = base();
+    snapshot.asignar_atributo(nodo, "Nivel", "alto").unwrap();
+    let antes = snapshot.atomos();
+    let delta = Delta::nuevo([], [ext("n/nodo", "alto"), ext("n/nodo", "bajo")]).unwrap();
+
+    let error = construir_candidato(&snapshot, &delta).unwrap_err();
+
+    assert!(matches!(
+        error,
+        ErrorCandidato::RemoveNotFound {
+            clase: ClaseOperacion::Ext
+        }
+    ));
+    assert_redactado(&error, &["n/nodo", "alto", "bajo"]);
+    assert_eq!(snapshot.atomos(), antes);
+}
+
+#[test]
+fn retiro_con_predicado_dominio_o_sujeto_invalidos_es_remove_not_found() {
+    let (snapshot, _, _) = base();
+    let antes = snapshot.atomos();
+    let invalidos = [
+        Atomo::Ext {
+            predicado: "PREDICADO_PRIVADO".into(),
+            sujeto: p("n/nodo"),
+            constante: "alto".into(),
+        },
+        Atomo::Ext {
+            predicado: "Nivel".into(),
+            sujeto: p("n/nodo"),
+            constante: "VALOR_PRIVADO".into(),
+        },
+        Atomo::Ext {
+            predicado: "Nivel".into(),
+            sujeto: p("n/SUJETO_PRIVADO"),
+            constante: "alto".into(),
+        },
+    ];
+
+    for atomo in invalidos {
+        let delta = Delta::nuevo([], [atomo]).unwrap();
+        let error = construir_candidato(&snapshot, &delta).unwrap_err();
+        assert!(matches!(
+            error,
+            ErrorCandidato::RemoveNotFound {
+                clase: ClaseOperacion::Ext
+            }
+        ));
+        assert_redactado(
+            &error,
+            &["PREDICADO_PRIVADO", "SUJETO_PRIVADO", "VALOR_PRIVADO"],
+        );
+        assert_eq!(snapshot.atomos(), antes);
+    }
+}
+
+#[test]
 fn predicado_sujeto_y_dominio_invalidos_rechazan_redactados() {
     let (snapshot, _, _) = base();
     let antes = snapshot.atomos();

@@ -11,6 +11,12 @@ struct Solicitud {
     retiros: BTreeSet<String>,
 }
 
+#[derive(Default)]
+struct Fallos {
+    alta: bool,
+    retiro: bool,
+}
+
 pub(super) struct Cambio {
     nodo: NodoId,
     predicado: String,
@@ -26,6 +32,7 @@ pub(super) fn preparar(
     delta: &Delta,
 ) -> Result<Vec<Cambio>, ErrorCandidato> {
     let mut solicitudes = BTreeMap::<(String, BundlePath), Solicitud>::new();
+    let mut fallos = Fallos::default();
     for (lado, atomos) in [(false, delta.agregar()), (true, delta.retirar())] {
         for atomo in atomos {
             let Atomo::Ext {
@@ -42,18 +49,14 @@ pub(super) fn preparar(
                 .predicado(predicado)
                 .is_some_and(|declaracion| declaracion.dominio.contains(constante));
             if !declarado {
-                return Err(conflicto_ext());
+                marcar_fallo(&mut fallos, lado);
+                continue;
             }
 
-            let nodo = snapshot.por_path(sujeto).ok_or_else(|| {
-                if lado {
-                    ErrorCandidato::RemoveNotFound {
-                        clase: ClaseOperacion::Ext,
-                    }
-                } else {
-                    conflicto_ext()
-                }
-            })?;
+            let Some(nodo) = snapshot.por_path(sujeto) else {
+                marcar_fallo(&mut fallos, lado);
+                continue;
+            };
             let solicitud = solicitudes
                 .entry((predicado.clone(), sujeto.clone()))
                 .or_default();
@@ -68,30 +71,33 @@ pub(super) fn preparar(
 
     let mut cambios = Vec::with_capacity(solicitudes.len());
     for ((predicado, _), solicitud) in solicitudes {
-        if solicitud.altas.len() > 1 || solicitud.retiros.len() > 1 {
-            return Err(conflicto_ext());
+        if solicitud.altas.len() > 1 {
+            fallos.alta = true;
+        }
+        if solicitud.retiros.len() > 1 {
+            fallos.retiro = true;
         }
         let nodo = solicitud
             .nodo
             .ok_or(ErrorCandidato::SnapshotInconsistente)?;
         let vigente = snapshot.atributos(nodo).get(&predicado).cloned();
-        let retirar = solicitud.retiros.into_iter().next();
-        let agregar = solicitud.altas.into_iter().next();
+        let retiro_coincide = solicitud_retiros_coincide(&solicitud, vigente.as_deref());
+        let tiene_retiro_vigente = solicitud
+            .retiros
+            .iter()
+            .any(|valor| vigente.as_deref() == Some(valor.as_str()));
+        let retirar = solicitud.retiros.iter().next().cloned();
+        let agregar = solicitud.altas.iter().next().cloned();
 
-        if retirar
-            .as_deref()
-            .is_some_and(|valor| vigente.as_deref() != Some(valor))
-        {
-            return Err(ErrorCandidato::RemoveNotFound {
-                clase: ClaseOperacion::Ext,
-            });
+        if !retiro_coincide {
+            fallos.retiro = true;
         }
         if agregar
             .as_deref()
             .is_some_and(|nuevo| vigente.as_deref().is_some_and(|actual| actual != nuevo))
-            && retirar.is_none()
+            && !tiene_retiro_vigente
         {
-            return Err(conflicto_ext());
+            fallos.alta = true;
         }
 
         cambios.push(Cambio {
@@ -101,6 +107,13 @@ pub(super) fn preparar(
             retirar,
             agregar,
         });
+    }
+
+    if fallos.alta {
+        return Err(conflicto_ext());
+    }
+    if fallos.retiro {
+        return Err(remove_not_found_ext());
     }
     Ok(cambios)
 }
@@ -129,4 +142,24 @@ fn conflicto_ext() -> ErrorCandidato {
     ErrorCandidato::AddConflict {
         clase: ClaseOperacion::Ext,
     }
+}
+
+fn remove_not_found_ext() -> ErrorCandidato {
+    ErrorCandidato::RemoveNotFound {
+        clase: ClaseOperacion::Ext,
+    }
+}
+
+fn marcar_fallo(fallos: &mut Fallos, lado_retiro: bool) {
+    if lado_retiro {
+        fallos.retiro = true;
+    } else {
+        fallos.alta = true;
+    }
+}
+
+fn solicitud_retiros_coincide(solicitud: &Solicitud, vigente: Option<&str>) -> bool {
+    solicitud.retiros.is_empty()
+        || (solicitud.retiros.len() == 1
+            && vigente.is_some_and(|valor| solicitud.retiros.contains(valor)))
 }

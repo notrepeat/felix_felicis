@@ -7,7 +7,7 @@ use universo_okf::{
 
 #[test]
 fn json_ext_canonico_se_parsea_y_serializa_sin_perdida() {
-    let json = r#"{"schema":"felix-delta-v1","add":["Nivel(n/root, alto)"],"remove":[]}"#;
+    let json = r#"{"schema":"felix-delta-v1","add":["Nivel(n/root, bajo)"],"remove":["Nivel(n/root, alto)"]}"#;
 
     let delta = parsear_delta_json_v1(json).unwrap();
     let serializado = serializar_delta_json_v1(&delta).unwrap();
@@ -16,8 +16,75 @@ fn json_ext_canonico_se_parsea_y_serializa_sin_perdida() {
     assert_eq!(parsear_delta_json_v1(&serializado).unwrap(), delta);
     assert!(
         matches!(delta.agregar(), [Atomo::Ext { predicado, sujeto, constante }]
+        if predicado == "Nivel" && sujeto.como_str() == "n/root" && constante == "bajo")
+    );
+    assert!(
+        matches!(delta.retirar(), [Atomo::Ext { predicado, sujeto, constante }]
         if predicado == "Nivel" && sujeto.como_str() == "n/root" && constante == "alto")
     );
+}
+
+#[test]
+fn candidato_ext_elimina_y_reemplaza_el_campo_al_serializar_y_recargar() {
+    let manifiesto = universo_testkit::manifiesto_minimo();
+    let archivo = (
+        "n/root.md".to_string(),
+        "---\ntype: a\ntitle: Raíz\nnivel: alto\n---\ncuerpo\n".to_string(),
+    );
+    let snapshot = parsear_bundle(&[archivo], manifiesto.clone()).unwrap();
+    let sujeto = BundlePath::nuevo("n/root").unwrap();
+    let id = snapshot.por_path(&sujeto).unwrap();
+
+    let retiro = Delta::nuevo(
+        [],
+        [Atomo::Ext {
+            predicado: "Nivel".into(),
+            sujeto: sujeto.clone(),
+            constante: "alto".into(),
+        }],
+    )
+    .unwrap();
+    let candidato_retiro = universo_core::construir_candidato(&snapshot, &retiro).unwrap();
+    let serializado_retiro = serializar_nodo(candidato_retiro.estructura(), id);
+    assert!(!serializado_retiro.contains("nivel:"));
+    let recargado_retiro = parsear_bundle(
+        &[("n/root.md".to_string(), serializado_retiro)],
+        manifiesto.clone(),
+    )
+    .unwrap();
+    assert!(
+        !recargado_retiro
+            .atomos()
+            .iter()
+            .any(|atomo| matches!(atomo, Atomo::Ext { predicado, .. } if predicado == "Nivel"))
+    );
+
+    let reemplazo = Delta::nuevo(
+        [Atomo::Ext {
+            predicado: "Nivel".into(),
+            sujeto,
+            constante: "bajo".into(),
+        }],
+        [Atomo::Ext {
+            predicado: "Nivel".into(),
+            sujeto: BundlePath::nuevo("n/root").unwrap(),
+            constante: "alto".into(),
+        }],
+    )
+    .unwrap();
+    let candidato_reemplazo = universo_core::construir_candidato(&snapshot, &reemplazo).unwrap();
+    let serializado_reemplazo = serializar_nodo(candidato_reemplazo.estructura(), id);
+    assert!(serializado_reemplazo.contains("nivel: bajo\n"));
+    assert!(!serializado_reemplazo.contains("nivel: alto\n"));
+    let recargado_reemplazo = parsear_bundle(
+        &[("n/root.md".to_string(), serializado_reemplazo)],
+        manifiesto,
+    )
+    .unwrap();
+    assert!(recargado_reemplazo.atomos().iter().any(
+        |atomo| matches!(atomo, Atomo::Ext { predicado, sujeto, constante }
+            if predicado == "Nivel" && sujeto.como_str() == "n/root" && constante == "bajo")
+    ));
 }
 
 #[test]
