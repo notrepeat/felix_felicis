@@ -99,6 +99,8 @@ fn validar_nombre_inventario(nombre: &str) -> Result<(), ErrorSnapshot> {
     Ok(())
 }
 
+// P3: enumera nombres antes de abrirlos; bajo mutación externa conserva
+// TOCTOU y no promete el mismo interleaving entre ambos pasos.
 struct BackendRuta<F> {
     leer: F,
 }
@@ -375,6 +377,62 @@ mod tests {
         fs::write(root.join("0.empty"), []).unwrap();
     }
 
+    fn crear_par_si_el_filesystem_distingue(
+        root: &Path,
+        primero: &str,
+        segundo: &str,
+        identidad: &str,
+    ) -> Option<[String; 2]> {
+        let primera = root.join(primero);
+        let segunda = root.join(segundo);
+        drop(
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&primera)
+                .unwrap_or_else(|error| panic!("no se pudo crear {primero}: {error}")),
+        );
+
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&segunda)
+        {
+            Ok(archivo) => {
+                drop(archivo);
+                Some([primero.to_owned(), segundo.to_owned()])
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                fs::remove_file(primera).unwrap();
+                eprintln!("SKIP explícito: el filesystem colisiona el par {identidad}");
+                None
+            }
+            Err(error) => panic!("no se pudo crear {segundo}: {error}"),
+        }
+    }
+
+    fn rechazo_path_sin_lectura(root: &Path) -> ErrorSnapshot {
+        let mut lecturas = 0;
+        let resultado = inventariar_root_con_lector(root, |_| {
+            lecturas += 1;
+            Ok(Vec::new())
+        });
+        assert_eq!(lecturas, 0);
+        resultado.unwrap_err()
+    }
+
+    #[cfg(unix)]
+    fn rechazo_handle_sin_lectura(root: &Path) -> ErrorSnapshot {
+        let mut lecturas = 0;
+        let resultado =
+            inventariar_root_anclado_con_lector(anclar(root).abrir_raiz().unwrap(), |_| {
+                lecturas += 1;
+                Ok(Vec::new())
+            });
+        assert_eq!(lecturas, 0);
+        resultado.unwrap_err()
+    }
+
     #[test]
     fn incluye_binarios_vacios_y_directorios_en_orden_utf8_exact() {
         let root = tempfile::tempdir().unwrap();
@@ -406,6 +464,49 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["0.empty", "a", "a/MiXeD-é.bin", "vacio"]
         );
+    }
+
+    #[test]
+    fn replay_path_y_handle_conservan_entradas_y_token_con_identidades_exactas() {
+        let root = tempfile::tempdir().unwrap();
+        crear_arbol_estable(root.path());
+        let mut adicionales = Vec::new();
+        if let Some(par) = crear_par_si_el_filesystem_distingue(
+            root.path(),
+            "Case-sibling.txt",
+            "case-sibling.txt",
+            "case",
+        ) {
+            adicionales.extend(par);
+        }
+        if let Some(par) = crear_par_si_el_filesystem_distingue(
+            root.path(),
+            "é-NFC.txt",
+            "e\u{301}-NFD.txt",
+            "Unicode NFC/NFD",
+        ) {
+            adicionales.extend(par);
+        }
+
+        let path_primera = inventariar_root(root.path()).unwrap();
+        let path_replay = inventariar_root(root.path()).unwrap();
+        let handle_primera =
+            inventariar_root_anclado(anclar(root.path()).abrir_raiz().unwrap()).unwrap();
+        let handle_replay =
+            inventariar_root_anclado(anclar(root.path()).abrir_raiz().unwrap()).unwrap();
+
+        assert_eq!(resumen(&path_primera), resumen(&path_replay));
+        assert_eq!(resumen(&handle_primera), resumen(&handle_replay));
+        assert_eq!(resumen(&path_primera), resumen(&handle_primera));
+        assert_eq!(token(&path_primera), token(&path_replay));
+        assert_eq!(token(&handle_primera), token(&handle_replay));
+        assert_eq!(token(&path_primera), token(&handle_primera));
+        for nombre in adicionales {
+            assert!(
+                path_primera.iter().any(|entrada| entrada.ruta() == nombre),
+                "no se preservó el nombre exacto {nombre:?}"
+            );
+        }
     }
 
     #[test]
@@ -499,6 +600,27 @@ mod tests {
         assert!(!error.to_string().contains("PRIVATE-CANARY"));
     }
 
+    #[test]
+    fn path_rechaza_enlace_en_ancestro_del_root_sin_leer_canary() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        let root_real = real.join("bundle");
+        let alias = temp.path().join("alias");
+        fs::create_dir_all(&root_real).unwrap();
+        fs::write(root_real.join("sentinel.txt"), b"OUTSIDE-CANARY").unwrap();
+        crear_junction(&alias, &real);
+
+        let root_via_link = alias.join("bundle");
+        let error = rechazo_path_sin_lectura(&root_via_link);
+
+        assert_eq!(error, ErrorSnapshot::EnlaceNoPermitido);
+        assert!(!error.to_string().contains("OUTSIDE-CANARY"));
+        assert_eq!(
+            fs::read(root_real.join("sentinel.txt")).unwrap(),
+            b"OUTSIDE-CANARY"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn rechaza_symlink_leaf_sin_leer_su_destino_desde_handle() {
@@ -537,6 +659,48 @@ mod tests {
             inventariar_root_anclado(anclar(root.path()).abrir_raiz().unwrap()).unwrap_err(),
             ErrorSnapshot::TipoNoAdmitido
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_rechaza_fifo_sin_leerlo() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let fifo = root.path().join("fifo");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `fifo_c` is nul-terminated and mkfifo does not retain it.
+        let status = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) };
+        assert_eq!(
+            status,
+            0,
+            "mkfifo failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        assert_eq!(
+            rechazo_path_sin_lectura(root.path()),
+            ErrorSnapshot::TipoNoAdmitido
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_y_handle_rechazan_socket_sin_leerlo() {
+        use std::os::unix::net::UnixListener;
+
+        let root = tempfile::tempdir().unwrap();
+        let _listener = UnixListener::bind(root.path().join("socket")).unwrap();
+
+        assert_eq!(
+            rechazo_path_sin_lectura(root.path()),
+            ErrorSnapshot::TipoNoAdmitido
+        );
+        assert!(matches!(
+            rechazo_handle_sin_lectura(root.path()),
+            ErrorSnapshot::TipoNoAdmitido | ErrorSnapshot::Io
+        ));
     }
 
     #[cfg(windows)]
