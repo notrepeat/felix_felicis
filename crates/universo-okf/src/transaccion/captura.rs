@@ -40,6 +40,21 @@ pub(crate) struct Snapshot {
     fuentes_invariantes: Vec<SentenciaFuente>,
 }
 
+/// Identidad del bundle calculada sobre buffers capturados, aún sin parsear.
+/// Solo la capa de transacción puede compararla y luego materializarla.
+struct CapturaSnapshotRaw {
+    token: SnapshotToken,
+    entradas: Vec<EntradaSnapshot>,
+    manifiesto_raw: Arc<[u8]>,
+    invariantes_raw: Arc<[u8]>,
+}
+
+impl fmt::Debug for CapturaSnapshotRaw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CapturaSnapshotRaw { .. }")
+    }
+}
+
 impl Snapshot {
     /// Token opaco; la representación solo se revela mediante `to_hex`.
     pub(crate) fn token(&self) -> SnapshotToken {
@@ -92,7 +107,47 @@ pub(crate) fn capturar_snapshot(
     version_motor: &str,
     policy_id: &str,
 ) -> Result<Snapshot, ErrorSnapshot> {
-    capturar_snapshot_con_lector(
+    materializar(capturar_snapshot_raw(
+        raiz,
+        ruta_manifiesto,
+        ruta_invariantes,
+        version_motor,
+        policy_id,
+    )?)
+}
+
+/// Captura, compara el token antes de parsear y materializa únicamente si el
+/// snapshot sigue siendo el esperado. Apply debe usar esta ruta tras adquirir
+/// su lock y ejecutar recovery; la captura aún conserva el límite TOCTOU de U6.
+pub(crate) fn capturar_snapshot_con_cas(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let captura = capturar_snapshot_raw(
+        raiz,
+        ruta_manifiesto,
+        ruta_invariantes,
+        version_motor,
+        policy_id,
+    )?;
+    super::snapshot::comparar_snapshot_esperado(esperado, captura.token)?;
+    materializar(captura)
+}
+
+/// Lee las entradas y configura la identidad solo desde sus buffers raw. Debe
+/// seguir privada hasta que U6 aporte un root anclado que cierre el TOCTOU.
+fn capturar_snapshot_raw(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
+    capturar_snapshot_raw_con_lector(
         raiz,
         ruta_manifiesto,
         ruta_invariantes,
@@ -108,8 +163,29 @@ fn capturar_snapshot_con_lector<F>(
     ruta_invariantes: &Path,
     version_motor: &str,
     policy_id: &str,
-    mut leer: F,
+    leer: F,
 ) -> Result<Snapshot, ErrorSnapshot>
+where
+    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    materializar(capturar_snapshot_raw_con_lector(
+        raiz,
+        ruta_manifiesto,
+        ruta_invariantes,
+        version_motor,
+        policy_id,
+        leer,
+    )?)
+}
+
+fn capturar_snapshot_raw_con_lector<F>(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+    mut leer: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
 where
     F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
 {
@@ -131,6 +207,32 @@ where
         &mut leer,
     )?;
 
+    let token = calcular_token_snapshot(
+        version_motor,
+        policy_id,
+        &manifiesto_raw,
+        &invariantes_raw,
+        &entradas,
+    )?;
+
+    Ok(CapturaSnapshotRaw {
+        token,
+        entradas,
+        manifiesto_raw,
+        invariantes_raw,
+    })
+}
+
+/// Parsea únicamente los buffers que ya forman la identidad raw. No vuelve a
+/// consultar el filesystem, así que el modelo y token describen los mismos
+/// bytes incluso si los archivos cambian después de la captura.
+fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
+    let CapturaSnapshotRaw {
+        token,
+        entradas,
+        manifiesto_raw,
+        invariantes_raw,
+    } = raw;
     let manifiesto_texto =
         std::str::from_utf8(&manifiesto_raw).map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
     let manifiesto =
@@ -147,14 +249,6 @@ where
         std::str::from_utf8(&invariantes_raw).map_err(|_| ErrorSnapshot::InvariantesInvalidas)?;
     let fuentes_invariantes =
         parsear_programa(invariantes_texto).map_err(|_| ErrorSnapshot::InvariantesInvalidas)?;
-    let token = calcular_token_snapshot(
-        version_motor,
-        policy_id,
-        &manifiesto_raw,
-        &invariantes_raw,
-        &entradas,
-    )?;
-
     Ok(Snapshot {
         token,
         entradas,
@@ -325,6 +419,99 @@ ignorados = ["ignored.md"]
         assert!(snapshot.fuentes_invariantes().is_empty());
         assert!(!format!("{snapshot:?}").contains("snapshot-test"));
         assert!(!format!("{snapshot:?}").contains("knowledge/a.md"));
+    }
+
+    #[test]
+    fn captura_raw_se_materializa_desde_los_mismos_buffers_sin_releer() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifiesto = root.path().join("manifest.toml");
+        let invariantes = root.path().join("invariants.smt2");
+        let documento = root.path().join("knowledge/a.md");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(&documento, "---\ntype: a\ntitle: A\n---\n").unwrap();
+
+        let raw = capturar_snapshot_raw(
+            root.path(),
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+        )
+        .unwrap();
+        fs::write(&manifiesto, b"\xffMANIFEST-CANARY").unwrap();
+        fs::write(&documento, b"\xffDOCUMENT-CANARY").unwrap();
+
+        let snapshot = materializar(raw).unwrap();
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+    }
+
+    #[test]
+    fn cas_stale_precede_parseo_de_manifest_e_invariantes_invalidos() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifiesto = root.path().join("manifest.toml");
+        let invariantes = root.path().join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let capturar = || {
+            capturar_snapshot(
+                root.path(),
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+            )
+            .unwrap()
+        };
+        let esperado = capturar().token();
+        assert!(
+            capturar_snapshot_con_cas(
+                root.path(),
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+                esperado,
+            )
+            .is_ok()
+        );
+
+        for (ruta, bytes) in [
+            (&manifiesto, &b"\xffMANIFEST-CANARY"[..]),
+            (&invariantes, &b"\xffINVARIANTS-CANARY"[..]),
+        ] {
+            fs::write(ruta, bytes).unwrap();
+            let error = capturar_snapshot_con_cas(
+                root.path(),
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+                esperado,
+            )
+            .unwrap_err();
+            assert_eq!(error, ErrorSnapshot::Stale);
+            assert_eq!(error.codigo(), "stale");
+            assert!(!format!("{error:?}").contains("CANARY"));
+            assert!(!error.to_string().contains("CANARY"));
+            fs::write(
+                ruta,
+                if ruta == &manifiesto {
+                    MANIFIESTO.as_bytes()
+                } else {
+                    b"\n"
+                },
+            )
+            .unwrap();
+        }
     }
 
     #[test]

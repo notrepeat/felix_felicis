@@ -85,3 +85,135 @@ fn framing_v1_publico_es_determinista_opaco_y_sensible_a_cambios() {
     assert!(!hash.to_string().contains(&token_base));
     assert!(!format!("{hash:?}").contains("CANARY"));
 }
+
+#[test]
+fn identidad_cubre_contenido_rutas_altas_bajas_directorios_y_configuracion() {
+    let archivo = EntradaSnapshot::archivo("knowledge/a.md", Arc::<[u8]>::from(&b"raw"[..]));
+    let directorio = EntradaSnapshot::directorio("empty");
+    let identidad = |motor: &str,
+                     politica: &str,
+                     manifiesto: &[u8],
+                     invariantes: &[u8],
+                     entradas: &[EntradaSnapshot]| {
+        calcular_token_snapshot(motor, politica, manifiesto, invariantes, entradas).unwrap()
+    };
+    let base = identidad(
+        "engine/1",
+        "policy/1",
+        b"manifest",
+        b"invariants",
+        &[archivo.clone(), directorio.clone()],
+    );
+
+    assert_eq!(
+        base,
+        identidad(
+            "engine/1",
+            "policy/1",
+            b"manifest",
+            b"invariants",
+            &[directorio.clone(), archivo.clone()],
+        )
+    );
+    assert_ne!(
+        base,
+        identidad(
+            "engine/1",
+            "policy/1",
+            b"manifest",
+            b"invariants",
+            &[
+                EntradaSnapshot::archivo("knowledge/a.md", Arc::<[u8]>::from(&b"changed"[..]),),
+                directorio.clone()
+            ],
+        )
+    );
+    assert_ne!(
+        base,
+        identidad(
+            "engine/1",
+            "policy/1",
+            b"manifest",
+            b"invariants",
+            &[
+                EntradaSnapshot::archivo("knowledge/b.md", Arc::<[u8]>::from(&b"raw"[..]),),
+                directorio.clone()
+            ],
+        )
+    );
+    assert_ne!(
+        base,
+        identidad("engine/1", "policy/1", b"manifest", b"invariants", &[]),
+        "eliminar entradas cambia la identidad",
+    );
+    assert_ne!(
+        base,
+        identidad(
+            "engine/1",
+            "policy/1",
+            b"manifest",
+            b"invariants",
+            &[
+                archivo.clone(),
+                directorio,
+                EntradaSnapshot::archivo("added.bin", [])
+            ],
+        ),
+        "agregar un archivo cambia la identidad",
+    );
+    assert_ne!(
+        base,
+        identidad(
+            "engine/1",
+            "policy/1",
+            b"manifest",
+            b"invariants",
+            &[archivo.clone()],
+        ),
+        "agregar o retirar directorios vacíos cambia la identidad",
+    );
+    assert_ne!(
+        base,
+        identidad(
+            "engine/1",
+            "policy/1",
+            b"manifest ",
+            b"invariants",
+            &[archivo.clone(), EntradaSnapshot::directorio("empty")]
+        ),
+        "el manifiesto raw cambia la identidad",
+    );
+    assert_ne!(
+        base,
+        identidad(
+            "engine/1",
+            "policy/1",
+            b"manifest",
+            b"invariants ",
+            &[archivo.clone(), EntradaSnapshot::directorio("empty")]
+        ),
+        "las invariantes raw cambian la identidad",
+    );
+    assert_ne!(
+        base,
+        identidad(
+            "engine/2",
+            "policy/1",
+            b"manifest",
+            b"invariants",
+            &[archivo.clone(), EntradaSnapshot::directorio("empty")]
+        ),
+        "la versión del motor cambia la identidad",
+    );
+    assert_ne!(
+        base,
+        identidad(
+            "engine/1",
+            "policy/2",
+            b"manifest",
+            b"invariants",
+            &[archivo, EntradaSnapshot::directorio("empty")]
+        ),
+        "la política cambia la identidad",
+    );
+}

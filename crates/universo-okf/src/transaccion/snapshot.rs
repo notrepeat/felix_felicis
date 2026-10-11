@@ -105,6 +105,8 @@ impl fmt::Debug for EntradaSnapshot {
 pub enum ErrorSnapshot {
     /// No se pudo leer o inspeccionar una entrada.
     Io,
+    /// El token actual no coincide con la identidad esperada.
+    Stale,
     /// La identidad contiene una ruta no representable como UTF-8.
     RutaNoUtf8,
     /// La ruta no admite representación portable con separadores `/`.
@@ -130,6 +132,7 @@ impl ErrorSnapshot {
     pub const fn codigo(self) -> &'static str {
         match self {
             Self::Io => "snapshot_io",
+            Self::Stale => "stale",
             Self::RutaNoUtf8 => "snapshot_path_not_utf8",
             Self::RutaNoRepresentable => "snapshot_path_not_representable",
             Self::EnlaceNoPermitido => "snapshot_link_not_allowed",
@@ -140,6 +143,19 @@ impl ErrorSnapshot {
             Self::LongitudExcedida => "snapshot_length_overflow",
             Self::RaizInvalida => "snapshot_root_invalid",
         }
+    }
+}
+
+/// Compara una identidad esperada con la capturada sin exponer ninguno de los
+/// tokens en caso de diferencia.
+pub(crate) fn comparar_snapshot_esperado(
+    esperado: SnapshotToken,
+    actual: SnapshotToken,
+) -> Result<(), ErrorSnapshot> {
+    if esperado == actual {
+        Ok(())
+    } else {
+        Err(ErrorSnapshot::Stale)
     }
 }
 
@@ -287,5 +303,20 @@ mod tests {
             token("1", "p", b"m", b"i", &[archivo("é", b"x")]),
             token("1", "p", b"m", b"i", &[archivo("e\u{301}", b"x")])
         );
+    }
+
+    #[test]
+    fn cas_puro_acepta_match_y_devuelve_stale_fijo_y_redactado() {
+        let base = token("engine/1", "policy/1", b"MANIFEST-CANARY", b"rules", &[]);
+        assert_eq!(comparar_snapshot_esperado(base, base), Ok(()));
+
+        let distinto = token("engine/2", "policy/1", b"MANIFEST-CANARY", b"rules", &[]);
+        let error = comparar_snapshot_esperado(base, distinto).unwrap_err();
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(error.codigo(), "stale");
+        assert_eq!(error.to_string(), "stale");
+        assert!(!format!("{error:?}").contains(&base.to_hex()));
+        assert!(!format!("{error:?}").contains(&distinto.to_hex()));
+        assert!(!format!("{error:?}").contains("MANIFEST-CANARY"));
     }
 }
