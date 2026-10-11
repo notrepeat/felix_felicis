@@ -14,6 +14,9 @@ struct ExpectedRow {
 }
 
 const NO_STEPS: &[RecoveryStep] = &[];
+const JOURNAL_ONLY: &[RecoveryStep] = &[RecoveryStep::RemoveJournal];
+const REMOVE_STAGE_AND_JOURNAL: &[RecoveryStep] =
+    &[RecoveryStep::RemoveKnownStage, RecoveryStep::RemoveJournal];
 const KEEP_OLD: &[RecoveryStep] = &[
     RecoveryStep::RemoveKnownStage,
     RecoveryStep::RemoveKnownBackup,
@@ -59,7 +62,7 @@ fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
             backup: Absent,
             validated: false,
             decision: KeepOld,
-            steps: KEEP_OLD,
+            steps: JOURNAL_ONLY,
         },
         ExpectedRow {
             phase: Prepared,
@@ -83,7 +86,7 @@ fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
             backup: Absent,
             validated: false,
             decision: KeepOld,
-            steps: KEEP_OLD,
+            steps: JOURNAL_ONLY,
         },
         ExpectedRow {
             phase: BackupReady,
@@ -148,6 +151,14 @@ fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
             validated: false,
             decision: RestoreOld,
             steps: RESTORE_OLD,
+        },
+        ExpectedRow {
+            phase: Installed,
+            root: Old,
+            backup: Absent,
+            validated: false,
+            decision: KeepOld,
+            steps: JOURNAL_ONLY,
         },
         ExpectedRow {
             phase: Installed,
@@ -193,12 +204,20 @@ fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
                                 == (phase, root, backup, validated)
                         });
                         let expected = match (stage, row) {
-                            (Absent | New, Some(row)) => (row.decision, row.steps),
+                            (Absent, Some(row)) => (row.decision, row.steps),
+                            (New, Some(row)) if row.decision == KeepOld && row.backup == Absent => {
+                                (row.decision, REMOVE_STAGE_AND_JOURNAL)
+                            }
+                            (New, Some(row)) => (row.decision, row.steps),
                             _ => (FailClosed, NO_STEPS),
                         };
                         let actual = decide_recovery(phase, inventory);
                         assert_eq!(actual, expected.0, "{phase:?} {inventory:?}");
-                        assert_eq!(actual.steps(), expected.1, "{phase:?} {inventory:?}");
+                        assert_eq!(
+                            actual.steps(inventory),
+                            expected.1,
+                            "{phase:?} {inventory:?}"
+                        );
                     }
                 }
             }

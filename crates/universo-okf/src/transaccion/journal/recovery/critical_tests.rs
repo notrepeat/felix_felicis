@@ -68,7 +68,7 @@ fn installed_new_without_candidate_validation_restores_old_before_journal_remova
     let decision = decide_recovery(Installed, seen);
     assert_eq!(decision, DiscardNewRestoreOld);
     assert_eq!(
-        decision.steps(),
+        decision.steps(seen),
         &[
             S::RemoveKnownStage,
             S::RemoveRootNew,
@@ -84,9 +84,31 @@ fn installed_invalid_candidate_without_old_backup_fails_without_mutation() {
     use JournalState::Installed;
     use RecoveryDecision::FailClosed;
 
-    let decision = decide_recovery(Installed, inventory(New, Absent, Absent, false));
+    let seen = inventory(New, Absent, Absent, false);
+    let decision = decide_recovery(Installed, seen);
     assert_eq!(decision, FailClosed);
-    assert!(decision.steps().is_empty());
+    assert!(decision.steps(seen).is_empty());
+}
+
+#[test]
+fn installed_old_without_backup_replays_the_completed_restore_safely() {
+    use ArtifactState::{Absent, New, Old};
+    use JournalState::Installed;
+    use RecoveryDecision::KeepOld;
+    use RecoveryStep as S;
+
+    let root_only = inventory(Old, Absent, Absent, false);
+    let decision = decide_recovery(Installed, root_only);
+    assert_eq!(decision, KeepOld);
+    assert_eq!(decision.steps(root_only), &[S::RemoveJournal]);
+
+    let residual_stage = inventory(Old, Absent, New, false);
+    let decision = decide_recovery(Installed, residual_stage);
+    assert_eq!(decision, KeepOld);
+    assert_eq!(
+        decision.steps(residual_stage),
+        &[S::RemoveKnownStage, S::RemoveJournal]
+    );
 }
 
 #[test]
@@ -96,14 +118,16 @@ fn committed_new_requires_validation_before_cleanup() {
     use RecoveryDecision::{FailClosed, KeepValidatedCommittedNew};
     use RecoveryStep as S;
 
-    let unvalidated = decide_recovery(Committed, inventory(New, Old, Absent, false));
+    let unvalidated_seen = inventory(New, Old, Absent, false);
+    let unvalidated = decide_recovery(Committed, unvalidated_seen);
     assert_eq!(unvalidated, FailClosed);
-    assert!(unvalidated.steps().is_empty());
+    assert!(unvalidated.steps(unvalidated_seen).is_empty());
 
-    let validated = decide_recovery(Committed, inventory(New, Old, Absent, true));
+    let validated_seen = inventory(New, Old, Absent, true);
+    let validated = decide_recovery(Committed, validated_seen);
     assert_eq!(validated, KeepValidatedCommittedNew);
     assert_eq!(
-        validated.steps(),
+        validated.steps(validated_seen),
         &[S::RemoveKnownStage, S::RemoveKnownBackup, S::RemoveJournal]
     );
 }

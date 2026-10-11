@@ -72,6 +72,9 @@ pub(crate) enum RecoveryDecision {
 }
 
 const NO_STEPS: &[RecoveryStep] = &[];
+const JOURNAL_ONLY_STEPS: &[RecoveryStep] = &[RecoveryStep::RemoveJournal];
+const REMOVE_STAGE_AND_JOURNAL_STEPS: &[RecoveryStep] =
+    &[RecoveryStep::RemoveKnownStage, RecoveryStep::RemoveJournal];
 const KEEP_OLD_STEPS: &[RecoveryStep] = &[
     RecoveryStep::RemoveKnownStage,
     RecoveryStep::RemoveKnownBackup,
@@ -101,7 +104,17 @@ const KEEP_COMMITTED_NEW_STEPS: &[RecoveryStep] = &[
 ];
 
 impl RecoveryDecision {
-    pub(crate) fn steps(self) -> &'static [RecoveryStep] {
+    pub(crate) fn steps(self, inventory: RecoveryInventory) -> &'static [RecoveryStep] {
+        if self == Self::KeepOld
+            && inventory.root == ArtifactState::Old
+            && inventory.backup == ArtifactState::Absent
+        {
+            return match inventory.stage {
+                ArtifactState::Absent => JOURNAL_ONLY_STEPS,
+                ArtifactState::New => REMOVE_STAGE_AND_JOURNAL_STEPS,
+                ArtifactState::Old | ArtifactState::Unknown => NO_STEPS,
+            };
+        }
         match self {
             Self::KeepOld => KEEP_OLD_STEPS,
             Self::RestoreOld => RESTORE_OLD_STEPS,
@@ -149,6 +162,7 @@ pub(crate) fn decide_recovery(
         (Installed, New, Absent | Old, true) => KeepValidatedNewAndCommit,
         (Installed, New, Old, false) => DiscardNewRestoreOld,
         (Installed, Absent, Old, false) => RestoreOld,
+        (Installed, Old, Absent, false) => KeepOld,
         (Installed, Old, Old, false) => KeepOld,
         (Committed, New, Absent | Old, true) => KeepValidatedCommittedNew,
         _ => FailClosed,
