@@ -32,6 +32,17 @@ fn confirmado(resultado: ResultadoPublicacionJournal) -> bool {
     matches!(resultado, ResultadoPublicacionJournal::Confirmado { .. })
 }
 
+#[cfg(unix)]
+#[test]
+fn mapper_unix_acepta_eisdir_y_enotdir_como_alternativas() {
+    for codigo in [libc::EISDIR, libc::ENOTDIR] {
+        assert_eq!(
+            super::mapear_error_publicacion_unix(std::io::Error::from_raw_os_error(codigo)),
+            ErrorJournalAnclado::RegularFileRequired
+        );
+    }
+}
+
 #[test]
 fn publicar_preserva_bytes_e_identidad_y_quita_temporal() {
     let temp = tempdir().unwrap();

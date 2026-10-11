@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 impl JournalTemporalAnclado<'_> {
     /// Publica el temporal fijo sin reemplazar el basename canónico del journal.
     /// La identidad debe provenir de `crear_nuevo`; nombres y rutas no los decide
-    /// quien llama. El lock protege a escritores cooperantes en un filesystem local.
+    /// quien llama. Estas primitivas solo están soportadas en filesystems locales.
     pub(crate) fn publicar(
         &self,
         esperada: IdentidadArchivoJournal,
@@ -287,6 +287,8 @@ fn es_conflicto_temporal(error: ErrorJournalAnclado) -> bool {
 }
 
 #[cfg(windows)]
+/// `RemoteUnsupported` solo reconoce prefijos UNC explícitos en Windows; no
+/// detecta unidades mapeadas ni montajes remotos.
 pub(super) fn raiz_es_remota(ruta: &std::path::Path) -> bool {
     matches!(
         ruta.components().next(),
@@ -474,7 +476,7 @@ fn mapear_error_publicacion_unix(error: std::io::Error) -> ErrorJournalAnclado {
     match error.raw_os_error() {
         Some(libc::EEXIST) => ErrorJournalAnclado::CanonicalConflict,
         Some(libc::ELOOP) => ErrorJournalAnclado::ReparseNotAllowed,
-        Some(libc::EISDIR | libc::ENOTDIR) => ErrorJournalAnclado::RegularFileRequired,
+        Some(libc::EISDIR) | Some(libc::ENOTDIR) => ErrorJournalAnclado::RegularFileRequired,
         _ => ErrorJournalAnclado::Io,
     }
 }
