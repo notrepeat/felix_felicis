@@ -13,6 +13,7 @@
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
+use std::sync::Arc;
 
 use super::raiz::{ErrorRaiz, UbicacionRaiz, metadata_es_enlace_o_reparse};
 
@@ -54,6 +55,7 @@ impl std::error::Error for ErrorLockEscritura {}
 pub struct LockEscritura {
     _archivo_lock: File,
     ubicacion: UbicacionRaiz,
+    autoridad: Arc<()>,
 }
 
 impl LockEscritura {
@@ -72,6 +74,7 @@ impl LockEscritura {
             Ok(()) => Ok(Self {
                 _archivo_lock: archivo,
                 ubicacion: ubicacion.clone(),
+                autoridad: Arc::new(()),
             }),
             Err(fs4::TryLockError::WouldBlock) => Err(ErrorLockEscritura::Busy),
             Err(fs4::TryLockError::Error(_)) => Err(ErrorLockEscritura::Io),
@@ -97,6 +100,10 @@ impl LockEscritura {
 
     pub(super) fn ubicacion(&self) -> &UbicacionRaiz {
         &self.ubicacion
+    }
+
+    pub(super) fn autoridad(&self) -> Arc<()> {
+        Arc::clone(&self.autoridad)
     }
 }
 

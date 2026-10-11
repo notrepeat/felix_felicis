@@ -4,6 +4,7 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::File;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use super::{DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, metadata_directorio};
 use crate::transaccion::lock::LockEscritura;
@@ -62,6 +63,7 @@ pub(crate) struct EspacioTransaccionalAnclado<'lock> {
     _lock: &'lock mut LockEscritura,
     parent: File,
     identidad_parent: IdentidadDirectorio,
+    autoridad: Arc<()>,
 }
 
 /// Objeto sibling observado desde una capability transaccional.
@@ -72,7 +74,9 @@ pub(crate) struct EspacioTransaccionalAnclado<'lock> {
 pub(crate) struct DirectorioSiblingAnclado<'lock> {
     nombre: OsString,
     raiz: File,
+    identidad_parent: IdentidadDirectorio,
     identidad_raiz: IdentidadDirectorio,
+    autoridad: Arc<()>,
     _lock: PhantomData<&'lock LockEscritura>,
 }
 
@@ -93,10 +97,12 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
         let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
             .map_err(mapear_error_directorio)?;
         let identidad_parent = ancla.identidad_parent;
+        let autoridad = lock.autoridad();
         Ok(EspacioTransaccionalAnclado {
             _lock: lock,
             parent: ancla.parent,
             identidad_parent,
+            autoridad,
         })
     }
 
@@ -125,7 +131,9 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
         Ok(DirectorioSiblingAnclado {
             nombre: nombre.to_os_string(),
             raiz,
+            identidad_parent: self.identidad_parent,
             identidad_raiz,
+            autoridad: Arc::clone(&self.autoridad),
             _lock: PhantomData,
         })
     }
@@ -139,6 +147,9 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
         Ok(())
     }
 }
+
+#[path = "renombrar_move.rs"]
+mod movimiento;
 
 fn mapear_error_directorio(error: ErrorDirectorioAnclado) -> ErrorRenombrarAnclado {
     match error {

@@ -640,3 +640,7 @@ mod tests;
 #[cfg(test)]
 #[path = "anclado/renombrar_observacion_tests.rs"]
 mod renombrar_observacion_tests;
+
+#[cfg(test)]
+#[path = "anclado/renombrar_operacion_tests.rs"]
+mod renombrar_operacion_tests;
