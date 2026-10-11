@@ -12,8 +12,8 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0 y 1 completadas; `cargo test --workspace` pasa en HEAD `59dc0dd`. |
-| Foco actual | Fase 04, Unidad 2: conflictos funcionales. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0 y 1 completadas; Unidad 2 tiene avance parcial; `cargo test --workspace` pasa en HEAD `dfc359f`. |
+| Foco actual | Fase 04, Unidad 2: detector funcional parcial; veredicto e invariantes pendientes. |
 | Última actualización | 2026-10-11 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0 y 1 completadas: contrato delta v1 y candidato aislado con Edge/HasLab de arista y Ext; stale, conflictos/invariantes, Parent, persistencia y CLI siguen pendientes. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0 y 1 completadas; Unidad 2 avanza con detector de conflictos Type/HasLab/Parent en estado final. No hay veredicto/invariantes ni integración `proponer`; stale, construcción Type/Parent/HasLab de nodo, persistencia y CLI siguen pendientes. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: avanzar la Unidad 2 de [04 — Operación transaccional](04-operacion-transaccional.md), que implementará conflictos funcionales.
+Foco actual: continuar la Unidad 2 de [04 — Operación transaccional](04-operacion-transaccional.md), integrando el detector con la evaluación futura y las invariantes.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -150,6 +150,12 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `1e7aa65aa641c80a0ad0ab9fed2eb7ccd4cb81d4` | Roundtrips transaccionales de `Ext` | 165 añadidas/2 borradas (167 authored); `ext_roundtrip` 3/3. |
 | `3b148913dee4af1d3cbfcbc7ae5dbf7769361833` | Clasificación de retiros `Ext` | 182 añadidas/24 borradas (206 authored). |
 | `59dc0dd23fca6da6ced96f06de709a7b66489e49` | Runtime release de construcción de candidatos | 213 líneas; dos muestras únicas por escenario. Ext 2,900/3,113 ms; Edge 1/100/10.000: 0,014/0,016; 0,032/0,027; 1,912/1,736 ms. Conteos y bytes canónicos comunes en [04](04-operacion-transaccional.md). |
+| `52234caf2dd8811094a379fc8184d4e228b43ee3` | Detector de conflictos funcionales sobre estado final | 149 añadidas/1 borrada (150 authored/churn). |
+| `b5c027a16006133fc5dec7dec583928b192b9005` | Cobertura del detector | 342 líneas añadidas (342 authored/churn). |
+| `86f16d3a95d3f9622eebc9eabf4ce9aa8bcb096c` | Normalización de etiquetas Edge | 229 añadidas/42 borradas (271 authored/churn). |
+| `ec29ea6985907fcc6992e47753325e7fec8d5d45` | Agregación por identidad final | 211 añadidas/74 borradas (285 authored/churn). |
+| `875915ca82fbc1449c731734711f0203a0521e83` | Casos límite y redacción | 321 añadidas/1 borrada (322 authored/churn); `conflictos_delta` 13/13. |
+| `dfc359f9a2339b14cedd6c16c35a550446746461` | Ajuste de métricas runtime | 3 añadidas/3 borradas (6 authored/churn). Dos muestras de 1.000 conflictos: 10,512 ms / 95.132 conflictos/s y 13,315 ms / 75.101 conflictos/s. |
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
@@ -171,6 +177,16 @@ Después de editar los planes pasan también enlaces Markdown locales y
 variación observada es orientativa, sin warmup, distribución estadística ni
 SLA. Los bytes informados son strings canónicos UTF-8, no heap ni bundle; los
 valores completos están en [04 — Operación transaccional](04-operacion-transaccional.md).
-Fase 04 continúa en curso y el progreso maestro permanece en 3/9. Sigue la
-Unidad 2; conflictos/invariantes, stale, Parent, persistencia y CLI continúan
-pendientes.
+
+Unidad 2 avanza parcialmente: el detector cuenta conflictos Type/HasLab/Parent
+en estado final, normaliza labels Edge por handle/topología final y permite
+labels iguales en sujetos distintos. En HEAD `dfc359f`, `conflictos_delta`
+pasa 13/13 y workspace, clippy, fmt y frontera pública pasan; tras editar los
+planes pasan enlaces locales y diff. Los seis commits del slice están bajo 400
+líneas authored/churn. El runtime usa 1.000 conflictos (334/333/333) y resume
+3 clases; sus dos muestras son únicas y orientativas. El resumen verifica
+`snapshot_unchanged=true` sin emitir hashes.
+La API no produce aún un veredicto ni evalúa invariantes; integrar el detector
+con `proponer`, validar `HasLab` huérfano/ausente en ese flujo y habilitar la
+construcción de `Type`, `Parent` y `HasLab` de nodo siguen pendientes. Fase 04
+permanece en curso y el progreso maestro en 3/9.

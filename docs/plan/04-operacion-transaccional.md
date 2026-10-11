@@ -183,8 +183,9 @@ Chain strategy: feature-branch-chain
   `(predicado, nodo)` exige retirar el valor vigente y añadir el nuevo. Las
   altas idénticas son no-op y las bajas exigen la identidad exacta. `Type`,
   `Parent` y `HasLab` de nodo siguen rechazados fail-closed como
-  `unsupported_operation`; los conflictos e invariantes funcionales todavía no
-  tienen ruta de evaluación/admisión.
+  `unsupported_operation` en la construcción del candidato. La Unidad 2 tiene
+  un detector funcional parcial; integrarlo en un veredicto e invariantes sigue
+  pendiente.
 
   `crates/universo-core/tests/candidato_delta.rs`
   (`cargo test -p universo-core --test candidato_delta`) pasa 3/3 casos de
@@ -222,10 +223,45 @@ Chain strategy: feature-branch-chain
   candidato. Los commits de la unidad se mantuvieron bajo 400 líneas authored.
 - [ ] 2 — Conflictos funcionales: `crates/universo-core/src/transaccion/conflictos.rs`.
   Test `crates/universo-core/tests/conflictos_delta.rs`
-  (`cargo test -p universo-core --test conflictos_delta`) separa
-  tipo/etiqueta/incidencia de invariantes y permite igual etiqueta en sujetos
-  distintos salvo invariante. Runtime: 1.000 conflictos, ms y diagnósticos/s;
-  rollback: no publicar cambios. Objetivo por slice: <400 líneas authored.
+  (`cargo test -p universo-core --test conflictos_delta`) cubre conflictos
+  funcionales de tipo/etiqueta/padre y permite igual etiqueta en sujetos
+  distintos; la incidencia v1 no es representable.
+
+  Avance parcial: `detectar_conflictos_funcionales` acumula el estado final
+  (`snapshot - remove + add`) para claves `Type`, `HasLab` y `Parent`. Normaliza
+  las etiquetas `HasLab` de arista por handle y topología final, así la
+  compactación de ordinales no cambia qué etiqueta pertenece a cada arista.
+  La misma etiqueta en sujetos distintos se permite; una clave funcional con
+  más de un valor final distinto se cuenta como conflicto. Los diagnósticos
+  resumen clase y cantidad, sin identidades ni valores.
+
+  La incidencia no es un conflicto representable en v1: `IdArista` ya codifica
+  origen, tipo, destino y ordinal, y la canonicalización rechaza una identidad
+  inconsistente antes del detector. La API devuelve conflictos en `Ok`; `Err`
+  queda para topología `Edge` inválida o inconsistente. El detector no valida
+  `HasLab` huérfanos ni exige etiqueta para cada arista nueva: eso corresponde
+  al constructor del candidato y al futuro flujo `proponer`. Tampoco valida
+  invariantes, acepta el delta como veredicto ni aplica cambios. La
+  construcción de candidatos para `Type`, `Parent` y `HasLab` de nodo, la
+  evaluación por `proponer`, las invariantes y la aplicación siguen pendientes.
+
+  `conflictos_delta` pasa 13/13 casos de claves funcionales finales, reemplazos
+  remove+add, orden determinista, etiquetas iguales en sujetos distintos,
+  normalización por handle, topología Edge irrepresentable y redacción. Runtime
+  release (`cargo test -p universo-core --release --test conflictos_runtime
+  -- --ignored --nocapture`): exactamente 1.000 conflictos (334 `Type`, 333
+  `HasLab`, 333 `Parent`) y 3 clases resumen. Dos ejecuciones disponibles:
+
+  | Muestra | Tiempo | Conflictos/s | Nota |
+  |---|---:|---:|---|
+  | Antes del rename del contador a `conflictos_s` | 10,512 ms | 95.132 | Semántica equivalente. |
+  | HEAD `dfc359f` | 13,315 ms | 75.101 | Harness final. |
+
+  Cada valor procede de una muestra única, sin warmup ni distribución
+  estadística; son orientativos y no constituyen SLA. El resumen indica
+  `snapshot_unchanged=true`; la salida no expone hashes, identidades ni valores.
+  Rollback: no publicar cambios. Los commits del slice se mantuvieron bajo 400
+  líneas de authored/churn.
 - [ ] 3 — Persistencia `Parent`: core `crates/universo-core/src/transaccion/padre.rs`
   y `crates/universo-core/src/manifiesto.rs`; OKF
   `crates/universo-okf/src/manifiesto_toml.rs`, `crates/universo-okf/src/bundle.rs`,
@@ -415,15 +451,22 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | `1e7aa65aa641c80a0ad0ab9fed2eb7ccd4cb81d4` | Roundtrips transaccionales de `Ext`; 165 añadidas/2 borradas (167 authored); `ext_roundtrip` 3/3. | Unidad 1 cerrada en conjunto. |
 | 2026-10-11 | `3b148913dee4af1d3cbfcbc7ae5dbf7769361833` | Clasificación de retiros `Ext`; 182 añadidas/24 borradas (206 authored). | Unidad 1 cerrada en conjunto. |
 | 2026-10-11 | `59dc0dd23fca6da6ced96f06de709a7b66489e49` | Prueba release de runtime para `Ext` y grupos `Edge`; 213 líneas añadidas. | Dos muestras únicas orientativas; no constituyen SLA. |
+| 2026-10-11 | `52234caf2dd8811094a379fc8184d4e228b43ee3` | Detector de conflictos funcionales sobre estado final; 149 añadidas/1 borrada (150 authored/churn). | Aporte parcial a Unidad 2. |
+| 2026-10-11 | `b5c027a16006133fc5dec7dec583928b192b9005` | Cobertura del detector; 342 líneas añadidas (342 authored/churn). | Aporte parcial a Unidad 2. |
+| 2026-10-11 | `86f16d3a95d3f9622eebc9eabf4ce9aa8bcb096c` | Normalización de etiquetas Edge; 229 añadidas/42 borradas (271 authored/churn). | Aporte parcial a Unidad 2. |
+| 2026-10-11 | `ec29ea6985907fcc6992e47753325e7fec8d5d45` | Agregación por identidad final; 211 añadidas/74 borradas (285 authored/churn). | Aporte parcial a Unidad 2. |
+| 2026-10-11 | `875915ca82fbc1449c731734711f0203a0521e83` | Casos límite y redacción; 321 añadidas/1 borrada (322 authored/churn). | Aporte parcial a Unidad 2. |
+| 2026-10-11 | `dfc359f9a2339b14cedd6c16c35a550446746461` | Ajuste de métricas runtime; 3 añadidas/3 borradas (6 authored/churn). | Runtime final: 1.000 conflictos, 3 clases resumen; muestra única orientativa. |
 | 2026-10-11 | Verificación en HEAD `f42cdb9` | Workspace, clippy, fmt y frontera pública pasan en el HEAD de código; enlaces, frontera, fmt y diff pasan tras editar los planes. | Aprobada; no incluye medición de rendimiento. |
 | 2026-10-11 | Verificación en HEAD `826b381` | `delta_aristas` 14/14, `candidato_delta` 3/3, workspace, clippy, fmt y frontera pública pasan; diff y enlaces pasan tras editar los planes. | Aprobada; runtime sigue pendiente. |
 | 2026-10-11 | Verificación en HEAD `59dc0dd` | `candidato_delta` 3/3, `delta_aristas` 14/14, `ext_transaccional` 10/10, `ext_roundtrip` 3/3; workspace, clippy, fmt y frontera pública pasan. Tras editar, enlaces locales y `git diff --check` pasan. | Unidad 1 cerrada; fase 04 sigue en curso. |
+| 2026-10-11 | Verificación en HEAD `dfc359f` | `conflictos_delta` 13/13; workspace, clippy, fmt, frontera pública, enlaces locales y `git diff --check` pasan. | Avance parcial de Unidad 2; no se cierra veredicto ni invariantes. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
 | 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada; siguen pendientes `Type`, `Parent`, `HasLab` de nodo, conflictos/invariantes funcionales, stale y publicación |
-| 2 | Core `conflictos_delta`: conflictos funcionales separados de invariantes | Pendiente; siguiente unidad |
+| 2 | Core `conflictos_delta`: detector de conflictos funcionales | Parcial; Unidad 2 sigue abierta: veredicto, invariantes e integración con `proponer` pendientes |
 | 3–4 | OKF `padre_persistible`, `snapshot_transaccional` | Pendiente |
 | 5–7 | `writer_lock_transaccional`, `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
