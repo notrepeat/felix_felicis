@@ -144,6 +144,15 @@ fn codigos_de_error_journal_son_estables_y_redactados() {
             "journal_regular_file_required",
         ),
         (ErrorJournalAnclado::ParentChanged, "journal_parent_changed"),
+        (ErrorJournalAnclado::SourceMissing, "journal_source_missing"),
+        (
+            ErrorJournalAnclado::IdentityMismatch,
+            "journal_identity_mismatch",
+        ),
+        (
+            ErrorJournalAnclado::CanonicalConflict,
+            "journal_canonical_conflict",
+        ),
     ];
 
     for (error, codigo) in casos {

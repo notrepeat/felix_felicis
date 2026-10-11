@@ -351,6 +351,10 @@ fn publicar_plataforma(
     Err(ErrorJournalAnclado::Io)
 }
 
+#[cfg(test)]
+#[path = "publicar_tests.rs"]
+mod tests;
+
 #[cfg(not(any(unix, windows)))]
 fn quitar_temporal(
     _parent: &File,
@@ -359,4 +363,3 @@ fn quitar_temporal(
 ) -> Result<(), ErrorJournalAnclado> {
     Err(ErrorJournalAnclado::Io)
 }
-
