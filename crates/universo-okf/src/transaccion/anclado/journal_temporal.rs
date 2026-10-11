@@ -89,6 +89,7 @@ pub(crate) struct JournalTemporalAnclado<'lock> {
     parent: File,
     identidad_parent: IdentidadDirectorio,
     nombre: OsString,
+    nombre_journal: OsString,
     _autoridad: Arc<()>,
     _vida_lock: PhantomData<&'lock LockEscritura>,
 }
@@ -99,6 +100,14 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             .map_err(mapear_error_directorio)?;
         let nombre = lock.ubicacion().nombre_journal_temporal();
         validar_componente(&nombre).map_err(mapear_error_directorio)?;
+        let nombre_journal = lock
+            .ubicacion()
+            .journal()
+            .as_path()
+            .file_name()
+            .ok_or(ErrorJournalTemporal::Io)?
+            .to_os_string();
+        validar_componente(&nombre_journal).map_err(mapear_error_directorio)?;
         let identidad_parent = ancla.identidad_parent();
         let autoridad = lock.autoridad();
         Ok(Self {
@@ -106,6 +115,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             parent: ancla.parent,
             identidad_parent,
             nombre,
+            nombre_journal,
             _autoridad: autoridad,
             _vida_lock: PhantomData,
         })
@@ -164,6 +174,34 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             return Err(ErrorJournalTemporal::TooLarge);
         }
         Ok((identidad, bytes))
+    }
+
+    /// Lee el journal canónico relativo al parent retenido. Solo una ausencia
+    /// observada del nombre devuelve `None`; toda otra condición falla cerrada.
+    pub(crate) fn abrir_y_leer_canonico(
+        &self,
+    ) -> Result<Option<(IdentidadArchivoTemporal, Vec<u8>)>, ErrorJournalTemporal> {
+        self.validar_parent()?;
+        let archivo = match abrir_entrada_relativa(
+            &self.parent,
+            &self.nombre_journal,
+            TipoEntradaAnclada::Archivo,
+        ) {
+            Ok(archivo) => archivo,
+            Err(ErrorDirectorioAnclado::EntradaAusente) => return Ok(None),
+            Err(error) => return Err(mapear_error_directorio(error)),
+        };
+        validar_archivo_regular(&archivo)?;
+        let identidad = identidad_archivo(&archivo)?;
+        let mut bytes = Vec::with_capacity(MAX_JOURNAL_BYTES + 1);
+        archivo
+            .take((MAX_JOURNAL_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ErrorJournalTemporal::Io)?;
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            return Err(ErrorJournalTemporal::TooLarge);
+        }
+        Ok(Some((identidad, bytes)))
     }
 
     fn validar_parent(&self) -> Result<(), ErrorJournalTemporal> {

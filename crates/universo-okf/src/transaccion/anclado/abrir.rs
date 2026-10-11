@@ -101,6 +101,9 @@ fn validar_tipo_abierto(
 }
 
 fn mapear_apertura(error: io::Error) -> ErrorDirectorioAnclado {
+    if error.kind() == io::ErrorKind::NotFound {
+        return ErrorDirectorioAnclado::EntradaAusente;
+    }
     #[cfg(unix)]
     if error.raw_os_error() == Some(libc::ELOOP) {
         return ErrorDirectorioAnclado::EnlaceNoPermitido;

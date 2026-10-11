@@ -13,6 +13,49 @@ fn nombre_temporal(temp: &Path) -> PathBuf {
     temp.join(".bundle.felix.journal.tmp")
 }
 
+fn nombre_journal(root: &Path) -> PathBuf {
+    crate::transaccion::raiz::UbicacionRaiz::nueva(root)
+        .unwrap()
+        .journal()
+        .as_path()
+        .to_path_buf()
+}
+
+#[test]
+fn journal_canonico_ausente_devuelve_none() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+
+    assert_eq!(capability.abrir_y_leer_canonico().unwrap(), None);
+}
+
+#[test]
+fn journal_canonico_lee_desde_basename_de_raiz_y_devuelve_identidad_y_bytes() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("knowledge.v2");
+    fs::create_dir(&root).unwrap();
+    let journal = nombre_journal(&root);
+    let canary = b"canonical-journal-content";
+    fs::write(&journal, canary).unwrap();
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+
+    let (identidad, bytes) = capability.abrir_y_leer_canonico().unwrap().unwrap();
+    let identidad_esperada = super::identidad_archivo(&fs::File::open(&journal).unwrap()).unwrap();
+    assert_eq!(identidad, identidad_esperada);
+    assert_eq!(bytes, canary);
+    assert!(!format!("{identidad:?}").contains("knowledge"));
+
+    fs::write(&journal, b"").unwrap();
+    let (identidad_vacia, bytes_vacios) = capability.abrir_y_leer_canonico().unwrap().unwrap();
+    let identidad_vacia_esperada =
+        super::identidad_archivo(&fs::File::open(&journal).unwrap()).unwrap();
+    assert_eq!(identidad_vacia, identidad_vacia_esperada);
+    assert_eq!(bytes_vacios, b"");
+}
+
 #[test]
 fn crea_cierra_lee_desde_parent_anclado_y_conserva_identidad_del_handle() {
     let temp = tempdir().unwrap();
@@ -40,6 +83,11 @@ fn acepta_exactamente_max_journal_bytes_al_escribir_y_leer() {
     let (identidad_leida, read) = capability.abrir_y_leer().unwrap();
     assert_eq!(identidad_escrita, identidad_leida);
     assert_eq!(read, bytes);
+
+    let journal = nombre_journal(&root);
+    fs::write(journal, &bytes).unwrap();
+    let (_, canonical_read) = capability.abrir_y_leer_canonico().unwrap().unwrap();
+    assert_eq!(canonical_read, bytes);
 }
 
 #[test]
@@ -66,6 +114,13 @@ fn rechaza_max_mas_uno_antes_de_crear_y_al_leer() {
         fs::metadata(nombre).unwrap().len(),
         (MAX_JOURNAL_BYTES + 1) as u64
     );
+
+    fs::write(nombre_journal(&root), &bytes).unwrap();
+    let error = capability.abrir_y_leer_canonico().unwrap_err();
+    assert_eq!(error, ErrorJournalTemporal::TooLarge);
+    assert_eq!(error.codigo(), "journal_temp_too_large");
+    assert_eq!(error.to_string(), "journal_temp_too_large");
+    assert!(!format!("{error:?}").contains("bundle"));
 }
 
 #[test]
@@ -108,6 +163,18 @@ fn colision_con_directorio_no_lo_reemplaza_ni_sigue_y_preserva_canary() {
         fs::read(nombre.join("canary")).unwrap(),
         b"directory-canary"
     );
+
+    let journal = nombre_journal(&root);
+    fs::create_dir(&journal).unwrap();
+    fs::write(journal.join("canary"), b"canonical-directory-canary").unwrap();
+    assert_eq!(
+        capability.abrir_y_leer_canonico().unwrap_err(),
+        ErrorJournalTemporal::RegularFileRequired
+    );
+    assert_eq!(
+        fs::read(journal.join("canary")).unwrap(),
+        b"canonical-directory-canary"
+    );
 }
 
 #[cfg(unix)]
@@ -120,7 +187,9 @@ fn symlink_existente_no_se_reemplaza_ni_se_sigue_y_preserva_canary() {
     let target = temp.path().join("outside-canary");
     fs::write(&target, b"outside-canary").unwrap();
     let nombre = nombre_temporal(temp.path());
+    let journal = nombre_journal(&root);
     symlink(&target, &nombre).unwrap();
+    symlink(&target, &journal).unwrap();
     let mut lock = LockEscritura::adquirir(&root).unwrap();
     let capability = lock.journal_temporal_anclado().unwrap();
 
@@ -130,6 +199,10 @@ fn symlink_existente_no_se_reemplaza_ni_se_sigue_y_preserva_canary() {
     );
     assert_eq!(
         capability.abrir_y_leer().unwrap_err(),
+        ErrorJournalTemporal::ReparseNotAllowed
+    );
+    assert_eq!(
+        capability.abrir_y_leer_canonico().unwrap_err(),
         ErrorJournalTemporal::ReparseNotAllowed
     );
     assert_eq!(fs::read(&target).unwrap(), b"outside-canary");
@@ -147,23 +220,26 @@ fn junction_existente_no_se_reemplaza_ni_se_sigue_y_preserva_canary() {
     fs::create_dir(&target).unwrap();
     fs::write(target.join("canary"), b"outside-canary").unwrap();
     let nombre = nombre_temporal(temp.path());
-    let output = std::process::Command::new("cmd")
-        .args(["/c", "mklink", "/J"])
-        .arg(&nombre)
-        .arg(&target)
-        .output()
-        .expect("cmd crea junctions");
-    if !output.status.success() {
-        let detalle = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if detalle.to_ascii_lowercase().contains("privilege") {
-            eprintln!("SKIP explícito: Windows no concedió privilegio para la junction");
-            return;
+    let journal = nombre_journal(&root);
+    for enlace in [&nombre, &journal] {
+        let output = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(enlace)
+            .arg(&target)
+            .output()
+            .expect("cmd crea junctions");
+        if !output.status.success() {
+            let detalle = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if detalle.to_ascii_lowercase().contains("privilege") {
+                eprintln!("SKIP explícito: Windows no concedió privilegio para la junction");
+                return;
+            }
+            panic!("no se pudo crear junction: {detalle}");
         }
-        panic!("no se pudo crear junction: {detalle}");
     }
     let mut lock = LockEscritura::adquirir(&root).unwrap();
     let capability = lock.journal_temporal_anclado().unwrap();
@@ -174,6 +250,10 @@ fn junction_existente_no_se_reemplaza_ni_se_sigue_y_preserva_canary() {
     );
     assert!(matches!(
         capability.abrir_y_leer().unwrap_err(),
+        ErrorJournalTemporal::ReparseNotAllowed | ErrorJournalTemporal::RegularFileRequired
+    ));
+    assert!(matches!(
+        capability.abrir_y_leer_canonico().unwrap_err(),
         ErrorJournalTemporal::ReparseNotAllowed | ErrorJournalTemporal::RegularFileRequired
     ));
     assert_eq!(fs::read(target.join("canary")).unwrap(), b"outside-canary");
