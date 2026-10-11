@@ -67,17 +67,65 @@ impl UbicacionRaiz {
 
     #[allow(dead_code)] // El builder de staging se implementa en la siguiente unidad.
     pub(crate) fn stage(&self, txn_id: &str) -> Result<RutaStage, ErrorRaiz> {
-        if txn_id.is_empty()
-            || !txn_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        {
+        if !txn_id_valido(txn_id.as_bytes()) {
             return Err(ErrorRaiz::TipoNoAdmitido);
         }
 
         let mut sufijo = OsString::from(".felix.stage.");
         sufijo.push(txn_id);
         Ok(RutaStage(self.ruta_sibling_os(&sufijo)))
+    }
+
+    /// Restringe el rename anclado a la raíz y sus siblings transaccionales.
+    #[allow(dead_code)] // La capability de rename consume esta allowlist en la siguiente unidad.
+    pub(super) fn permite_rename_sibling(&self, nombre: &std::ffi::OsStr) -> bool {
+        if self.ruta.file_name() == Some(nombre)
+            || self.backup().as_path().file_name() == Some(nombre)
+        {
+            return true;
+        }
+
+        let Some(root_name) = self.ruta.file_name() else {
+            return false;
+        };
+        let mut stage_prefix = OsString::from(".");
+        stage_prefix.push(root_name);
+        stage_prefix.push(".felix.stage.");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+
+            let Some(txn_id) = nombre
+                .as_bytes()
+                .strip_prefix(stage_prefix.as_os_str().as_bytes())
+            else {
+                return false;
+            };
+            txn_id_valido(txn_id)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+
+            let nombre: Vec<u16> = nombre.encode_wide().collect();
+            let prefijo: Vec<u16> = stage_prefix.encode_wide().collect();
+            let Some(txn_id) = nombre.strip_prefix(prefijo.as_slice()) else {
+                return false;
+            };
+            let mut ascii = Vec::with_capacity(txn_id.len());
+            for unidad in txn_id {
+                let Ok(byte) = u8::try_from(*unidad) else {
+                    return false;
+                };
+                ascii.push(byte);
+            }
+            txn_id_valido(&ascii)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            false
+        }
     }
 
     #[allow(dead_code)] // El publicador/recovery consumirá esta ruta tipada.
@@ -212,6 +260,13 @@ fn separar_parent_y_basename(ruta: &Path) -> Result<(PathBuf, OsString), ErrorRa
         return Err(ErrorRaiz::TipoNoAdmitido);
     }
     Ok((parent, basename))
+}
+
+fn txn_id_valido(txn_id: &[u8]) -> bool {
+    !txn_id.is_empty()
+        && txn_id
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn validar_metadata_raiz(metadata: &Metadata) -> Result<(), ErrorRaiz> {
@@ -500,6 +555,35 @@ mod tests {
         assert!(ubicacion.stage("").is_err());
         assert!(ubicacion.stage("../outside").is_err());
         assert!(ubicacion.stage("txn/child").is_err());
+    }
+
+    #[test]
+    fn allowlist_de_rename_solo_admite_root_backup_y_stages_validos() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let aceptados = [
+            std::ffi::OsString::from("bundle"),
+            std::ffi::OsString::from(".bundle.felix.backup"),
+            std::ffi::OsString::from(".bundle.felix.stage.txn-01_a"),
+        ];
+        let rechazados = [
+            ".bundle.felix.lock",
+            ".bundle.felix.journal",
+            ".bundle.felix.stage.",
+            ".bundle.felix.stage.unsafe/child",
+            "bundle-b",
+        ];
+
+        for nombre in aceptados {
+            assert!(ubicacion.permite_rename_sibling(&nombre), "{nombre:?}");
+        }
+        for nombre in rechazados {
+            assert!(
+                !ubicacion.permite_rename_sibling(std::ffi::OsStr::new(nombre)),
+                "{nombre:?}"
+            );
+        }
     }
 
     #[cfg(unix)]
