@@ -773,6 +773,33 @@ ignorados = ["ignored.md"]
     }
 
     #[test]
+    fn captura_anclada_rechaza_procedencia_ausente_o_no_regular_redactada() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+
+        for ruta in ["PRIVATE-CANARY-missing.toml", "knowledge"] {
+            let config = ConfigRawCapturada::nueva(
+                MANIFIESTO.as_bytes(),
+                b"\n".as_slice(),
+                Some(ruta.to_owned()),
+                None,
+            );
+            let error =
+                capturar_snapshot_raw_anclado(&ancla, config, "engine/1", "policy/1").unwrap_err();
+            assert_eq!(error, ErrorSnapshot::BundleInvalido);
+            assert_eq!(error.to_string(), "snapshot_bundle_invalid");
+            assert!(!format!("{error:?}").contains("PRIVATE-CANARY"));
+            assert!(!format!("{error:?}").contains(ruta));
+            assert!(!error.to_string().contains("PRIVATE-CANARY"));
+            assert!(!error.to_string().contains(ruta));
+        }
+    }
+
+    #[test]
     fn captura_anclada_usa_config_raw_capturada_aunque_cambien_sus_fuentes() {
         let temp = tempdir().unwrap();
         let root = temp.path().join("bundle");
@@ -810,6 +837,101 @@ ignorados = ["ignored.md"]
         assert_eq!(snapshot.invariantes_raw(), b"\n");
         assert_eq!(snapshot.estructura().nodos().count(), 1);
         assert!(!format!("{snapshot:?}").contains("PRIVATE-CANARY"));
+    }
+
+    #[test]
+    fn captura_anclada_no_relee_config_externa_eliminada() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let source = temp.path().join("PRIVATE-CANARY-config-source");
+        fs::create_dir(&source).unwrap();
+        let manifest = source.join("manifest.toml");
+        let invariants = source.join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+
+        let config = ConfigRawCapturada::nueva(
+            fs::read(&manifest).unwrap(),
+            fs::read(&invariants).unwrap(),
+            None,
+            None,
+        );
+        let debug_config = format!("{config:?}");
+        fs::remove_file(&manifest).unwrap();
+        fs::remove_file(&invariants).unwrap();
+        fs::remove_dir(&source).unwrap();
+        assert!(!source.exists());
+
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(
+                &DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap(),
+                config,
+                "engine/1",
+                "policy/1",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+        assert!(!debug_config.contains("PRIVATE-CANARY"));
+        assert!(!format!("{snapshot:?}").contains("PRIVATE-CANARY"));
+    }
+
+    #[test]
+    fn snapshot_anclado_conserva_identidad_root_sin_incluirla_en_token() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        let moved = temp.path().join("bundle-old");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.join("invariants.smt2"), "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let identidad_original = ancla.identidad_raiz().unwrap();
+        let config = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        );
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(&ancla, config, "engine/1", "policy/1").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot.identidad_root(), Some(identidad_original));
+        drop(ancla);
+
+        fs::rename(&root, &moved).unwrap();
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.join("invariants.smt2"), "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let nueva_ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let nueva_config = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        );
+        let nuevo_snapshot = materializar(
+            capturar_snapshot_raw_anclado(&nueva_ancla, nueva_config, "engine/1", "policy/1")
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            nueva_ancla.identidad_raiz(),
+            nuevo_snapshot.identidad_root()
+        );
+        assert_ne!(snapshot.identidad_root(), nuevo_snapshot.identidad_root());
+        assert_eq!(snapshot.token(), nuevo_snapshot.token());
     }
 
     #[cfg(unix)]
@@ -1023,7 +1145,53 @@ ignorados = ["ignored.md"]
             capturar_snapshot_con_cas_anclado(&ancla, validada, "engine/1", "policy/1", esperado)
                 .unwrap_err();
         assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(error.to_string(), "stale");
         assert!(!format!("{error:?}").contains("PRIVATE-MISMATCH-CANARY"));
+        assert!(!format!("{error:?}").contains("manifest.toml"));
+        assert!(!error.to_string().contains("PRIVATE-MISMATCH-CANARY"));
+        assert!(!error.to_string().contains("manifest.toml"));
+
+        for (config, canary) in [
+            (
+                ConfigRawCapturada::nueva(
+                    MANIFIESTO.as_bytes(),
+                    b"\n".as_slice(),
+                    Some("PRIVATE-CANARY-missing.toml".to_owned()),
+                    None,
+                ),
+                "PRIVATE-CANARY-missing.toml",
+            ),
+            (
+                ConfigRawCapturada::nueva(
+                    MANIFIESTO.as_bytes(),
+                    b"\n".as_slice(),
+                    Some("knowledge".to_owned()),
+                    None,
+                ),
+                "knowledge",
+            ),
+            (
+                ConfigRawCapturada::nueva(
+                    b"PRIVATE-CANARY invalid local manifest".as_slice(),
+                    b"\n".as_slice(),
+                    Some("manifest.toml".to_owned()),
+                    Some("invariants.smt2".to_owned()),
+                ),
+                "PRIVATE-CANARY",
+            ),
+        ] {
+            let error =
+                capturar_snapshot_con_cas_anclado(&ancla, config, "engine/1", "policy/1", esperado)
+                    .unwrap_err();
+            assert_eq!(error, ErrorSnapshot::Stale);
+            assert_eq!(error.to_string(), "stale");
+            assert!(!format!("{error:?}").contains(canary));
+            assert!(!format!("{error:?}").contains("manifest.toml"));
+            assert!(!format!("{error:?}").contains("invariants.smt2"));
+            assert!(!error.to_string().contains(canary));
+            assert!(!error.to_string().contains("manifest.toml"));
+            assert!(!error.to_string().contains("invariants.smt2"));
+        }
 
         fs::write(&manifest, MANIFIESTO).unwrap();
         for (manifiesto, invariantes, canary) in [
