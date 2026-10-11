@@ -407,6 +407,9 @@ fn directorios_padre(mut ruta: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transaccion::captura::capturar_snapshot;
+    use std::fs;
+    use tempfile::{TempDir, tempdir};
 
     fn directorio(ruta: &str) -> EntradaSnapshot {
         EntradaSnapshot::directorio(ruta)
@@ -439,9 +442,53 @@ mod tests {
             .collect()
     }
 
+    fn fuentes(plan: &PlanStaging) -> Vec<(String, FuenteEntradaStage)> {
+        plan.entradas_objetivo
+            .iter()
+            .map(|entrada| (entrada.ruta.clone(), entrada.fuente))
+            .collect()
+    }
+
+    fn snapshot_minimo() -> (TempDir, Snapshot) {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        fs::create_dir_all(raiz.join("knowledge")).unwrap();
+        fs::create_dir(raiz.join("empty")).unwrap();
+        fs::write(raiz.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        fs::write(raiz.join("documento.md.tmp"), b"sentinel").unwrap();
+        fs::write(raiz.join("payload.bin"), [0, 255, 17]).unwrap();
+
+        let manifiesto = temp.path().join("manifest.toml");
+        let invariantes = temp.path().join("invariants.smt2");
+        fs::write(
+            &manifiesto,
+            r#"version = "snapshot-test/1"
+
+[nodos]
+sortes = ["a", "Retirado", "Patrón"]
+
+[nodos.disco]
+"Patrón" = "pattern"
+
+[layout]
+directorios = ["knowledge"]
+sin_iota = []
+ignorados = ["ignored.md"]
+"#,
+        )
+        .unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        let snapshot =
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1").unwrap();
+        (temp, snapshot)
+    }
+
     #[test]
     fn planifica_deterministicamente_y_preserva_directorios_y_auxiliares() {
         let entradas = vec![
+            // Canario: `documento.md.tmp` sigue siendo auxiliar. El builder
+            // futuro debe usar un namespace/temporal único por transacción y
+            // jamás llamar `serializar_bundle` sobre este árbol destino.
             archivo("documento.md.tmp", b"sentinel"),
             directorio("empty"),
             directorio("docs"),
@@ -474,25 +521,86 @@ mod tests {
     }
 
     #[test]
-    fn clasifica_managed_y_retirados_desde_inventario_sintetico() {
-        let entradas = [directorio("docs"), archivo("docs/old.md", b"viejo")];
+    fn clasifica_managed_deterministicamente_bajo_permutaciones() {
+        let entradas = vec![
+            directorio("docs"),
+            archivo("docs/old-z.md", b"viejo z"),
+            archivo("docs/old-a.md", b"viejo a"),
+        ];
+        let managed_old = ["docs/old-z", "docs/old-a"];
         let nuevos = [
             documento("docs/z", "último"),
             documento("docs/new", "nuevo"),
         ];
-        let resultado = plan(&entradas, &["docs/old"], &nuevos).unwrap();
+        let primero = plan(&entradas, &managed_old, &nuevos).unwrap();
 
-        assert_eq!(resultado.managed_old, ["docs/old.md"]);
-        assert_eq!(resultado.removed, ["docs/old.md"]);
-        assert_eq!(resultado.managed_new[0].path().como_str(), "docs/new");
-        assert_eq!(resultado.managed_new[1].path().como_str(), "docs/z");
+        let mut entradas_reversas = entradas.clone();
+        entradas_reversas.reverse();
+        let mut managed_old_reversos = managed_old;
+        managed_old_reversos.reverse();
+        let mut nuevos_reversos = nuevos.clone();
+        nuevos_reversos.reverse();
+        let segundo = plan(&entradas_reversas, &managed_old_reversos, &nuevos_reversos).unwrap();
+
+        assert_eq!(primero.managed_old, ["docs/old-a.md", "docs/old-z.md"]);
+        assert_eq!(primero.removed, primero.managed_old);
+        assert_eq!(primero.managed_new[0].path().como_str(), "docs/new");
+        assert_eq!(primero.managed_new[1].path().como_str(), "docs/z");
+        assert_eq!(primero.managed_old, segundo.managed_old);
+        assert_eq!(primero.removed, segundo.removed);
         assert_eq!(
-            rutas(&resultado),
+            primero
+                .managed_new
+                .iter()
+                .map(|documento| documento.path().como_str())
+                .collect::<Vec<_>>(),
+            segundo
+                .managed_new
+                .iter()
+                .map(|documento| documento.path().como_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(rutas(&primero), rutas(&segundo));
+        assert_eq!(fuentes(&primero), fuentes(&segundo));
+        assert_eq!(
+            rutas(&primero),
             [
                 "docs".to_owned(),
                 "docs/new.md".to_owned(),
                 "docs/z.md".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn wrapper_planifica_desde_snapshot_capturado_real() {
+        let (_temp, snapshot) = snapshot_minimo();
+        let nuevos = [documento("knowledge/new", "contenido")];
+        let resultado = planificar_staging(&snapshot, &nuevos).unwrap();
+
+        assert_eq!(resultado.managed_old, ["knowledge/a.md"]);
+        assert_eq!(resultado.removed, ["knowledge/a.md"]);
+        assert_eq!(resultado.managed_new[0].path().como_str(), "knowledge/new");
+        assert_eq!(resultado.directorios, ["empty", "knowledge"]);
+        assert_eq!(
+            rutas(&resultado),
+            [
+                "documento.md.tmp".to_owned(),
+                "empty".to_owned(),
+                "knowledge".to_owned(),
+                "knowledge/new.md".to_owned(),
+                "payload.bin".to_owned(),
+            ]
+        );
+        assert_eq!(resultado.auxiliares[0].ruta(), "documento.md.tmp");
+        assert_eq!(
+            resultado.auxiliares[0].bytes(),
+            Some(b"sentinel".as_slice())
+        );
+        assert_eq!(resultado.auxiliares[1].ruta(), "payload.bin");
+        assert_eq!(
+            resultado.auxiliares[1].bytes(),
+            Some([0, 255, 17].as_slice())
         );
     }
 
@@ -532,6 +640,27 @@ mod tests {
             plan(&file_dir, &[], &[]).unwrap_err().codigo(),
             "stage_file_directory_conflict"
         );
+    }
+
+    #[test]
+    fn rechaza_documentocandidato_duplicado() {
+        let duplicados = [documento("docs/doc", "uno"), documento("docs/doc", "dos")];
+        let error = plan(&[], &[], &duplicados).unwrap_err();
+        assert_eq!(error.codigo(), "stage_duplicate_entry");
+        assert!(!format!("{error:?} {error}").contains("docs/doc"));
+        assert!(!format!("{error:?} {error}").contains("uno"));
+    }
+
+    #[test]
+    fn rechaza_conflicto_file_directory_creado_por_documentos_candidatos() {
+        // `node` se materializa como `node.md`; el segundo documento necesita
+        // que esa misma ruta física sea un directorio.
+        let candidatos = [
+            documento("node", "archivo"),
+            documento("node.md/child", "hijo"),
+        ];
+        let error = plan(&[], &[], &candidatos).unwrap_err();
+        assert_eq!(error.codigo(), "stage_file_directory_conflict");
     }
 
     #[cfg(unix)]
