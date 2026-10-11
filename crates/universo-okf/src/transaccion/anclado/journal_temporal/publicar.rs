@@ -40,12 +40,32 @@ impl JournalTemporalAnclado<'_> {
     fn resultado_despues_de_commit(
         &self,
         esperada: IdentidadArchivoJournal,
-        limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> Result<(), ErrorJournalAnclado>,
+        limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> EstadoLimpiezaPublicacion,
     ) -> Result<ResultadoPublicacionJournal, ErrorJournalAnclado> {
-        if self.canonico_es(&esperada).unwrap_or(false) && limpiar(self, esperada).is_ok() {
-            Ok(ResultadoPublicacionJournal::Publicado)
-        } else {
-            Ok(ResultadoPublicacionJournal::PublicadoTemporalPendiente)
+        self.resultado_despues_de_commit_observando(
+            esperada,
+            |capability, identidad| capability.canonico_es(identidad),
+            limpiar,
+        )
+    }
+
+    fn resultado_despues_de_commit_observando(
+        &self,
+        esperada: IdentidadArchivoJournal,
+        observar_canonico: impl FnOnce(
+            &Self,
+            &IdentidadArchivoJournal,
+        ) -> Result<bool, ErrorJournalAnclado>,
+        limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> EstadoLimpiezaPublicacion,
+    ) -> Result<ResultadoPublicacionJournal, ErrorJournalAnclado> {
+        match observar_canonico(self, &esperada) {
+            Ok(true) => resultado_con_limpieza_confirmada(
+                limpiar(self, esperada),
+                ResultadoPublicacionJournal::Publicado,
+            ),
+            Ok(false) => Ok(ResultadoPublicacionJournal::Indeterminado),
+            Err(error) if es_conflicto_concreto(error) => Err(error),
+            Err(_) => Ok(ResultadoPublicacionJournal::Indeterminado),
         }
     }
 
@@ -54,29 +74,64 @@ impl JournalTemporalAnclado<'_> {
         esperada: IdentidadArchivoJournal,
         error: ErrorJournalAnclado,
     ) -> Result<ResultadoPublicacionJournal, ErrorJournalAnclado> {
-        if self.canonico_es(&esperada)? {
-            return match self.limpiar_temporal_si_coincide(esperada) {
-                Ok(()) => Ok(ResultadoPublicacionJournal::YaPublicado),
-                Err(
-                    error @ (ErrorJournalAnclado::IdentityMismatch
-                    | ErrorJournalAnclado::RegularFileRequired
-                    | ErrorJournalAnclado::ReparseNotAllowed),
-                ) => Err(error),
-                Err(_) => Ok(ResultadoPublicacionJournal::PublicadoTemporalPendiente),
-            };
+        self.resolver_error_publicacion_observando(
+            esperada,
+            error,
+            |capability, identidad| capability.canonico_es(identidad),
+            |capability, identidad| capability.temporal_es(identidad),
+            |capability, identidad| capability.limpiar_temporal_si_coincide(identidad),
+        )
+    }
+
+    fn resolver_error_publicacion_observando(
+        &self,
+        esperada: IdentidadArchivoJournal,
+        error_publicacion: ErrorJournalAnclado,
+        observar_canonico: impl FnOnce(
+            &Self,
+            &IdentidadArchivoJournal,
+        ) -> Result<bool, ErrorJournalAnclado>,
+        observar_temporal: impl FnOnce(
+            &Self,
+            &IdentidadArchivoJournal,
+        ) -> Result<bool, ErrorJournalAnclado>,
+        limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> EstadoLimpiezaPublicacion,
+    ) -> Result<ResultadoPublicacionJournal, ErrorJournalAnclado> {
+        let canonico = observar_canonico(self, &esperada);
+        if canonico == Ok(true) {
+            return resultado_con_limpieza_confirmada(
+                limpiar(self, esperada),
+                ResultadoPublicacionJournal::YaPublicado,
+            );
         }
-        match abrir_temporal(&self.parent, &self.nombre) {
-            Ok(fuente) => {
-                validar_archivo_regular(&fuente)?;
-                if identidad_archivo(&fuente)? != esperada {
-                    Err(ErrorJournalAnclado::IdentityMismatch)
-                } else {
-                    Err(error)
-                }
-            }
-            Err(ErrorJournalAnclado::SourceMissing) => Err(ErrorJournalAnclado::SourceMissing),
-            Err(error) => Err(error),
+
+        // Ambas observaciones son de solo lectura. Se conservan sus errores
+        // estables de conflicto; sin prueba de no aplicación, el estado es incierto.
+        let temporal = observar_temporal(self, &esperada);
+        match canonico {
+            Err(error) if es_conflicto_concreto(error) => Err(error),
+            Err(_) => Ok(ResultadoPublicacionJournal::Indeterminado),
+            Ok(false) => match temporal {
+                Ok(true) => Err(error_publicacion),
+                Err(error) if es_conflicto_temporal(error) => Err(error),
+                _ => Ok(ResultadoPublicacionJournal::Indeterminado),
+            },
+            Ok(true) => unreachable!("canonical result was handled above"),
         }
+    }
+
+    fn temporal_es(&self, esperada: &IdentidadArchivoJournal) -> Result<bool, ErrorJournalAnclado> {
+        self.validar_parent()?;
+        let archivo = match abrir_temporal(&self.parent, &self.nombre) {
+            Ok(archivo) => archivo,
+            Err(ErrorJournalAnclado::SourceMissing) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        validar_archivo_regular(&archivo)?;
+        if identidad_archivo(&archivo)? != *esperada {
+            return Err(ErrorJournalAnclado::IdentityMismatch);
+        }
+        Ok(true)
     }
 
     fn canonico_es(&self, esperada: &IdentidadArchivoJournal) -> Result<bool, ErrorJournalAnclado> {
@@ -101,19 +156,74 @@ impl JournalTemporalAnclado<'_> {
     fn limpiar_temporal_si_coincide(
         &self,
         esperada: IdentidadArchivoJournal,
-    ) -> Result<(), ErrorJournalAnclado> {
-        self.validar_parent()?;
+    ) -> EstadoLimpiezaPublicacion {
+        if self.validar_parent().is_err() {
+            return EstadoLimpiezaPublicacion::Indeterminada;
+        }
         let archivo = match abrir_temporal(&self.parent, &self.nombre) {
             Ok(archivo) => archivo,
-            Err(ErrorJournalAnclado::SourceMissing) => return Ok(()),
-            Err(error) => return Err(error),
+            Err(ErrorJournalAnclado::SourceMissing) => return EstadoLimpiezaPublicacion::Completa,
+            Err(_) => return EstadoLimpiezaPublicacion::Indeterminada,
         };
-        validar_archivo_regular(&archivo)?;
-        if identidad_archivo(&archivo)? != esperada {
-            return Err(ErrorJournalAnclado::IdentityMismatch);
+        if let Err(error) = validar_archivo_regular(&archivo) {
+            return if es_conflicto_temporal(error) {
+                EstadoLimpiezaPublicacion::Conflicto(error)
+            } else {
+                EstadoLimpiezaPublicacion::Indeterminada
+            };
         }
-        quitar_temporal(&self.parent, &self.nombre, &archivo)
+        match identidad_archivo(&archivo) {
+            Ok(identidad) if identidad == esperada => {}
+            Ok(_) => {
+                return EstadoLimpiezaPublicacion::Conflicto(ErrorJournalAnclado::IdentityMismatch);
+            }
+            Err(_) => return EstadoLimpiezaPublicacion::Indeterminada,
+        }
+        match quitar_temporal(&self.parent, &self.nombre, &archivo) {
+            Ok(()) => EstadoLimpiezaPublicacion::Completa,
+            Err(_) => EstadoLimpiezaPublicacion::Pendiente,
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EstadoLimpiezaPublicacion {
+    Completa,
+    Pendiente,
+    Conflicto(ErrorJournalAnclado),
+    Indeterminada,
+}
+
+fn resultado_con_limpieza_confirmada(
+    limpieza: EstadoLimpiezaPublicacion,
+    confirmado: ResultadoPublicacionJournal,
+) -> Result<ResultadoPublicacionJournal, ErrorJournalAnclado> {
+    match limpieza {
+        EstadoLimpiezaPublicacion::Completa => Ok(confirmado),
+        EstadoLimpiezaPublicacion::Pendiente => {
+            Ok(ResultadoPublicacionJournal::PublicadoTemporalPendiente)
+        }
+        EstadoLimpiezaPublicacion::Conflicto(error) => Err(error),
+        EstadoLimpiezaPublicacion::Indeterminada => Ok(ResultadoPublicacionJournal::Indeterminado),
+    }
+}
+
+fn es_conflicto_concreto(error: ErrorJournalAnclado) -> bool {
+    matches!(
+        error,
+        ErrorJournalAnclado::CanonicalConflict
+            | ErrorJournalAnclado::RegularFileRequired
+            | ErrorJournalAnclado::ReparseNotAllowed
+    )
+}
+
+fn es_conflicto_temporal(error: ErrorJournalAnclado) -> bool {
+    matches!(
+        error,
+        ErrorJournalAnclado::IdentityMismatch
+            | ErrorJournalAnclado::RegularFileRequired
+            | ErrorJournalAnclado::ReparseNotAllowed
+    )
 }
 
 #[cfg(windows)]

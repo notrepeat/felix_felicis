@@ -212,7 +212,7 @@ fn fallo_de_cleanup_despues_de_linkat_devuelve_publicado_pendiente() {
     let resultado = capability
         .resultado_despues_de_commit(esperada, |_, _| {
             cleanup_llamado = true;
-            Err(ErrorJournalAnclado::Io)
+            super::EstadoLimpiezaPublicacion::Pendiente
         })
         .unwrap();
 
@@ -225,6 +225,120 @@ fn fallo_de_cleanup_despues_de_linkat_devuelve_publicado_pendiente() {
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(temporal).unwrap(), bytes);
     assert_eq!(fs::read(journal).unwrap(), bytes);
+}
+
+#[cfg(unix)]
+#[test]
+fn linkat_exitoso_con_verificacion_ausente_o_incierta_es_indeterminado() {
+    for observacion in [Ok(false), Err(ErrorJournalAnclado::Io)] {
+        let temp = tempdir().unwrap();
+        let root = crear_root(temp.path());
+        let mut lock = LockEscritura::adquirir(&root).unwrap();
+        let capability = lock.journal_temporal_anclado().unwrap();
+        let temporal = nombre_temporal(temp.path());
+        let journal = nombre_journal(&root);
+        let bytes = b"keep evidence when verification is uncertain";
+        let esperada = capability.crear_nuevo(bytes).unwrap();
+        let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
+
+        super::publicar_plataforma(
+            &capability.parent,
+            &capability.nombre,
+            &capability.nombre_journal,
+            &fuente,
+        )
+        .unwrap();
+        let mut cleanup_llamado = false;
+        let resultado = capability
+            .resultado_despues_de_commit_observando(
+                esperada,
+                |_, _| observacion,
+                |_, _| {
+                    cleanup_llamado = true;
+                    super::EstadoLimpiezaPublicacion::Pendiente
+                },
+            )
+            .unwrap();
+
+        assert_eq!(resultado, ResultadoPublicacionJournal::Indeterminado);
+        assert!(!cleanup_llamado);
+        assert_eq!(identidad(&temporal), esperada);
+        assert_eq!(identidad(&journal), esperada);
+        assert_eq!(fs::read(&temporal).unwrap(), bytes);
+        assert_eq!(fs::read(&journal).unwrap(), bytes);
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn efecto_de_publicacion_seguido_de_error_se_confirma_como_ya_publicado() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal = nombre_journal(&root);
+    let bytes = b"effect completed before platform error";
+    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
+
+    super::publicar_plataforma(
+        &capability.parent,
+        &capability.nombre,
+        &capability.nombre_journal,
+        &fuente,
+    )
+    .unwrap();
+    let resultado = capability
+        .resolver_error_publicacion(esperada, ErrorJournalAnclado::Io)
+        .unwrap();
+
+    assert_eq!(resultado, ResultadoPublicacionJournal::YaPublicado);
+    assert_eq!(identidad(&journal), esperada);
+    assert_eq!(fs::read(journal).unwrap(), bytes);
+    assert!(!temporal.exists());
+}
+
+#[test]
+fn error_de_publicacion_con_observaciones_inciertas_preserva_evidencia() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal = nombre_journal(&root);
+    let bytes = b"preserve evidence after uncertain observations";
+    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let mut canonico_observado = false;
+    let mut temporal_observado = false;
+    let mut limpieza_llamada = false;
+
+    let resultado = capability
+        .resolver_error_publicacion_observando(
+            esperada,
+            ErrorJournalAnclado::Io,
+            |_, _| {
+                canonico_observado = true;
+                Err(ErrorJournalAnclado::Io)
+            },
+            |_, _| {
+                temporal_observado = true;
+                Err(ErrorJournalAnclado::Io)
+            },
+            |_, _| {
+                limpieza_llamada = true;
+                super::EstadoLimpiezaPublicacion::Completa
+            },
+        )
+        .unwrap();
+
+    assert_eq!(resultado, ResultadoPublicacionJournal::Indeterminado);
+    assert!(canonico_observado);
+    assert!(temporal_observado);
+    assert!(!limpieza_llamada);
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+    assert!(!journal.exists());
 }
 
 #[cfg(windows)]

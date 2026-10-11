@@ -64,6 +64,7 @@ pub(crate) enum ResultadoPublicacionJournal {
     Publicado,
     YaPublicado,
     PublicadoTemporalPendiente,
+    Indeterminado,
 }
 
 impl fmt::Debug for ErrorJournalAnclado {
