@@ -331,6 +331,127 @@ fn candidato_parent_exige_override_para_cada_cambio() {
 }
 
 #[test]
+fn candidato_rechaza_overrides_sobrantes_y_duplicados_sin_revelar_paths() {
+    let archivos = vec![
+        ("n/PRIVATE_parent.md".into(), doc("Padre", "")),
+        (
+            "n/PRIVATE_child.md".into(),
+            doc("Hijo", "parent: n/PRIVATE_parent\n"),
+        ),
+    ];
+    let snapshot = parsear_bundle(&archivos, manifiesto_con_parent_key()).unwrap();
+    let delta = Delta::nuevo(std::iter::empty::<Atomo>(), std::iter::empty()).unwrap();
+    let candidato = construir(&snapshot, &delta);
+
+    for duplicado in [false, true] {
+        let mut overrides = vec![ParentOverride::new(
+            BundlePath::nuevo("n/PRIVATE_child").unwrap(),
+            Some(BundlePath::nuevo("n/PRIVATE_parent").unwrap()),
+        )];
+        if duplicado {
+            overrides.push(ParentOverride::new(
+                BundlePath::nuevo("n/PRIVATE_child").unwrap(),
+                Some(BundlePath::nuevo("n/PRIVATE_parent").unwrap()),
+            ));
+        }
+
+        let error = serializar_candidato(&snapshot, &candidato, &overrides).unwrap_err();
+        assert_eq!(error.codigo(), "parent_override_unexpected");
+        let visible = format!("{error} {error:?} {overrides:?}");
+        assert!(
+            !visible.contains("PRIVATE"),
+            "error sin redactar: {visible}"
+        );
+    }
+}
+
+#[test]
+fn candidato_rechaza_snapshot_incompatible_sin_revelar_paths() {
+    let archivos_base = vec![("n/PRIVATE_base.md".into(), doc("Base", ""))];
+    let snapshot = parsear_bundle(&archivos_base, manifiesto_minimo()).unwrap();
+    let delta = Delta::nuevo(std::iter::empty::<Atomo>(), std::iter::empty()).unwrap();
+
+    let candidato_manifest = construir(
+        &parsear_bundle(&archivos_base, manifiesto_con_parent_key()).unwrap(),
+        &delta,
+    );
+    let candidato_nodos = construir(
+        &parsear_bundle(
+            &[("n/PRIVATE_otro.md".into(), doc("Otro", ""))],
+            manifiesto_minimo(),
+        )
+        .unwrap(),
+        &delta,
+    );
+
+    for candidato in [candidato_manifest, candidato_nodos] {
+        let error = serializar_candidato(&snapshot, &candidato, &[]).unwrap_err();
+        assert_eq!(error.codigo(), "snapshot_incompatible");
+        let visible = format!("{error} {error:?}");
+        assert!(
+            !visible.contains("PRIVATE"),
+            "error sin redactar: {visible}"
+        );
+    }
+}
+
+#[test]
+fn candidato_roundtrip_conserva_parent_explicito_e_inferido_en_hermanos() {
+    let archivos = vec![
+        ("n/index.md".into(), doc("Raíz", "")),
+        ("n/sub/index.md".into(), doc("Sub", "parent: \"\"\n")),
+        (
+            "n/sub/explicito.md".into(),
+            doc("Explícito", "parent: n/sub/index\n"),
+        ),
+        ("n/sub/inferido.md".into(), doc("Inferido", "")),
+        (
+            "n/sub/cambio.md".into(),
+            doc("Cambio", "parent: n/sub/index\n"),
+        ),
+    ];
+    let snapshot = parsear_bundle(&archivos, manifiesto_con_parent_key()).unwrap();
+    let delta = Delta::nuevo(
+        [parent("n/sub/cambio", "n/index")],
+        [parent("n/sub/cambio", "n/sub/index")],
+    )
+    .unwrap();
+    let candidato = construir(&snapshot, &delta);
+    let override_parent = ParentOverride::new(
+        BundlePath::nuevo("n/sub/cambio").unwrap(),
+        Some(BundlePath::nuevo("n/index").unwrap()),
+    );
+    let documentos = serializar_candidato(&snapshot, &candidato, &[override_parent]).unwrap();
+
+    let explicito = documentos
+        .iter()
+        .find(|documento| documento.path().como_str() == "n/sub/explicito")
+        .unwrap();
+    let inferido = documentos
+        .iter()
+        .find(|documento| documento.path().como_str() == "n/sub/inferido")
+        .unwrap();
+    assert!(explicito.contenido().contains("parent: n/sub/index\n"));
+    assert!(!inferido.contenido().contains("parent:"));
+
+    let recargado = parsear_bundle(&archivos_de(&documentos), manifiesto_con_parent_key()).unwrap();
+    assert!(contiene_parent(
+        &recargado,
+        "n/sub/explicito",
+        "n/sub/index"
+    ));
+    assert!(contiene_parent(&recargado, "n/sub/inferido", "n/sub/index"));
+    let explicito_id = recargado
+        .por_path(&BundlePath::nuevo("n/sub/explicito").unwrap())
+        .unwrap();
+    let inferido_id = recargado
+        .por_path(&BundlePath::nuevo("n/sub/inferido").unwrap())
+        .unwrap();
+    assert!(recargado.parent_frontmatter_explicito(explicito_id));
+    assert!(!recargado.parent_frontmatter_explicito(inferido_id));
+}
+
+#[test]
 fn candidato_parent_reemplaza_y_quita_varios_hijos_con_roundtrip_determinista() {
     let archivos = vec![
         ("n/Old.md".into(), doc("Viejo", "")),
