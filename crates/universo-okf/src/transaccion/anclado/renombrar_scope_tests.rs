@@ -1,0 +1,170 @@
+use super::renombrar::ErrorRenombrarAnclado;
+use super::renombrar_test_support::{
+    rename_backup_name, rename_identity, saltar_sin_file_id,
+};
+use super::{DirectorioAnclado, UbicacionRaiz};
+use tempfile::tempdir;
+
+#[test]
+fn rename_sibling_rechaza_capability_de_otro_lock_en_el_mismo_parent() {
+    use crate::transaccion::lock::LockEscritura;
+
+    let temp = tempdir().unwrap();
+    if saltar_sin_file_id(temp.path()) {
+        return;
+    }
+    let root_a = temp.path().join("bundle-a");
+    let root_b = temp.path().join("bundle-b");
+    std::fs::create_dir(&root_a).unwrap();
+    std::fs::create_dir(&root_b).unwrap();
+    std::fs::write(root_a.join("canary.txt"), b"root a").unwrap();
+    std::fs::write(root_b.join("canary.txt"), b"root b").unwrap();
+    let mut lock_a = LockEscritura::adquirir(&root_a).unwrap();
+    let mut lock_b = LockEscritura::adquirir(&root_b).unwrap();
+    let mut espacio_a = lock_a.espacio_transaccional_anclado().unwrap();
+    let espacio_b = lock_b.espacio_transaccional_anclado().unwrap();
+    let identidad_b = rename_identity(&root_b);
+    let mut sibling_b = espacio_b
+        .observar_directorio_sibling(std::ffi::OsStr::new("bundle-b"), identidad_b)
+        .unwrap();
+
+    let backup_a = rename_backup_name(&root_a);
+    let error = espacio_a
+        .renombrar_directorio(&mut sibling_b, &backup_a)
+        .unwrap_err();
+
+    assert_eq!(error, ErrorRenombrarAnclado::FuenteNoHermana);
+    assert_eq!(sibling_b.identidad(), identidad_b);
+    assert_eq!(sibling_b.nombre(), std::ffi::OsStr::new("bundle-b"));
+    assert!(matches!(
+        espacio_a.observar_directorio_sibling(std::ffi::OsStr::new("bundle-b"), identidad_b),
+        Err(ErrorRenombrarAnclado::FuenteNoHermana)
+    ));
+    let identity_a = rename_identity(&root_a);
+    let mut sibling_a = espacio_a
+        .observar_directorio_sibling(std::ffi::OsStr::new("bundle-a"), identity_a)
+        .unwrap();
+    assert!(matches!(
+        espacio_a.renombrar_directorio(&mut sibling_a, std::ffi::OsStr::new("bundle-b")),
+        Err(ErrorRenombrarAnclado::FuenteNoHermana)
+    ));
+    assert_eq!(sibling_a.identidad(), identity_a);
+    assert_eq!(sibling_a.nombre(), std::ffi::OsStr::new("bundle-a"));
+    assert_eq!(std::fs::read(root_a.join("canary.txt")).unwrap(), b"root a");
+    assert_eq!(std::fs::read(root_b.join("canary.txt")).unwrap(), b"root b");
+    assert!(!temp.path().join(&backup_a).exists());
+}
+
+#[test]
+fn rename_sibling_rechaza_identidad_fuente_reemplazada() {
+    use crate::transaccion::lock::LockEscritura;
+
+    let temp = tempdir().unwrap();
+    if saltar_sin_file_id(temp.path()) {
+        return;
+    }
+    let root = temp.path().join("bundle");
+    std::fs::create_dir(&root).unwrap();
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut espacio = lock.espacio_transaccional_anclado().unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&root).unwrap()).unwrap();
+    let (stage_anchor, component) = ancla.crear_stage_sibling("identity-mismatch").unwrap();
+    let source_path = temp.path().join(component);
+    let saved_path = temp.path().join("saved-source");
+    std::fs::write(source_path.join("original.txt"), b"original source").unwrap();
+    let original_identity = stage_anchor.identidad_raiz().unwrap();
+    let mut source = espacio
+        .observar_directorio_sibling(source_path.file_name().unwrap(), original_identity)
+        .unwrap();
+    std::fs::rename(&source_path, &saved_path).unwrap();
+    std::fs::create_dir(&source_path).unwrap();
+    std::fs::write(source_path.join("canary.txt"), b"replacement").unwrap();
+    let replacement =
+        DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&source_path).unwrap()).unwrap();
+
+    let backup_name = rename_backup_name(&root);
+    let error = espacio
+        .renombrar_directorio(&mut source, &backup_name)
+        .unwrap_err();
+
+    assert_eq!(error, ErrorRenombrarAnclado::IdentidadNoCoincide);
+    assert_ne!(replacement.identidad_raiz(), Some(original_identity));
+    assert_eq!(source.nombre(), source_path.file_name().unwrap());
+    assert_eq!(source.identidad(), original_identity);
+    assert_eq!(
+        std::fs::read(source_path.join("canary.txt")).unwrap(),
+        b"replacement"
+    );
+    assert!(saved_path.is_dir());
+    assert_eq!(
+        std::fs::read(saved_path.join("original.txt")).unwrap(),
+        b"original source"
+    );
+    assert!(!temp.path().join(&backup_name).exists());
+}
+
+#[test]
+fn rename_sibling_rechaza_nombres_no_componentes() {
+    use crate::transaccion::lock::LockEscritura;
+
+    let temp = tempdir().unwrap();
+    if saltar_sin_file_id(temp.path()) {
+        return;
+    }
+    let root = temp.path().join("bundle");
+    std::fs::create_dir(&root).unwrap();
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut espacio = lock.espacio_transaccional_anclado().unwrap();
+    let mut source = espacio
+        .observar_directorio_sibling(std::ffi::OsStr::new("bundle"), rename_identity(&root))
+        .unwrap();
+
+    let invalid_names = vec![
+        "",
+        ".",
+        "..",
+        "a/b",
+        "a\\b",
+        "file:stream",
+        "CON",
+        "nul.txt",
+        "\0",
+        "\u{1}",
+    ];
+    #[cfg(windows)]
+    let invalid_names = {
+        let mut invalid_names = invalid_names;
+        invalid_names.extend(["normal.", "normal ", "BUNDLE~23"]);
+        invalid_names
+    };
+    for nombre in invalid_names {
+        let error = espacio
+            .renombrar_directorio(&mut source, std::ffi::OsStr::new(nombre))
+            .unwrap_err();
+        assert_eq!(error, ErrorRenombrarAnclado::ComponenteInvalido, "{nombre}");
+    }
+    assert!(root.is_dir());
+}
+
+#[test]
+fn rename_sibling_rechaza_hermano_que_no_es_directorio() {
+    use crate::transaccion::lock::LockEscritura;
+
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let backup_name = rename_backup_name(&root);
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(temp.path().join(&backup_name), b"file canary").unwrap();
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let espacio = lock.espacio_transaccional_anclado().unwrap();
+
+    assert!(matches!(
+        espacio.observar_directorio_sibling(&backup_name, rename_identity(&root)),
+        Err(ErrorRenombrarAnclado::TipoNoAdmitido)
+    ));
+    assert_eq!(
+        std::fs::read(temp.path().join(&backup_name)).unwrap(),
+        b"file canary"
+    );
+    assert!(root.is_dir());
+}

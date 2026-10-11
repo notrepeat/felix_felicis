@@ -652,3 +652,7 @@ mod renombrar_test_support;
 #[cfg(test)]
 #[path = "anclado/renombrar_destino_tests.rs"]
 mod renombrar_destino_tests;
+
+#[cfg(test)]
+#[path = "anclado/renombrar_scope_tests.rs"]
+mod renombrar_scope_tests;
