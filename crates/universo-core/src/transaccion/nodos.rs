@@ -32,6 +32,8 @@ pub(super) struct CambiosNodos {
     etiquetas: Vec<(NodoId, Etiqueta)>,
     retirar_padres: Vec<NodoId>,
     agregar_padres: Vec<(NodoId, NodoId)>,
+    pub(super) conflicto_haslab: bool,
+    pub(super) conflicto_parent: bool,
 }
 
 /// Resuelve los cambios funcionales de nodo contra el snapshot sin mutarlo.
@@ -149,8 +151,13 @@ pub(super) fn preparar(
                 }
             }
         } else if retiro_exacto {
-            // lambda es total: un HasLab de nodo no se puede retirar aislado.
-            fallos.agregar_haslab = true;
+            // Lambda es total: la etiqueta requiere un reemplazo explícito.
+            fallos
+                .invalidez_tecnica
+                .get_or_insert(ErrorCandidato::InvalidOperation {
+                    clase: ClaseOperacion::HasLab,
+                    codigo: "label_replacement_required",
+                });
         }
     }
 
@@ -228,7 +235,9 @@ pub(super) fn preparar(
                 codigo: "parent_cycle",
             });
     }
-    devolver_fallo(fallos)?;
+    devolver_fallo(&fallos)?;
+    cambios.conflicto_haslab = fallos.agregar_haslab;
+    cambios.conflicto_parent = fallos.agregar_parent;
     Ok(cambios)
 }
 
@@ -259,7 +268,7 @@ pub(super) fn aplicar(
     Ok(())
 }
 
-fn devolver_fallo(fallos: Fallos) -> Result<(), ErrorCandidato> {
+fn devolver_fallo(fallos: &Fallos) -> Result<(), ErrorCandidato> {
     if fallos.retirar_haslab {
         return Err(ErrorCandidato::RemoveNotFound {
             clase: ClaseOperacion::HasLab,
@@ -270,18 +279,8 @@ fn devolver_fallo(fallos: Fallos) -> Result<(), ErrorCandidato> {
             clase: ClaseOperacion::Parent,
         });
     }
-    if let Some(error) = fallos.invalidez_tecnica {
-        return Err(error);
-    }
-    if fallos.agregar_haslab {
-        return Err(ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab,
-        });
-    }
-    if fallos.agregar_parent {
-        return Err(ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::Parent,
-        });
+    if let Some(error) = &fallos.invalidez_tecnica {
+        return Err(error.clone());
     }
     Ok(())
 }

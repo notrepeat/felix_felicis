@@ -193,6 +193,16 @@ pub fn construir_candidato(
     aplicar_altas(&mut estructura, delta.agregar(), &etiquetas_retiradas)?;
     ext::aplicar(&mut estructura, &cambios_ext)?;
     nodos::aplicar(&mut estructura, &cambios_nodos)?;
+    if cambios_nodos.conflicto_haslab {
+        return Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab,
+        });
+    }
+    if cambios_nodos.conflicto_parent {
+        return Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::Parent,
+        });
+    }
     Ok(Candidato { estructura })
 }
 
@@ -301,8 +311,9 @@ fn aplicar_altas(
             && !identidades_reemplazo.contains(identidad)
             && !etiquetas_vigentes.contains_key(identidad)
     }) {
-        return Err(ErrorCandidato::AddConflict {
+        return Err(ErrorCandidato::InvalidOperation {
             clase: ClaseOperacion::HasLab,
+            codigo: "label_orphan",
         });
     }
 
@@ -352,9 +363,16 @@ fn aplicar_altas(
             let Atomo::Edge { id, .. } = atomo else {
                 unreachable!("el grupo solo contiene altas Edge")
             };
-            let etiquetas_edge = etiquetas.get(id).ok_or(ErrorCandidato::AddConflict {
+            let etiquetas_edge = etiquetas.get(id).ok_or(ErrorCandidato::InvalidOperation {
                 clase: ClaseOperacion::HasLab,
+                codigo: "label_missing",
             })?;
+            if etiquetas_edge.is_empty() {
+                return Err(ErrorCandidato::InvalidOperation {
+                    clase: ClaseOperacion::HasLab,
+                    codigo: "label_missing",
+                });
+            }
             if etiquetas_edge.len() != 1 {
                 return Err(ErrorCandidato::AddConflict {
                     clase: ClaseOperacion::HasLab,
@@ -362,8 +380,9 @@ fn aplicar_altas(
             }
             let etiqueta = etiquetas_edge[0];
             if etiqueta.como_str().contains(['\n', '\r']) {
-                return Err(ErrorCandidato::AddConflict {
+                return Err(ErrorCandidato::InvalidOperation {
                     clase: ClaseOperacion::HasLab,
+                    codigo: "label_contains_line_break",
                 });
             }
 
@@ -416,9 +435,16 @@ fn aplicar_altas(
         let etiquetas_nuevas =
             etiquetas
                 .get(&identidad_final)
-                .ok_or(ErrorCandidato::AddConflict {
+                .ok_or(ErrorCandidato::InvalidOperation {
                     clase: ClaseOperacion::HasLab,
+                    codigo: "label_replacement_required",
                 })?;
+        if etiquetas_nuevas.is_empty() {
+            return Err(ErrorCandidato::InvalidOperation {
+                clase: ClaseOperacion::HasLab,
+                codigo: "label_replacement_required",
+            });
+        }
         if etiquetas_nuevas.len() != 1 {
             return Err(ErrorCandidato::AddConflict {
                 clase: ClaseOperacion::HasLab,
@@ -426,8 +452,9 @@ fn aplicar_altas(
         }
         let etiqueta_nueva = etiquetas_nuevas[0];
         if etiqueta_nueva.como_str().contains(['\n', '\r']) {
-            return Err(ErrorCandidato::AddConflict {
+            return Err(ErrorCandidato::InvalidOperation {
                 clase: ClaseOperacion::HasLab,
+                codigo: "label_contains_line_break",
             });
         }
         if estructura
@@ -442,8 +469,9 @@ fn aplicar_altas(
     for (handle, etiqueta) in reemplazos {
         estructura
             .reemplazar_etiqueta_arista(handle, etiqueta)
-            .map_err(|_| ErrorCandidato::AddConflict {
+            .map_err(|_| ErrorCandidato::InvalidOperation {
                 clase: ClaseOperacion::HasLab,
+                codigo: "label_replacement_failed",
             })?;
     }
     Ok(())
