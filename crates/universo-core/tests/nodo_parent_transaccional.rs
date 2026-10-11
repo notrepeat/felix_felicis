@@ -103,21 +103,28 @@ fn haslab_nodo_no_admite_retiro_aislado_ni_retiro_inexacto() {
     let (snapshot, _, _, _) = base();
     let antes = snapshot.atomos();
     let retiros = [
-        haslab("n/hijo", "hijo"),
-        haslab("n/hijo", "PRIV_LABEL"),
-        haslab("n/PRIV_NODE", "hijo"),
+        (haslab("n/hijo", "hijo"), true),
+        (haslab("n/hijo", "PRIV_LABEL"), false),
+        (haslab("n/PRIV_NODE", "hijo"), false),
     ];
-    for retiro in retiros {
+    for (retiro, add_conflict) in retiros {
         let delta = Delta::nuevo([], [retiro]).unwrap();
         let error = construir_candidato(&snapshot, &delta).unwrap_err();
-        assert!(matches!(
-            error,
-            ErrorCandidato::AddConflict {
-                clase: ClaseOperacion::HasLab
-            } | ErrorCandidato::RemoveNotFound {
-                clase: ClaseOperacion::HasLab
-            }
-        ));
+        if add_conflict {
+            assert!(matches!(
+                &error,
+                ErrorCandidato::AddConflict {
+                    clase: ClaseOperacion::HasLab
+                }
+            ));
+        } else {
+            assert!(matches!(
+                &error,
+                ErrorCandidato::RemoveNotFound {
+                    clase: ClaseOperacion::HasLab
+                }
+            ));
+        }
         assert_redactado(&error, &["PRIV_LABEL", "PRIV_NODE"]);
         assert_eq!(snapshot.atomos(), antes);
     }
@@ -134,8 +141,32 @@ fn haslab_nodo_no_admite_retiro_aislado_ni_retiro_inexacto() {
 }
 
 #[test]
-fn haslab_conflictivo_redactado_y_misma_etiqueta_en_sujetos_distintos_valida() {
+fn haslab_nodo_rechaza_cr_y_lf_redactado_sin_mutar_entradas() {
     let (snapshot, _, _, _) = base();
+    let antes = snapshot.atomos();
+
+    for etiqueta in ["PRIV_LF\ncontinúa", "PRIV_CR\rcontinúa"] {
+        let delta = Delta::nuevo([haslab("n/hijo", etiqueta)], [haslab("n/hijo", "hijo")]).unwrap();
+        let agregar_antes = delta.agregar().to_vec();
+        let retirar_antes = delta.retirar().to_vec();
+        let error = construir_candidato(&snapshot, &delta).unwrap_err();
+
+        assert!(matches!(
+            &error,
+            ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::HasLab
+            }
+        ));
+        assert_redactado(&error, &[etiqueta, "PRIV_LF", "PRIV_CR"]);
+        assert_eq!(delta.agregar(), agregar_antes.as_slice());
+        assert_eq!(delta.retirar(), retirar_antes.as_slice());
+        assert_eq!(snapshot.atomos(), antes);
+    }
+}
+
+#[test]
+fn haslab_conflictivo_redactado_y_misma_etiqueta_en_sujetos_distintos_valida() {
+    let (snapshot, _, hijo, otro) = base();
     let antes = snapshot.atomos();
     let multiples = Delta::nuevo([haslab("n/hijo", "uno"), haslab("n/hijo", "dos")], []).unwrap();
     let error = construir_candidato(&snapshot, &multiples).unwrap_err();
@@ -157,7 +188,24 @@ fn haslab_conflictivo_redactado_y_misma_etiqueta_en_sujetos_distintos_valida() {
     )
     .unwrap();
     let candidato = construir_candidato(&snapshot, &misma).unwrap();
-    assert_eq!(candidato.estructura().atomos().len(), antes.len());
+    assert_eq!(
+        candidato
+            .estructura()
+            .nodo(hijo)
+            .unwrap()
+            .etiqueta
+            .como_str(),
+        "compartida"
+    );
+    assert_eq!(
+        candidato
+            .estructura()
+            .nodo(otro)
+            .unwrap()
+            .etiqueta
+            .como_str(),
+        "compartida"
+    );
     assert_eq!(snapshot.atomos(), antes);
 }
 
@@ -244,43 +292,57 @@ fn parent_rechaza_conflictos_estructurales_redactados() {
         (
             Delta::nuevo([parent("n/raiz", "n/raiz")], []).unwrap(),
             "n/raiz",
+            true,
         ),
         (
             Delta::nuevo([parent("n/raiz", "n/hijo")], []).unwrap(),
             "n/hijo",
+            true,
         ),
         (
             Delta::nuevo([parent("n/PRIV_CHILD", "n/raiz")], []).unwrap(),
             "PRIV_CHILD",
+            true,
         ),
         (
             Delta::nuevo([parent("n/otro", "n/PRIV_PARENT")], []).unwrap(),
             "PRIV_PARENT",
+            true,
         ),
         (
             Delta::nuevo([parent("n/otro", "n/raiz"), parent("n/otro", "n/hijo")], []).unwrap(),
             "n/otro",
+            true,
         ),
         (
             Delta::nuevo([], [parent("n/PRIV_CHILD", "n/raiz")]).unwrap(),
             "PRIV_CHILD",
+            false,
         ),
         (
             Delta::nuevo([], [parent("n/otro", "n/PRIV_PARENT")]).unwrap(),
             "PRIV_PARENT",
+            false,
         ),
     ];
 
-    for (delta, canario) in casos {
+    for (delta, canario, add_conflict) in casos {
         let error = construir_candidato(&snapshot, &delta).unwrap_err();
-        assert!(matches!(
-            error,
-            ErrorCandidato::AddConflict {
-                clase: ClaseOperacion::Parent
-            } | ErrorCandidato::RemoveNotFound {
-                clase: ClaseOperacion::Parent
-            }
-        ));
+        if add_conflict {
+            assert!(matches!(
+                &error,
+                ErrorCandidato::AddConflict {
+                    clase: ClaseOperacion::Parent
+                }
+            ));
+        } else {
+            assert!(matches!(
+                &error,
+                ErrorCandidato::RemoveNotFound {
+                    clase: ClaseOperacion::Parent
+                }
+            ));
+        }
         assert_redactado(&error, &[canario]);
         assert_eq!(snapshot.atomos(), antes);
     }
@@ -314,6 +376,33 @@ fn parent_resuelve_todos_los_retiros_antes_de_reasignar() {
 
     assert_eq!(candidato.estructura().padre(c), Some(a));
     assert_eq!(candidato.estructura().padre(b), Some(d));
+    assert_eq!(snapshot.atomos(), antes);
+    candidato.estructura().verificar_representacion().unwrap();
+}
+
+#[test]
+fn parent_retiros_antes_de_altas_evitan_ciclo_transitorio() {
+    let mut snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
+    let a = snapshot
+        .insertar_nodo(p("n/a"), Sorte::nuevo("a"), Etiqueta::nuevo("a"))
+        .unwrap();
+    let b = snapshot
+        .insertar_nodo(p("n/b"), Sorte::nuevo("b"), Etiqueta::nuevo("b"))
+        .unwrap();
+    let c = snapshot
+        .insertar_nodo(p("n/c"), Sorte::nuevo("b"), Etiqueta::nuevo("c"))
+        .unwrap();
+    snapshot.asignar_padre(a, b).unwrap();
+    snapshot.asignar_padre(b, c).unwrap();
+    let antes = snapshot.atomos();
+    let delta = Delta::nuevo([parent("n/c", "n/a")], [parent("n/b", "n/c")]).unwrap();
+
+    // La alta c -> a crearía a -> b -> c -> a hasta que se retire b -> c.
+    let candidato = construir_candidato(&snapshot, &delta).unwrap();
+
+    assert_eq!(candidato.estructura().padre(a), Some(b));
+    assert_eq!(candidato.estructura().padre(b), None);
+    assert_eq!(candidato.estructura().padre(c), Some(a));
     assert_eq!(snapshot.atomos(), antes);
     candidato.estructura().verificar_representacion().unwrap();
 }
