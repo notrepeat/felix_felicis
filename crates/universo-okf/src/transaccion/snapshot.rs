@@ -234,6 +234,10 @@ mod tests {
             result,
             token("engine/1", "policy/1", b"manifest", b"rules", &entries)
         );
+        assert_eq!(
+            result.to_hex(),
+            "6cffaa8a4d9cfcf5e298d8f73d72d6ada739b383d4aa9bdf21d30bba5577fb72"
+        );
         assert_eq!(result.to_hex().len(), 64);
         assert!(!format!("{result:?}").contains(&result.to_hex()));
         assert!(!result.to_string().contains(&result.to_hex()));
