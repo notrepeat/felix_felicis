@@ -1068,7 +1068,7 @@ fn directorios_padre(mut ruta: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::serializar::serializar_candidato;
+    use crate::serializar::{ParentOverride, serializar_candidato};
     use crate::transaccion::captura::{capturar_snapshot, materializar_desde_entradas};
     use std::fs;
     use tempfile::{TempDir, tempdir};
@@ -1147,6 +1147,10 @@ ignorados = ["ignored.md"]
     }
 
     fn snapshot_con_parent() -> (TempDir, Snapshot, PathBuf, PathBuf) {
+        snapshot_con_parent_version("stage-parent/1")
+    }
+
+    fn snapshot_con_parent_version(version: &str) -> (TempDir, Snapshot, PathBuf, PathBuf) {
         let temp = tempdir().unwrap();
         let raiz = temp.path().join("bundle");
         fs::create_dir_all(raiz.join("knowledge/sub")).unwrap();
@@ -1169,7 +1173,7 @@ ignorados = ["ignored.md"]
         let invariantes = temp.path().join("invariants.smt2");
         fs::write(
             &manifiesto,
-            "version = \"stage-parent/1\"\n\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n\n[layout]\ndirectorios = [\"knowledge\"]\nsin_iota = []\nignorados = []\nparent_key = \"parent\"\n",
+            format!("version = \"{version}\"\n\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n\n[layout]\ndirectorios = [\"knowledge\"]\nsin_iota = []\nignorados = []\nparent_key = \"parent\"\n"),
         )
         .unwrap();
         fs::write(&invariantes, "\n").unwrap();
@@ -1189,6 +1193,20 @@ ignorados = ["ignored.md"]
             etiqueta: Etiqueta::nuevo(titulo),
         };
         let delta = Delta::nuevo([nuevo], [anterior]).unwrap();
+        construir_candidato(snapshot.estructura(), &delta).unwrap()
+    }
+
+    fn candidato_con_padre(snapshot: &Snapshot, nuevo_padre: Option<&str>) -> Candidato {
+        let hijo = BundlePath::nuevo("knowledge/sub/index").unwrap();
+        let anterior = Atomo::Parent {
+            hijo: hijo.clone(),
+            padre: BundlePath::nuevo("knowledge/index").unwrap(),
+        };
+        let agregar = nuevo_padre.map(|padre| Atomo::Parent {
+            hijo,
+            padre: BundlePath::nuevo(padre).unwrap(),
+        });
+        let delta = Delta::nuevo(agregar, [anterior]).unwrap();
         construir_candidato(snapshot.estructura(), &delta).unwrap()
     }
 
@@ -1635,8 +1653,10 @@ ignorados = ["ignored.md"]
             "success",
             "corrupcion",
             "missing",
+            "missing-dir",
             "extra-file",
             "extra-dir",
+            "file-to-dir",
             "type",
         ] {
             let (temp, snapshot) = snapshot_minimo();
@@ -1648,8 +1668,17 @@ ignorados = ["ignored.md"]
                 "success" => {}
                 "corrupcion" => fs::write(stage.ruta().join("knowledge/a.md"), b"corrupt").unwrap(),
                 "missing" => fs::remove_file(stage.ruta().join("knowledge/a.md")).unwrap(),
+                "missing-dir" => fs::remove_dir(stage.ruta().join("empty")).unwrap(),
                 "extra-file" => fs::write(stage.ruta().join("extra.bin"), b"extra").unwrap(),
-                "extra-dir" => fs::create_dir(stage.ruta().join("extra-empty")).unwrap(),
+                "extra-dir" => {
+                    fs::create_dir(stage.ruta().join("extra-nonempty")).unwrap();
+                    fs::write(stage.ruta().join("extra-nonempty/canary.bin"), b"extra").unwrap();
+                }
+                "file-to-dir" => {
+                    fs::remove_file(stage.ruta().join("payload.bin")).unwrap();
+                    fs::create_dir(stage.ruta().join("payload.bin")).unwrap();
+                    fs::write(stage.ruta().join("payload.bin/canary.bin"), b"wrong type").unwrap();
+                }
                 "type" => {
                     fs::remove_dir(stage.ruta().join("empty")).unwrap();
                     fs::write(stage.ruta().join("empty"), b"wrong type").unwrap();
@@ -1674,6 +1703,32 @@ ignorados = ["ignored.md"]
             }
             assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), original);
         }
+    }
+
+    #[test]
+    fn recarga_con_inventario_exacto_rechaza_documento_invalido_sin_revelar_canarios() {
+        let (temp, snapshot) = snapshot_minimo();
+        let root = temp.path().join("bundle");
+        let original = fs::read(root.join("knowledge/a.md")).unwrap();
+        let canario = "PRIVATE_RELOAD_PARSE_CANARY";
+        let plan = planificar_staging(&snapshot, &[documento("knowledge/a", canario)]).unwrap();
+        let error = materializar_staging_y_recargar_con(
+            &UbicacionRaiz::nueva(&root).unwrap(),
+            &snapshot,
+            &plan,
+            || Ok("invalid-doc-stage".to_owned()),
+            escribir_archivo_nuevo,
+            leer_archivo_regular,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.codigo(), "snapshot_bundle_invalid");
+        let visible = format!("{error:?} {error}");
+        assert!(!visible.contains(canario));
+        assert!(!visible.contains("knowledge/a.md"));
+        assert!(!visible.contains("invalid-doc-stage"));
+        assert!(!visible.contains(temp.path().to_string_lossy().as_ref()));
+        assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), original);
     }
 
     #[cfg(unix)]
@@ -1845,7 +1900,7 @@ ignorados = ["ignored.md"]
     }
 
     #[test]
-    fn recarga_validada_emite_recibo_opaco_y_conserva_el_root() {
+    fn stages_equivalentes_comparten_token_con_ids_distintos_y_redactados() {
         let (temp, snapshot, manifiesto, invariantes) = snapshot_con_parent();
         let raiz = temp.path().join("bundle");
         let antes = fs::read(raiz.join("knowledge/index.md")).unwrap();
@@ -1855,13 +1910,20 @@ ignorados = ["ignored.md"]
         let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
 
         let stage = materializar_staging(&ubicacion, &snapshot, &plan, &candidato).unwrap();
+        let segundo = materializar_staging(&ubicacion, &snapshot, &plan, &candidato).unwrap();
         let recibo = stage.recibo().unwrap();
+        let recibo_segundo = segundo.recibo().unwrap();
         assert_eq!(recibo.stage_id(), stage.stage_id());
+        assert_eq!(recibo_segundo.stage_id(), segundo.stage_id());
+        assert_ne!(recibo.stage_id(), recibo_segundo.stage_id());
+        assert_eq!(recibo.snapshot(), recibo_segundo.snapshot());
         assert_ne!(recibo.snapshot(), snapshot.token());
-        let visible = format!("{recibo:?} {recibo}");
-        assert!(!visible.contains(stage.stage_id()));
-        assert!(!visible.contains(&recibo.snapshot().to_hex()));
-        assert!(!format!("{stage:?}").contains(stage.stage_id()));
+        for (stage, recibo) in [(&stage, recibo), (&segundo, recibo_segundo)] {
+            let visible = format!("{recibo:?} {recibo}");
+            assert!(!visible.contains(stage.stage_id()));
+            assert!(!visible.contains(&recibo.snapshot().to_hex()));
+            assert!(!format!("{stage:?}").contains(stage.stage_id()));
+        }
         assert_eq!(fs::read(raiz.join("knowledge/index.md")).unwrap(), antes);
         assert_eq!(
             capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
@@ -1881,7 +1943,11 @@ ignorados = ["ignored.md"]
         assert!(validar_candidato_recargado(&snapshot, &candidato, &recapturado).is_ok());
 
         let path = "knowledge/index.md";
-        for (buscar, reemplazo) in [("custom: keep", "custom: changed"), ("parent: \"\"\n", "")] {
+        for (buscar, reemplazo) in [
+            ("custom: keep", "custom: changed"),
+            ("parent: \"\"\n", ""),
+            ("root body\n", "tampered body\n"),
+        ] {
             let mut entradas = snapshot.entradas().to_vec();
             let indice = entradas.iter().position(|e| e.ruta() == path).unwrap();
             let original = std::str::from_utf8(entradas[indice].bytes().unwrap()).unwrap();
@@ -1923,6 +1989,61 @@ ignorados = ["ignored.md"]
         .unwrap();
         assert!(stage.recibo().is_some());
         assert_eq!(fs::read(&ruta_documento).unwrap(), antes);
+    }
+
+    #[test]
+    fn comparador_rechaza_manifiesto_de_candidato_distinto() {
+        let (temp, original, _, _) = snapshot_con_parent();
+        let raiz = temp.path().join("bundle");
+        let (_otro_temp, otro_manifiesto, _, _) = snapshot_con_parent_version("stage-parent/2");
+        let candidato =
+            construir_candidato(otro_manifiesto.estructura(), &Delta::default()).unwrap();
+        let esperado = construir_candidato(original.estructura(), &Delta::default()).unwrap();
+        let documentos = serializar_candidato(original.estructura(), &esperado, &[]).unwrap();
+        let plan = planificar_staging(&original, &documentos).unwrap();
+        let error = materializar_staging(
+            &UbicacionRaiz::nueva(&raiz).unwrap(),
+            &original,
+            &plan,
+            &candidato,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_candidate_mismatch");
+        assert!(!format!("{error:?} {error}").contains("stage-parent/2"));
+    }
+
+    #[test]
+    fn parent_inferido_que_cambia_se_persiste_explicito_al_reasignar_o_quitar() {
+        for nuevo_padre in [Some("knowledge/sub/leaf"), None] {
+            let (temp, snapshot, _, _) = snapshot_con_parent();
+            let raiz = temp.path().join("bundle");
+            let hijo = BundlePath::nuevo("knowledge/sub/index").unwrap();
+            let id = snapshot.estructura().por_path(&hijo).unwrap();
+            assert!(!snapshot.estructura().parent_frontmatter_explicito(id));
+            let candidato = candidato_con_padre(&snapshot, nuevo_padre);
+            let override_parent = ParentOverride::new(
+                hijo.clone(),
+                nuevo_padre.map(|padre| BundlePath::nuevo(padre).unwrap()),
+            );
+            let documentos =
+                serializar_candidato(snapshot.estructura(), &candidato, &[override_parent])
+                    .unwrap();
+            let hijo_doc = documentos.iter().find(|doc| doc.path() == &hijo).unwrap();
+            assert!(hijo_doc.contenido().contains("parent:"));
+            let plan = planificar_staging(&snapshot, &documentos).unwrap();
+
+            let stage = materializar_staging(
+                &UbicacionRaiz::nueva(&raiz).unwrap(),
+                &snapshot,
+                &plan,
+                &candidato,
+            )
+            .unwrap();
+            let esperado = parent_explicito_esperado(snapshot.estructura(), candidato.estructura());
+            assert_eq!(esperado.get(&hijo), Some(&true));
+            assert!(stage.recibo().is_some());
+        }
     }
 
     #[test]
@@ -1978,6 +2099,8 @@ ignorados = ["ignored.md"]
         let candidato = construir_candidato(snapshot.estructura(), &Delta::default()).unwrap();
         let documentos = serializar_candidato(snapshot.estructura(), &candidato, &[]).unwrap();
         let plan = planificar_staging(&snapshot, &documentos).unwrap();
+        fs::remove_file(raiz.join("manifest.toml")).unwrap();
+        fs::remove_file(raiz.join("invariants.smt2")).unwrap();
         let stage = materializar_staging(
             &UbicacionRaiz::nueva(&raiz).unwrap(),
             &snapshot,
