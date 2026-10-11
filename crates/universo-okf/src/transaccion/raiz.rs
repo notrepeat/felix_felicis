@@ -31,8 +31,8 @@ impl RaizValidada {
         validar_componentes_sin_enlaces(&absoluta)?;
 
         // Canonizar la ruta original, no una reducción léxica: el sistema de
-        // archivos define la semántica de `..`. La inspección previa garantiza
-        // que ningún componente recorrido haya sido un symlink/reparse point.
+        // archivos define la semántica de `..`. La inspección rechaza los
+        // symlink/reparse observados; no elimina reemplazos concurrentes.
         let canonica = fs::canonicalize(&absoluta).map_err(|_| ErrorRaiz::Io)?;
         validar_directorio_final(&canonica)?;
 
