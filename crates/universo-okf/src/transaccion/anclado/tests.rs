@@ -88,12 +88,11 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
     let mut bytes = Vec::new();
     lectura.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"read");
-    std::fs::create_dir(ruta.join("subdir")).unwrap();
+    let subdirectorio = ancla.crear_directorio("subdir").unwrap();
     assert!(matches!(
         ancla.abrir_entrada_inventario("subdir").unwrap(),
         EntradaLecturaAnclada::Directorio(_)
     ));
-    let subdirectorio = ancla.crear_directorio("subdir").unwrap();
     let mut nuevo = subdirectorio.crear_nuevo("new.txt").unwrap();
     nuevo.write_all(b"new").unwrap();
     assert_eq!(std::fs::read(ruta.join("subdir/new.txt")).unwrap(), b"new");
