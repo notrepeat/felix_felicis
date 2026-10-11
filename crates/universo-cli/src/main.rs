@@ -4,17 +4,27 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use universo_core::invariante::expansion::{ErrorExpansion, expandir_sentencias};
+use universo_core::evaluador::{
+    ConstructorAtomico, EvidenciaEvaluacion, ReglaEvidencia, TipoCuantificador,
+};
+use universo_core::invariante::expansion::{
+    ErrorExpansion, expandir_sentencias, expandir_sentencias_fuente,
+};
 use universo_core::invariante::validar_sentencia_fuente;
 use universo_core::sexpr::{ErrorAutoria, SentenciaFuente, parsear_programa};
-use universo_core::{ErrorEvaluacion, Manifiesto, evaluar};
+use universo_core::veredicto::{
+    AtomoBrecha, Brecha, ClaseBrecha, ErrorVeredicto, FormaPositiva, ModoExplicacion,
+    ObjetoExplicacion, ResultadoExplicaciones, ResultadoExplicacionesMedido,
+    explicar_con_presupuesto_y_consumos,
+};
+use universo_core::{ErrorEvaluacion, Manifiesto, PRESUPUESTO_EXPLICACION_POR_DEFECTO, evaluar};
 use universo_okf::{ErrorBundle, ErrorManifiestoArchivo, Regla, cargar_bundle, cargar_manifiesto};
 
 /// Uso breve, mostrado por errores de argumentos en `stderr`.
-const USO: &str = "Uso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]  (alias de validate)\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--format <text|json>]\nUse --manifiesto=<ruta> y --invariantes=<ruta> si una ruta empieza con '-'.\n";
+const USO: &str = "Uso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]  (alias de validate)\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate>] [--format <text|json>]\nUse --manifiesto=<ruta> y --invariantes=<ruta> si una ruta empieza con '-'.\n";
 
 /// Ayuda completa, mostrada en `stdout` con código de salida 0.
-const AYUDA: &str = "CLI de Felix Felicis\n\nUso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--format <text|json>]\n\nComandos:\n  atomos     Imprime los átomos del bundle en orden canónico.\n  validate   Valida el manifiesto, el formato OKF y la estructura del bundle.\n  verificar  Alias compatible de validate.\n  check      Evalúa el programa de invariantes sobre el bundle.\n\nOpciones:\n  --manifiesto <ruta> | --manifiesto=<ruta>  Manifiesto TOML requerido.\n  --invariantes <ruta> | --invariantes=<ruta> Programa de invariantes requerido por check.\n  --format text|json                         Formato de validate/check (por defecto: text).\n  -h, --help                                 Muestra esta ayuda y termina con código 0.\n\nSi la ruta de un archivo empieza con `-`, usa `--opcion=<ruta>`.\nSi la raíz posicional empieza con `-`, antepone `./` (por ejemplo, `./-bundle`).\nvalidate es una comprobación estructural; no evalúa invariantes.\ncheck informa admit/reject/error y no incluye testigos ni contenido del bundle.\n\nCódigos de salida:\n  0  Bundle válido, check admit o ayuda mostrada.\n  1  Bundle inválido, check reject/error o fallo de escritura.\n  2  Uso inválido.\n";
+const AYUDA: &str = "CLI de Felix Felicis\n\nUso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate>] [--format <text|json>]\n\nComandos:\n  atomos     Imprime los átomos del bundle en orden canónico.\n  validate   Valida el manifiesto, el formato OKF y la estructura del bundle.\n  verificar  Alias compatible de validate.\n  check      Evalúa el programa de invariantes sobre el bundle.\n\nOpciones:\n  --manifiesto <ruta> | --manifiesto=<ruta>  Manifiesto TOML requerido.\n  --invariantes <ruta> | --invariantes=<ruta> Programa de invariantes requerido por check.\n  --explain decide|enumerate                  Explicación redactada opt-in de check.\n  --format text|json                         Formato de validate/check (por defecto: text).\n  -h, --help                                 Muestra esta ayuda y termina con código 0.\n\nSi la ruta de un archivo empieza con `-`, usa `--opcion=<ruta>`.\nSi la raíz posicional empieza con `-`, antepone `./` (por ejemplo, `./-bundle`).\nvalidate es una comprobación estructural; no evalúa invariantes.\ncheck informa admit/reject/error y no incluye datos concretos del bundle. La explicación es redactada; su pase opt-in usa un presupuesto de 1.000.000 unidades además del pase completo que determina el resumen.\n\nCódigos de salida:\n  0  Bundle válido, check admit o ayuda mostrada.\n  1  Bundle inválido, check reject/error o fallo de escritura.\n  2  Uso inválido.\n";
 
 /// Formato de salida de `validate`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +50,7 @@ enum Comando {
         manifiesto: PathBuf,
         invariantes: PathBuf,
         formato: Formato,
+        explicacion: Option<ModoExplicacion>,
     },
 }
 
@@ -66,6 +77,7 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
     let mut manifiesto: Option<PathBuf> = None;
     let mut invariantes: Option<PathBuf> = None;
     let mut formato: Option<Formato> = None;
+    let mut explicacion: Option<ModoExplicacion> = None;
     let mut i = 0;
     while i < resto.len() {
         let arg = &resto[i];
@@ -100,6 +112,17 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
                 return Err(USO.to_string());
             }
             invariantes = Some(PathBuf::from(valor));
+            i += 2;
+        } else if arg == "--explain" {
+            let valor = resto.get(i + 1).ok_or_else(|| USO.to_string())?;
+            if tipo_comando != 2 || explicacion.is_some() || valor.starts_with('-') {
+                return Err(USO.to_string());
+            }
+            explicacion = Some(match valor.as_str() {
+                "decide" => ModoExplicacion::Decidir,
+                "enumerate" => ModoExplicacion::enumerar_por_defecto(),
+                _ => return Err(USO.to_string()),
+            });
             i += 2;
         } else if let Some(valor) = arg.strip_prefix("--format=") {
             if tipo_comando == 0 || formato.is_some() {
@@ -138,6 +161,7 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
             manifiesto,
             invariantes: invariantes.ok_or_else(|| USO.to_string())?,
             formato: formato.unwrap_or(Formato::Texto),
+            explicacion,
         }),
     }
 }
@@ -413,8 +437,31 @@ impl DiagnosticoCheck {
         })
     }
 
+    fn a_json_redactado(&self) -> Value {
+        json!({
+            "kind": self.kind,
+            "code": self.code,
+            "message": self.message,
+            "path": null,
+            "line": self.line,
+            "column": self.column,
+            "location": null,
+        })
+    }
+
     fn a_texto(&self) -> String {
         let mut ubicacion = self.path.as_deref().unwrap_or("check").to_string();
+        if let Some(linea) = self.line {
+            ubicacion.push_str(&format!(":{linea}"));
+            if let Some(columna) = self.column {
+                ubicacion.push_str(&format!(":{columna}"));
+            }
+        }
+        format!("{ubicacion}: {}: {}\n", self.code, self.message)
+    }
+
+    fn a_texto_redactado(&self) -> String {
+        let mut ubicacion = "check".to_string();
         if let Some(linea) = self.line {
             ubicacion.push_str(&format!(":{linea}"));
             if let Some(columna) = self.column {
@@ -505,6 +552,169 @@ fn escribir_error_check(
     error: &mut impl Write,
 ) -> i32 {
     escribir_resultado_check("error", None, errores, formato, 1, salida, error)
+}
+
+fn resultado_json_check_explicado(
+    status: &str,
+    summary: Option<Value>,
+    errors: &[DiagnosticoCheck],
+    explanations: Option<Value>,
+) -> Value {
+    json!({
+        "schema_version": 2,
+        "command": "check",
+        "status": status,
+        "summary": summary,
+        "errors": errors.iter().map(DiagnosticoCheck::a_json_redactado).collect::<Vec<_>>(),
+        "explanations": explanations,
+    })
+}
+
+struct ResultadoCheckExplicado<'a> {
+    status: &'a str,
+    summary: Option<Value>,
+    errors: &'a [DiagnosticoCheck],
+    explanations: Option<Value>,
+}
+
+fn escribir_resultado_check_explicado(
+    resultado: ResultadoCheckExplicado<'_>,
+    formato: Formato,
+    codigo_salida: i32,
+    salida: &mut impl Write,
+    error: &mut impl Write,
+) -> i32 {
+    if formato == Formato::Json {
+        let mut bytes = match serde_json::to_vec(&resultado_json_check_explicado(
+            resultado.status,
+            resultado.summary,
+            resultado.errors,
+            resultado.explanations,
+        )) {
+            Ok(bytes) => bytes,
+            Err(causa) => {
+                let causa = io::Error::other(causa);
+                reportar_fallo_escritura(error, "JSON", &causa);
+                return 1;
+            }
+        };
+        bytes.push(b'\n');
+        return if escribir_salida(salida, error, &bytes, "stdout") {
+            codigo_salida
+        } else {
+            1
+        };
+    }
+
+    if resultado.status == "error" {
+        let bytes: String = resultado
+            .errors
+            .iter()
+            .map(DiagnosticoCheck::a_texto_redactado)
+            .collect();
+        if let Err(causa) = error.write_all(bytes.as_bytes()) {
+            reportar_fallo_escritura(error, "stderr", &causa);
+        }
+        return codigo_salida;
+    }
+
+    let summary = resultado
+        .summary
+        .expect("admit/reject siempre tiene resumen");
+    let sources = summary["sources"].as_u64().unwrap_or_default();
+    let instances = summary["instances"].as_u64().unwrap_or_default();
+    let evaluated = summary["evaluated"].as_u64().unwrap_or_default();
+    let failed = summary["failed"].as_u64().unwrap_or_default();
+    let mut mensaje = format!(
+        "{}: {sources} fuentes, {instances} instancias, {evaluated} evaluadas, {failed} fallidas\n",
+        resultado.status.to_ascii_uppercase()
+    );
+    if let Some(explanations) = resultado.explanations {
+        mensaje.push_str(&explicaciones_a_texto(&explanations));
+    }
+    if escribir_salida(salida, error, mensaje.as_bytes(), "stdout") {
+        codigo_salida
+    } else {
+        1
+    }
+}
+
+fn escribir_error_check_explicado(
+    errores: &[DiagnosticoCheck],
+    formato: Formato,
+    salida: &mut impl Write,
+    error: &mut impl Write,
+) -> i32 {
+    escribir_resultado_check_explicado(
+        ResultadoCheckExplicado {
+            status: "error",
+            summary: None,
+            errors: errores,
+            explanations: None,
+        },
+        formato,
+        1,
+        salida,
+        error,
+    )
+}
+
+fn escribir_error_check_segun_modo(
+    errores: &[DiagnosticoCheck],
+    formato: Formato,
+    modo: Option<ModoExplicacion>,
+    salida: &mut impl Write,
+    error: &mut impl Write,
+) -> i32 {
+    if modo.is_some() {
+        escribir_error_check_explicado(errores, formato, salida, error)
+    } else {
+        escribir_error_check(errores, formato, salida, error)
+    }
+}
+
+fn explicaciones_a_texto(explanations: &Value) -> String {
+    let mode = explanations["mode"].as_str().unwrap_or("unknown");
+    let objects = explanations["objects"].as_array().map_or(0, Vec::len);
+    let truncated = explanations["truncated"].as_bool().unwrap_or(false);
+    let reason = explanations["reason"].as_str().unwrap_or("none");
+    let budget = &explanations["budget"];
+    let mut output = format!(
+        "EXPLANATIONS mode={mode} objects={objects} truncated={truncated} reason={reason}\n"
+    );
+    output.push_str(&format!(
+        "  budget total={} limit={} semantic={} evidence={} aggregator={}\n",
+        budget["consumed"].as_u64().unwrap_or_default(),
+        budget["limit"].as_u64().unwrap_or_default(),
+        budget["semantic_units"].as_u64().unwrap_or_default(),
+        budget["evidence_units"].as_u64().unwrap_or_default(),
+        budget["aggregator_units"].as_u64().unwrap_or_default(),
+    ));
+    for object in explanations["objects"].as_array().into_iter().flatten() {
+        output.push_str(&format!(
+            "  object source={} line={} column={} instance={}\n",
+            object["source_index"].as_u64().unwrap_or_default(),
+            object["line"]
+                .as_u64()
+                .map_or_else(|| "none".to_string(), |n| n.to_string()),
+            object["column"]
+                .as_u64()
+                .map_or_else(|| "none".to_string(), |n| n.to_string()),
+            object["instance_index"]
+                .as_u64()
+                .map_or_else(|| "none".to_string(), |n| n.to_string()),
+        ));
+        output.push_str("    counterexample: ");
+        output.push_str(&object["counterexample"].to_string());
+        output.push('\n');
+        output.push_str("    presence_core: ");
+        output.push_str(&object["presence_core"].to_string());
+        output.push('\n');
+        output.push_str("    gap: ");
+        output.push_str(&object["gap"].to_string());
+        output.push('\n');
+    }
+    output
 }
 
 fn error_manifiesto_check(ruta: &Path, error: &ErrorManifiestoArchivo) -> DiagnosticoCheck {
@@ -651,6 +861,242 @@ fn error_evaluacion_check(ruta: &Path, error: ErrorEvaluacion) -> DiagnosticoChe
     )
 }
 
+fn constructor_atomico_nombre(constructor: ConstructorAtomico) -> &'static str {
+    match constructor {
+        ConstructorAtomico::Type => "type",
+        ConstructorAtomico::Edge => "edge",
+        ConstructorAtomico::Parent => "parent",
+        ConstructorAtomico::HasLabNodo => "has_label_node",
+        ConstructorAtomico::HasLabArista => "has_label_edge",
+        ConstructorAtomico::Ext => "extension",
+        ConstructorAtomico::TcParent => "tc_parent",
+        ConstructorAtomico::IgualNodo => "equal_node",
+        ConstructorAtomico::IgualArista => "equal_edge",
+    }
+}
+
+fn evidencia_a_json(evidencia: &EvidenciaEvaluacion) -> Value {
+    let valor = evidencia.valor;
+    match &evidencia.regla {
+        ReglaEvidencia::Atomo { constructor, .. } => json!({
+            "rule": "atom",
+            "value": valor,
+            "predicate": constructor_atomico_nombre(*constructor),
+        }),
+        ReglaEvidencia::No { interior } => json!({
+            "rule": "not",
+            "value": valor,
+            "inner": evidencia_a_json(interior),
+        }),
+        ReglaEvidencia::Conjuncion { partes_evaluadas } => json!({
+            "rule": "and",
+            "value": valor,
+            "children": partes_evaluadas.iter().map(evidencia_a_json).collect::<Vec<_>>(),
+        }),
+        ReglaEvidencia::Disyuncion { partes_evaluadas } => json!({
+            "rule": "or",
+            "value": valor,
+            "children": partes_evaluadas.iter().map(evidencia_a_json).collect::<Vec<_>>(),
+        }),
+        ReglaEvidencia::Implicacion {
+            antecedente,
+            consecuente,
+        } => json!({
+            "rule": "implies",
+            "value": valor,
+            "antecedent": evidencia_a_json(antecedente),
+            "consequent": consecuente.as_deref().map(evidencia_a_json),
+        }),
+        ReglaEvidencia::Cuantificador {
+            tipo,
+            instancias,
+            busqueda_agotada,
+        } => {
+            let rule = match tipo {
+                TipoCuantificador::ParaTodo => "forall",
+                TipoCuantificador::Existe => "exists",
+            };
+            let instancias = instancias
+                .iter()
+                .map(|instancia| {
+                    json!({
+                        "value": instancia.valor,
+                        "guard": instancia.guarda.as_deref().map(evidencia_a_json),
+                        "body": instancia.cuerpo.as_deref().map(evidencia_a_json),
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "rule": rule,
+                "value": valor,
+                "search_exhausted": busqueda_agotada,
+                "instances": instancias,
+            })
+        }
+    }
+}
+
+fn atomo_brecha_nombre(atomo: AtomoBrecha) -> &'static str {
+    match atomo {
+        AtomoBrecha::Type => "type",
+        AtomoBrecha::Edge => "edge",
+        AtomoBrecha::Parent => "parent",
+        AtomoBrecha::HasLabNodo => "has_label_node",
+        AtomoBrecha::HasLabArista => "has_label_edge",
+        AtomoBrecha::Ext => "extension",
+        AtomoBrecha::TcParent => "tc_parent",
+        AtomoBrecha::IgualNodo => "equal_node",
+        AtomoBrecha::IgualArista => "equal_edge",
+    }
+}
+
+fn forma_positiva_a_json(forma: &FormaPositiva) -> Value {
+    match forma {
+        FormaPositiva::Atomo(atomo) => json!({
+            "kind": "atom",
+            "predicate": atomo_brecha_nombre(*atomo),
+        }),
+        FormaPositiva::Y(partes) => json!({
+            "kind": "and",
+            "children": partes.iter().map(forma_positiva_a_json).collect::<Vec<_>>(),
+        }),
+        FormaPositiva::O(partes) => json!({
+            "kind": "or",
+            "children": partes.iter().map(forma_positiva_a_json).collect::<Vec<_>>(),
+        }),
+        FormaPositiva::Existe {
+            ligaduras_nodo,
+            ligaduras_arista,
+            guarda,
+            cuerpo,
+        } => json!({
+            "kind": "exists",
+            "node_binders": ligaduras_nodo,
+            "edge_binders": ligaduras_arista,
+            "guard": guarda.as_deref().map(forma_positiva_a_json),
+            "body": forma_positiva_a_json(cuerpo),
+        }),
+    }
+}
+
+fn brecha_a_json(brecha: &Brecha) -> Value {
+    let class = match brecha.clase {
+        ClaseBrecha::ExistenciaSinTestigo => "existence_without_witness",
+        ClaseBrecha::ParaTodoExisteSinTestigo => "forall_exists_without_witness",
+    };
+    json!({
+        "class": class,
+        "counts": {
+            "available_nodes": brecha.conteos.nodos_disponibles,
+            "available_edges": brecha.conteos.aristas_disponibles,
+            "existential_candidates_evaluated": brecha.conteos.candidatos_existencial_principal_evaluados,
+            "universal_bindings_examined": brecha.conteos.asignaciones_universales_examinadas,
+        },
+        "form": {
+            "node_binders": brecha.forma.ligaduras_nodo,
+            "edge_binders": brecha.forma.ligaduras_arista,
+            "guard": brecha.forma.guarda.as_ref().map(forma_positiva_a_json),
+            "body": forma_positiva_a_json(&brecha.forma.cuerpo),
+        },
+    })
+}
+
+fn objeto_explicacion_a_json(objeto: &ObjetoExplicacion) -> Value {
+    let core = objeto.core_presencia().map_or(
+        Value::Null,
+        |core| json!({ "atom_count": core.atomos_sensibles().len() }),
+    );
+    json!({
+        "kind": "counterexample",
+        "source_index": objeto.procedencia.source_index,
+        "line": objeto.procedencia.linea,
+        "column": objeto.procedencia.columna,
+        "instance_index": objeto.procedencia.instance_index,
+        "counterexample": evidencia_a_json(&objeto.counterexample.evidencia),
+        "presence_core": core,
+        "gap": objeto.gap().map_or(Value::Null, brecha_a_json),
+    })
+}
+
+fn explicaciones_medidas_a_json(
+    medido: &ResultadoExplicacionesMedido,
+    modo: ModoExplicacion,
+) -> Value {
+    let (objects, truncated, reason) = match &medido.resultado {
+        ResultadoExplicaciones::Decision(objeto) => (
+            objeto
+                .iter()
+                .map(objeto_explicacion_a_json)
+                .collect::<Vec<_>>(),
+            false,
+            None,
+        ),
+        ResultadoExplicaciones::Enumeracion {
+            objetos,
+            truncated,
+            reason,
+        } => (
+            objetos
+                .iter()
+                .map(objeto_explicacion_a_json)
+                .collect::<Vec<_>>(),
+            *truncated,
+            reason.map(|reason| reason.as_str()),
+        ),
+    };
+    let mode = match modo {
+        ModoExplicacion::Decidir => "decide",
+        ModoExplicacion::Enumerar { .. } => "enumerate",
+    };
+    json!({
+        "mode": mode,
+        "objects": objects,
+        "truncated": truncated,
+        "reason": reason,
+        "budget": {
+            "limit": PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+            "consumed": medido.unidades_consumidas,
+            "semantic_units": medido.unidades_semanticas,
+            "evidence_units": medido.unidades_evidencia,
+            "aggregator_units": medido.unidades_agregador,
+        },
+    })
+}
+
+fn error_explicacion_check(error: ErrorVeredicto) -> DiagnosticoCheck {
+    let (kind, code, message) = match error {
+        ErrorVeredicto::PresupuestoAgotado { .. }
+        | ErrorVeredicto::Evaluacion(
+            ErrorEvaluacion::PresupuestoAgotado { .. }
+            | ErrorEvaluacion::PresupuestoEvidenciaAgotado { .. },
+        ) => (
+            "resource",
+            "explanation_budget_exceeded",
+            "se agotó el presupuesto de explicación",
+        ),
+        ErrorVeredicto::Evaluacion(_) => (
+            "authorship",
+            "explanation_evaluation_invalid",
+            "no se pudo construir evidencia para una instancia",
+        ),
+    };
+    DiagnosticoCheck::nuevo(kind, code, message, None, None, None, None)
+}
+
+fn explicar_check(
+    expansion: &universo_core::invariante::expansion::ResultadoExpansionFuente,
+    estructura: &universo_core::Estructura,
+    modo: ModoExplicacion,
+) -> Result<Value, ErrorVeredicto> {
+    explicar_con_presupuesto_y_consumos(
+        expansion,
+        estructura,
+        modo,
+        PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+    )
+    .map(|medido| explicaciones_medidas_a_json(&medido, modo))
+}
+
 /// Ejecuta el pipeline cerrado de `check`. Ningún error de carga, autoría o
 /// presupuesto se convierte en un veredicto lógico `reject`.
 fn ejecutar_check(
@@ -658,6 +1104,7 @@ fn ejecutar_check(
     manifiesto: &Path,
     invariantes: &Path,
     formato: Formato,
+    explicacion: Option<ModoExplicacion>,
     salida: &mut impl Write,
     error: &mut impl Write,
 ) -> i32 {
@@ -665,14 +1112,26 @@ fn ejecutar_check(
         Ok(manifiesto) => manifiesto,
         Err(error_manifiesto) => {
             let diagnostico = error_manifiesto_check(manifiesto, &error_manifiesto);
-            return escribir_error_check(&[diagnostico], formato, salida, error);
+            return escribir_error_check_segun_modo(
+                &[diagnostico],
+                formato,
+                explicacion,
+                salida,
+                error,
+            );
         }
     };
     let estructura = match cargar_bundle(raiz, manifiesto_cargado) {
         Ok(estructura) => estructura,
         Err(errores) => {
             let diagnosticos = errores_bundle_check(&errores);
-            return escribir_error_check(&diagnosticos, formato, salida, error);
+            return escribir_error_check_segun_modo(
+                &diagnosticos,
+                formato,
+                explicacion,
+                salida,
+                error,
+            );
         }
     };
 
@@ -688,7 +1147,13 @@ fn ejecutar_check(
                 None,
                 None,
             );
-            return escribir_error_check(&[diagnostico], formato, salida, error);
+            return escribir_error_check_segun_modo(
+                &[diagnostico],
+                formato,
+                explicacion,
+                salida,
+                error,
+            );
         }
     };
     let texto = match String::from_utf8(bytes) {
@@ -703,38 +1168,113 @@ fn ejecutar_check(
                 None,
                 None,
             );
-            return escribir_error_check(&[diagnostico], formato, salida, error);
+            return escribir_error_check_segun_modo(
+                &[diagnostico],
+                formato,
+                explicacion,
+                salida,
+                error,
+            );
         }
     };
     let fuentes = match parsear_programa(&texto) {
         Ok(fuentes) => fuentes,
         Err(error_autoria) => {
             let diagnostico = error_autoria_check(invariantes, &error_autoria);
-            return escribir_error_check(&[diagnostico], formato, salida, error);
+            return escribir_error_check_segun_modo(
+                &[diagnostico],
+                formato,
+                explicacion,
+                salida,
+                error,
+            );
         }
     };
 
     let diagnosticos =
         errores_validacion_check(invariantes, &fuentes, estructura.manifiesto(), &estructura);
     if !diagnosticos.is_empty() {
-        return escribir_error_check(&diagnosticos, formato, salida, error);
+        return escribir_error_check_segun_modo(&diagnosticos, formato, explicacion, salida, error);
     }
 
-    let sentencias: Vec<_> = fuentes
-        .iter()
-        .map(|fuente| fuente.sentencia.clone())
-        .collect();
-    let expansion = match expandir_sentencias(&sentencias, estructura.manifiesto(), &estructura) {
-        Ok(expansion) => expansion,
-        Err(error_expansion) => {
-            let diagnosticos = errores_expansion_check(invariantes, &fuentes, error_expansion);
-            return escribir_error_check(&diagnosticos, formato, salida, error);
+    // El pase de explicación opt-in conserva fuente para la procedencia. El
+    // pase baseline sigue evaluando el programa completo para conservar status
+    // y summary; la explicación vuelve a evaluar trazas bajo su presupuesto
+    // global independiente de 1.000.000 unidades.
+    let expansion_fuente = if explicacion.is_some() {
+        match expandir_sentencias_fuente(&fuentes, estructura.manifiesto(), &estructura) {
+            Ok(expansion) => Some(expansion),
+            Err(error_expansion) => {
+                let diagnosticos = errores_expansion_check(invariantes, &fuentes, error_expansion);
+                return escribir_error_check_segun_modo(
+                    &diagnosticos,
+                    formato,
+                    explicacion,
+                    salida,
+                    error,
+                );
+            }
         }
+    } else {
+        None
     };
+    let expansion_legacy = if explicacion.is_none() {
+        let sentencias: Vec<_> = fuentes
+            .iter()
+            .map(|fuente| fuente.sentencia.clone())
+            .collect();
+        match expandir_sentencias(&sentencias, estructura.manifiesto(), &estructura) {
+            Ok(expansion) => Some(expansion),
+            Err(error_expansion) => {
+                let diagnosticos = errores_expansion_check(invariantes, &fuentes, error_expansion);
+                return escribir_error_check_segun_modo(
+                    &diagnosticos,
+                    formato,
+                    explicacion,
+                    salida,
+                    error,
+                );
+            }
+        }
+    } else {
+        None
+    };
+    let (oraciones, total_instancias): (Vec<&universo_core::Formula>, usize) =
+        if let Some(expansion) = &expansion_fuente {
+            (
+                expansion
+                    .oraciones
+                    .iter()
+                    .map(|oracion| &oracion.formula)
+                    .collect(),
+                expansion.oraciones.len(),
+            )
+        } else if let Some(expansion) = &expansion_legacy {
+            (
+                expansion.oraciones.iter().collect(),
+                expansion.oraciones.len(),
+            )
+        } else {
+            return escribir_error_check_segun_modo(
+                &[DiagnosticoCheck::nuevo(
+                    "resource",
+                    "check_internal_error",
+                    "no se pudo preparar el programa de invariantes",
+                    None,
+                    None,
+                    None,
+                    None,
+                )],
+                formato,
+                explicacion,
+                salida,
+                error,
+            );
+        };
 
     let mut evaluadas = 0;
     let mut fallidas = 0;
-    for formula in &expansion.oraciones {
+    for formula in oraciones {
         match evaluar(formula, &estructura) {
             Ok(true) => evaluadas += 1,
             Ok(false) => {
@@ -743,20 +1283,64 @@ fn ejecutar_check(
             }
             Err(error_evaluacion) => {
                 let diagnostico = error_evaluacion_check(invariantes, error_evaluacion);
-                return escribir_error_check(&[diagnostico], formato, salida, error);
+                return escribir_error_check_segun_modo(
+                    &[diagnostico],
+                    formato,
+                    explicacion,
+                    salida,
+                    error,
+                );
             }
         }
     }
-    let resumen = resumen_check(
-        fuentes.len(),
-        expansion.oraciones.len(),
-        evaluadas,
-        fallidas,
-    );
-    if fallidas == 0 {
-        escribir_resultado_check("admit", Some(resumen), &[], formato, 0, salida, error)
+    let resumen = resumen_check(fuentes.len(), total_instancias, evaluadas, fallidas);
+    let status = if fallidas == 0 { "admit" } else { "reject" };
+    let codigo_salida = if fallidas == 0 { 0 } else { 1 };
+    if let Some(modo) = explicacion {
+        let Some(expansion) = expansion_fuente.as_ref() else {
+            return escribir_error_check_explicado(
+                &[DiagnosticoCheck::nuevo(
+                    "resource",
+                    "check_internal_error",
+                    "no se pudo preparar la procedencia de las explicaciones",
+                    None,
+                    None,
+                    None,
+                    None,
+                )],
+                formato,
+                salida,
+                error,
+            );
+        };
+        match explicar_check(expansion, &estructura, modo) {
+            Ok(explanations) => escribir_resultado_check_explicado(
+                ResultadoCheckExplicado {
+                    status,
+                    summary: Some(resumen),
+                    errors: &[],
+                    explanations: Some(explanations),
+                },
+                formato,
+                codigo_salida,
+                salida,
+                error,
+            ),
+            Err(diagnostico) => {
+                let diagnostico = error_explicacion_check(diagnostico);
+                escribir_error_check_explicado(&[diagnostico], formato, salida, error)
+            }
+        }
     } else {
-        escribir_resultado_check("reject", Some(resumen), &[], formato, 1, salida, error)
+        escribir_resultado_check(
+            status,
+            Some(resumen),
+            &[],
+            formato,
+            codigo_salida,
+            salida,
+            error,
+        )
     }
 }
 
@@ -792,7 +1376,16 @@ pub(crate) fn ejecutar(args: Vec<String>, salida: &mut impl Write, error: &mut i
             manifiesto,
             invariantes,
             formato,
-        } => ejecutar_check(&raiz, &manifiesto, &invariantes, formato, salida, error),
+            explicacion,
+        } => ejecutar_check(
+            &raiz,
+            &manifiesto,
+            &invariantes,
+            formato,
+            explicacion,
+            salida,
+            error,
+        ),
     }
 }
 
