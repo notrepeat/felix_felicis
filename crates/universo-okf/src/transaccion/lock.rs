@@ -83,6 +83,21 @@ impl LockEscritura {
     pub fn raiz_canonica(&self) -> &Path {
         self.ubicacion.ruta()
     }
+
+    /// Crea una capability de renombre sibling ligada a este lock.
+    #[allow(dead_code)] // El publicador consume esta capability en la unidad siguiente.
+    pub(crate) fn espacio_transaccional_anclado(
+        &mut self,
+    ) -> Result<
+        super::anclado::renombrar::EspacioTransaccionalAnclado<'_>,
+        super::anclado::renombrar::ErrorRenombrarAnclado,
+    > {
+        super::anclado::renombrar::EspacioTransaccionalAnclado::desde_lock(self)
+    }
+
+    pub(super) fn ubicacion(&self) -> &UbicacionRaiz {
+        &self.ubicacion
+    }
 }
 
 impl fmt::Debug for LockEscritura {

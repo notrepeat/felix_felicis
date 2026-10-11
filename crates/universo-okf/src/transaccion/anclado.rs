@@ -21,10 +21,10 @@ mod abrir;
 mod clasificar;
 mod limpieza;
 mod operaciones;
+pub(crate) mod renombrar;
 
 pub(super) use clasificar::{TipoEntradaAnclada, clasificar_entrada_sin_seguir};
 pub(super) use limpieza::{ErrorLimpiezaAnclado, limpiar_stage_anclado};
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ErrorDirectorioAnclado {
     Io,
@@ -636,3 +636,7 @@ pub(super) fn mapear_error_creacion(error: io::Error) -> ErrorDirectorioAnclado 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "anclado/renombrar_observacion_tests.rs"]
+mod renombrar_observacion_tests;
