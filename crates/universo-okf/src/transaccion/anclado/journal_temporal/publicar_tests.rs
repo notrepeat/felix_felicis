@@ -129,6 +129,43 @@ fn fuente_ausente_falla_con_codigo_estable() {
     assert!(!nombre_journal(&root).exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn raiz_unc_rechaza_publicacion_sin_tocar_temporal_ni_canonico() {
+    let unc = Path::new(r"\\server\share\bundle");
+    assert!(super::raiz_es_remota(unc));
+    assert!(super::raiz_es_remota(Path::new(
+        r"\\?\UNC\server\share\bundle"
+    )));
+    assert!(!super::raiz_es_remota(Path::new(r"C:\bundle")));
+    assert!(!super::raiz_es_remota(Path::new(r"\\?\C:\bundle")));
+    assert!(!super::raiz_es_remota(Path::new(
+        r"\\?\Volume{GUID}\bundle"
+    )));
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal = nombre_journal(&root);
+    let bytes_temporales = b"temporary canary";
+    let bytes_canonicos = b"canonical canary";
+    let esperada = capability.crear_nuevo(bytes_temporales).unwrap();
+    fs::write(&journal, bytes_canonicos).unwrap();
+    let identidad_canonica = identidad(&journal);
+    capability.raiz_remota = super::raiz_es_remota(unc);
+
+    assert_eq!(
+        capability.publicar(esperada).unwrap_err(),
+        ErrorJournalAnclado::RemoteUnsupported
+    );
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes_temporales);
+    assert_eq!(identidad(&journal), identidad_canonica);
+    assert_eq!(fs::read(&journal).unwrap(), bytes_canonicos);
+}
+
 #[cfg(unix)]
 #[test]
 fn reintento_despues_de_linkat_ve_el_mismo_inode_y_limpia_temporal() {
@@ -149,6 +186,45 @@ fn reintento_despues_de_linkat_ve_el_mismo_inode_y_limpia_temporal() {
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(journal).unwrap(), bytes);
     assert!(!temporal.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn fallo_de_cleanup_despues_de_linkat_devuelve_publicado_pendiente() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal = nombre_journal(&root);
+    let bytes = b"committed with uncertain cleanup";
+    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
+
+    super::publicar_plataforma(
+        &capability.parent,
+        &capability.nombre,
+        &capability.nombre_journal,
+        &fuente,
+    )
+    .unwrap();
+    let mut cleanup_llamado = false;
+    let resultado = capability
+        .resultado_despues_de_commit(esperada, |_, _| {
+            cleanup_llamado = true;
+            Err(ErrorJournalAnclado::Io)
+        })
+        .unwrap();
+
+    assert!(cleanup_llamado);
+    assert_eq!(
+        resultado,
+        ResultadoPublicacionJournal::PublicadoTemporalPendiente
+    );
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(identidad(&journal), esperada);
+    assert_eq!(fs::read(temporal).unwrap(), bytes);
+    assert_eq!(fs::read(journal).unwrap(), bytes);
 }
 
 #[cfg(windows)]

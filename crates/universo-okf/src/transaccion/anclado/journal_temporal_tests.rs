@@ -153,6 +153,10 @@ fn codigos_de_error_journal_son_estables_y_redactados() {
             ErrorJournalAnclado::CanonicalConflict,
             "journal_canonical_conflict",
         ),
+        (
+            ErrorJournalAnclado::RemoteUnsupported,
+            "journal_remote_unsupported",
+        ),
     ];
 
     for (error, codigo) in casos {

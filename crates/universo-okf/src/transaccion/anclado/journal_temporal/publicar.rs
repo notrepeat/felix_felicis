@@ -9,6 +9,9 @@ impl JournalTemporalAnclado<'_> {
         &self,
         esperada: IdentidadArchivoJournal,
     ) -> Result<ResultadoPublicacionJournal, ErrorJournalAnclado> {
+        if self.raiz_remota {
+            return Err(ErrorJournalAnclado::RemoteUnsupported);
+        }
         self.validar_parent()?;
         let fuente = match abrir_temporal(&self.parent, &self.nombre) {
             Ok(fuente) => fuente,
@@ -27,16 +30,22 @@ impl JournalTemporalAnclado<'_> {
         }
 
         match publicar_plataforma(&self.parent, &self.nombre, &self.nombre_journal, &fuente) {
-            Ok(()) => {
-                if self.canonico_es(&esperada).unwrap_or(false)
-                    && self.limpiar_temporal_si_coincide(esperada).is_ok()
-                {
-                    Ok(ResultadoPublicacionJournal::Publicado)
-                } else {
-                    Ok(ResultadoPublicacionJournal::PublicadoTemporalPendiente)
-                }
-            }
+            Ok(()) => self.resultado_despues_de_commit(esperada, |capability, identidad| {
+                capability.limpiar_temporal_si_coincide(identidad)
+            }),
             Err(error) => self.resolver_error_publicacion(esperada, error),
+        }
+    }
+
+    fn resultado_despues_de_commit(
+        &self,
+        esperada: IdentidadArchivoJournal,
+        limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> Result<(), ErrorJournalAnclado>,
+    ) -> Result<ResultadoPublicacionJournal, ErrorJournalAnclado> {
+        if self.canonico_es(&esperada).unwrap_or(false) && limpiar(self, esperada).is_ok() {
+            Ok(ResultadoPublicacionJournal::Publicado)
+        } else {
+            Ok(ResultadoPublicacionJournal::PublicadoTemporalPendiente)
         }
     }
 
@@ -105,6 +114,23 @@ impl JournalTemporalAnclado<'_> {
         }
         quitar_temporal(&self.parent, &self.nombre, &archivo)
     }
+}
+
+#[cfg(windows)]
+pub(super) fn raiz_es_remota(ruta: &std::path::Path) -> bool {
+    matches!(
+        ruta.components().next(),
+        Some(std::path::Component::Prefix(prefijo))
+            if matches!(
+                prefijo.kind(),
+                std::path::Prefix::UNC(_, _) | std::path::Prefix::VerbatimUNC(_, _)
+            )
+    )
+}
+
+#[cfg(not(windows))]
+pub(super) fn raiz_es_remota(_ruta: &std::path::Path) -> bool {
+    false
 }
 
 #[cfg(unix)]

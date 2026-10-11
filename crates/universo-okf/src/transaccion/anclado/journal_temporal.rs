@@ -30,6 +30,7 @@ pub(crate) enum ErrorJournalAnclado {
     SourceMissing,
     IdentityMismatch,
     CanonicalConflict,
+    RemoteUnsupported,
 }
 
 impl ErrorJournalAnclado {
@@ -44,6 +45,7 @@ impl ErrorJournalAnclado {
             Self::SourceMissing => "journal_source_missing",
             Self::IdentityMismatch => "journal_identity_mismatch",
             Self::CanonicalConflict => "journal_canonical_conflict",
+            Self::RemoteUnsupported => "journal_remote_unsupported",
         }
     }
 }
@@ -106,6 +108,7 @@ pub(crate) struct JournalTemporalAnclado<'lock> {
     identidad_parent: IdentidadDirectorio,
     nombre: OsString,
     nombre_journal: OsString,
+    raiz_remota: bool,
     _autoridad: Arc<()>,
     _vida_lock: PhantomData<&'lock LockEscritura>,
 }
@@ -124,6 +127,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             .ok_or(ErrorJournalAnclado::Io)?
             .to_os_string();
         validar_componente(&nombre_journal).map_err(mapear_error_directorio)?;
+        let raiz_remota = publicar::raiz_es_remota(lock.raiz_canonica());
         let identidad_parent = ancla.identidad_parent();
         let autoridad = lock.autoridad();
         Ok(Self {
@@ -132,6 +136,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             identidad_parent,
             nombre,
             nombre_journal,
+            raiz_remota,
             _autoridad: autoridad,
             _vida_lock: PhantomData,
         })
