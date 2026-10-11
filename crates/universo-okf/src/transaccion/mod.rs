@@ -7,6 +7,8 @@ pub(crate) mod anclado;
 pub(crate) mod captura;
 #[allow(dead_code)]
 pub(crate) mod inventario;
+#[allow(dead_code)]
+pub(crate) mod journal;
 pub mod lock;
 pub(crate) mod raiz;
 pub mod snapshot;
