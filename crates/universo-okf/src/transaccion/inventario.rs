@@ -257,6 +257,10 @@ pub(crate) fn leer_archivo_regular(ruta: &Path) -> Result<Vec<u8>, ErrorSnapshot
 }
 
 /// Inventaría desde un root ya abierto; no reconstruye rutas absolutas.
+///
+/// Serializar llamadas sobre clones del mismo handle: `fs_at` comparte cursor
+/// de enumeración entre esos clones, aunque cada llamada individual reinicie
+/// el cursor antes de recorrerlo.
 pub(crate) fn inventariar_root_anclado(
     raiz: super::anclado::DirectorioAnclado,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
@@ -325,7 +329,8 @@ fn mapear_error_anclado(error: super::anclado::ErrorDirectorioAnclado) -> ErrorS
         }
         super::anclado::ErrorDirectorioAnclado::RaizAusente => ErrorSnapshot::RaizInvalida,
         super::anclado::ErrorDirectorioAnclado::Io
-        | super::anclado::ErrorDirectorioAnclado::EntradaAusente => ErrorSnapshot::Io,
+        | super::anclado::ErrorDirectorioAnclado::EntradaAusente
+        | super::anclado::ErrorDirectorioAnclado::EntradaExistente => ErrorSnapshot::Io,
     }
 }
 

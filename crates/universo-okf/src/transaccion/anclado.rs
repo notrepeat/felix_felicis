@@ -26,6 +26,7 @@ pub(crate) enum ErrorDirectorioAnclado {
     TipoNoAdmitido,
     RaizAusente,
     EntradaAusente,
+    EntradaExistente,
 }
 
 /// Identidad obtenida de metadata de un handle abierto, no de una ruta.
@@ -104,6 +105,10 @@ impl DirectorioAnclado {
     }
 
     /// Duplica los handles sin resolver nuevamente la ubicación por ruta.
+    ///
+    /// Los clones comparten cursor de enumeración de directorio en `fs_at`;
+    /// inventarios basados en clones de la misma raíz deben ejecutarse en
+    /// serie bajo el lock del escritor, no concurrentemente.
     pub(crate) fn clonar(&self) -> Result<Self, ErrorDirectorioAnclado> {
         Ok(Self {
             parent: clonar_handle(&self.parent)?,
@@ -126,6 +131,63 @@ impl DirectorioAnclado {
             identidad_raiz: Some(identidad_raiz),
         })
     }
+
+    /// Crea un sibling con nombre aleatorio relativo al parent ya anclado. El
+    /// identificador solo admite bytes portables generados por CSPRNG. La
+    /// creación y la apertura-capacidad posterior se ejecutan bajo
+    /// `LockEscritura`; la identidad del handle abierto se compara con la del
+    /// handle devuelto por `mkdir_at`. En Unix, `fs_at::mkdir_at` hace
+    /// `mkdirat` y `openat` separados. El lock serializa escritores Felix
+    /// cooperantes; no excluye procesos externos que modifiquen el parent.
+    pub(crate) fn crear_stage_sibling(
+        &self,
+        stage_id: &str,
+    ) -> Result<(Self, OsString), ErrorDirectorioAnclado> {
+        if stage_id.is_empty()
+            || !stage_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(ErrorDirectorioAnclado::ComponenteInvalido);
+        }
+        if self.raiz.is_none() {
+            return Err(ErrorDirectorioAnclado::RaizAusente);
+        }
+
+        let mut componente = OsString::from(".");
+        componente.push(&self.basename);
+        componente.push(".felix.stage.");
+        componente.push(stage_id);
+        validar_componente(&componente)?;
+
+        let identidad_parent = metadata_directorio(&self.parent)?;
+        if identidad_parent != self.identidad_parent {
+            return Err(ErrorDirectorioAnclado::Io);
+        }
+
+        let mut opciones = OpenOptionsAt::default();
+        opciones.create_new(true);
+        let creado = opciones
+            .mkdir_at(&self.parent, Path::new(&componente))
+            .map_err(mapear_error_creacion)?;
+        // `mkdir_at` returns a handle without all directory-add rights needed
+        // by nested stage writes. Open the same sibling relative to the held
+        // parent and fail closed unless its identity matches the created fd.
+        let directorio = abrir_directorio_hijo_stage(&self.parent, &componente, &creado)?;
+        let identidad_raiz = metadata_directorio(&directorio)?;
+        let stage = Self {
+            parent: clonar_handle(&self.parent)?,
+            basename: componente.clone(),
+            raiz: Some(directorio),
+            identidad_parent,
+            identidad_raiz: Some(identidad_raiz),
+        };
+        Ok((stage, componente))
+    }
+
+    pub(crate) fn componente(&self) -> &OsStr {
+        &self.basename
+    }
 }
 
 fn validar_componente(nombre: &OsStr) -> Result<&OsStr, ErrorDirectorioAnclado> {
@@ -136,6 +198,46 @@ fn validar_componente(nombre: &OsStr) -> Result<&OsStr, ErrorDirectorioAnclado> 
 fn abrir_directorio_hijo(parent: &File, nombre: &OsStr) -> Result<File, ErrorDirectorioAnclado> {
     let opciones = opciones_directorio();
     abrir_directorio_hijo_con_opciones(parent, nombre, &opciones)
+}
+
+pub(super) fn abrir_directorio_hijo_stage(
+    parent: &File,
+    nombre: &OsStr,
+    creado: &File,
+) -> Result<File, ErrorDirectorioAnclado> {
+    let nombre = validar_componente(nombre)?;
+    let identidad_creado = identidad_handle_creado(creado)?;
+    let directorio = abrir_directorio_hijo_stage_existente(parent, nombre)?;
+    let identidad_reabierto = metadata_directorio(&directorio)?;
+    if identidad_reabierto != identidad_creado {
+        return Err(ErrorDirectorioAnclado::Io);
+    }
+    Ok(directorio)
+}
+
+pub(super) fn abrir_directorio_hijo_stage_existente(
+    parent: &File,
+    nombre: &OsStr,
+) -> Result<File, ErrorDirectorioAnclado> {
+    let nombre = validar_componente(nombre)?;
+    let directorio = opciones_directorio_stage()
+        .open_dir_at(parent, Path::new(nombre))
+        .map_err(mapear_io)?;
+    metadata_directorio(&directorio)?;
+    Ok(directorio)
+}
+
+fn identidad_handle_creado(handle: &File) -> Result<IdentidadDirectorio, ErrorDirectorioAnclado> {
+    #[cfg(unix)]
+    {
+        metadata_directorio(handle)
+    }
+    #[cfg(windows)]
+    {
+        // fs_at's atomic Windows mkdir handle omits FILE_READ_ATTRIBUTES, so
+        // query the object ID directly before opening a write-capable handle.
+        identidad_windows(handle).map_err(mapear_io)
+    }
 }
 
 fn abrir_directorio_hijo_lectura(
@@ -168,13 +270,40 @@ fn abrir_directorio_hijo_con_opciones(
 fn opciones_directorio() -> OpenOptionsAt {
     let mut opciones = OpenOptionsAt::default();
     opciones.read(true).follow(false);
+    opciones
+}
+
+fn opciones_directorio_stage() -> OpenOptionsAt {
+    let mut opciones = opciones_directorio();
     #[cfg(windows)]
     {
         use fs_at::os::windows::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_TRAVERSE,
+            FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
+            FILE_TRAVERSE,
         };
-        opciones.desired_access(FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_TRAVERSE);
+        opciones.desired_access(
+            FILE_READ_ATTRIBUTES
+                | FILE_LIST_DIRECTORY
+                | FILE_TRAVERSE
+                | FILE_ADD_FILE
+                | FILE_ADD_SUBDIRECTORY,
+        );
+    }
+    opciones
+}
+
+fn opciones_parent_stage() -> OpenOptionsAt {
+    let mut opciones = opciones_directorio();
+    #[cfg(windows)]
+    {
+        use fs_at::os::windows::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ADD_SUBDIRECTORY, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
+        };
+        opciones.desired_access(
+            FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY,
+        );
     }
     opciones
 }
@@ -207,15 +336,24 @@ fn abrir_directorio_absoluto(ruta: &Path) -> Result<File, ErrorDirectorioAnclado
         abrir_directorio_por_ruta(&volumen)?
     };
 
+    let mut nombres = Vec::new();
     for componente in ruta.components() {
         match componente {
             Component::Prefix(_) | Component::RootDir => continue,
-            Component::Normal(nombre) => {
-                actual = abrir_directorio_hijo_lectura(&actual, nombre)?;
-            }
+            Component::Normal(nombre) => nombres.push(nombre.to_os_string()),
             Component::CurDir => return Err(ErrorDirectorioAnclado::TipoNoAdmitido),
             Component::ParentDir => return Err(ErrorDirectorioAnclado::TipoNoAdmitido),
         }
+    }
+    for (indice, nombre) in nombres.iter().enumerate() {
+        let opciones = if indice + 1 == nombres.len() {
+            opciones_parent_stage()
+        } else {
+            let mut opciones = OpenOptionsAt::default();
+            opciones.read(true).follow(false);
+            opciones
+        };
+        actual = abrir_directorio_hijo_con_opciones(&actual, nombre, &opciones)?;
     }
     Ok(actual)
 }
@@ -337,6 +475,14 @@ fn mapear_io(error: io::Error) -> ErrorDirectorioAnclado {
             ErrorDirectorioAnclado::TipoNoAdmitido
         }
         _ => ErrorDirectorioAnclado::Io,
+    }
+}
+
+pub(super) fn mapear_error_creacion(error: io::Error) -> ErrorDirectorioAnclado {
+    if error.kind() == io::ErrorKind::AlreadyExists {
+        ErrorDirectorioAnclado::EntradaExistente
+    } else {
+        mapear_io(error)
     }
 }
 

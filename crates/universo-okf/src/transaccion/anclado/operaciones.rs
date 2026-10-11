@@ -4,8 +4,8 @@ use std::fs::File;
 use fs_at::{OpenOptions as OpenOptionsAt, OpenOptionsWriteMode};
 
 use super::{
-    DirectorioAnclado, EntradaLecturaAnclada, ErrorDirectorioAnclado, abrir_directorio_hijo,
-    clonar_handle, mapear_io, metadata_directorio, metadata_es_reparse, validar_componente,
+    DirectorioAnclado, EntradaLecturaAnclada, ErrorDirectorioAnclado, clonar_handle,
+    mapear_error_creacion, mapear_io, metadata_directorio, metadata_es_reparse, validar_componente,
 };
 
 impl DirectorioAnclado {
@@ -79,7 +79,7 @@ impl DirectorioAnclado {
             .raiz
             .as_ref()
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
-        let directorio = abrir_directorio_hijo(raiz, componente)?;
+        let directorio = super::abrir_directorio_hijo_stage_existente(raiz, componente)?;
         let identidad_parent = metadata_directorio(raiz)?;
         let identidad_raiz = metadata_directorio(&directorio)?;
         Ok(DirectorioAnclado {
@@ -100,10 +100,12 @@ impl DirectorioAnclado {
             .raiz
             .as_ref()
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
-        let opciones = OpenOptionsAt::default();
-        let creado = opciones.mkdir_at(raiz, componente).map_err(mapear_io)?;
-        drop(creado);
-        let directorio = abrir_directorio_hijo(raiz, componente)?;
+        let mut opciones = OpenOptionsAt::default();
+        opciones.create_new(true);
+        let creado = opciones
+            .mkdir_at(raiz, componente)
+            .map_err(mapear_error_creacion)?;
+        let directorio = super::abrir_directorio_hijo_stage(raiz, componente, &creado)?;
         let identidad_parent = metadata_directorio(raiz)?;
         let identidad_raiz = metadata_directorio(&directorio)?;
         Ok(DirectorioAnclado {
@@ -131,7 +133,9 @@ impl DirectorioAnclado {
             use fs_at::os::unix::OpenOptionsExt;
             opciones.custom_flags(libc::O_NONBLOCK);
         }
-        let archivo = opciones.open_at(raiz, componente).map_err(mapear_io)?;
+        let archivo = opciones
+            .open_at(raiz, componente)
+            .map_err(mapear_error_creacion)?;
         metadata_archivo_regular(&archivo)?;
         Ok(archivo)
     }
