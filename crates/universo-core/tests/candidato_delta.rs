@@ -1,6 +1,6 @@
 use universo_core::{
-    Anexo, Atomo, BundlePath, ClaseOperacion, Delta, ErrorCandidato, Estructura, Etiqueta,
-    IdArista, LadoDelta, Sorte, construir_candidato,
+    Anexo, Atomo, BundlePath, ClaseOperacion, Delta, Entrada, ErrorCandidato, Estructura, Etiqueta,
+    IdArista, LadoDelta, Sorte, Sujeto, construir_candidato,
 };
 
 fn p(texto: &str) -> BundlePath {
@@ -29,9 +29,16 @@ fn base() -> (
             origen,
             Anexo {
                 cuerpo: "cuerpo".into(),
-                ..Anexo::default()
+                passthrough: vec![Entrada {
+                    clave: "x-private-frontmatter".into(),
+                    crudo: "x-private-frontmatter: literal\n".into(),
+                }],
             },
         )
+        .unwrap();
+    estructura.asignar_padre(destino, origen).unwrap();
+    estructura
+        .asignar_atributo(origen, "Nivel", "alto")
         .unwrap();
     let arista = estructura
         .insertar_arista(
@@ -76,7 +83,19 @@ fn candidato_y_entrada_son_aislados_y_preservan_anexos() {
     assert_eq!(entrada.atomos(), antes);
     assert!(entrada.arista(arista).is_some());
     assert!(candidato.arista(arista).is_none());
-    assert_eq!(candidato.anexo(origen).unwrap().cuerpo, "cuerpo");
+    assert_eq!(
+        candidato.padre(candidato.por_path(&p("n/destino")).unwrap()),
+        Some(origen)
+    );
+    assert_eq!(candidato.atributos(origen).get("Nivel").unwrap(), "alto");
+    let anexo = candidato.anexo(origen).unwrap();
+    assert_eq!(anexo.cuerpo, "cuerpo");
+    assert_eq!(anexo.passthrough[0].clave, "x-private-frontmatter");
+    assert_eq!(
+        anexo.passthrough[0].crudo,
+        "x-private-frontmatter: literal\n"
+    );
+    assert_eq!(entrada.anexo(origen), Some(anexo));
     candidato
         .insertar_nodo(
             p("n/candidato"),
@@ -117,5 +136,74 @@ fn operacion_no_soportada_rechaza_sin_reflejar_datos_privados() {
         assert!(!texto.contains(canario));
     }
     assert_eq!(entrada.atomos(), antes);
+    entrada.verificar_representacion().unwrap();
+}
+
+#[test]
+fn operaciones_fuera_de_alcance_se_rechazan_en_ambos_lados_y_sin_mutar() {
+    let (entrada, _, _, _) = base();
+    let antes = entrada.atomos();
+    let casos = [
+        (
+            Atomo::Type {
+                sujeto: p("n/PRIVATE_PATH"),
+                sorte: Sorte::nuevo("PRIVATE_TYPE"),
+            },
+            ClaseOperacion::Type,
+        ),
+        (
+            Atomo::Parent {
+                hijo: p("n/PRIVATE_CHILD"),
+                padre: p("n/PRIVATE_PARENT"),
+            },
+            ClaseOperacion::Parent,
+        ),
+        (
+            Atomo::HasLab {
+                sujeto: Sujeto::Nodo(p("n/PRIVATE_NODE")),
+                etiqueta: Etiqueta::nuevo("PRIVATE_LABEL"),
+            },
+            ClaseOperacion::HasLab,
+        ),
+        (
+            Atomo::Ext {
+                predicado: "PRIVATE_PREDICATE".into(),
+                sujeto: p("n/PRIVATE_SUBJECT"),
+                constante: "PRIVATE_VALUE".into(),
+            },
+            ClaseOperacion::Ext,
+        ),
+    ];
+
+    for (atomo, clase) in casos {
+        for (delta, lado) in [
+            (Delta::nuevo([atomo.clone()], []).unwrap(), LadoDelta::Add),
+            (Delta::nuevo([], [atomo]).unwrap(), LadoDelta::Remove),
+        ] {
+            let error = construir_candidato(&entrada, &delta).unwrap_err();
+            assert!(matches!(
+                error,
+                ErrorCandidato::UnsupportedOperation {
+                    lado: actual_lado,
+                    clase: actual_clase
+                } if actual_lado == lado && actual_clase == clase
+            ));
+            let texto = format!("{error} {error:?}");
+            for canario in [
+                "PRIVATE_PATH",
+                "PRIVATE_TYPE",
+                "PRIVATE_CHILD",
+                "PRIVATE_PARENT",
+                "PRIVATE_NODE",
+                "PRIVATE_LABEL",
+                "PRIVATE_PREDICATE",
+                "PRIVATE_SUBJECT",
+                "PRIVATE_VALUE",
+            ] {
+                assert!(!texto.contains(canario));
+            }
+            assert_eq!(entrada.atomos(), antes);
+        }
+    }
     entrada.verificar_representacion().unwrap();
 }

@@ -43,7 +43,7 @@ pub struct Arista {
 /// que puede desincronizarse por un error de esta implementación: por eso
 /// existe `verificar_representacion`, que lo comprueba contra la fuente de
 /// verdad.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Estructura {
     manifiesto: Manifiesto,
     nodos: SlotMap<NodoId, Nodo>,
@@ -163,6 +163,24 @@ impl Estructura {
             atributos: SecondaryMap::new(),
             anexos: SecondaryMap::new(),
         })
+    }
+
+    /// Clona todos los datos de la estructura para construir un candidato
+    /// aislado; no expone clonación general en la API pública.
+    pub(crate) fn clonar_para_candidato(&self) -> Self {
+        Self {
+            manifiesto: self.manifiesto.clone(),
+            nodos: self.nodos.clone(),
+            aristas: self.aristas.clone(),
+            salientes: self.salientes.clone(),
+            entrantes: self.entrantes.clone(),
+            padre: self.padre.clone(),
+            hijos: self.hijos.clone(),
+            indice: self.indice.clone(),
+            indice_case: self.indice_case.clone(),
+            atributos: self.atributos.clone(),
+            anexos: self.anexos.clone(),
+        }
     }
 
     /// El manifiesto de instanciación.

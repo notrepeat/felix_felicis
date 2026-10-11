@@ -12,6 +12,7 @@ fn paralelas(
 ) -> (
     Estructura,
     universo_core::NodoId,
+    universo_core::NodoId,
     Vec<universo_core::AristaId>,
 ) {
     let mut estructura = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
@@ -37,7 +38,7 @@ fn paralelas(
                 .unwrap()
         })
         .collect();
-    (estructura, origen, handles)
+    (estructura, origen, destino, handles)
 }
 
 fn edge(snapshot: &Estructura, ordinal: u32) -> Atomo {
@@ -50,7 +51,7 @@ fn edge(snapshot: &Estructura, ordinal: u32) -> Atomo {
 
 #[test]
 fn tres_paralelas_remove_cero_compacta_en_orden_y_conserva_labels_por_handle() {
-    let (snapshot, origen, handles) = paralelas(3);
+    let (snapshot, origen, _, handles) = paralelas(3);
     let delta = Delta::nuevo([], [edge(&snapshot, 0)]).unwrap();
     let candidato = construir_candidato(&snapshot, &delta).unwrap();
     let estructura = candidato.estructura();
@@ -71,8 +72,55 @@ fn tres_paralelas_remove_cero_compacta_en_orden_y_conserva_labels_por_handle() {
 }
 
 #[test]
+fn dos_retiros_paralelos_dejan_el_tercero_y_preservan_adyacencias_ajenas() {
+    let (mut snapshot, origen, destino, handles) = paralelas(3);
+    let otro_destino = snapshot
+        .insertar_nodo(
+            p("n/otro-destino"),
+            Sorte::nuevo("b"),
+            Etiqueta::nuevo("otro"),
+        )
+        .unwrap();
+    let ajena = snapshot
+        .insertar_arista(
+            origen,
+            otro_destino,
+            Sorte::nuevo("rel"),
+            Etiqueta::nuevo("grupo-ajeno"),
+        )
+        .unwrap();
+    let delta = Delta::nuevo([], [edge(&snapshot, 0), edge(&snapshot, 1)]).unwrap();
+
+    let candidato = construir_candidato(&snapshot, &delta).unwrap();
+    let salida = candidato.estructura();
+
+    assert_eq!(salida.salientes(origen), &[handles[2], ajena]);
+    assert_eq!(salida.entrantes(destino), &[handles[2]]);
+    assert_eq!(salida.entrantes(otro_destino), &[ajena]);
+    assert_eq!(salida.arista(handles[2]).unwrap().ordinal, 0);
+    assert_eq!(
+        salida.arista(handles[2]).unwrap().etiqueta.como_str(),
+        "label-2"
+    );
+    assert_eq!(salida.arista(ajena).unwrap().ordinal, 0);
+    assert_eq!(
+        salida.arista(ajena).unwrap().etiqueta.como_str(),
+        "grupo-ajeno"
+    );
+    assert_eq!(
+        snapshot.salientes(origen),
+        &[handles[0], handles[1], handles[2], ajena]
+    );
+    assert_eq!(
+        snapshot.entrantes(destino),
+        &[handles[0], handles[1], handles[2]]
+    );
+    salida.verificar_representacion().unwrap();
+}
+
+#[test]
 fn lote_reordena_retiros_de_forma_determinista_y_reasocia_label_al_handle() {
-    let (snapshot, origen, handles) = paralelas(11);
+    let (snapshot, origen, _, handles) = paralelas(11);
     let uno = edge(&snapshot, 1);
     let diez = edge(&snapshot, 10);
     let a = Delta::nuevo([], [uno.clone(), diez.clone()]).unwrap();
@@ -105,7 +153,7 @@ fn lote_reordena_retiros_de_forma_determinista_y_reasocia_label_al_handle() {
 
 #[test]
 fn remove_valido_mas_inexistente_falla_sin_alterar_snapshot() {
-    let (snapshot, _, _) = paralelas(3);
+    let (snapshot, _, _, _) = paralelas(3);
     let antes = snapshot.atomos();
     let inexistente = Atomo::parsear(
         "Edge(z/PRIVATE_FROM→z/PRIVATE_TO#rel#7, z/PRIVATE_FROM, z/PRIVATE_TO, rel)",
@@ -129,7 +177,7 @@ fn remove_valido_mas_inexistente_falla_sin_alterar_snapshot() {
 
 #[test]
 fn haslab_de_arista_exige_edge_del_mismo_handle_y_label_exacta() {
-    let (snapshot, _, handles) = paralelas(1);
+    let (snapshot, _, _, handles) = paralelas(2);
     let identidad = match edge(&snapshot, 0) {
         Atomo::Edge { id, .. } => id,
         _ => unreachable!(),
@@ -146,13 +194,11 @@ fn haslab_de_arista_exige_edge_del_mismo_handle_y_label_exacta() {
         ],
     )
     .unwrap();
-    assert!(
-        construir_candidato(&snapshot, &delta)
-            .unwrap()
-            .estructura()
-            .arista(handles[0])
-            .is_none()
-    );
+    let salida = construir_candidato(&snapshot, &delta).unwrap();
+    assert!(salida.estructura().arista(handles[0]).is_none());
+    let superviviente = salida.estructura().arista(handles[1]).unwrap();
+    assert_eq!(superviviente.ordinal, 0);
+    assert_eq!(superviviente.etiqueta.como_str(), "label-1");
 
     let solo_label = Delta::nuevo(
         [],

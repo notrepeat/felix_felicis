@@ -149,7 +149,7 @@ pub fn construir_candidato(
         });
     }
 
-    let mut estructura = snapshot.clone();
+    let mut estructura = snapshot.clonar_para_candidato();
     let handles: Vec<_> = aristas_retiradas.into_iter().collect();
     aristas::retirar_lote(&mut estructura, &handles)
         .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
