@@ -18,9 +18,9 @@ use super::{
 use crate::transaccion::journal::MAX_JOURNAL_BYTES;
 use crate::transaccion::lock::LockEscritura;
 
-/// Error estable y redactado para el temporal singleton del journal.
+/// Error estable y redactado para operaciones sobre archivos del journal.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ErrorJournalTemporal {
+pub(crate) enum ErrorJournalAnclado {
     Io,
     Exists,
     TooLarge,
@@ -29,39 +29,39 @@ pub(crate) enum ErrorJournalTemporal {
     ParentChanged,
 }
 
-impl ErrorJournalTemporal {
+impl ErrorJournalAnclado {
     pub(crate) const fn codigo(self) -> &'static str {
         match self {
-            Self::Io => "journal_temp_io",
-            Self::Exists => "journal_temp_exists",
-            Self::TooLarge => "journal_temp_too_large",
-            Self::ReparseNotAllowed => "journal_temp_reparse_not_allowed",
-            Self::RegularFileRequired => "journal_temp_regular_file_required",
-            Self::ParentChanged => "journal_temp_parent_changed",
+            Self::Io => "journal_io",
+            Self::Exists => "journal_exists",
+            Self::TooLarge => "journal_too_large",
+            Self::ReparseNotAllowed => "journal_reparse_not_allowed",
+            Self::RegularFileRequired => "journal_regular_file_required",
+            Self::ParentChanged => "journal_parent_changed",
         }
     }
 }
 
-impl fmt::Debug for ErrorJournalTemporal {
+impl fmt::Debug for ErrorJournalAnclado {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_tuple("ErrorJournalTemporal")
+            .debug_tuple("ErrorJournalAnclado")
             .field(&self.codigo())
             .finish()
     }
 }
 
-impl fmt::Display for ErrorJournalTemporal {
+impl fmt::Display for ErrorJournalAnclado {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.codigo())
     }
 }
 
-impl std::error::Error for ErrorJournalTemporal {}
+impl std::error::Error for ErrorJournalAnclado {}
 
 /// File identity captured from an opened handle. Its representation is secret.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct IdentidadArchivoTemporal {
+pub(crate) struct IdentidadArchivoJournal {
     #[cfg(unix)]
     device: u64,
     #[cfg(unix)]
@@ -74,9 +74,9 @@ pub(crate) struct IdentidadArchivoTemporal {
     _unsupported: PhantomData<()>,
 }
 
-impl fmt::Debug for IdentidadArchivoTemporal {
+impl fmt::Debug for IdentidadArchivoJournal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("IdentidadArchivoTemporal([redacted])")
+        formatter.write_str("IdentidadArchivoJournal([redacted])")
     }
 }
 
@@ -95,7 +95,7 @@ pub(crate) struct JournalTemporalAnclado<'lock> {
 }
 
 impl<'lock> JournalTemporalAnclado<'lock> {
-    pub(crate) fn desde_lock(lock: &'lock mut LockEscritura) -> Result<Self, ErrorJournalTemporal> {
+    pub(crate) fn desde_lock(lock: &'lock mut LockEscritura) -> Result<Self, ErrorJournalAnclado> {
         let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
             .map_err(mapear_error_directorio)?;
         let nombre = lock.ubicacion().nombre_journal_temporal();
@@ -105,7 +105,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             .journal()
             .as_path()
             .file_name()
-            .ok_or(ErrorJournalTemporal::Io)?
+            .ok_or(ErrorJournalAnclado::Io)?
             .to_os_string();
         validar_componente(&nombre_journal).map_err(mapear_error_directorio)?;
         let identidad_parent = ancla.identidad_parent();
@@ -125,9 +125,9 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     pub(crate) fn crear_nuevo(
         &self,
         bytes: &[u8],
-    ) -> Result<IdentidadArchivoTemporal, ErrorJournalTemporal> {
+    ) -> Result<IdentidadArchivoJournal, ErrorJournalAnclado> {
         if bytes.len() > MAX_JOURNAL_BYTES {
-            return Err(ErrorJournalTemporal::TooLarge);
+            return Err(ErrorJournalAnclado::TooLarge);
         }
         self.validar_parent()?;
 
@@ -149,7 +149,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         let identidad = identidad_archivo(&archivo)?;
         archivo
             .write_all(bytes)
-            .map_err(|_| ErrorJournalTemporal::Io)?;
+            .map_err(|_| ErrorJournalAnclado::Io)?;
         drop(archivo);
         Ok(identidad)
     }
@@ -158,7 +158,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     /// como máximo `MAX_JOURNAL_BYTES + 1` bytes antes de decidir el límite.
     pub(crate) fn abrir_y_leer(
         &self,
-    ) -> Result<(IdentidadArchivoTemporal, Vec<u8>), ErrorJournalTemporal> {
+    ) -> Result<(IdentidadArchivoJournal, Vec<u8>), ErrorJournalAnclado> {
         self.validar_parent()?;
         let archivo =
             abrir_entrada_relativa(&self.parent, &self.nombre, TipoEntradaAnclada::Archivo)
@@ -169,9 +169,9 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         archivo
             .take((MAX_JOURNAL_BYTES + 1) as u64)
             .read_to_end(&mut bytes)
-            .map_err(|_| ErrorJournalTemporal::Io)?;
+            .map_err(|_| ErrorJournalAnclado::Io)?;
         if bytes.len() > MAX_JOURNAL_BYTES {
-            return Err(ErrorJournalTemporal::TooLarge);
+            return Err(ErrorJournalAnclado::TooLarge);
         }
         Ok((identidad, bytes))
     }
@@ -180,7 +180,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     /// observada del nombre devuelve `None`; toda otra condición falla cerrada.
     pub(crate) fn abrir_y_leer_canonico(
         &self,
-    ) -> Result<Option<(IdentidadArchivoTemporal, Vec<u8>)>, ErrorJournalTemporal> {
+    ) -> Result<Option<(IdentidadArchivoJournal, Vec<u8>)>, ErrorJournalAnclado> {
         self.validar_parent()?;
         let archivo = match abrir_entrada_relativa(
             &self.parent,
@@ -197,47 +197,47 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         archivo
             .take((MAX_JOURNAL_BYTES + 1) as u64)
             .read_to_end(&mut bytes)
-            .map_err(|_| ErrorJournalTemporal::Io)?;
+            .map_err(|_| ErrorJournalAnclado::Io)?;
         if bytes.len() > MAX_JOURNAL_BYTES {
-            return Err(ErrorJournalTemporal::TooLarge);
+            return Err(ErrorJournalAnclado::TooLarge);
         }
         Ok(Some((identidad, bytes)))
     }
 
-    fn validar_parent(&self) -> Result<(), ErrorJournalTemporal> {
+    fn validar_parent(&self) -> Result<(), ErrorJournalAnclado> {
         let identidad = metadata_directorio(&self.parent).map_err(mapear_error_directorio)?;
         if identidad != self.identidad_parent {
-            return Err(ErrorJournalTemporal::ParentChanged);
+            return Err(ErrorJournalAnclado::ParentChanged);
         }
         Ok(())
     }
 }
 
-fn validar_archivo_regular(handle: &File) -> Result<(), ErrorJournalTemporal> {
-    let metadata = handle.metadata().map_err(|_| ErrorJournalTemporal::Io)?;
+fn validar_archivo_regular(handle: &File) -> Result<(), ErrorJournalAnclado> {
+    let metadata = handle.metadata().map_err(|_| ErrorJournalAnclado::Io)?;
     if metadata.file_type().is_symlink() || super::metadata_es_reparse(&metadata) {
-        return Err(ErrorJournalTemporal::ReparseNotAllowed);
+        return Err(ErrorJournalAnclado::ReparseNotAllowed);
     }
     if !metadata.is_file() {
-        return Err(ErrorJournalTemporal::RegularFileRequired);
+        return Err(ErrorJournalAnclado::RegularFileRequired);
     }
     Ok(())
 }
 
-fn identidad_archivo(handle: &File) -> Result<IdentidadArchivoTemporal, ErrorJournalTemporal> {
+fn identidad_archivo(handle: &File) -> Result<IdentidadArchivoJournal, ErrorJournalAnclado> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let metadata = handle.metadata().map_err(|_| ErrorJournalTemporal::Io)?;
-        Ok(IdentidadArchivoTemporal {
+        let metadata = handle.metadata().map_err(|_| ErrorJournalAnclado::Io)?;
+        Ok(IdentidadArchivoJournal {
             device: metadata.dev(),
             inode: metadata.ino(),
         })
     }
     #[cfg(windows)]
     {
-        let identidad = super::identidad_windows(handle).map_err(|_| ErrorJournalTemporal::Io)?;
-        Ok(IdentidadArchivoTemporal {
+        let identidad = super::identidad_windows(handle).map_err(|_| ErrorJournalAnclado::Io)?;
+        Ok(IdentidadArchivoJournal {
             volume: identidad.volumen,
             file_id: identidad.id_archivo,
         })
@@ -245,27 +245,27 @@ fn identidad_archivo(handle: &File) -> Result<IdentidadArchivoTemporal, ErrorJou
     #[cfg(not(any(unix, windows)))]
     {
         let _ = handle;
-        Err(ErrorJournalTemporal::Io)
+        Err(ErrorJournalAnclado::Io)
     }
 }
 
-fn mapear_error_directorio(error: ErrorDirectorioAnclado) -> ErrorJournalTemporal {
+fn mapear_error_directorio(error: ErrorDirectorioAnclado) -> ErrorJournalAnclado {
     match error {
         ErrorDirectorioAnclado::Io
         | ErrorDirectorioAnclado::ComponenteInvalido
         | ErrorDirectorioAnclado::RaizAusente
-        | ErrorDirectorioAnclado::EntradaAusente => ErrorJournalTemporal::Io,
-        ErrorDirectorioAnclado::EnlaceNoPermitido => ErrorJournalTemporal::ReparseNotAllowed,
-        ErrorDirectorioAnclado::TipoNoAdmitido => ErrorJournalTemporal::RegularFileRequired,
-        ErrorDirectorioAnclado::EntradaExistente => ErrorJournalTemporal::Exists,
+        | ErrorDirectorioAnclado::EntradaAusente => ErrorJournalAnclado::Io,
+        ErrorDirectorioAnclado::EnlaceNoPermitido => ErrorJournalAnclado::ReparseNotAllowed,
+        ErrorDirectorioAnclado::TipoNoAdmitido => ErrorJournalAnclado::RegularFileRequired,
+        ErrorDirectorioAnclado::EntradaExistente => ErrorJournalAnclado::Exists,
     }
 }
 
-fn mapear_error_io(error: std::io::Error) -> ErrorJournalTemporal {
+fn mapear_error_io(error: std::io::Error) -> ErrorJournalAnclado {
     if error.kind() == std::io::ErrorKind::AlreadyExists {
-        ErrorJournalTemporal::Exists
+        ErrorJournalAnclado::Exists
     } else {
-        ErrorJournalTemporal::Io
+        ErrorJournalAnclado::Io
     }
 }
 

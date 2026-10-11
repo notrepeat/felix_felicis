@@ -104,7 +104,7 @@ impl LockEscritura {
         &mut self,
     ) -> Result<
         super::anclado::journal_temporal::JournalTemporalAnclado<'_>,
-        super::anclado::journal_temporal::ErrorJournalTemporal,
+        super::anclado::journal_temporal::ErrorJournalAnclado,
     > {
         super::anclado::journal_temporal::JournalTemporalAnclado::desde_lock(self)
     }

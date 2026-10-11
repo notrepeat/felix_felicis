@@ -46,7 +46,10 @@ fn journal_canonico_lee_desde_basename_de_raiz_y_devuelve_identidad_y_bytes() {
     let identidad_esperada = super::identidad_archivo(&fs::File::open(&journal).unwrap()).unwrap();
     assert_eq!(identidad, identidad_esperada);
     assert_eq!(bytes, canary);
-    assert!(!format!("{identidad:?}").contains("knowledge"));
+    assert_eq!(
+        format!("{identidad:?}"),
+        "IdentidadArchivoJournal([redacted])"
+    );
 
     fs::write(&journal, b"").unwrap();
     let (identidad_vacia, bytes_vacios) = capability.abrir_y_leer_canonico().unwrap().unwrap();
@@ -68,7 +71,10 @@ fn crea_cierra_lee_desde_parent_anclado_y_conserva_identidad_del_handle() {
     assert_eq!(identidad_escrita, identidad_leida);
     assert_eq!(bytes, b"journal-temp-canary");
     assert_eq!(fs::read(nombre_temporal(temp.path())).unwrap(), bytes);
-    assert!(!format!("{identidad_leida:?}").contains("bundle"));
+    assert_eq!(
+        format!("{identidad_leida:?}"),
+        "IdentidadArchivoJournal([redacted])"
+    );
 }
 
 #[test]
@@ -101,14 +107,14 @@ fn rechaza_max_mas_uno_antes_de_crear_y_al_leer() {
 
     assert_eq!(
         capability.crear_nuevo(&bytes).unwrap_err(),
-        ErrorJournalTemporal::TooLarge
+        ErrorJournalAnclado::TooLarge
     );
     assert!(!nombre.exists());
 
     fs::write(&nombre, &bytes).unwrap();
     assert_eq!(
         capability.abrir_y_leer().unwrap_err(),
-        ErrorJournalTemporal::TooLarge
+        ErrorJournalAnclado::TooLarge
     );
     assert_eq!(
         fs::metadata(nombre).unwrap().len(),
@@ -117,10 +123,37 @@ fn rechaza_max_mas_uno_antes_de_crear_y_al_leer() {
 
     fs::write(nombre_journal(&root), &bytes).unwrap();
     let error = capability.abrir_y_leer_canonico().unwrap_err();
-    assert_eq!(error, ErrorJournalTemporal::TooLarge);
-    assert_eq!(error.codigo(), "journal_temp_too_large");
-    assert_eq!(error.to_string(), "journal_temp_too_large");
+    assert_eq!(error, ErrorJournalAnclado::TooLarge);
+    assert_eq!(error.codigo(), "journal_too_large");
+    assert_eq!(error.to_string(), "journal_too_large");
     assert!(!format!("{error:?}").contains("bundle"));
+}
+
+#[test]
+fn codigos_de_error_journal_son_estables_y_redactados() {
+    let casos = [
+        (ErrorJournalAnclado::Io, "journal_io"),
+        (ErrorJournalAnclado::Exists, "journal_exists"),
+        (ErrorJournalAnclado::TooLarge, "journal_too_large"),
+        (
+            ErrorJournalAnclado::ReparseNotAllowed,
+            "journal_reparse_not_allowed",
+        ),
+        (
+            ErrorJournalAnclado::RegularFileRequired,
+            "journal_regular_file_required",
+        ),
+        (ErrorJournalAnclado::ParentChanged, "journal_parent_changed"),
+    ];
+
+    for (error, codigo) in casos {
+        assert_eq!(error.codigo(), codigo);
+        assert_eq!(error.to_string(), codigo);
+        assert_eq!(
+            format!("{error:?}"),
+            format!("ErrorJournalAnclado({codigo:?})")
+        );
+    }
 }
 
 #[test]
@@ -134,7 +167,7 @@ fn colision_con_archivo_preserva_canary_y_rechaza_segundo_create() {
 
     assert_eq!(
         capability.crear_nuevo(b"replacement").unwrap_err(),
-        ErrorJournalTemporal::Exists
+        ErrorJournalAnclado::Exists
     );
     let (_, read) = capability.abrir_y_leer().unwrap();
     assert_eq!(read, canary);
@@ -153,11 +186,11 @@ fn colision_con_directorio_no_lo_reemplaza_ni_sigue_y_preserva_canary() {
 
     assert_eq!(
         capability.crear_nuevo(b"replacement").unwrap_err(),
-        ErrorJournalTemporal::Exists
+        ErrorJournalAnclado::Exists
     );
     assert_eq!(
         capability.abrir_y_leer().unwrap_err(),
-        ErrorJournalTemporal::RegularFileRequired
+        ErrorJournalAnclado::RegularFileRequired
     );
     assert_eq!(
         fs::read(nombre.join("canary")).unwrap(),
@@ -169,7 +202,7 @@ fn colision_con_directorio_no_lo_reemplaza_ni_sigue_y_preserva_canary() {
     fs::write(journal.join("canary"), b"canonical-directory-canary").unwrap();
     assert_eq!(
         capability.abrir_y_leer_canonico().unwrap_err(),
-        ErrorJournalTemporal::RegularFileRequired
+        ErrorJournalAnclado::RegularFileRequired
     );
     assert_eq!(
         fs::read(journal.join("canary")).unwrap(),
@@ -195,15 +228,15 @@ fn symlink_existente_no_se_reemplaza_ni_se_sigue_y_preserva_canary() {
 
     assert_eq!(
         capability.crear_nuevo(b"replacement").unwrap_err(),
-        ErrorJournalTemporal::Exists
+        ErrorJournalAnclado::Exists
     );
     assert_eq!(
         capability.abrir_y_leer().unwrap_err(),
-        ErrorJournalTemporal::ReparseNotAllowed
+        ErrorJournalAnclado::ReparseNotAllowed
     );
     assert_eq!(
         capability.abrir_y_leer_canonico().unwrap_err(),
-        ErrorJournalTemporal::ReparseNotAllowed
+        ErrorJournalAnclado::ReparseNotAllowed
     );
     assert_eq!(fs::read(&target).unwrap(), b"outside-canary");
 }
@@ -246,16 +279,16 @@ fn junction_existente_no_se_reemplaza_ni_se_sigue_y_preserva_canary() {
 
     assert_eq!(
         capability.crear_nuevo(b"replacement").unwrap_err(),
-        ErrorJournalTemporal::Exists
+        ErrorJournalAnclado::Exists
     );
     assert!(matches!(
         capability.abrir_y_leer().unwrap_err(),
-        ErrorJournalTemporal::ReparseNotAllowed | ErrorJournalTemporal::RegularFileRequired
+        ErrorJournalAnclado::ReparseNotAllowed | ErrorJournalAnclado::RegularFileRequired
     ));
-    assert!(matches!(
+    assert_eq!(
         capability.abrir_y_leer_canonico().unwrap_err(),
-        ErrorJournalTemporal::ReparseNotAllowed | ErrorJournalTemporal::RegularFileRequired
-    ));
+        ErrorJournalAnclado::ReparseNotAllowed
+    );
     assert_eq!(fs::read(target.join("canary")).unwrap(), b"outside-canary");
 }
 
