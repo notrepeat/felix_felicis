@@ -8,14 +8,14 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use universo_core::BundlePath;
+use universo_core::{Anexo, BundlePath, Candidato, Estructura};
 
 use crate::serializar::DocumentoCandidato;
 
 use super::captura::{Snapshot, materializar_desde_entradas};
 use super::inventario::{inventariar_root_con_lector, leer_archivo_regular};
 use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
-use super::snapshot::{EntradaSnapshot, ErrorSnapshot, TipoEntradaSnapshot};
+use super::snapshot::{EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot};
 
 #[cfg(windows)]
 use std::cmp::Ordering;
@@ -78,6 +78,7 @@ enum CodigoEscrituraStage {
     ColisionesAgotadas,
     Snapshot(ErrorSnapshot),
     InventarioInconsistente,
+    CandidatoInconsistente,
 }
 
 #[allow(dead_code)] // Lo consume el flujo apply en la siguiente unidad.
@@ -93,6 +94,7 @@ impl CodigoEscrituraStage {
             Self::ColisionesAgotadas => "stage_name_collision",
             Self::Snapshot(error) => error.codigo(),
             Self::InventarioInconsistente => "stage_inventory_mismatch",
+            Self::CandidatoInconsistente => "stage_candidate_mismatch",
         }
     }
 }
@@ -103,6 +105,38 @@ impl CodigoEscrituraStage {
 pub(crate) struct StagePropio {
     ruta: PathBuf,
     stage_id: String,
+    recibo: Option<ReciboStage>,
+}
+
+/// Identidad interna del stage recargado; no implica identidad del objeto
+/// filesystem. U7 aún debe anclar/revalidar handles antes de publicar.
+#[allow(dead_code)] // El journal/commit consume identidad y token en U7.
+pub(crate) struct ReciboStage {
+    stage_id: String,
+    snapshot: SnapshotToken,
+}
+
+#[allow(dead_code)] // Las capas de journal/recovery consumirán estos campos en U7.
+impl ReciboStage {
+    pub(crate) fn stage_id(&self) -> &str {
+        &self.stage_id
+    }
+
+    pub(crate) fn snapshot(&self) -> SnapshotToken {
+        self.snapshot
+    }
+}
+
+impl fmt::Debug for ReciboStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ReciboStage { .. }")
+    }
+}
+
+impl fmt::Display for ReciboStage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[stage receipt redacted]")
+    }
 }
 
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
@@ -113,6 +147,10 @@ impl StagePropio {
 
     pub(crate) fn stage_id(&self) -> &str {
         &self.stage_id
+    }
+
+    pub(crate) fn recibo(&self) -> Option<&ReciboStage> {
+        self.recibo.as_ref()
     }
 }
 
@@ -225,15 +263,108 @@ pub(crate) fn materializar_staging(
     ubicacion: &UbicacionRaiz,
     snapshot: &Snapshot,
     plan: &PlanStaging,
-) -> Result<(StagePropio, Snapshot), ErrorEscrituraStage> {
-    materializar_staging_y_recargar_con(
+    candidato: &Candidato,
+) -> Result<StagePropio, ErrorEscrituraStage> {
+    let (mut stage, recapturado) = materializar_staging_y_recargar_con(
         ubicacion,
         snapshot,
         plan,
         generar_id_stage,
         escribir_archivo_nuevo,
         leer_archivo_regular,
-    )
+    )?;
+    if validar_candidato_recargado(snapshot, candidato, &recapturado).is_err() {
+        return Err(ErrorEscrituraStage {
+            codigo: CodigoEscrituraStage::CandidatoInconsistente,
+            stage_parcial: Some(stage),
+        });
+    }
+    stage.recibo = Some(ReciboStage {
+        stage_id: stage.stage_id.clone(),
+        snapshot: recapturado.token(),
+    });
+    Ok(stage)
+}
+
+fn validar_candidato_recargado(
+    original: &Snapshot,
+    candidato: &Candidato,
+    recapturado: &Snapshot,
+) -> Result<(), CodigoEscrituraStage> {
+    let esperado = candidato.estructura();
+    let actual = recapturado.estructura();
+    if original.estructura().manifiesto() != esperado.manifiesto()
+        || esperado.manifiesto() != actual.manifiesto()
+        || atomos_canonicos(esperado) != atomos_canonicos(actual)
+        || anexos_por_path(esperado) != anexos_por_path(actual)
+        || parent_explicito_esperado(original.estructura(), esperado)
+            != parent_explicito_por_path(actual)
+    {
+        return Err(CodigoEscrituraStage::CandidatoInconsistente);
+    }
+    Ok(())
+}
+
+fn atomos_canonicos(estructura: &Estructura) -> Vec<universo_core::Atomo> {
+    let mut atomos = estructura.atomos();
+    atomos.sort_unstable();
+    atomos
+}
+
+fn anexos_por_path(estructura: &Estructura) -> BTreeMap<BundlePath, Anexo> {
+    estructura
+        .nodos()
+        .map(|(id, nodo)| {
+            (
+                nodo.path.clone(),
+                estructura.anexo(id).cloned().unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+fn parent_explicito_por_path(estructura: &Estructura) -> BTreeMap<BundlePath, bool> {
+    estructura
+        .nodos()
+        .map(|(id, nodo)| {
+            (
+                nodo.path.clone(),
+                estructura.parent_frontmatter_explicito(id),
+            )
+        })
+        .collect()
+}
+
+fn parent_explicito_esperado(
+    original: &Estructura,
+    candidato: &Estructura,
+) -> BTreeMap<BundlePath, bool> {
+    let padres_originales = padres_por_path(original);
+    let padres_candidatos = padres_por_path(candidato);
+    candidato
+        .nodos()
+        .map(|(id, nodo)| {
+            let cambio_parent =
+                padres_originales.get(&nodo.path) != padres_candidatos.get(&nodo.path);
+            (
+                nodo.path.clone(),
+                candidato.parent_frontmatter_explicito(id) || cambio_parent,
+            )
+        })
+        .collect()
+}
+
+fn padres_por_path(estructura: &Estructura) -> BTreeMap<BundlePath, Option<BundlePath>> {
+    estructura
+        .nodos()
+        .map(|(id, nodo)| {
+            let padre = estructura
+                .padre(id)
+                .and_then(|padre| estructura.nodo(padre))
+                .map(|padre| padre.path.clone());
+            (nodo.path.clone(), padre)
+        })
+        .collect()
 }
 
 /// Escribe el sibling, recaptura su inventario real una sola vez y materializa
@@ -411,6 +542,7 @@ where
                 let stage = StagePropio {
                     ruta: ruta.as_path().to_path_buf(),
                     stage_id: id,
+                    recibo: None,
                 };
                 if let Err(codigo) = validar_directorio_stage(stage.ruta()) {
                     return Err(ErrorEscrituraStage {
@@ -936,9 +1068,11 @@ fn directorios_padre(mut ruta: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaccion::captura::capturar_snapshot;
+    use crate::serializar::serializar_candidato;
+    use crate::transaccion::captura::{capturar_snapshot, materializar_desde_entradas};
     use std::fs;
     use tempfile::{TempDir, tempdir};
+    use universo_core::{Atomo, Delta, Etiqueta, Sujeto, construir_candidato};
 
     fn directorio(ruta: &str) -> EntradaSnapshot {
         EntradaSnapshot::directorio(ruta)
@@ -1010,6 +1144,52 @@ ignorados = ["ignored.md"]
         let snapshot =
             capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1").unwrap();
         (temp, snapshot)
+    }
+
+    fn snapshot_con_parent() -> (TempDir, Snapshot, PathBuf, PathBuf) {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        fs::create_dir_all(raiz.join("knowledge/sub")).unwrap();
+        fs::write(
+            raiz.join("knowledge/index.md"),
+            "---\ntype: a\ntitle: Root\nparent: \"\"\ncustom: keep\n---\nroot body\n",
+        )
+        .unwrap();
+        fs::write(
+            raiz.join("knowledge/sub/index.md"),
+            "---\ntype: a\ntitle: Sub\n---\nsub body\n",
+        )
+        .unwrap();
+        fs::write(
+            raiz.join("knowledge/sub/leaf.md"),
+            "---\ntype: a\ntitle: Leaf\nparent: knowledge/index\ncustom: ordered\n---\nleaf body\n",
+        )
+        .unwrap();
+        let manifiesto = temp.path().join("manifest.toml");
+        let invariantes = temp.path().join("invariants.smt2");
+        fs::write(
+            &manifiesto,
+            "version = \"stage-parent/1\"\n\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n\n[layout]\ndirectorios = [\"knowledge\"]\nsin_iota = []\nignorados = []\nparent_key = \"parent\"\n",
+        )
+        .unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        let snapshot =
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1").unwrap();
+        (temp, snapshot, manifiesto, invariantes)
+    }
+
+    fn candidato_con_titulo(snapshot: &Snapshot, titulo: &str) -> Candidato {
+        let path = BundlePath::nuevo("knowledge/index").unwrap();
+        let anterior = Atomo::HasLab {
+            sujeto: Sujeto::Nodo(path.clone()),
+            etiqueta: Etiqueta::nuevo("Root"),
+        };
+        let nuevo = Atomo::HasLab {
+            sujeto: Sujeto::Nodo(path),
+            etiqueta: Etiqueta::nuevo(titulo),
+        };
+        let delta = Delta::nuevo([nuevo], [anterior]).unwrap();
+        construir_candidato(snapshot.estructura(), &delta).unwrap()
     }
 
     fn stage_para_recarga(
@@ -1662,5 +1842,158 @@ ignorados = ["ignored.md"]
     fn windows_rechaza_prefijo_de_unidad_absoluto() {
         let error = plan(&[archivo("C:/secreto.txt", b"x")], &[], &[]).unwrap_err();
         assert_eq!(error.codigo(), "stage_path_invalid");
+    }
+
+    #[test]
+    fn recarga_validada_emite_recibo_opaco_y_conserva_el_root() {
+        let (temp, snapshot, manifiesto, invariantes) = snapshot_con_parent();
+        let raiz = temp.path().join("bundle");
+        let antes = fs::read(raiz.join("knowledge/index.md")).unwrap();
+        let candidato = candidato_con_titulo(&snapshot, "Root edited");
+        let documentos = serializar_candidato(snapshot.estructura(), &candidato, &[]).unwrap();
+        let plan = planificar_staging(&snapshot, &documentos).unwrap();
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+
+        let stage = materializar_staging(&ubicacion, &snapshot, &plan, &candidato).unwrap();
+        let recibo = stage.recibo().unwrap();
+        assert_eq!(recibo.stage_id(), stage.stage_id());
+        assert_ne!(recibo.snapshot(), snapshot.token());
+        let visible = format!("{recibo:?} {recibo}");
+        assert!(!visible.contains(stage.stage_id()));
+        assert!(!visible.contains(&recibo.snapshot().to_hex()));
+        assert!(!format!("{stage:?}").contains(stage.stage_id()));
+        assert_eq!(fs::read(raiz.join("knowledge/index.md")).unwrap(), antes);
+        assert_eq!(
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
+                .unwrap()
+                .token(),
+            snapshot.token()
+        );
+    }
+
+    #[test]
+    fn comparador_semantico_ignora_ids_y_orden_pero_exige_anexos_y_parent_explicito() {
+        let (_temp, snapshot, _, _) = snapshot_con_parent();
+        let candidato = construir_candidato(snapshot.estructura(), &Delta::default()).unwrap();
+        let mut entradas = snapshot.entradas().to_vec();
+        entradas.reverse();
+        let recapturado = materializar_desde_entradas(&snapshot, entradas).unwrap();
+        assert!(validar_candidato_recargado(&snapshot, &candidato, &recapturado).is_ok());
+
+        let path = "knowledge/index.md";
+        for (buscar, reemplazo) in [("custom: keep", "custom: changed"), ("parent: \"\"\n", "")] {
+            let mut entradas = snapshot.entradas().to_vec();
+            let indice = entradas.iter().position(|e| e.ruta() == path).unwrap();
+            let original = std::str::from_utf8(entradas[indice].bytes().unwrap()).unwrap();
+            assert!(original.contains(buscar));
+            entradas[indice] =
+                EntradaSnapshot::archivo(path, original.replace(buscar, reemplazo).into_bytes());
+            let recapturado = materializar_desde_entradas(&snapshot, entradas).unwrap();
+            assert_eq!(
+                atomos_canonicos(candidato.estructura()),
+                atomos_canonicos(recapturado.estructura())
+            );
+            assert_eq!(
+                validar_candidato_recargado(&snapshot, &candidato, &recapturado)
+                    .unwrap_err()
+                    .codigo(),
+                "stage_candidate_mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn recarga_usa_configuracion_externa_capturada_sin_releerla() {
+        let (temp, snapshot) = snapshot_minimo();
+        let raiz = temp.path().join("bundle");
+        let ruta_documento = raiz.join("knowledge/a.md");
+        let antes = fs::read(&ruta_documento).unwrap();
+        let candidato = construir_candidato(snapshot.estructura(), &Delta::default()).unwrap();
+        let documentos = serializar_candidato(snapshot.estructura(), &candidato, &[]).unwrap();
+        let plan = planificar_staging(&snapshot, &documentos).unwrap();
+        fs::remove_file(temp.path().join("manifest.toml")).unwrap();
+        fs::remove_file(temp.path().join("invariants.smt2")).unwrap();
+
+        let stage = materializar_staging(
+            &UbicacionRaiz::nueva(&raiz).unwrap(),
+            &snapshot,
+            &plan,
+            &candidato,
+        )
+        .unwrap();
+        assert!(stage.recibo().is_some());
+        assert_eq!(fs::read(&ruta_documento).unwrap(), antes);
+    }
+
+    #[test]
+    fn rechaza_candidato_distinto_y_conserva_stage_parcial_sin_recibo() {
+        let (temp, snapshot, _, _) = snapshot_con_parent();
+        let raiz = temp.path().join("bundle");
+        let antes = fs::read(raiz.join("knowledge/index.md")).unwrap();
+        let candidato = candidato_con_titulo(&snapshot, "Root edited");
+        let mut documentos = serializar_candidato(snapshot.estructura(), &candidato, &[]).unwrap();
+        let index = documentos
+            .iter()
+            .position(|documento| documento.path().como_str() == "knowledge/index")
+            .unwrap();
+        documentos[index] = documento(
+            "knowledge/index",
+            &documentos[index]
+                .contenido()
+                .replace("Root edited", "Wrong target"),
+        );
+        let plan = planificar_staging(&snapshot, &documentos).unwrap();
+        let error = materializar_staging(
+            &UbicacionRaiz::nueva(&raiz).unwrap(),
+            &snapshot,
+            &plan,
+            &candidato,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_candidate_mismatch");
+        assert!(error.stage_parcial().unwrap().recibo().is_none());
+        assert!(!format!("{error:?} {error}").contains("Wrong target"));
+        assert_eq!(fs::read(raiz.join("knowledge/index.md")).unwrap(), antes);
+    }
+
+    #[test]
+    fn recarga_copia_configuracion_local_exacta_al_stage() {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        fs::create_dir_all(raiz.join("knowledge")).unwrap();
+        fs::write(raiz.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let manifiesto = "version = \"local/1\"\n\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n\n[layout]\ndirectorios = [\"knowledge\"]\nsin_iota = []\nignorados = []\n";
+        let invariantes = "\n; raw local config\n";
+        fs::write(raiz.join("manifest.toml"), manifiesto).unwrap();
+        fs::write(raiz.join("invariants.smt2"), invariantes).unwrap();
+        let snapshot = capturar_snapshot(
+            &raiz,
+            &raiz.join("manifest.toml"),
+            &raiz.join("invariants.smt2"),
+            "engine/1",
+            "policy/1",
+        )
+        .unwrap();
+        let candidato = construir_candidato(snapshot.estructura(), &Delta::default()).unwrap();
+        let documentos = serializar_candidato(snapshot.estructura(), &candidato, &[]).unwrap();
+        let plan = planificar_staging(&snapshot, &documentos).unwrap();
+        let stage = materializar_staging(
+            &UbicacionRaiz::nueva(&raiz).unwrap(),
+            &snapshot,
+            &plan,
+            &candidato,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(stage.ruta().join("manifest.toml")).unwrap(),
+            manifiesto
+        );
+        assert_eq!(
+            fs::read_to_string(stage.ruta().join("invariants.smt2")).unwrap(),
+            invariantes
+        );
+        assert!(stage.recibo().is_some());
     }
 }
