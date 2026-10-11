@@ -182,7 +182,7 @@ impl JournalTemporalAnclado<'_> {
         Ok(true)
     }
 
-    fn limpiar_temporal_si_coincide(
+    pub(super) fn limpiar_temporal_si_coincide(
         &self,
         esperada: IdentidadArchivoJournal,
     ) -> EstadoLimpiezaPublicacion {
@@ -313,11 +313,11 @@ fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnc
 fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
     use fs_at::os::windows::OpenOptionsExt;
     use std::path::Path;
-    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES};
+    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES, FILE_READ_DATA};
 
     let mut opciones = OpenOptionsAt::default();
     opciones
-        .desired_access(FILE_READ_ATTRIBUTES | DELETE)
+        .desired_access(FILE_READ_ATTRIBUTES | FILE_READ_DATA | DELETE)
         .follow(false);
     opciones
         .open_at(parent, Path::new(nombre))
@@ -380,6 +380,17 @@ fn publicar_plataforma(
     canonico: &OsStr,
     _handle_fuente: &File,
 ) -> Result<(), ErrorJournalAnclado> {
+    publicar_plataforma_modo(parent, fuente, canonico, _handle_fuente, false)
+}
+
+#[cfg(unix)]
+fn publicar_plataforma_modo(
+    parent: &File,
+    fuente: &OsStr,
+    canonico: &OsStr,
+    _handle_fuente: &File,
+    reemplazar: bool,
+) -> Result<(), ErrorJournalAnclado> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -387,15 +398,24 @@ fn publicar_plataforma(
     let fuente = CString::new(fuente.as_bytes()).map_err(|_| ErrorJournalAnclado::Io)?;
     let canonico = CString::new(canonico.as_bytes()).map_err(|_| ErrorJournalAnclado::Io)?;
     // SAFETY: both validated names are single components relative to the same
-    // retained parent handle. Flags 0 never follows a source symlink.
+    // retained parent handle. Neither syscall follows a source symlink.
     let resultado = unsafe {
-        libc::linkat(
-            parent.as_raw_fd(),
-            fuente.as_ptr(),
-            parent.as_raw_fd(),
-            canonico.as_ptr(),
-            0,
-        )
+        if reemplazar {
+            libc::renameat(
+                parent.as_raw_fd(),
+                fuente.as_ptr(),
+                parent.as_raw_fd(),
+                canonico.as_ptr(),
+            )
+        } else {
+            libc::linkat(
+                parent.as_raw_fd(),
+                fuente.as_ptr(),
+                parent.as_raw_fd(),
+                canonico.as_ptr(),
+                0,
+            )
+        }
     };
     if resultado == 0 {
         Ok(())
@@ -451,6 +471,17 @@ fn publicar_plataforma(
     canonico: &OsStr,
     handle_fuente: &File,
 ) -> Result<(), ErrorJournalAnclado> {
+    publicar_plataforma_modo(parent, _fuente, canonico, handle_fuente, false)
+}
+
+#[cfg(windows)]
+fn publicar_plataforma_modo(
+    parent: &File,
+    _fuente: &OsStr,
+    canonico: &OsStr,
+    handle_fuente: &File,
+    reemplazar: bool,
+) -> Result<(), ErrorJournalAnclado> {
     use std::mem::{offset_of, size_of};
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
@@ -475,7 +506,7 @@ fn publicar_plataforma(
     // SAFETY: storage is usize-aligned and large enough for the fixed header
     // and UTF-16 component. No terminating NUL is part of FileNameLength.
     unsafe {
-        (*informacion).Anonymous.ReplaceIfExists = false;
+        (*informacion).Anonymous.ReplaceIfExists = reemplazar;
         (*informacion).RootDirectory = parent.as_raw_handle() as HANDLE;
         (*informacion).FileNameLength = nombre_bytes_u32;
         std::ptr::copy_nonoverlapping(
@@ -485,7 +516,7 @@ fn publicar_plataforma(
         );
     }
     // SAFETY: the source was opened relative/no-follow with DELETE access;
-    // the retained parent anchors a no-replace rename on the local filesystem.
+    // the retained parent anchors the rename to the local filesystem.
     let mut estado_io = IO_STATUS_BLOCK::default();
     let estado = unsafe {
         NtSetInformationFile(
@@ -545,6 +576,17 @@ fn publicar_plataforma(
     _fuente: &OsStr,
     _canonico: &OsStr,
     _handle_fuente: &File,
+) -> Result<(), ErrorJournalAnclado> {
+    publicar_plataforma_modo(_parent, _fuente, _canonico, _handle_fuente, false)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn publicar_plataforma_modo(
+    _parent: &File,
+    _fuente: &OsStr,
+    _canonico: &OsStr,
+    _handle_fuente: &File,
+    _reemplazar: bool,
 ) -> Result<(), ErrorJournalAnclado> {
     Err(ErrorJournalAnclado::Io)
 }
