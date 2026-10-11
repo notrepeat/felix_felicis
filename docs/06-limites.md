@@ -128,14 +128,47 @@ elemento, y exigir prioridad también sobre la cascada volvería inadmisible
 casi cualquier revisión que toque un elemento con incidencias. Quien retira
 un nodo retira todo lo que cuelga de él, esté atrincherado como esté.
 
-**Los testigos cubren solo el fragmento universal.** La identificación
-kernel = testigo mínimo vale para invariantes que fallan por **presencia**
-de átomos. Un invariante existencial — o de forma $\forall\exists$, como
-ID1 e ID2 del capítulo 07 — falla por **ausencia**, no tiene testigo de ese
-tipo, y su violación queda fuera del aparato de retiro guiado por
-$\preceq$: el check la detecta igual, pero la reparación es una obligación
-de añadir (o de rechazar la transacción entera, que es el modo por defecto),
-no un retiro que la maquinaria del capítulo 03 pueda decidir.
+**Una fórmula universal también puede fallar por ausencia.** La
+identificación kernel = testigo mínimo vale para patrones que fallan por
+**presencia** de átomos; que una fórmula sea sintácticamente universal no
+basta. Los invariantes existenciales o de forma $\forall\exists$, como ID1
+e ID2 del capítulo 07, fallan por **ausencia** y no tienen testigo positivo
+de ese tipo. El `check` de fase 02 los detecta igualmente porque evalúa la
+fórmula completa, pero la reparación es una obligación de añadir (o de
+rechazar la transacción entera, que es el modo por defecto), no un retiro
+que la maquinaria del capítulo 03 pueda decidir.
+
+El contrato documental de fase 03 limita `gap` a una obligación existencial
+monotónica positiva (átomos de presencia, igualdad positiva, `Y`, `O` y
+`Existe`), ya sea un `Existe` exterior falso o el primer cuerpo existencial
+falso y aplicable de un `ParaTodo` falso, saltando guardas falsas y cuerpos
+existenciales verdaderos. No admite `No`, `Implica` ni `ParaTodo` dentro de la
+obligación; fuera del fragmento se conserva el `counterexample` genérico y
+`gap` queda ausente. Ningún `gap` cambia `reject`, inventa un testigo ni
+propone una reparación ejecutable. El extractor se registró en `df06f11`;
+`fd637ce` añade replay semántico de cores, irreducibilidad, orden canónico y
+formas positivas recursivas. `check --explain decide|enumerate` se registró
+en `4d8b238`, con límites y procedencia cubiertos en `ccd54b5`. La fase 03
+cerró sus 17 criterios. En HEAD `ccd54b5`, `cargo test -p universo-core`
+pasó con 151 pruebas unitarias y 7 complementarias; `cargo test -p
+universo-cli` pasó con 1 unitaria, 8 de `check`, 14 de CLI y 12 de
+explicación. Además, `cargo test --workspace` pasó 251 pruebas y 0 fallos.
+El `presence_core` confirmado en `cf0f752` se limita a una asignación concreta
+de una instancia en un fragmento operacional positivo; no ofrece un núcleo
+para toda fórmula universal ni decide satisfacibilidad FO global.
+
+La salida explicativa es optativa: sin `--explain`, el `check` v1 conserva su
+salida y diagnósticos por compatibilidad. El pase explicativo tiene un
+presupuesto medido global de 1.000.000 de unidades y corre después del check
+base. Si la explicación se completa, se conserva su veredicto y resumen; si agota el
+presupuesto, la salida opt-in es `error` con resumen nulo y sin explicación
+parcial. Ese límite no es un máximo del trabajo total de la invocación. JSON
+v2 y texto opt-in ocultan rutas y contenido original, pero revelan estructura
+lógica abstracta y valores booleanos por instancia,
+ordinales/posiciones de fuente, conteos derivados y métricas deterministas.
+Los errores legacy sin `--explain` aún pueden contener rutas locales o
+absolutas. La forma completa del límite, redacción y salida v2 está en
+[03 — Veredictos explicables](plan/03-veredictos-explicables.md).
 
 **No todo compromiso cabe en una oración sobre un estado.** El capítulo 07
 lo dijo para "todo retiro deja registro": esa exigencia relaciona dos

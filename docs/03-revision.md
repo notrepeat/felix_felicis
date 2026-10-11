@@ -168,8 +168,9 @@ Con eso, la revisión:
 **Definición 4 (Revisión de $U$ con un delta).** Dado $U$ consistente
 ($\mathit{Str}(U) \models I$) y un delta $\Delta \subseteq
 \mathit{At}(\Sigma)$, llamamos **testigo mínimo** de violación a un conjunto
-de átomos — vigentes y/o de $\Delta$ — **mínimo por inclusión** (como los
-kernels de Hansson 1994) tal que ninguna estructura de firma $\Sigma$ que
+de átomos — vigentes y/o de $\Delta$ — **subconjunto-minimal por inclusión**
+(como los kernels de Hansson 1994; no necesariamente de cardinalidad mínima
+ni único) tal que ninguna estructura de firma $\Sigma$ que
 satisfaga $I$ y respete la funcionalidad de $\tau$, $\lambda$ e $\iota$ (tipo
 único, etiqueta única, a lo sumo un padre) e incidencia única de aristas
 ($s$, $t$: cada arista tiene origen y destino únicos) hace verdaderos todos
@@ -179,11 +180,13 @@ combinada": cuando $\Delta$ trae $\mathit{HasLab}(v, l')$ y rige
 $\mathit{HasLab}(v, l)$ con $l \neq l'$, ninguna $\Sigma$-estructura
 interpreta ambos a la vez ($\lambda$ es función; lo mismo con
 $\mathit{Parent}$/$\iota$ y $\mathit{Type}$/$\tau$), y el par es directamente
-un testigo de conflicto funcional. Nota de alcance: así se capturan las
-violaciones de invariantes **universales**, que fallan por presencia de
-átomos (como $I_1$); un invariante existencial falla por **ausencia** de
-átomos y no tiene testigo de este tipo, de modo que la identificación
-kernel = testigo de la Advertencia 2 vale solo en ese fragmento universal.
+un testigo de conflicto funcional. Nota de alcance: este aparato cubre las
+violaciones por **presencia** de un patrón positivo incompatible con $I$;
+que una fórmula sea sintácticamente universal no basta para pertenecer al
+fragmento, pues también puede fallar por ausencia de hechos. Un requisito
+existencial incumplido es un caso de ausencia y no tiene testigo positivo de
+este tipo. La identificación kernel = testigo de la Advertencia 2 vale solo
+en el fragmento por presencia.
 Una **revisión admisible** es un conjunto $R$ de átomos vigentes tal que:
 
 1. **Éxito**: la estructura $\mathit{Str}(U')$ que resulta de retirar
@@ -256,6 +259,48 @@ testigos a vecindarios pequeños del delta, y la búsqueda del mínimo queda
 acotada. Un delta enorme contra invariantes globales sale de ese régimen y
 el sistema debe poder decir "no puedo resolver esto solo" en lugar de
 prometer eficiencia que no tiene.
+
+### Frontera con la explicación de `check`
+
+La Definición 4 es una noción formal de revisión que presupone un estado
+consistente y un delta; no es una especificación operacional de explicación
+para el `check` estático, que recibe solo un snapshot y no distingue hechos
+vigentes de nuevos. El contrato de fase
+[03 — Veredictos explicables](plan/03-veredictos-explicables.md) separa la
+asignación `counterexample` de un `presence_core` subconjunto-minimal, este
+último restringido a una asignación fallida del fragmento positivo que puede
+validarse directamente en ese snapshot. No intenta decidir satisfacibilidad
+FO global ni construir un kernel para todo $I$. El contrato de fase 03 limita
+`gap` a una obligación existencial monotónica positiva: átomos de presencia
+(`Type`, `Edge`, `Parent`, `HasLab`, `Ext`, `TcParent` e igualdad positiva),
+combinados con `Y`, `O` y `Existe`; la obligación no puede contener `No`,
+`Implica` ni `ParaTodo`. Se admite un `Existe` exterior falso, o un `ParaTodo`
+falso cuya primera asignación en orden canónico con guarda ausente/verdadera
+y cuerpo `Existe` falso exige una obligación de esa gramática. Se saltan
+guardas falsas y cuerpos existenciales verdaderos. La salida resume la forma
+completa de la obligación con constructores/aridades allowlisted; no afirma
+qué átomo individual falta cuando la fórmula incluye `Y`, `O` o existenciales
+anidados. Una guarda universal falsa es vacua. Fuera del fragmento se
+conserva el `counterexample` y `gap` queda ausente; no cambia el rechazo, no
+se inventa identidad de testigo ni se propone una reparación. El `gap` es
+evidencia, no una orden para añadir hechos.
+
+El núcleo expone este `gap` como componente opcional, no como veredicto ni
+como un `kind` alternativo. El extractor se registra en `df06f11` y la
+integración CLI optativa en `4d8b238`; `--explain` conserva el veredicto y
+agrega la evidencia redactada del contrato de fase 03. Si el pase optativo
+agota presupuesto, informa `error` de recurso sin resumen ni parcial. Los
+regresores de `fd637ce` y `ccd54b5` cubren replay de cores, forma positiva
+recursiva, orden, procedencia y errores de presupuesto sin salida parcial.
+El gate de fase 03 está cerrado con 17 criterios; su evidencia de suites por
+crate y el límite pendiente de verificación transversal están en
+[03 — Veredictos explicables](plan/03-veredictos-explicables.md).
+
+Los conflictos funcionales de tipo, etiqueta, padre o incidencia definidos
+arriba siguen formando parte de la teoría de revisión. Su detección y
+diagnóstico al combinar un delta son trabajo operativo de
+[fase 04](plan/04-operacion-transaccional.md), no del `presence_core` de la
+evaluación estática.
 
 ## Ejemplo de una política de prioridad epistémica
 
