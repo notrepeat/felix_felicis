@@ -80,11 +80,19 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
         DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
 
     let nombres = ancla.read_dir().unwrap();
-    assert_eq!(nombres, vec!["read.txt".to_owned()]);
-    let mut lectura = ancla.abrir_archivo_regular("read.txt").unwrap();
+    assert_eq!(nombres, vec![OsString::from("read.txt")]);
+    let mut lectura = match ancla.abrir_entrada_inventario("read.txt").unwrap() {
+        EntradaLecturaAnclada::Archivo(archivo) => archivo,
+        EntradaLecturaAnclada::Directorio(_) => panic!("se esperaba archivo regular"),
+    };
     let mut bytes = Vec::new();
     lectura.read_to_end(&mut bytes).unwrap();
     assert_eq!(bytes, b"read");
+    std::fs::create_dir(ruta.join("subdir")).unwrap();
+    assert!(matches!(
+        ancla.abrir_entrada_inventario("subdir").unwrap(),
+        EntradaLecturaAnclada::Directorio(_)
+    ));
     let subdirectorio = ancla.crear_directorio("subdir").unwrap();
     let mut nuevo = subdirectorio.crear_nuevo("new.txt").unwrap();
     nuevo.write_all(b"new").unwrap();

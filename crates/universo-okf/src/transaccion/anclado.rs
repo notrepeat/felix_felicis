@@ -59,6 +59,12 @@ pub(crate) struct DirectorioAnclado {
     identidad_raiz: Option<IdentidadDirectorio>,
 }
 
+/// Entrada de lectura clasificada desde el handle devuelto por fs_at.
+pub(crate) enum EntradaLecturaAnclada {
+    Directorio(DirectorioAnclado),
+    Archivo(File),
+}
+
 impl DirectorioAnclado {
     pub(crate) fn desde_ubicacion(
         ubicacion: &UbicacionRaiz,
