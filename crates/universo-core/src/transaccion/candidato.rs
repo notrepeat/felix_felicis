@@ -123,7 +123,7 @@ pub fn construir_candidato(
     }
 
     let mut aristas_retiradas = HashSet::new();
-    let mut etiquetas_retiradas = Vec::<AristaId>::new();
+    let mut etiquetas_retiradas = HashMap::<AristaId, Etiqueta>::new();
     for atomo in delta.retirar() {
         match atomo {
             Atomo::Edge { id, .. } => {
@@ -149,32 +149,26 @@ pub fn construir_candidato(
                         clase: ClaseOperacion::HasLab,
                     });
                 }
-                etiquetas_retiradas.push(handle);
+                etiquetas_retiradas.insert(handle, etiqueta.clone());
             }
             _ => unreachable!("las operaciones se validaron antes de resolver handles"),
         }
     }
-    if etiquetas_retiradas
-        .iter()
-        .any(|handle| !aristas_retiradas.contains(handle))
-    {
-        return Err(ErrorCandidato::UnsupportedOperation {
-            lado: LadoDelta::Remove,
-            clase: ClaseOperacion::HasLab,
-        });
-    }
-
     let mut estructura = snapshot.clonar_para_candidato();
     let handles: Vec<_> = aristas_retiradas.into_iter().collect();
     aristas::retirar_lote(&mut estructura, &handles)
         .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
-    aplicar_altas(&mut estructura, delta.agregar())?;
+    aplicar_altas(&mut estructura, delta.agregar(), &etiquetas_retiradas)?;
     Ok(Candidato { estructura })
 }
 
 type GrupoArista = (BundlePath, Sorte, BundlePath);
 
-fn aplicar_altas(estructura: &mut Estructura, atomos: &[Atomo]) -> Result<(), ErrorCandidato> {
+fn aplicar_altas(
+    estructura: &mut Estructura,
+    atomos: &[Atomo],
+    etiquetas_retiradas: &HashMap<AristaId, Etiqueta>,
+) -> Result<(), ErrorCandidato> {
     let mut grupos = BTreeMap::<GrupoArista, Vec<&Atomo>>::new();
     let mut etiquetas = HashMap::<IdArista, Vec<&Etiqueta>>::new();
     let mut identidades_edge = HashSet::<IdArista>::new();
@@ -210,10 +204,13 @@ fn aplicar_altas(estructura: &mut Estructura, atomos: &[Atomo]) -> Result<(), Er
         }
     }
 
-    if etiquetas
+    let identidades_reemplazo: HashSet<_> = etiquetas_retiradas
         .keys()
-        .any(|identidad| !identidades_edge.contains(identidad))
-    {
+        .filter_map(|handle| identidad_arista(estructura, *handle))
+        .collect();
+    if etiquetas.keys().any(|identidad| {
+        !identidades_edge.contains(identidad) && !identidades_reemplazo.contains(identidad)
+    }) {
         return Err(ErrorCandidato::AddConflict {
             clase: ClaseOperacion::HasLab,
         });
@@ -252,7 +249,7 @@ fn aplicar_altas(estructura: &mut Estructura, atomos: &[Atomo]) -> Result<(), Er
             let Atomo::Edge { id, .. } = atomo else {
                 unreachable!("el grupo solo contiene altas Edge")
             };
-            let etiquetas_edge = etiquetas.remove(id).ok_or(ErrorCandidato::AddConflict {
+            let etiquetas_edge = etiquetas.get(id).ok_or(ErrorCandidato::AddConflict {
                 clase: ClaseOperacion::HasLab,
             })?;
             if etiquetas_edge.len() != 1 {
@@ -306,12 +303,57 @@ fn aplicar_altas(estructura: &mut Estructura, atomos: &[Atomo]) -> Result<(), Er
         }
     }
 
-    if !etiquetas.is_empty() {
-        return Err(ErrorCandidato::AddConflict {
-            clase: ClaseOperacion::HasLab,
-        });
+    let mut reemplazos = Vec::new();
+    for (handle, etiqueta_anterior) in etiquetas_retiradas {
+        if estructura.arista(*handle).is_none() {
+            continue;
+        }
+        let identidad_final =
+            identidad_arista(estructura, *handle).ok_or(ErrorCandidato::SnapshotInconsistente)?;
+        let etiquetas_nuevas =
+            etiquetas
+                .get(&identidad_final)
+                .ok_or(ErrorCandidato::AddConflict {
+                    clase: ClaseOperacion::HasLab,
+                })?;
+        if etiquetas_nuevas.len() != 1 {
+            return Err(ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::HasLab,
+            });
+        }
+        let etiqueta_nueva = etiquetas_nuevas[0];
+        if etiqueta_nueva.como_str().contains(['\n', '\r']) {
+            return Err(ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::HasLab,
+            });
+        }
+        if estructura
+            .arista(*handle)
+            .is_none_or(|arista| arista.etiqueta != *etiqueta_anterior)
+        {
+            return Err(ErrorCandidato::SnapshotInconsistente);
+        }
+        reemplazos.push((*handle, (*etiqueta_nueva).clone()));
+    }
+
+    for (handle, etiqueta) in reemplazos {
+        estructura
+            .reemplazar_etiqueta_arista(handle, etiqueta)
+            .map_err(|_| ErrorCandidato::AddConflict {
+                clase: ClaseOperacion::HasLab,
+            })?;
     }
     Ok(())
+}
+
+fn identidad_arista(estructura: &Estructura, handle: AristaId) -> Option<IdArista> {
+    let arista = estructura.arista(handle)?;
+    Some(IdArista {
+        origen: estructura.nodo(arista.origen)?.path.clone(),
+        sorte: arista.tipo.clone(),
+        destino: estructura.nodo(arista.destino)?.path.clone(),
+        ordinal: arista.ordinal,
+    })
 }
 
 fn clase(atomo: &Atomo) -> ClaseOperacion {

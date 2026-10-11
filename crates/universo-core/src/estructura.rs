@@ -556,6 +556,23 @@ impl Estructura {
         self.aristas.get(id)
     }
 
+    pub(crate) fn reemplazar_etiqueta_arista(
+        &mut self,
+        id: AristaId,
+        etiqueta: Etiqueta,
+    ) -> Result<(), ErrorEstructura> {
+        if etiqueta.como_str().contains(['\n', '\r']) {
+            return Err(ErrorEstructura::EtiquetaInvalida(
+                etiqueta.como_str().to_string(),
+            ));
+        }
+        self.aristas
+            .get_mut(id)
+            .ok_or(ErrorEstructura::AristaInexistente)?
+            .etiqueta = etiqueta;
+        Ok(())
+    }
+
     /// El id del nodo con ese path exacto, si existe.
     pub fn por_path(&self, path: &BundlePath) -> Option<NodoId> {
         self.indice.get(path).copied()
