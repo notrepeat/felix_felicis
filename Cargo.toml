@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 libc = "0.2"
+fs4 = { version = "=1.1.0", default-features = false, features = ["sync"] }
 slotmap = "1.1.1"
 sha2 = "0.10"
 toml = "1"
