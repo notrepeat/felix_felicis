@@ -12,11 +12,11 @@ use std::path::{Component, Path, PathBuf};
 use super::snapshot::{EntradaSnapshot, ErrorSnapshot};
 
 /// Lee una vez cada archivo y devuelve el inventario ordenado por bytes UTF-8.
-pub fn inventariar_root(raiz: &Path) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
+pub(crate) fn inventariar_root(raiz: &Path) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
     inventariar_root_con_lector(raiz, leer_archivo_regular)
 }
 
-fn inventariar_root_con_lector<F>(
+pub(crate) fn inventariar_root_con_lector<F>(
     raiz: &Path,
     mut leer: F,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>
@@ -116,6 +116,15 @@ fn validar_componentes_sin_enlaces(ruta: &Path) -> Result<Metadata, ErrorSnapsho
     final_metadata.ok_or(ErrorSnapshot::Io)
 }
 
+pub(crate) fn validar_archivo_sin_enlaces(ruta: &Path) -> Result<(), ErrorSnapshot> {
+    let metadata = validar_componentes_sin_enlaces(ruta)?;
+    if metadata.is_file() {
+        Ok(())
+    } else {
+        Err(ErrorSnapshot::TipoNoAdmitido)
+    }
+}
+
 fn es_enlace_o_reparse(metadata: &Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
@@ -124,7 +133,7 @@ fn es_enlace_o_reparse(metadata: &Metadata) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
     #[cfg(not(windows))]
     {

@@ -780,7 +780,7 @@ fn relativa_a_raiz(raiz: &Path, dir: &Path) -> String {
 /// Acepta solo segmentos normales portables y separados con `/`. Se evita
 /// interpretar rutas absolutas, prefijos de unidad, `.` y `..` de manera
 /// distinta entre plataformas.
-fn directorio_layout_seguro(directorio: &str) -> bool {
+pub(crate) fn directorio_layout_seguro(directorio: &str) -> bool {
     if directorio.is_empty() || directorio.contains('\\') || directorio.contains(':') {
         return false;
     }
