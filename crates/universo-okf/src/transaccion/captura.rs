@@ -23,14 +23,17 @@ use super::inventario::{
     inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
     ruta_absoluta_lexica, validar_archivo_sin_enlaces,
 };
+use super::journal::RawTreeDigest;
 use super::snapshot::{
-    EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_token_snapshot,
+    EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_digest_raw_tree,
+    calcular_token_snapshot,
 };
 
 /// Snapshot completo que conserva las entradas raw y sus vistas parseadas.
 /// Sus campos no son mutables desde el exterior y su representación se redacta.
 pub(crate) struct Snapshot {
     token: SnapshotToken,
+    raw_tree_digest: RawTreeDigest,
     entradas: Vec<EntradaSnapshot>,
     manifiesto_raw: Arc<[u8]>,
     invariantes_raw: Arc<[u8]>,
@@ -47,6 +50,7 @@ pub(crate) struct Snapshot {
 /// Solo la capa de transacción puede compararla y luego materializarla.
 pub(crate) struct CapturaSnapshotRaw {
     token: SnapshotToken,
+    raw_tree_digest: RawTreeDigest,
     entradas: Vec<EntradaSnapshot>,
     manifiesto_raw: Arc<[u8]>,
     invariantes_raw: Arc<[u8]>,
@@ -109,6 +113,10 @@ impl Snapshot {
     /// Token opaco; la representación solo se revela mediante `to_hex`.
     pub(crate) fn token(&self) -> SnapshotToken {
         self.token
+    }
+
+    pub(crate) fn raw_tree_digest(&self) -> &RawTreeDigest {
+        &self.raw_tree_digest
     }
 
     /// Entradas raw del root, ordenadas por bytes UTF-8 de la ruta.
@@ -246,6 +254,7 @@ fn capturar_snapshot_raw_anclado_sin_validar(
 ) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
     let entradas = inventariar_root_anclado(raiz.clonar().map_err(|_| ErrorSnapshot::Io)?)?;
     let identidad_root = raiz.identidad_raiz().ok_or(ErrorSnapshot::RaizInvalida)?;
+    let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
     let token = calcular_token_snapshot(
         version_motor,
         policy_id,
@@ -256,6 +265,7 @@ fn capturar_snapshot_raw_anclado_sin_validar(
 
     Ok(CapturaSnapshotRaw {
         token,
+        raw_tree_digest,
         entradas,
         manifiesto_raw: configuracion.manifiesto_raw,
         invariantes_raw: configuracion.invariantes_raw,
@@ -343,9 +353,11 @@ where
         &invariantes.bytes,
         &entradas,
     )?;
+    let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
 
     Ok(CapturaSnapshotRaw {
         token,
+        raw_tree_digest,
         entradas,
         manifiesto_raw: manifiesto.bytes,
         invariantes_raw: invariantes.bytes,
@@ -365,6 +377,7 @@ pub(crate) fn materializar_desde_entradas(
     original: &Snapshot,
     entradas: Vec<EntradaSnapshot>,
 ) -> Result<Snapshot, ErrorSnapshot> {
+    let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
     let token = calcular_token_snapshot(
         original.version_motor(),
         original.policy_id(),
@@ -374,6 +387,7 @@ pub(crate) fn materializar_desde_entradas(
     )?;
     materializar(CapturaSnapshotRaw {
         token,
+        raw_tree_digest,
         entradas,
         manifiesto_raw: Arc::clone(&original.manifiesto_raw),
         invariantes_raw: Arc::clone(&original.invariantes_raw),
@@ -391,6 +405,7 @@ pub(crate) fn materializar_desde_entradas(
 fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
     let CapturaSnapshotRaw {
         token,
+        raw_tree_digest,
         entradas,
         manifiesto_raw,
         invariantes_raw,
@@ -425,6 +440,7 @@ fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
         parsear_programa(invariantes_texto).map_err(|_| ErrorSnapshot::InvariantesInvalidas)?;
     Ok(Snapshot {
         token,
+        raw_tree_digest,
         entradas,
         manifiesto_raw,
         invariantes_raw,

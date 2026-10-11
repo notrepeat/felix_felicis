@@ -22,6 +22,7 @@ use super::captura::{Snapshot, materializar_desde_entradas};
 use super::inventario::{
     inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
 };
+use super::journal::{DirectoryIdentity, RawTreeDigest};
 use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
 use super::snapshot::{EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot};
 
@@ -197,7 +198,9 @@ impl std::error::Error for ErrorLimpiezaStage {}
 pub(crate) struct ReciboStage {
     stage_id: String,
     identidad: Option<IdentidadDirectorio>,
+    identidad_journal: Option<DirectoryIdentity>,
     snapshot: SnapshotToken,
+    raw_tree_digest: RawTreeDigest,
 }
 
 #[allow(dead_code)] // Las capas de journal/recovery consumirán estos campos en U7.
@@ -210,8 +213,16 @@ impl ReciboStage {
         self.identidad
     }
 
+    pub(crate) fn identidad_journal(&self) -> Option<&DirectoryIdentity> {
+        self.identidad_journal.as_ref()
+    }
+
     pub(crate) fn snapshot(&self) -> SnapshotToken {
         self.snapshot
+    }
+
+    pub(crate) fn raw_tree_digest(&self) -> &RawTreeDigest {
+        &self.raw_tree_digest
     }
 }
 
@@ -453,7 +464,9 @@ pub(crate) fn materializar_staging(
         // path-based y no puede afirmar que token e identidad sean del mismo
         // objeto bajo sustitución concurrente.
         identidad: None,
+        identidad_journal: None,
         snapshot: recapturado.token(),
+        raw_tree_digest: recapturado.raw_tree_digest().clone(),
     });
     Ok(stage)
 }
@@ -489,7 +502,9 @@ pub(crate) fn materializar_staging_anclado(
     stage.recibo = Some(ReciboStage {
         stage_id: stage.stage_id.clone(),
         identidad: Some(identidad),
+        identidad_journal: identidad.journal_identity(),
         snapshot: recapturado.token(),
+        raw_tree_digest: recapturado.raw_tree_digest().clone(),
     });
     Ok(stage)
 }

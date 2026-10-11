@@ -7,12 +7,12 @@ use tempfile::{TempDir, tempdir};
 use universo_core::{Atomo, BundlePath, Delta, Etiqueta, Sujeto, construir_candidato};
 
 use crate::serializar::serializar_candidato;
-use crate::transaccion::anclado::DirectorioAnclado;
+use crate::transaccion::anclado::{DirectorioAnclado, IdentidadDirectorio};
 use crate::transaccion::captura::{
     ConfigRawCapturada, Snapshot, capturar_snapshot, capturar_snapshot_con_cas_anclado,
 };
 use crate::transaccion::raiz::UbicacionRaiz;
-use crate::transaccion::snapshot::{SnapshotToken, TipoEntradaSnapshot};
+use crate::transaccion::snapshot::{SnapshotToken, TipoEntradaSnapshot, calcular_digest_raw_tree};
 
 use super::{
     StageAnclado, materializar_staging_anclado, planificar_staging, recargar_staging_anclado,
@@ -122,6 +122,8 @@ fn materializa_bundle_anclado_con_recibo_y_cleanup_explicito() {
     // La captura se toma después de preparar los auxiliares y usa la identidad
     // de root que conservará la capability durante toda la operación.
     let snapshot = fixture.capturar_snapshot_actual();
+    let digest_snapshot = calcular_digest_raw_tree(snapshot.entradas()).unwrap();
+    assert!(snapshot.raw_tree_digest() == &digest_snapshot);
     let identidad_root = fixture.ancla.identidad_raiz();
     let path = BundlePath::nuevo("knowledge/a").unwrap();
     let anterior = Atomo::HasLab {
@@ -147,12 +149,12 @@ fn materializa_bundle_anclado_con_recibo_y_cleanup_explicito() {
     assert_eq!(recibo.stage_id(), stage.stage_id());
     assert_eq!(recibo.identidad(), stage.identidad());
     assert_eq!(recibo.identidad(), stage_reabierto.identidad_raiz());
-    assert_eq!(
-        recibo.snapshot(),
-        recargar_staging_anclado(&snapshot, &plan, &stage)
-            .unwrap_or_else(|_| panic!("el stage recién escrito debe recargar"))
-            .token()
-    );
+    let stage_snapshot = recargar_staging_anclado(&snapshot, &plan, &stage)
+        .unwrap_or_else(|_| panic!("el stage recién escrito debe recargar"));
+    assert!(recibo.raw_tree_digest() == stage_snapshot.raw_tree_digest());
+    let identidad_journal = stage.identidad().map(IdentidadDirectorio::journal_identity);
+    assert!(recibo.identidad_journal() == identidad_journal.as_ref().and_then(Option::as_ref));
+    assert_eq!(recibo.snapshot(), stage_snapshot.token());
     assert_ne!(recibo.snapshot(), root_token);
     assert!(sibling.join("empty-dir").is_dir());
     assert_eq!(

@@ -180,6 +180,19 @@ pub(crate) struct RawTreeDigest {
 }
 
 impl RawTreeDigest {
+    pub(crate) fn from_digest(digest: [u8; 32]) -> Self {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut hex = String::with_capacity(digest.len() * 2);
+        for byte in digest {
+            hex.push(HEX[(byte >> 4) as usize] as char);
+            hex.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        Self {
+            version: RAW_TREE_DIGEST_V1.to_owned(),
+            hex,
+        }
+    }
+
     pub(crate) fn from_hex(hex: impl Into<String>) -> Result<Self, JournalError> {
         let digest = Self {
             version: RAW_TREE_DIGEST_V1.to_owned(),

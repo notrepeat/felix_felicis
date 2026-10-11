@@ -95,6 +95,40 @@ impl fmt::Debug for IdentidadDirectorio {
     }
 }
 
+impl IdentidadDirectorio {
+    pub(crate) fn journal_identity(self) -> Option<super::journal::DirectoryIdentity> {
+        #[cfg(unix)]
+        {
+            Some(super::journal::DirectoryIdentity::unix(
+                self.dispositivo,
+                self.inode,
+            ))
+        }
+        #[cfg(windows)]
+        {
+            Some(super::journal::DirectoryIdentity::windows(
+                self.volumen,
+                file_id_hex(&self.id_archivo),
+            ))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            None
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn file_id_hex(bytes: &[u8; 16]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        hex.push(HEX[(byte >> 4) as usize] as char);
+        hex.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    hex
+}
+
 /// Mantiene abiertos el parent canónico y, si existe, su directorio raíz hijo.
 ///
 /// Cuando recovery deja la raíz ausente, el handle de parent se conserva y

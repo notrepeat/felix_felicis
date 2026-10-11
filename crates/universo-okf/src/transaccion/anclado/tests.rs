@@ -20,6 +20,46 @@ fn root_ausente_conserva_parent_y_se_abre_despues_de_recovery() {
 }
 
 #[test]
+fn file_id_hex_conserva_el_orden_literal_de_bytes_en_minusculas() {
+    assert_eq!(
+        file_id_hex(&[
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ]),
+        "000102030405060708090a0b0c0d0e0f"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn identidad_unix_se_convierte_a_device_e_inode_del_journal() {
+    let identidad = IdentidadDirectorio {
+        dispositivo: 17,
+        inode: 29,
+    };
+    let convertida = identidad.journal_identity().unwrap();
+    assert!(convertida == crate::transaccion::journal::DirectoryIdentity::unix(17, 29));
+}
+
+#[cfg(windows)]
+#[test]
+fn identidad_windows_se_convierte_a_volume_y_file_id_literal() {
+    let identidad = IdentidadDirectorio {
+        volumen: 17,
+        id_archivo: [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ],
+    };
+    let convertida = identidad.journal_identity().unwrap();
+    assert!(matches!(
+        convertida,
+        crate::transaccion::journal::DirectoryIdentity::Windows { volume: 17, file_id }
+            if file_id == "000102030405060708090a0b0c0d0e0f"
+    ));
+}
+
+#[test]
 fn reemplazo_de_root_existente_recibe_otra_identidad() {
     let temp = tempdir().unwrap();
     let ruta = temp.path().join("bundle");

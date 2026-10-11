@@ -8,9 +8,12 @@ use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
+use super::journal::RawTreeDigest;
+
 const DOMAIN: &[u8] = b"FELIX-SNAPSHOT-v1";
 const CAPTURE_POLICY: &[u8] =
     b"files-and-directories-v1;utf8-exact;slash-paths;byte-order-no-unicode-normalization";
+const RAW_TREE_DOMAIN: &[u8] = b"FELIX-RAW-TREE\0v1";
 
 /// Token opaco de identidad de snapshot. La representación está redactada
 /// salvo que el llamador solicite explícitamente [`SnapshotToken::to_hex`].
@@ -224,6 +227,62 @@ pub fn calcular_token_snapshot(
     Ok(SnapshotToken(hash.finalize().into()))
 }
 
+/// Calcula la identidad raw del árbol sin agregar contexto externo ni metadatos.
+///
+/// El framing es independiente del token de snapshot y ordena por bytes UTF-8
+/// de ruta. Se validan las rutas aquí porque la API recibe una slice que puede
+/// haberse construido fuera del inventario del filesystem.
+pub(crate) fn calcular_digest_raw_tree(
+    entradas: &[EntradaSnapshot],
+) -> Result<RawTreeDigest, ErrorSnapshot> {
+    let mut ordenadas: Vec<_> = entradas.iter().collect();
+    ordenadas.sort_by(|a, b| a.ruta.as_bytes().cmp(b.ruta.as_bytes()));
+
+    for (indice, entrada) in ordenadas.iter().enumerate() {
+        validar_ruta_raw_tree(entrada.ruta())?;
+        if indice > 0 && ordenadas[indice - 1].ruta() == entrada.ruta() {
+            return Err(ErrorSnapshot::RutaNoRepresentable);
+        }
+    }
+
+    let mut hash = Sha256::new();
+    hash.update(RAW_TREE_DOMAIN);
+    hash_len(&mut hash, ordenadas.len())?;
+    for entrada in ordenadas {
+        hash.update([match entrada.tipo() {
+            TipoEntradaSnapshot::Directorio => b'D',
+            TipoEntradaSnapshot::Archivo => b'F',
+        }]);
+        hash_len(&mut hash, entrada.ruta().len())?;
+        hash.update(entrada.ruta().as_bytes());
+
+        match entrada.tipo() {
+            TipoEntradaSnapshot::Directorio if entrada.bytes().is_none() => {}
+            TipoEntradaSnapshot::Directorio => return Err(ErrorSnapshot::TipoNoAdmitido),
+            TipoEntradaSnapshot::Archivo => {
+                let contenido = entrada.bytes().ok_or(ErrorSnapshot::TipoNoAdmitido)?;
+                hash_len(&mut hash, contenido.len())?;
+                hash.update(contenido);
+            }
+        }
+    }
+
+    Ok(RawTreeDigest::from_digest(hash.finalize().into()))
+}
+
+fn validar_ruta_raw_tree(ruta: &str) -> Result<(), ErrorSnapshot> {
+    if ruta.is_empty() || ruta.contains('\\') || ruta.contains('\0') {
+        return Err(ErrorSnapshot::RutaNoRepresentable);
+    }
+    if ruta
+        .split('/')
+        .any(|componente| componente.is_empty() || matches!(componente, "." | ".."))
+    {
+        return Err(ErrorSnapshot::RutaNoRepresentable);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +377,78 @@ mod tests {
         assert!(!format!("{error:?}").contains(&base.to_hex()));
         assert!(!format!("{error:?}").contains(&distinto.to_hex()));
         assert!(!format!("{error:?}").contains("MANIFEST-CANARY"));
+    }
+
+    #[test]
+    fn raw_tree_sha256_v1_coincide_con_los_golden_vectors() {
+        let casos = [
+            (
+                Vec::new(),
+                "d8da747cd5c5b098a99bcda58579805009bf4a30330a2f5a68c41a4a8dcaa0d4",
+            ),
+            (
+                vec![EntradaSnapshot::directorio("d")],
+                "930bc81711f7b49fc32d54de8495e56003cf7f15c1988007e847e31ae26e0adf",
+            ),
+            (
+                vec![EntradaSnapshot::archivo("d", Arc::<[u8]>::from([]))],
+                "2c9b5c2fb775b77f46c7af2b3d956688807c6d479e00ddb2fda7ac71bf033647",
+            ),
+            (
+                vec![archivo("a", b"bc")],
+                "e7bdbcc08e6537f54d828106109839223eb40076ba679455138235d077ebb1dd",
+            ),
+            (
+                vec![EntradaSnapshot::archivo(
+                    "n/á.md",
+                    Arc::<[u8]>::from([0x00, 0xff]),
+                )],
+                "abacd0996831e8d000b59ef712ed96c0f056efe1faaa63de241acb5a7b4ce6a2",
+            ),
+            (
+                vec![
+                    EntradaSnapshot::directorio("a"),
+                    EntradaSnapshot::archivo("b", Arc::<[u8]>::from([b'x'])),
+                ],
+                "0c4adc7e2e9ed6a44b253f3a97b4116930c605df4e4aebfa0705ff617bd53e7a",
+            ),
+        ];
+
+        for (entradas, esperado) in casos {
+            let esperado = RawTreeDigest::from_hex(esperado).unwrap();
+            assert!(calcular_digest_raw_tree(&entradas).unwrap() == esperado);
+        }
+    }
+
+    #[test]
+    fn raw_tree_sha256_v1_ordena_bytes_utf8_y_rechaza_rutas_invalidas_o_duplicadas() {
+        let entradas = [archivo("z", b"z"), archivo("a", b"a")];
+        let invertidas = [archivo("a", b"a"), archivo("z", b"z")];
+        assert!(
+            calcular_digest_raw_tree(&entradas).unwrap()
+                == calcular_digest_raw_tree(&invertidas).unwrap()
+        );
+
+        for ruta in [
+            "", "/a", "a/", "a//b", "../a", "a/..", "a/./b", "a\\b", "a\0b",
+        ] {
+            let entrada = archivo(ruta, b"x");
+            assert!(calcular_digest_raw_tree(&[entrada]).is_err());
+        }
+
+        let duplicadas = [EntradaSnapshot::directorio("a"), archivo("a", b"x")];
+        assert!(calcular_digest_raw_tree(&duplicadas).is_err());
+
+        let mayuscula = archivo("A", b"x");
+        let minuscula = archivo("a", b"x");
+        assert!(calcular_digest_raw_tree(&[mayuscula, minuscula]).is_ok());
+
+        let compuesto = archivo("e\u{301}", b"x");
+        let precompuesto = archivo("é", b"x");
+        assert!(
+            calcular_digest_raw_tree(&[compuesto.clone()]).unwrap()
+                != calcular_digest_raw_tree(&[precompuesto.clone()]).unwrap()
+        );
+        assert!(calcular_digest_raw_tree(&[precompuesto, compuesto]).is_ok());
     }
 }
