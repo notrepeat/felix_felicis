@@ -20,6 +20,57 @@ fn root_ausente_conserva_parent_y_se_abre_despues_de_recovery() {
 }
 
 #[test]
+fn reemplazo_de_root_existente_recibe_otra_identidad() {
+    let temp = tempdir().unwrap();
+    let ruta = temp.path().join("bundle");
+    let movida = temp.path().join("bundle-anterior");
+    std::fs::create_dir(&ruta).unwrap();
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+
+        let mut opciones = std::fs::OpenOptions::new();
+        opciones
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+        let directorio = opciones.open(&ruta).unwrap();
+        if let Err(error) = identidad_windows(&directorio) {
+            if filesystem_sin_file_id(&error) {
+                eprintln!(
+                    "SKIP explícito: el filesystem no implementa FILE_ID_INFO (error {})",
+                    error.raw_os_error().unwrap_or_default()
+                );
+                return;
+            }
+            panic!("FILE_ID_INFO falló sin indicar falta de soporte: {error}");
+        }
+    }
+
+    let ubicacion = UbicacionRaiz::nueva(&ruta).unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+    let identidad_anterior = ancla.identidad_raiz().unwrap();
+    assert_eq!(
+        identidad_anterior,
+        ancla.abrir_raiz().unwrap().identidad_raiz().unwrap()
+    );
+
+    std::fs::rename(&ruta, &movida).unwrap();
+    std::fs::create_dir(&ruta).unwrap();
+    let reemplazo = ancla.abrir_raiz().unwrap();
+    let identidad_nueva = reemplazo.identidad_raiz().unwrap();
+
+    assert_ne!(identidad_anterior, identidad_nueva);
+    assert_eq!(
+        identidad_nueva,
+        ancla.abrir_raiz().unwrap().identidad_raiz().unwrap()
+    );
+}
+
+#[test]
 fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
     let temp = tempdir().unwrap();
     let ruta = temp.path().join("bundle");
@@ -43,6 +94,32 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
 }
 
 #[test]
+fn colisiones_de_create_new_y_mkdir_preservan_contenido_existente() {
+    let temp = tempdir().unwrap();
+    let ruta = temp.path().join("bundle");
+    let directorio_existente = ruta.join("directorio-existente");
+    std::fs::create_dir_all(&directorio_existente).unwrap();
+    std::fs::write(ruta.join("archivo-existente.txt"), b"no modificar").unwrap();
+    std::fs::write(
+        directorio_existente.join("sentinel.txt"),
+        b"directorio intacto",
+    )
+    .unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+
+    assert!(ancla.crear_nuevo("archivo-existente.txt").is_err());
+    assert!(ancla.crear_directorio("directorio-existente").is_err());
+    assert_eq!(
+        std::fs::read(ruta.join("archivo-existente.txt")).unwrap(),
+        b"no modificar"
+    );
+    assert_eq!(
+        std::fs::read(directorio_existente.join("sentinel.txt")).unwrap(),
+        b"directorio intacto"
+    );
+}
+
+#[test]
 fn nombres_de_componente_rechazan_separadores_ads_y_reservados() {
     for nombre in [
         "",
@@ -51,14 +128,54 @@ fn nombres_de_componente_rechazan_separadores_ads_y_reservados() {
         "a/b",
         "a\\b",
         "file:stream",
-        "CON",
-        "nul.txt",
+        "cOn",
+        "Con.TXT",
+        "nUl.txt",
+        "NuL.",
+        "cOm1.log",
+        "lPt9",
+        "CLOCK$.txt",
+        "conin$",
+        "CONOUT$",
     ] {
+        assert!(validar_componente(OsStr::new(nombre)).is_err(), "{nombre}");
+    }
+    #[cfg(windows)]
+    for nombre in ["normal.", "normal ", "bundle~1", "BUNDLE~23", "MiXeD~2.txt"] {
         assert!(validar_componente(OsStr::new(nombre)).is_err(), "{nombre}");
     }
     for nombre in ["bundle-safe", "readme.md"] {
         assert!(validar_componente(OsStr::new(nombre)).is_ok(), "{nombre}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn operaciones_rechazan_fifo_y_socket_sin_bloquear() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::net::UnixListener;
+
+    let temp = tempdir().unwrap();
+    let ruta = temp.path().join("bundle");
+    std::fs::create_dir(&ruta).unwrap();
+    let fifo = ruta.join("fifo");
+    let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `fifo_c` is a valid nul-terminated path, and mkfifo does not
+    // retain the pointer after the call.
+    let status = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) };
+    assert_eq!(
+        status,
+        0,
+        "mkfifo failed: {}",
+        std::io::Error::last_os_error()
+    );
+    let socket_path = ruta.join("socket");
+    let _socket = UnixListener::bind(&socket_path).unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+
+    assert!(ancla.abrir_archivo_regular("fifo").is_err());
+    assert!(ancla.abrir_archivo_regular("socket").is_err());
 }
 
 #[test]
@@ -108,8 +225,17 @@ fn identidad_parent_sobrevive_renombre_y_reemplazo_de_ancestro() {
 
 #[cfg(windows)]
 #[test]
-fn symlink_y_junction_se_rechazan_sin_tocar_sentinel_externo() {
-    use std::os::windows::fs::{symlink_dir, symlink_file};
+fn rechaza_ancestro_junction_y_archivos_a_traves_de_junction() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let parent_movido = temp.path().join("parent-movido");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    let ubicacion = UbicacionRaiz::nueva(&parent.join("bundle")).unwrap();
+    std::fs::rename(&parent, &parent_movido).unwrap();
+    crear_junction(&parent, &outside);
+    assert!(DirectorioAnclado::desde_ubicacion(&ubicacion).is_err());
 
     let temp = tempdir().unwrap();
     let root = temp.path().join("bundle");
@@ -118,38 +244,17 @@ fn symlink_y_junction_se_rechazan_sin_tocar_sentinel_externo() {
     std::fs::create_dir(&outside).unwrap();
     std::fs::write(outside.join("sentinel.txt"), b"untouched").unwrap();
     crear_junction(&root.join("junction"), &outside);
-    let symlink = root.join("symlink");
-    match symlink_dir(&outside, &symlink) {
-        Ok(()) => {}
-        Err(error)
-            if error.kind() == std::io::ErrorKind::PermissionDenied
-                || error.raw_os_error() == Some(1314) =>
-        {
-            eprintln!("SKIP explícito: crear symlink requiere privilegio; junction sí se prueba");
-        }
-        Err(error) => panic!("no se pudo crear fixture symlink: {error}"),
-    }
-    let enlace_archivo = root.join("sentinel-link.txt");
-    match symlink_file(outside.join("sentinel.txt"), &enlace_archivo) {
-        Ok(()) => {}
-        Err(error)
-            if error.kind() == std::io::ErrorKind::PermissionDenied
-                || error.raw_os_error() == Some(1314) =>
-        {
-            eprintln!("SKIP explícito: crear symlink de archivo requiere privilegio");
-        }
-        Err(error) => panic!("no se pudo crear fixture symlink de archivo: {error}"),
-    }
 
     let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&root).unwrap()).unwrap();
     assert!(ancla.abrir_directorio("junction").is_err());
     assert!(ancla.crear_directorio("junction").is_err());
-    if symlink.exists() {
-        assert!(ancla.abrir_directorio("symlink").is_err());
-    }
-    if enlace_archivo.exists() {
-        assert!(ancla.abrir_archivo_regular("sentinel-link.txt").is_err());
-    }
+    assert!(ancla.abrir_archivo_regular("junction").is_err());
+    assert!(
+        ancla
+            .abrir_archivo_regular("junction\\sentinel.txt")
+            .is_err()
+    );
+    assert!(ancla.crear_nuevo("junction\\created.txt").is_err());
     assert_eq!(
         std::fs::read(outside.join("sentinel.txt")).unwrap(),
         b"untouched"

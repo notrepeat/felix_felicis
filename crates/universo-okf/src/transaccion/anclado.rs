@@ -5,6 +5,7 @@
 //! devueltos; no expone rename, unlink ni cleanup.
 
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io;
 #[cfg(windows)]
@@ -28,16 +29,22 @@ pub(crate) enum ErrorDirectorioAnclado {
 }
 
 /// Identidad obtenida de metadata de un handle abierto, no de una ruta.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IdentidadDirectorio {
     #[cfg(unix)]
     dispositivo: u64,
     #[cfg(unix)]
     inode: u64,
     #[cfg(windows)]
-    volumen: u32,
+    volumen: u64,
     #[cfg(windows)]
-    id_archivo: u64,
+    id_archivo: [u8; 16],
+}
+
+impl fmt::Debug for IdentidadDirectorio {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("IdentidadDirectorio([redacted])")
+    }
 }
 
 /// Mantiene abiertos el parent canónico y, si existe, su directorio raíz hijo.
@@ -266,27 +273,44 @@ fn identidad_desde_metadata(
     }
     #[cfg(windows)]
     {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::HANDLE;
-        use windows_sys::Win32::Storage::FileSystem::{
-            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-        };
-
-        let mut informacion = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: `handle` stays open for this synchronous query, and
-        // `informacion` is an aligned, writable buffer of the documented type.
-        let exito = unsafe {
-            GetFileInformationByHandle(handle.as_raw_handle() as HANDLE, &mut informacion)
-        };
-        if exito == 0 {
-            return Err(mapear_io(io::Error::last_os_error()));
-        }
-        Ok(IdentidadDirectorio {
-            volumen: informacion.dwVolumeSerialNumber,
-            id_archivo: (u64::from(informacion.nFileIndexHigh) << 32)
-                | u64::from(informacion.nFileIndexLow),
-        })
+        identidad_windows(handle).map_err(mapear_io)
     }
+}
+
+#[cfg(windows)]
+fn identidad_windows(handle: &File) -> io::Result<IdentidadDirectorio> {
+    use std::mem::size_of;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+
+    let mut informacion = FILE_ID_INFO::default();
+    // SAFETY: `handle` stays open for this synchronous query, and `informacion`
+    // is an aligned, writable buffer sized for FILE_ID_INFO as required by the API.
+    let exito = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle() as HANDLE,
+            FileIdInfo,
+            (&mut informacion as *mut FILE_ID_INFO).cast(),
+            size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if exito == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(IdentidadDirectorio {
+        volumen: informacion.VolumeSerialNumber,
+        id_archivo: informacion.FileId.Identifier,
+    })
+}
+
+#[cfg(windows)]
+fn filesystem_sin_file_id(error: &io::Error) -> bool {
+    // These Win32 errors explicitly indicate that this filesystem/driver does
+    // not implement the FileIdInfo query. Other failures must remain visible.
+    matches!(error.raw_os_error(), Some(1 | 50))
 }
 
 fn mapear_io(error: io::Error) -> ErrorDirectorioAnclado {
