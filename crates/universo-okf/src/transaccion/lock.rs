@@ -98,6 +98,17 @@ impl LockEscritura {
         super::anclado::renombrar::EspacioTransaccionalAnclado::desde_lock(self)
     }
 
+    /// Crea una capability interna para el temporal singleton del journal.
+    #[allow(dead_code)] // El writer del journal la consume en la siguiente unidad.
+    pub(crate) fn journal_temporal_anclado(
+        &mut self,
+    ) -> Result<
+        super::anclado::journal_temporal::JournalTemporalAnclado<'_>,
+        super::anclado::journal_temporal::ErrorJournalTemporal,
+    > {
+        super::anclado::journal_temporal::JournalTemporalAnclado::desde_lock(self)
+    }
+
     pub(super) fn ubicacion(&self) -> &UbicacionRaiz {
         &self.ubicacion
     }

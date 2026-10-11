@@ -19,6 +19,7 @@ use super::raiz::{UbicacionRaiz, validar_basename_prospectivo};
 
 mod abrir;
 mod clasificar;
+pub(crate) mod journal_temporal;
 mod limpieza;
 mod operaciones;
 pub(crate) mod renombrar;
@@ -501,6 +502,8 @@ fn derechos_parent_transaccional() -> u32 {
 
 fn abrir_directorio_absoluto(ruta: &Path) -> Result<File, ErrorDirectorioAnclado> {
     #[cfg(windows)]
+    // Si el parent es raíz de volumen/share y su ACL niega estos derechos, se
+    // propaga el error; no se reintenta con una ruta sin anclar.
     let volumen = raiz_parent_windows(ruta)?;
 
     let mut nombres = Vec::new();

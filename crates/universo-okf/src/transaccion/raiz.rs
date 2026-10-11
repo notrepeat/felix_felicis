@@ -138,6 +138,13 @@ impl UbicacionRaiz {
         RutaJournal(self.ruta_sibling(".felix.journal"))
     }
 
+    pub(super) fn nombre_journal_temporal(&self) -> OsString {
+        let mut nombre = OsString::from(".");
+        nombre.push(&self.basename);
+        nombre.push(".felix.journal.tmp");
+        nombre
+    }
+
     fn ruta_sibling(&self, sufijo: &str) -> PathBuf {
         self.ruta_sibling_os(std::ffi::OsStr::new(sufijo))
     }
