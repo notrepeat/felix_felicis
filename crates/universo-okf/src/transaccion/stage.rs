@@ -3,6 +3,7 @@
 //! conservan identidad exacta y sensible a case, incluidos sus bytes Unicode.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -12,8 +13,11 @@ use universo_core::{Anexo, BundlePath, Candidato, Estructura};
 
 use crate::serializar::DocumentoCandidato;
 
+use super::anclado::{DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio};
 use super::captura::{Snapshot, materializar_desde_entradas};
-use super::inventario::{inventariar_root_con_lector, leer_archivo_regular};
+use super::inventario::{
+    inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
+};
 use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
 use super::snapshot::{EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot};
 
@@ -76,6 +80,7 @@ enum CodigoEscrituraStage {
     TipoNoAdmitido,
     ConflictoEntrada,
     ColisionesAgotadas,
+    RaizInconsistente,
     Snapshot(ErrorSnapshot),
     InventarioInconsistente,
     CandidatoInconsistente,
@@ -92,6 +97,7 @@ impl CodigoEscrituraStage {
             Self::TipoNoAdmitido => "stage_entry_type_not_allowed",
             Self::ConflictoEntrada => "stage_create_conflict",
             Self::ColisionesAgotadas => "stage_name_collision",
+            Self::RaizInconsistente => "stage_root_mismatch",
             Self::Snapshot(error) => error.codigo(),
             Self::InventarioInconsistente => "stage_inventory_mismatch",
             Self::CandidatoInconsistente => "stage_candidate_mismatch",
@@ -108,11 +114,25 @@ pub(crate) struct StagePropio {
     recibo: Option<ReciboStage>,
 }
 
-/// Identidad interna del stage recargado; no implica identidad del objeto
-/// filesystem. U7 aún debe anclar/revalidar handles antes de publicar.
+/// Sibling stage cuyo parent y directorio se mantienen abiertos desde su
+/// creación relativa al handle del root.
+///
+/// U7 debe usarlo bajo el mismo `LockGuard` desde recovery hasta cleanup y
+/// revalidar identidad antes de cualquier publicación. Esta unidad no mueve
+/// ni elimina el directorio.
+pub(crate) struct StageAnclado {
+    directorio: DirectorioAnclado,
+    componente: OsString,
+    stage_id: String,
+    identidad: IdentidadDirectorio,
+    recibo: Option<ReciboStage>,
+}
+
+/// Identidad interna del objeto stage y del inventario raw recargado.
 #[allow(dead_code)] // El journal/commit consume identidad y token en U7.
 pub(crate) struct ReciboStage {
     stage_id: String,
+    identidad: Option<IdentidadDirectorio>,
     snapshot: SnapshotToken,
 }
 
@@ -120,6 +140,10 @@ pub(crate) struct ReciboStage {
 impl ReciboStage {
     pub(crate) fn stage_id(&self) -> &str {
         &self.stage_id
+    }
+
+    pub(crate) fn identidad(&self) -> Option<IdentidadDirectorio> {
+        self.identidad
     }
 
     pub(crate) fn snapshot(&self) -> SnapshotToken {
@@ -136,6 +160,37 @@ impl fmt::Debug for ReciboStage {
 impl fmt::Display for ReciboStage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("[stage receipt redacted]")
+    }
+}
+
+#[allow(dead_code)] // U7 consumirá la capability anclada para publicar/recuperar.
+impl StageAnclado {
+    pub(crate) fn stage_id(&self) -> &str {
+        &self.stage_id
+    }
+
+    pub(crate) fn componente(&self) -> &std::ffi::OsStr {
+        &self.componente
+    }
+
+    pub(crate) fn identidad(&self) -> IdentidadDirectorio {
+        self.identidad
+    }
+
+    pub(crate) fn recibo(&self) -> Option<&ReciboStage> {
+        self.recibo.as_ref()
+    }
+
+    fn directorio_clonado(&self) -> Result<DirectorioAnclado, CodigoEscrituraStage> {
+        self.directorio
+            .clonar()
+            .map_err(mapear_error_directorio_stage)
+    }
+}
+
+impl fmt::Debug for StageAnclado {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("StageAnclado { .. }")
     }
 }
 
@@ -166,6 +221,7 @@ impl fmt::Debug for StagePropio {
 pub(crate) struct ErrorEscrituraStage {
     codigo: CodigoEscrituraStage,
     stage_parcial: Option<StagePropio>,
+    stage_anclado_parcial: Option<StageAnclado>,
 }
 
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
@@ -178,10 +234,15 @@ impl ErrorEscrituraStage {
         self.stage_parcial.as_ref()
     }
 
+    pub(crate) fn stage_anclado_parcial(&self) -> Option<&StageAnclado> {
+        self.stage_anclado_parcial.as_ref()
+    }
+
     fn nuevo(codigo: CodigoEscrituraStage) -> Self {
         Self {
             codigo,
             stage_parcial: None,
+            stage_anclado_parcial: None,
         }
     }
 }
@@ -277,13 +338,229 @@ pub(crate) fn materializar_staging(
         return Err(ErrorEscrituraStage {
             codigo: CodigoEscrituraStage::CandidatoInconsistente,
             stage_parcial: Some(stage),
+            stage_anclado_parcial: None,
         });
     }
     stage.recibo = Some(ReciboStage {
         stage_id: stage.stage_id.clone(),
+        // Esta ruta es solo para simulación/tests. Su inventario sigue siendo
+        // path-based y no puede afirmar que token e identidad sean del mismo
+        // objeto bajo sustitución concurrente.
+        identidad: None,
         snapshot: recapturado.token(),
     });
     Ok(stage)
+}
+
+/// Materializa y valida el sibling stage usando solo la capability del root
+/// anclado. U7 debe adquirir y conservar el mismo `LockEscritura` desde
+/// recovery hasta terminar publicación y cleanup. El lock es advisory y solo
+/// coordina escritores Felix cooperantes; no defiende contra otro proceso que
+/// pueda mutar el parent durante el `mkdirat`/`openat` de Unix.
+#[allow(dead_code)] // Se integra a apply bajo lock en U7.
+pub(crate) fn materializar_staging_anclado(
+    raiz: &DirectorioAnclado,
+    snapshot: &Snapshot,
+    plan: &PlanStaging,
+    candidato: &Candidato,
+) -> Result<StageAnclado, ErrorEscrituraStage> {
+    let (mut stage, recapturado) =
+        materializar_staging_anclado_y_recargar_con(raiz, snapshot, plan, generar_id_stage)?;
+    if validar_candidato_recargado(snapshot, candidato, &recapturado).is_err() {
+        return Err(ErrorEscrituraStage {
+            codigo: CodigoEscrituraStage::CandidatoInconsistente,
+            stage_parcial: None,
+            stage_anclado_parcial: Some(stage),
+        });
+    }
+    stage.recibo = Some(ReciboStage {
+        stage_id: stage.stage_id.clone(),
+        identidad: Some(stage.identidad),
+        snapshot: recapturado.token(),
+    });
+    Ok(stage)
+}
+
+#[allow(dead_code)] // Se integra a apply/recovery bajo lock en U7.
+fn materializar_staging_anclado_y_recargar_con<G>(
+    raiz: &DirectorioAnclado,
+    snapshot: &Snapshot,
+    plan: &PlanStaging,
+    siguiente_id: G,
+) -> Result<(StageAnclado, Snapshot), ErrorEscrituraStage>
+where
+    G: FnMut() -> Result<String, CodigoEscrituraStage>,
+{
+    let stage = crear_staging_anclado_con(raiz, snapshot, plan, siguiente_id)?;
+    match recargar_staging_anclado(snapshot, plan, &stage) {
+        Ok(recapturado) => Ok((stage, recapturado)),
+        Err(codigo) => Err(ErrorEscrituraStage {
+            codigo,
+            stage_parcial: None,
+            stage_anclado_parcial: Some(stage),
+        }),
+    }
+}
+
+#[allow(dead_code)] // Seam de creación usado por las pruebas de handles U6.
+fn crear_staging_anclado_con<G>(
+    raiz: &DirectorioAnclado,
+    snapshot: &Snapshot,
+    plan: &PlanStaging,
+    mut siguiente_id: G,
+) -> Result<StageAnclado, ErrorEscrituraStage>
+where
+    G: FnMut() -> Result<String, CodigoEscrituraStage>,
+{
+    validar_plan_para_escritura(plan).map_err(ErrorEscrituraStage::nuevo)?;
+    if raiz.identidad_raiz().is_none() || snapshot.identidad_root() != raiz.identidad_raiz() {
+        return Err(ErrorEscrituraStage::nuevo(
+            CodigoEscrituraStage::RaizInconsistente,
+        ));
+    }
+
+    let stage = crear_stage_anclado_unico(raiz, &mut siguiente_id)?;
+    if let Err(codigo) = escribir_plan_en_stage_anclado(&stage, plan) {
+        return Err(ErrorEscrituraStage {
+            codigo,
+            stage_parcial: None,
+            stage_anclado_parcial: Some(stage),
+        });
+    }
+    Ok(stage)
+}
+
+#[allow(dead_code)] // Se integra a apply/recovery bajo lock en U7.
+fn crear_stage_anclado_unico<G>(
+    raiz: &DirectorioAnclado,
+    siguiente_id: &mut G,
+) -> Result<StageAnclado, ErrorEscrituraStage>
+where
+    G: FnMut() -> Result<String, CodigoEscrituraStage>,
+{
+    for _ in 0..INTENTOS_STAGE {
+        let stage_id = siguiente_id().map_err(ErrorEscrituraStage::nuevo)?;
+        match raiz.crear_stage_sibling(&stage_id) {
+            Ok((directorio, componente)) => {
+                let identidad = directorio
+                    .identidad_raiz()
+                    .ok_or_else(|| ErrorEscrituraStage::nuevo(CodigoEscrituraStage::Io))?;
+                return Ok(StageAnclado {
+                    directorio,
+                    componente,
+                    stage_id,
+                    identidad,
+                    recibo: None,
+                });
+            }
+            Err(ErrorDirectorioAnclado::EntradaExistente) => {}
+            Err(error) => {
+                return Err(ErrorEscrituraStage::nuevo(mapear_error_directorio_stage(
+                    error,
+                )));
+            }
+        }
+    }
+    Err(ErrorEscrituraStage::nuevo(
+        CodigoEscrituraStage::ColisionesAgotadas,
+    ))
+}
+
+#[allow(dead_code)] // Se integra a apply bajo lock en U7.
+fn escribir_plan_en_stage_anclado(
+    stage: &StageAnclado,
+    plan: &PlanStaging,
+) -> Result<(), CodigoEscrituraStage> {
+    let mut directorios = plan.directorios.iter().collect::<Vec<_>>();
+    directorios.sort_by(|a, b| {
+        a.matches('/')
+            .count()
+            .cmp(&b.matches('/').count())
+            .then_with(|| a.as_bytes().cmp(b.as_bytes()))
+    });
+    for ruta in directorios {
+        let mut actual = stage.directorio_clonado()?;
+        let mut componentes = ruta.split('/').peekable();
+        while let Some(componente) = componentes.next() {
+            actual = if componentes.peek().is_some() {
+                actual.abrir_directorio(componente)
+            } else {
+                actual.crear_directorio(componente)
+            }
+            .map_err(mapear_error_directorio_stage)?;
+        }
+    }
+
+    for entrada in &plan.entradas_objetivo {
+        let bytes = match entrada.fuente {
+            FuenteEntradaStage::Directorio => continue,
+            FuenteEntradaStage::Auxiliar(indice) => plan
+                .auxiliares
+                .get(indice)
+                .and_then(EntradaSnapshot::bytes)
+                .ok_or(CodigoEscrituraStage::Plan(
+                    ErrorPlanStaging::SnapshotInconsistente,
+                ))?,
+            FuenteEntradaStage::DocumentoNuevo(indice) => plan
+                .managed_new
+                .get(indice)
+                .ok_or(CodigoEscrituraStage::Plan(
+                    ErrorPlanStaging::SnapshotInconsistente,
+                ))?
+                .contenido()
+                .as_bytes(),
+        };
+        let (padres, nombre) = entrada
+            .ruta
+            .rsplit_once('/')
+            .map_or((None, entrada.ruta.as_str()), |(padres, nombre)| {
+                (Some(padres), nombre)
+            });
+        let mut directorio = stage.directorio_clonado()?;
+        if let Some(padres) = padres {
+            for componente in padres.split('/') {
+                directorio = directorio
+                    .abrir_directorio(componente)
+                    .map_err(mapear_error_directorio_stage)?;
+            }
+        }
+        let mut archivo = directorio
+            .crear_nuevo(nombre)
+            .map_err(mapear_error_directorio_stage)?;
+        archivo
+            .write_all(bytes)
+            .map_err(|_| CodigoEscrituraStage::Io)?;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // Se integra a apply bajo lock en U7.
+fn recargar_staging_anclado(
+    snapshot: &Snapshot,
+    plan: &PlanStaging,
+    stage: &StageAnclado,
+) -> Result<Snapshot, CodigoEscrituraStage> {
+    let recapturadas =
+        inventariar_root_anclado(stage.directorio_clonado()?).map_err(mapear_error_snapshot)?;
+    let objetivo = inventario_objetivo(plan)?;
+    if !inventarios_iguales(&recapturadas, &objetivo) {
+        return Err(CodigoEscrituraStage::InventarioInconsistente);
+    }
+    materializar_desde_entradas(snapshot, recapturadas).map_err(mapear_error_snapshot)
+}
+
+fn mapear_error_directorio_stage(error: ErrorDirectorioAnclado) -> CodigoEscrituraStage {
+    match error {
+        ErrorDirectorioAnclado::EnlaceNoPermitido => CodigoEscrituraStage::EnlaceNoPermitido,
+        ErrorDirectorioAnclado::TipoNoAdmitido => CodigoEscrituraStage::TipoNoAdmitido,
+        ErrorDirectorioAnclado::ComponenteInvalido => {
+            CodigoEscrituraStage::Plan(ErrorPlanStaging::RutaInvalida)
+        }
+        ErrorDirectorioAnclado::EntradaExistente => CodigoEscrituraStage::ConflictoEntrada,
+        ErrorDirectorioAnclado::Io
+        | ErrorDirectorioAnclado::RaizAusente
+        | ErrorDirectorioAnclado::EntradaAusente => CodigoEscrituraStage::Io,
+    }
 }
 
 fn validar_candidato_recargado(
@@ -390,6 +667,7 @@ where
         Err(codigo) => Err(ErrorEscrituraStage {
             codigo,
             stage_parcial: Some(stage),
+            stage_anclado_parcial: None,
         }),
     }
 }
@@ -519,6 +797,7 @@ where
         return Err(ErrorEscrituraStage {
             codigo,
             stage_parcial: Some(stage),
+            stage_anclado_parcial: None,
         });
     }
     Ok(stage)
@@ -548,6 +827,7 @@ where
                     return Err(ErrorEscrituraStage {
                         codigo,
                         stage_parcial: Some(stage),
+                        stage_anclado_parcial: None,
                     });
                 }
                 return Ok(stage);
