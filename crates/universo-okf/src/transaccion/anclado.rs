@@ -644,3 +644,11 @@ mod renombrar_observacion_tests;
 #[cfg(test)]
 #[path = "anclado/renombrar_operacion_tests.rs"]
 mod renombrar_operacion_tests;
+
+#[cfg(test)]
+#[path = "anclado/renombrar_test_support.rs"]
+mod renombrar_test_support;
+
+#[cfg(test)]
+#[path = "anclado/renombrar_destino_tests.rs"]
+mod renombrar_destino_tests;
