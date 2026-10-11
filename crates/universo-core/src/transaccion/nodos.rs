@@ -118,9 +118,7 @@ pub(super) fn preparar(
 
         if let Some(etiqueta_nueva) = solicitud.agregar.first() {
             if etiqueta_nueva != etiqueta_actual {
-                if etiqueta_nueva.como_str().contains(['\n', '\r']) {
-                    fallos.agregar_haslab = true;
-                } else if !retiro_exacto {
+                if etiqueta_nueva.como_str().contains(['\n', '\r']) || !retiro_exacto {
                     fallos.agregar_haslab = true;
                 } else {
                     cambios.etiquetas.push((nodo, etiqueta_nueva.clone()));
