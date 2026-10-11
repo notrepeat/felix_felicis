@@ -203,7 +203,9 @@ fn resultado_con_limpieza_confirmada(
         EstadoLimpiezaPublicacion::Pendiente => {
             Ok(ResultadoPublicacionJournal::PublicadoTemporalPendiente)
         }
-        EstadoLimpiezaPublicacion::Conflicto(error) => Err(error),
+        EstadoLimpiezaPublicacion::Conflicto(error) => Ok(
+            ResultadoPublicacionJournal::PublicadoTemporalEnConflicto(error),
+        ),
         EstadoLimpiezaPublicacion::Indeterminada => Ok(ResultadoPublicacionJournal::Indeterminado),
     }
 }

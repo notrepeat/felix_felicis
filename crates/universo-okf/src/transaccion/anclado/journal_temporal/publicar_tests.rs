@@ -341,6 +341,85 @@ fn error_de_publicacion_con_observaciones_inciertas_preserva_evidencia() {
     assert!(!journal.exists());
 }
 
+#[test]
+fn conflictos_de_cleanup_confirmado_y_limpieza_indeterminada_son_outcomes() {
+    let conflicto = ErrorJournalAnclado::IdentityMismatch;
+    assert_eq!(
+        super::resultado_con_limpieza_confirmada(
+            super::EstadoLimpiezaPublicacion::Conflicto(conflicto),
+            ResultadoPublicacionJournal::Publicado,
+        ),
+        Ok(ResultadoPublicacionJournal::PublicadoTemporalEnConflicto(
+            conflicto
+        ))
+    );
+    assert_eq!(
+        super::resultado_con_limpieza_confirmada(
+            super::EstadoLimpiezaPublicacion::Indeterminada,
+            ResultadoPublicacionJournal::YaPublicado,
+        ),
+        Ok(ResultadoPublicacionJournal::Indeterminado)
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn el_mismo_error_es_fallo_antes_del_commit_y_outcome_despues() {
+    let error = ErrorJournalAnclado::IdentityMismatch;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal = nombre_journal(&root);
+    let bytes = b"expected source before commit";
+    let esperada = capability.crear_nuevo(bytes).unwrap();
+    assert_eq!(
+        capability.resolver_error_publicacion(esperada, error),
+        Err(error)
+    );
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+    assert!(!journal.exists());
+    drop(lock);
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal = nombre_journal(&root);
+    let bytes = b"canonical commit is already confirmed";
+    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
+    super::publicar_plataforma(
+        &capability.parent,
+        &capability.nombre,
+        &capability.nombre_journal,
+        &fuente,
+    )
+    .unwrap();
+    if temporal.exists() {
+        fs::remove_file(&temporal).unwrap();
+    }
+    fs::write(&temporal, b"replacement temp").unwrap();
+
+    let outcome = capability.resolver_error_publicacion(esperada, error);
+    assert_eq!(
+        outcome,
+        Ok(ResultadoPublicacionJournal::PublicadoTemporalEnConflicto(
+            error
+        ))
+    );
+    let debug = format!("{outcome:?}");
+    assert!(debug.contains("journal_identity_mismatch"));
+    assert!(!debug.contains(temp.path().to_string_lossy().as_ref()));
+    assert_eq!(identidad(&journal), esperada);
+    assert_eq!(fs::read(&journal).unwrap(), bytes);
+    assert_eq!(fs::read(&temporal).unwrap(), b"replacement temp");
+}
+
 #[cfg(windows)]
 #[test]
 fn reintento_despues_de_rename_ve_canonico_esperado() {
