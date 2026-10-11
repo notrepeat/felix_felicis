@@ -69,6 +69,24 @@ impl Journal {
         self.state.advance(next)
     }
 
+    pub(crate) fn validate_successor(&self, candidate: &Self) -> Result<(), JournalError> {
+        let next = self
+            .state
+            .successor()
+            .ok_or(JournalError::InvalidTransition)?;
+        if candidate.state != next {
+            return Err(JournalError::InvalidTransition);
+        }
+
+        let mut expected = self.clone();
+        expected.advance(next)?;
+        if &expected == candidate {
+            Ok(())
+        } else {
+            Err(JournalError::InvalidTransition)
+        }
+    }
+
     pub(crate) fn encode(&self) -> Result<Vec<u8>, JournalError> {
         codec::encode(self)
     }
@@ -107,6 +125,15 @@ pub(crate) enum JournalState {
 }
 
 impl JournalState {
+    fn successor(self) -> Option<Self> {
+        match self {
+            Self::Prepared => Some(Self::BackupReady),
+            Self::BackupReady => Some(Self::Installed),
+            Self::Installed => Some(Self::Committed),
+            Self::Committed => None,
+        }
+    }
+
     fn advance(&mut self, next: Self) -> Result<(), JournalError> {
         if *self == next {
             return Ok(());
@@ -340,6 +367,9 @@ mod tests {
 
     #[test]
     fn state_transitions_are_sequential_monotonic_and_idempotent() {
+        let mut journal = record();
+        assert_eq!(journal.advance(JournalState::Prepared), Ok(()));
+
         let mut state = JournalState::Prepared;
         assert!(state.advance(JournalState::Installed).is_err());
         for next in [
@@ -351,5 +381,84 @@ mod tests {
             assert_eq!(state.advance(next), Ok(()));
         }
         assert!(state.advance(JournalState::Prepared).is_err());
+    }
+
+    #[test]
+    fn record_successor_validation_accepts_only_the_exact_next_state() {
+        let states = [
+            JournalState::Prepared,
+            JournalState::BackupReady,
+            JournalState::Installed,
+            JournalState::Committed,
+        ];
+        let mut accepted = 0;
+
+        for old_state in states {
+            for candidate_state in states {
+                let mut old = record();
+                old.state = old_state;
+                let mut candidate = old.clone();
+                candidate.state = candidate_state;
+                let expected = matches!(
+                    (old_state, candidate_state),
+                    (JournalState::Prepared, JournalState::BackupReady)
+                        | (JournalState::BackupReady, JournalState::Installed)
+                        | (JournalState::Installed, JournalState::Committed)
+                );
+
+                let result = old.validate_successor(&candidate);
+                assert_eq!(
+                    result.is_ok(),
+                    expected,
+                    "{old_state:?} -> {candidate_state:?}"
+                );
+                if expected {
+                    accepted += 1;
+                } else {
+                    assert_eq!(result, Err(JournalError::InvalidTransition));
+                }
+            }
+        }
+
+        assert_eq!(accepted, 3);
+    }
+
+    #[test]
+    fn record_successor_validation_rejects_identity_and_fingerprint_mutations() {
+        fn exact_next(old: &Journal) -> Journal {
+            let mut candidate = old.clone();
+            let next = old.state.successor().unwrap();
+            candidate.advance(next).unwrap();
+            candidate
+        }
+
+        fn assert_rejected(old: &Journal, candidate: &Journal) {
+            let error = old.validate_successor(candidate).unwrap_err();
+            assert_eq!(error, JournalError::InvalidTransition);
+            assert_eq!(format!("{error:?}"), "journal_transition_invalid");
+            assert_eq!(format!("{error}"), "journal_transition_invalid");
+        }
+
+        let old = record();
+
+        let mut candidate = exact_next(&old);
+        candidate.transaction_id = "f123456789abcdef0123456789abcdef".to_owned();
+        assert_rejected(&old, &candidate);
+
+        let mut candidate = exact_next(&old);
+        candidate.parent = identity(99);
+        assert_rejected(&old, &candidate);
+
+        let mut candidate = exact_next(&old);
+        candidate.old = fingerprint(2, 'c');
+        assert_rejected(&old, &candidate);
+
+        let mut candidate = exact_next(&old);
+        candidate.new = fingerprint(3, 'd');
+        assert_rejected(&old, &candidate);
+
+        let mut candidate = exact_next(&old);
+        candidate.schema = "private-schema-canary".to_owned();
+        assert_rejected(&old, &candidate);
     }
 }
