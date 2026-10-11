@@ -3,6 +3,7 @@
 //! que se construyen `universo-okf`, `universo-testkit` y `universo-cli`.
 pub mod anexo;
 pub mod atomos;
+pub mod delta;
 pub mod estructura;
 pub mod evaluador;
 pub mod formula;
@@ -15,6 +16,7 @@ pub mod tipos;
 pub mod veredicto;
 pub use anexo::{Anexo, Entrada};
 pub use atomos::{Atomo, ErrorAtomo, IdArista, Sujeto};
+pub use delta::{Delta, ErrorDelta, LadoDelta};
 pub use estructura::{Arista, ErrorEstructura, Estructura, Nodo};
 pub use evaluador::{
     AsignacionCanonica, ConstructorAtomico, ErrorEvaluacion, ErrorEvaluacionMedida,
