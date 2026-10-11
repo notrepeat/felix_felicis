@@ -73,8 +73,9 @@ impl JournalTemporalAnclado<'_> {
         }
 
         // Reopen both names without following links immediately before rename.
-        // Windows needs the source handle itself for NtSetInformationFile; the
-        // target handle is dropped before that call so it cannot block replace.
+        // The temp's typed record was loaded above; this handle only rechecks
+        // identity. Windows needs it for NtSetInformationFile, so keep its
+        // access metadata-only and drop the target handle before replace.
         let (target, target_id, target_record) = match self.abrir_cargar_canonico() {
             Ok(registro) => registro,
             Err(error) => return precondicion(error),
@@ -89,17 +90,12 @@ impl JournalTemporalAnclado<'_> {
         }
         drop(target);
 
-        let (source, source_id, source_record) = match self.abrir_temporal_para_reemplazo() {
+        let (source, source_id) = match self.abrir_temporal_para_reemplazo() {
             Ok(registro) => registro,
             Err(error) => return precondicion(error),
         };
         if source_id != identidad_temporal_esperada {
             return precondicion(ErrorJournalAnclado::IdentityMismatch);
-        }
-        if source_record != *candidato_esperado {
-            return precondicion(ErrorJournalAnclado::InvalidJournal(
-                JournalError::InvalidTransition,
-            ));
         }
         if let Err(error) = self.validar_parent() {
             return precondicion(error);
@@ -162,10 +158,12 @@ impl JournalTemporalAnclado<'_> {
 
     fn abrir_temporal_para_reemplazo(
         &self,
-    ) -> Result<(File, IdentidadArchivoJournal, Journal), ErrorJournalAnclado> {
+    ) -> Result<(File, IdentidadArchivoJournal), ErrorJournalAnclado> {
         self.validar_parent()?;
         let archivo = super::publicar::abrir_temporal(&self.parent, &self.nombre)?;
-        self.cargar_handle(archivo)
+        validar_archivo_regular(&archivo)?;
+        let identidad = identidad_archivo(&archivo)?;
+        Ok((archivo, identidad))
     }
 
     fn cargar_handle(

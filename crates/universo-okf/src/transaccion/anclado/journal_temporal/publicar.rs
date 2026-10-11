@@ -322,15 +322,21 @@ pub(super) fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, Erro
 pub(super) fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
     use fs_at::os::windows::OpenOptionsExt;
     use std::path::Path;
-    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES, FILE_READ_DATA};
 
     let mut opciones = OpenOptionsAt::default();
     opciones
-        .desired_access(FILE_READ_ATTRIBUTES | FILE_READ_DATA | DELETE)
+        .desired_access(acceso_temporal_publicacion())
         .follow(false);
     opciones
         .open_at(parent, Path::new(nombre))
         .map_err(mapear_error_apertura_temporal)
+}
+
+#[cfg(windows)]
+pub(super) fn acceso_temporal_publicacion() -> u32 {
+    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES};
+
+    FILE_READ_ATTRIBUTES | DELETE
 }
 
 #[cfg(not(any(unix, windows)))]

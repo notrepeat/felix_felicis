@@ -1,5 +1,15 @@
 use super::*;
 
+#[cfg(windows)]
+#[test]
+fn temporal_replacement_handle_requests_only_attributes_and_delete_access() {
+    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES, FILE_READ_DATA};
+
+    let access = super::super::super::publicar::acceso_temporal_publicacion();
+    assert_eq!(access, FILE_READ_ATTRIBUTES | DELETE);
+    assert_eq!(access & FILE_READ_DATA, 0);
+}
+
 #[cfg(unix)]
 #[test]
 fn symlink_canonico_en_conflicto_preserva_destino_y_temporal() {
