@@ -875,6 +875,101 @@ ignorados = ["ignored.md"]
     }
 
     #[test]
+    fn reintenta_colision_con_directorio_no_vacio_sin_alterarlo() {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let colision = ubicacion.stage("occupied-dir").unwrap();
+        fs::create_dir(colision.as_path()).unwrap();
+        fs::write(colision.as_path().join("canary.bin"), b"do not touch").unwrap();
+        let mut ids = ["occupied-dir", "fresh-dir"].into_iter();
+        let mut intentos = 0;
+
+        let stage = crear_stage_unico(&ubicacion, &mut || {
+            intentos += 1;
+            Ok(ids.next().unwrap().to_owned())
+        })
+        .unwrap();
+
+        assert_eq!(intentos, 2);
+        assert_eq!(
+            fs::read(colision.as_path().join("canary.bin")).unwrap(),
+            b"do not touch"
+        );
+        assert!(stage.ruta().is_dir());
+        assert_ne!(stage.ruta(), colision.as_path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reintenta_colision_symlink_sin_seguirla_ni_alterar_destino() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let destino = temp.path().join("target");
+        fs::create_dir(&destino).unwrap();
+        fs::write(destino.join("canary.bin"), b"target untouched").unwrap();
+        let colision = ubicacion.stage("linked").unwrap();
+        symlink(&destino, colision.as_path()).unwrap();
+        let mut ids = ["linked", "fresh-link"].into_iter();
+
+        let stage =
+            crear_stage_unico(&ubicacion, &mut || Ok(ids.next().unwrap().to_owned())).unwrap();
+
+        assert!(
+            fs::symlink_metadata(colision.as_path())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read(destino.join("canary.bin")).unwrap(),
+            b"target untouched"
+        );
+        assert!(stage.ruta().is_dir());
+        assert_ne!(stage.ruta(), colision.as_path());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reintenta_colision_junction_sin_seguirla_ni_alterar_destino() {
+        use std::process::Command;
+
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let destino = temp.path().join("target");
+        fs::create_dir(&destino).unwrap();
+        fs::write(destino.join("canary.bin"), b"target untouched").unwrap();
+        let colision = ubicacion.stage("linked").unwrap();
+        let resultado = Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(colision.as_path())
+            .arg(&destino)
+            .output()
+            .unwrap();
+        assert!(
+            resultado.status.success(),
+            "mklink /J must create a junction"
+        );
+        let mut ids = ["linked", "fresh-link"].into_iter();
+
+        let stage =
+            crear_stage_unico(&ubicacion, &mut || Ok(ids.next().unwrap().to_owned())).unwrap();
+
+        let metadata = fs::symlink_metadata(colision.as_path()).unwrap();
+        assert!(metadata_es_enlace_o_reparse(&metadata));
+        assert_eq!(
+            fs::read(destino.join("canary.bin")).unwrap(),
+            b"target untouched"
+        );
+        assert!(stage.ruta().is_dir());
+        assert_ne!(stage.ruta(), colision.as_path());
+    }
+
+    #[test]
     fn materializa_raw_auxiliares_directorios_vacios_y_documento_junto_a_md_tmp() {
         let temp = tempdir().unwrap();
         let raiz = temp.path().join("bundle");
@@ -884,6 +979,7 @@ ignorados = ["ignored.md"]
             directorio("vacio"),
             directorio("assets"),
             archivo("assets/data.bin", &[0, 255, 17]),
+            archivo("assets/empty.bin", &[]),
             archivo("doc.md.tmp", b"temporary sentinel"),
         ];
         let plan = plan(&entradas, &[], &[documento("doc", "candidate bytes")]).unwrap();
@@ -911,12 +1007,16 @@ ignorados = ["ignored.md"]
             fs::read(stage.ruta().join("assets/data.bin")).unwrap(),
             [0, 255, 17]
         );
+        assert_eq!(
+            fs::read(stage.ruta().join("assets/empty.bin")).unwrap(),
+            b""
+        );
         assert!(stage.ruta().join("vacio").is_dir());
         assert!(!raiz.join("doc.md").exists());
     }
 
     #[test]
-    fn conflicto_create_new_deja_stage_parcial_y_no_cambia_el_hash_del_root() {
+    fn fallo_despues_de_escritura_deja_stage_parcial_y_no_cambia_el_hash_del_root() {
         let (temp, snapshot) = snapshot_minimo();
         let raiz = temp.path().join("bundle");
         let manifiesto = temp.path().join("manifest.toml");
@@ -925,31 +1025,127 @@ ignorados = ["ignored.md"]
         let documentos = [documento("knowledge/new", "candidate")];
         let plan = planificar_staging(&snapshot, &documentos).unwrap();
         let mut ids = ["partial"].into_iter();
+        let mut escrituras = 0;
+        let canario = b"injected create_new conflict";
 
         let error = materializar_staging_con(
             &ubicacion,
             &plan,
             || Ok(ids.next().unwrap().to_owned()),
             |path, bytes| {
-                fs::write(path, b"preexisting stage file").map_err(|_| CodigoEscrituraStage::Io)?;
+                escrituras += 1;
+                if escrituras == 2 {
+                    fs::write(path, canario).map_err(|_| CodigoEscrituraStage::Io)?;
+                }
                 escribir_archivo_nuevo(path, bytes)
             },
         )
         .unwrap_err();
 
+        assert_eq!(escrituras, 2);
         assert_eq!(error.codigo(), "stage_create_conflict");
-        assert!(!format!("{error:?} {error}").contains("partial"));
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for detalle in [&debug, &display] {
+            assert!(!detalle.contains("partial"));
+            assert!(!detalle.contains(temp.path().to_string_lossy().as_ref()));
+            assert!(!detalle.contains("injected create_new conflict"));
+            assert!(!detalle.contains("StagePropio"));
+        }
         let stage = error.stage_parcial().unwrap();
         assert_eq!(
             fs::read(stage.ruta().join("documento.md.tmp")).unwrap(),
-            b"preexisting stage file"
+            b"sentinel"
         );
+        assert_eq!(
+            fs::read(stage.ruta().join("knowledge/new.md")).unwrap(),
+            canario
+        );
+        let stage_debug = format!("{stage:?}");
+        assert!(!stage_debug.contains("partial"));
+        assert!(!stage_debug.contains(temp.path().to_string_lossy().as_ref()));
+        assert!(!stage_debug.contains("injected create_new conflict"));
         assert_eq!(
             snapshot.token(),
             capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1",)
                 .unwrap()
                 .token()
         );
+    }
+
+    #[test]
+    fn dieciseis_colisiones_agotadas_no_tocan_objetos_y_error_es_redactado() {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        fs::create_dir(&raiz).unwrap();
+        fs::write(raiz.join("root.bin"), b"root stays intact").unwrap();
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let mut ids = Vec::new();
+        for indice in 0..INTENTOS_STAGE {
+            let id = format!("collision-{indice}");
+            let ruta = ubicacion.stage(&id).unwrap();
+            fs::create_dir(ruta.as_path()).unwrap();
+            fs::write(ruta.as_path().join("canary.bin"), b"preexisting").unwrap();
+            ids.push(id);
+        }
+        let mut restantes = ids.iter();
+        let plan = plan(&[], &[], &[]).unwrap();
+        let error = materializar_staging_con(
+            &ubicacion,
+            &plan,
+            || Ok(restantes.next().unwrap().clone()),
+            escribir_archivo_nuevo,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_name_collision");
+        assert!(error.stage_parcial().is_none());
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for detalle in [&debug, &display] {
+            assert!(!detalle.contains("collision-"));
+            assert!(!detalle.contains(temp.path().to_string_lossy().as_ref()));
+            assert!(!detalle.contains("preexisting"));
+            assert!(!detalle.contains("StagePropio"));
+        }
+        for id in ids {
+            let ruta = ubicacion.stage(&id).unwrap();
+            assert_eq!(
+                fs::read(ruta.as_path().join("canary.bin")).unwrap(),
+                b"preexisting"
+            );
+        }
+        assert_eq!(
+            fs::read(raiz.join("root.bin")).unwrap(),
+            b"root stays intact"
+        );
+    }
+
+    #[test]
+    fn fallo_del_seam_aleatorio_es_redactado_y_no_crea_stage() {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("root-with-private-name");
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let plan = plan(&[], &[], &[]).unwrap();
+        let error = materializar_staging_con(
+            &ubicacion,
+            &plan,
+            || Err(CodigoEscrituraStage::Aleatorio),
+            escribir_archivo_nuevo,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_random_unavailable");
+        assert!(error.stage_parcial().is_none());
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for detalle in [&debug, &display] {
+            assert!(!detalle.contains(temp.path().to_string_lossy().as_ref()));
+            assert!(!detalle.contains("root-with-private-name"));
+            assert!(!detalle.contains("doc.md.tmp"));
+            assert!(!detalle.contains("StagePropio"));
+        }
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
     }
 
     #[test]
