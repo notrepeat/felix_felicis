@@ -60,6 +60,7 @@ fn manifiesto_prueba() -> Manifiesto {
             directorios: vec!["n".into()],
             sin_iota: vec!["n/libre".into()],
             ignorados: vec!["log.md".into()],
+            parent_key: None,
         },
     }
 }

@@ -121,6 +121,16 @@ pub enum Regla {
     TypeDesconocido,
     /// Falta la entrada `title` del frontmatter.
     TitleAusente,
+    /// La clave configurada para `Parent` aparece más de una vez.
+    ParentDuplicado,
+    /// La referencia `Parent` no es un `BundlePath` lógico válido.
+    ParentInvalido,
+    /// La referencia `Parent` no resuelve a un nodo cargado.
+    ParentNoEncontrado,
+    /// Un nodo declara su propio path como padre.
+    ParentDeSiMismo,
+    /// La relación `Parent` declarada formaría un ciclo.
+    ParentCiclo,
     /// Un ítem de una lista de wikilinks o de mappings está malformado.
     LinkMalformado,
     /// Un `[[wikilink]]` no resuelve a ningún nodo cargado.
@@ -161,6 +171,11 @@ impl std::fmt::Display for Regla {
             Regla::TypeAusente => "TypeAusente",
             Regla::TypeDesconocido => "TypeDesconocido",
             Regla::TitleAusente => "TitleAusente",
+            Regla::ParentDuplicado => "ParentDuplicado",
+            Regla::ParentInvalido => "ParentInvalido",
+            Regla::ParentNoEncontrado => "ParentNoEncontrado",
+            Regla::ParentDeSiMismo => "ParentDeSiMismo",
+            Regla::ParentCiclo => "ParentCiclo",
             Regla::LinkMalformado => "LinkMalformado",
             Regla::TargetColgante => "TargetColgante",
             Regla::StemAmbiguo => "StemAmbiguo",

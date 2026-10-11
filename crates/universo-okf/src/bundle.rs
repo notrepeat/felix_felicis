@@ -16,6 +16,16 @@ struct ArchivoBundle {
     contenido: String,
 }
 
+/// Valor pendiente de la clave optativa que declara el padre de un nodo.
+enum PadreFrontmatter {
+    /// La clave no estaba presente; conserva la inferencia por directorio.
+    InferenciaLegacy,
+    /// La clave estaba presente y vacía; no se infiere un padre.
+    RaizExplicita,
+    /// La clave declara el `BundlePath` lógico exacto del padre.
+    Referencia(BundlePath),
+}
+
 /// Último segmento del path (nombre de archivo con extensión), aceptando
 /// `/` o `\` como separador: mismo criterio que usa `cargar_bundle` para
 /// comparar contra `layout.ignorados`.
@@ -134,11 +144,13 @@ pub fn parsear_bundle(
     struct NodoCargado {
         id: NodoId,
         path: BundlePath,
+        padre_frontmatter: PadreFrontmatter,
         /// Entradas de arista pendientes de resolver (clave, entrada).
         aristas_pendientes: Vec<(String, EntradaCruda)>,
     }
 
     let mut cargados: Vec<NodoCargado> = Vec::new();
+    let parent_key = estructura.manifiesto().layout.parent_key.clone();
 
     for archivo in &resueltos {
         let path_str = archivo.path.como_str().to_string();
@@ -235,6 +247,41 @@ pub fn parsear_bundle(
         };
         let etiqueta = Etiqueta::nuevo(&entrada_title.valor_escalar());
 
+        let padre_frontmatter = if let Some(clave) = parent_key.as_deref() {
+            let mut entradas_padre = documento.entradas.iter().filter(|e| e.clave == clave);
+            let entrada_padre = entradas_padre.next();
+            if entradas_padre.next().is_some() {
+                errores.push(error(
+                    None,
+                    None,
+                    Regla::ParentDuplicado,
+                    "la clave configurada para Parent aparece más de una vez",
+                ));
+                continue;
+            }
+            match entrada_padre {
+                None => PadreFrontmatter::InferenciaLegacy,
+                Some(entrada) => {
+                    let valor = entrada.valor_escalar();
+                    if valor.is_empty() {
+                        PadreFrontmatter::RaizExplicita
+                    } else if let Ok(path) = BundlePath::nuevo(&valor) {
+                        PadreFrontmatter::Referencia(path)
+                    } else {
+                        errores.push(error(
+                            None,
+                            None,
+                            Regla::ParentInvalido,
+                            "la referencia Parent no es un BundlePath lógico válido",
+                        ));
+                        continue;
+                    }
+                }
+            }
+        } else {
+            PadreFrontmatter::InferenciaLegacy
+        };
+
         let id = match estructura.insertar_nodo(archivo.path.clone(), tipo, etiqueta) {
             Ok(id) => id,
             Err(err) => {
@@ -254,6 +301,11 @@ pub fn parsear_bundle(
         let mut aristas_pendientes: Vec<(String, EntradaCruda)> = Vec::new();
         for entrada in &documento.entradas {
             if entrada.clave == "title" {
+                continue;
+            }
+            if parent_key.as_deref() == Some(entrada.clave.as_str()) {
+                // La clave configurada está administrada por el cargador:
+                // se consume y nunca se conserva como passthrough.
                 continue;
             }
             if clave_consumida_retirado.as_deref() == Some(entrada.clave.as_str()) {
@@ -319,6 +371,7 @@ pub fn parsear_bundle(
         cargados.push(NodoCargado {
             id,
             path: archivo.path.clone(),
+            padre_frontmatter,
             aristas_pendientes,
         });
     }
@@ -422,7 +475,8 @@ pub fn parsear_bundle(
         }
     }
 
-    // Paso 7: ι, nodo padre implícito por directorio.
+    // Paso 7: resolver Parent explícito y, solo cuando la clave configurada
+    // está ausente, conservar la inferencia legacy por directorio.
     let sin_iota = estructura.manifiesto().layout.sin_iota.clone();
     let es_sin_iota = |dir: &str| -> bool {
         sin_iota.iter().any(|s| {
@@ -433,6 +487,48 @@ pub fn parsear_bundle(
         })
     };
     for nodo in &cargados {
+        match &nodo.padre_frontmatter {
+            PadreFrontmatter::RaizExplicita => continue,
+            PadreFrontmatter::Referencia(parent_path) => {
+                let Some(&parent_id) = indice_por_path.get(parent_path) else {
+                    errores.push(error(
+                        None,
+                        None,
+                        Regla::ParentNoEncontrado,
+                        "la referencia Parent no resuelve a un nodo cargado",
+                    ));
+                    continue;
+                };
+                if parent_path == &nodo.path {
+                    errores.push(error(
+                        None,
+                        None,
+                        Regla::ParentDeSiMismo,
+                        "un nodo no puede ser su propio padre",
+                    ));
+                    continue;
+                }
+                if let Err(err) = estructura.asignar_padre(nodo.id, parent_id) {
+                    let (regla, detalle) = match err {
+                        ErrorEstructura::CicloEnIota => {
+                            (Regla::ParentCiclo, "la relación Parent formaría un ciclo")
+                        }
+                        ErrorEstructura::PadreDeSiMismo => (
+                            Regla::ParentDeSiMismo,
+                            "un nodo no puede ser su propio padre",
+                        ),
+                        _ => (
+                            Regla::ParentInvalido,
+                            "no se pudo resolver la relación Parent",
+                        ),
+                    };
+                    errores.push(error(None, None, regla, detalle));
+                }
+                continue;
+            }
+            PadreFrontmatter::InferenciaLegacy => {}
+        }
+
         let Some(dir) = nodo.path.directorio() else {
             continue;
         };
@@ -458,12 +554,26 @@ pub fn parsear_bundle(
         }
         if let Some(&padre_id) = indice_por_path.get(&candidato_path) {
             if let Err(err) = estructura.asignar_padre(nodo.id, padre_id) {
-                errores.push(error(
-                    Some(nodo.path.como_str()),
-                    None,
-                    Regla::Estructura,
-                    err.to_string(),
-                ));
+                if parent_key.is_some() {
+                    let regla = if err == ErrorEstructura::CicloEnIota {
+                        Regla::ParentCiclo
+                    } else {
+                        Regla::ParentInvalido
+                    };
+                    errores.push(error(
+                        None,
+                        None,
+                        regla,
+                        "no se pudo resolver la relación Parent",
+                    ));
+                } else {
+                    errores.push(error(
+                        Some(nodo.path.como_str()),
+                        None,
+                        Regla::Estructura,
+                        err.to_string(),
+                    ));
+                }
             }
         }
     }

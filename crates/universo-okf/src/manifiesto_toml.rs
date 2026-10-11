@@ -70,6 +70,8 @@ struct LayoutToml {
     sin_iota: Vec<String>,
     #[serde(default)]
     ignorados: Vec<String>,
+    #[serde(default)]
+    parent_key: Option<String>,
 }
 
 impl From<ManifiestoToml> for Manifiesto {
@@ -108,6 +110,7 @@ impl From<ManifiestoToml> for Manifiesto {
                 directorios: m.layout.directorios,
                 sin_iota: m.layout.sin_iota,
                 ignorados: m.layout.ignorados,
+                parent_key: m.layout.parent_key,
             },
         }
     }

@@ -78,6 +78,9 @@ pub struct Layout {
     pub sin_iota: Vec<String>,
     /// Rutas ignoradas por el motor.
     pub ignorados: Vec<String>,
+    /// Clave optativa de frontmatter cuyo escalar declara el `BundlePath`
+    /// lógico del padre; una cadena vacía declara una raíz explícita.
+    pub parent_key: Option<String>,
 }
 
 /// Motivo de rechazo de un `Manifiesto` por `validar`.
@@ -124,6 +127,8 @@ pub enum ErrorManifiesto {
     SinIotaFueraDeLayout(String),
     /// `directorios` está vacío.
     DirectoriosVacio,
+    /// `layout.parent_key` se declaró vacío.
+    ParentKeyVacia,
     /// Un valor de `sortes_nodo_disco` coincide con el nombre de otro
     /// sorte de `sortes_nodo` distinto de su propia clave.
     AliasDeDiscoColisiona(String),
@@ -192,6 +197,7 @@ impl std::fmt::Display for ErrorManifiesto {
                 write!(f, "{p:?} en sin_iota no está contenido en directorios")
             }
             ErrorManifiesto::DirectoriosVacio => write!(f, "layout.directorios está vacío"),
+            ErrorManifiesto::ParentKeyVacia => write!(f, "layout.parent_key está vacío"),
             ErrorManifiesto::AliasDeDiscoColisiona(v) => write!(
                 f,
                 "el alias de disco {v:?} coincide con el nombre de otro sorte declarado"
@@ -322,7 +328,8 @@ impl Manifiesto {
             .aristas
             .iter()
             .map(|a| a.clave.as_str())
-            .chain(self.predicados.iter().map(|p| p.clave.as_str()));
+            .chain(self.predicados.iter().map(|p| p.clave.as_str()))
+            .chain(self.layout.parent_key.as_deref());
         for clave in claves_declaradas {
             let es_reservada =
                 CLAVES_FRONTMATTER_RESERVADAS.contains(&clave) || clave_retirado == Some(clave);
@@ -337,7 +344,8 @@ impl Manifiesto {
             .aristas
             .iter()
             .map(|a| a.clave.as_str())
-            .chain(self.predicados.iter().map(|p| p.clave.as_str()));
+            .chain(self.predicados.iter().map(|p| p.clave.as_str()))
+            .chain(self.layout.parent_key.as_deref());
         for clave in todas_las_claves {
             if !vistas_clave.insert(clave) && reportadas_clave.insert(clave) {
                 errores.push(ErrorManifiesto::ClaveDuplicada(clave.to_string()));
@@ -358,6 +366,9 @@ impl Manifiesto {
 
         if self.layout.directorios.is_empty() {
             errores.push(ErrorManifiesto::DirectoriosVacio);
+        }
+        if self.layout.parent_key.as_deref() == Some("") {
+            errores.push(ErrorManifiesto::ParentKeyVacia);
         }
 
         let mut reportados_alias_colision: BTreeSet<&str> = BTreeSet::new();
@@ -392,6 +403,11 @@ impl Manifiesto {
         }
         for v in self.sortes_nodo_disco.values() {
             nombres_a_validar.push(v.as_str());
+        }
+        if let Some(parent_key) = self.layout.parent_key.as_deref() {
+            if !parent_key.is_empty() {
+                nombres_a_validar.push(parent_key);
+            }
         }
         let mut reportados_nombre: BTreeSet<&str> = BTreeSet::new();
         for nombre in nombres_a_validar {
@@ -507,6 +523,7 @@ pub(crate) mod tests {
                 directorios: vec!["n".into()],
                 sin_iota: vec![],
                 ignorados: vec!["log.md".into()],
+                parent_key: None,
             },
         }
     }
