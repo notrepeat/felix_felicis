@@ -12,8 +12,8 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0 y 1 completadas; Unidad 2 tiene avance parcial; `cargo test --workspace` pasa en HEAD `dfc359f`. |
-| Foco actual | Fase 04, Unidad 2: detector funcional parcial; veredicto e invariantes pendientes. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0, 1 y 2 completadas; `cargo test --workspace` pasa en HEAD `eb497cc`. |
+| Foco actual | Fase 04, Unidad 3: persistencia de `Parent`; el hardening de presupuesto agregado del evaluador también queda pendiente. |
 | Última actualización | 2026-10-11 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0 y 1 completadas; Unidad 2 avanza con detector de conflictos Type/HasLab/Parent en estado final. No hay veredicto/invariantes ni integración `proponer`; stale, construcción Type/Parent/HasLab de nodo, persistencia y CLI siguen pendientes. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0, 1 y 2 completadas en core: candidato `Parent`/`HasLab` de nodo, conflictos y `proponer`. `Parent` aún no se persiste; `Type` sigue técnico en `proponer`. Stale, filesystem, lock, recovery y CLI siguen pendientes. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: continuar la Unidad 2 de [04 — Operación transaccional](04-operacion-transaccional.md), integrando el detector con la evaluación futura y las invariantes.
+Foco actual: continuar la Unidad 3 de [04 — Operación transaccional](04-operacion-transaccional.md) y persistir `Parent` según el contrato fijado. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -156,6 +156,17 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `ec29ea6985907fcc6992e47753325e7fec8d5d45` | Agregación por identidad final | 211 añadidas/74 borradas (285 authored/churn). |
 | `875915ca82fbc1449c731734711f0203a0521e83` | Casos límite y redacción | 321 añadidas/1 borrada (322 authored/churn); `conflictos_delta` 13/13. |
 | `dfc359f9a2339b14cedd6c16c35a550446746461` | Ajuste de métricas runtime | 3 añadidas/3 borradas (6 authored/churn). Dos muestras de 1.000 conflictos: 10,512 ms / 95.132 conflictos/s y 13,315 ms / 75.101 conflictos/s. |
+| `64206882d7cee4c5c9262c056e9edb54270cbdba` | Construcción core de `Parent` y `HasLab` nodo | 310 añadidas/50 borradas (360 authored/churn). |
+| `9ccf8b3d51a018dacf6034c5dc87d884d091a3d7` | Pruebas de `Parent`/`HasLab` nodo | 374 líneas añadidas (374 authored/churn). |
+| `d382fd5b4037b899ba6969aaae2bca5aa185a9b2` | Simplificación de validación | 1 añadida/3 borradas (4 authored/churn). |
+| `3d40561fe717ba9f0e10349eead1e1639457dbf7` | Aserciones de transacción `Parent`/nodo | 112 añadidas/23 borradas (135 authored/churn). |
+| `7d50be550bd093e24b89be710c6d79f05171da9a` | Orden de comprobación de ciclos `Parent` | 7 añadidas/12 borradas (19 authored/churn). |
+| `595f0e2bf6fece6db319305890804f6245b03d43` | Clasificación técnica y preflight de propuesta | 243 añadidas/44 borradas (287 authored/churn); `proponer_preflight` 4/4. |
+| `e6b4f60f2d623d60445396969d9150d1f61e311b` | API core `proponer` | 223 añadidas/1 borrada (224 authored/churn). |
+| `15ed4b83af1c25883c83910cd60333f47c2c6748` | Pruebas de propuesta y privacidad | 373 líneas añadidas (373 authored/churn). |
+| `9607a9a8191bbba3ae334178f5a61147359dc48e` | Clasificación técnica de `HasLab` incompleto | 49 añadidas/22 borradas (71 authored/churn). |
+| `12bcc314918a4b4738b582475a3e0b1d33ed5469` | Precedencia técnica y casos `HasLab` | 185 añadidas/37 borradas (222 authored/churn). |
+| `eb497cc2e60db1dd9e2df7397797855d142ce663` | Privacidad y agregación de `proponer` | 91 añadidas/7 borradas (98 authored/churn). |
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
@@ -178,15 +189,22 @@ variación observada es orientativa, sin warmup, distribución estadística ni
 SLA. Los bytes informados son strings canónicos UTF-8, no heap ni bundle; los
 valores completos están en [04 — Operación transaccional](04-operacion-transaccional.md).
 
-Unidad 2 avanza parcialmente: el detector cuenta conflictos Type/HasLab/Parent
-en estado final, normaliza labels Edge por handle/topología final y permite
-labels iguales en sujetos distintos. En HEAD `dfc359f`, `conflictos_delta`
-pasa 13/13 y workspace, clippy, fmt y frontera pública pasan; tras editar los
-planes pasan enlaces locales y diff. Los seis commits del slice están bajo 400
-líneas authored/churn. El runtime usa 1.000 conflictos (334/333/333) y resume
-3 clases; sus dos muestras son únicas y orientativas. El resumen verifica
-`snapshot_unchanged=true` sin emitir hashes.
-La API no produce aún un veredicto ni evalúa invariantes; integrar el detector
-con `proponer`, validar `HasLab` huérfano/ausente en ese flujo y habilitar la
-construcción de `Type`, `Parent` y `HasLab` de nodo siguen pendientes. Fase 04
-permanece en curso y el progreso maestro en 3/9.
+Unidad 2 quedó cerrada en core. En HEAD `eb497cc` pasan
+`nodo_parent_transaccional` 13/13, `conflictos_delta` 13/13,
+`proponer_preflight` 4/4 y `proponer_transaccional` 10/10; workspace, clippy,
+fmt y frontera pública también pasan, y los enlaces locales y diff pasan tras
+editar los planes. La propuesta pura separa error técnico, conflicto funcional
+y rechazo por invariantes; expande/evalúa sobre el candidato y redacta la
+procedencia. `Parent` y `HasLab` de nodo se construyen en core, pero `Parent`
+no se persiste hasta Unidad 3. `Type` sigue técnico/unsupported en `proponer`
+y solo tiene detector standalone; los conflictos `Ext` siguen técnicos según
+Unidad 1. La incidencia v1 no es representable.
+
+El runtime del detector ya registrado usa 1.000 conflictos (334/333/333), 3
+clases resumen y dos muestras únicas orientativas; confirma
+`snapshot_unchanged=true` sin emitir hashes. El presupuesto de evaluación es
+por fórmula, no una cota agregada por propuesta: hardening y medición global
+siguen pendientes, sin promesa de costo total. Todos los commits de los dos
+slices recientes se mantuvieron bajo 400 líneas authored/churn. Fase 04 sigue
+en curso y el progreso maestro permanece en 3/9; el siguiente paso es Unidad 3,
+persistencia `Parent` bajo el opt-in `layout.parent_key`.

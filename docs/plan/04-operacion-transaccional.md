@@ -70,10 +70,10 @@ implementados.
   buffers inmutables; parsear desde esos mismos bytes y calcular el token
   desde ellos, sin relectura que permita TOCTOU. Simulación conserva lectura
   legacy de links; apply los rechaza antes del snapshot transaccional.
-- Persistir una relación `Parent` requiere override opt-in: un `BundlePath`
-  exacto o raíz vacía. En `Option<Option<BundlePath>>`, `None` devuelve
-  `parent_not_persistable`, `Some(Some(path))` persiste ese `BundlePath`
-  exacto y `Some(None)` persiste raíz vacía.
+- Persistir `Parent` requiere opt-in por la clave opcional `layout.parent_key`;
+  la semántica exacta del `BundlePath`, la inferencia legacy, raíz explícita y
+  validación contra el candidato quedan fijadas en la decisión de Unidad 3
+  descrita junto a su tarea. La persistencia aún no está implementada.
 - La API pura de `universo-core` es
   `proponer(estructura, delta, invariantes) -> Result<ResultadoPropuesta, ErrorPropuesta>`;
   construye/evalúa candidato y separa errores técnicos del veredicto
@@ -183,9 +183,10 @@ Chain strategy: feature-branch-chain
   `(predicado, nodo)` exige retirar el valor vigente y añadir el nuevo. Las
   altas idénticas son no-op y las bajas exigen la identidad exacta. `Type`,
   `Parent` y `HasLab` de nodo siguen rechazados fail-closed como
-  `unsupported_operation` en la construcción del candidato. La Unidad 2 tiene
-  un detector funcional parcial; integrarlo en un veredicto e invariantes sigue
-  pendiente.
+  `unsupported_operation` al cierre de Unidad 1. Unidad 2 añadió construcción
+  core para `Parent` y `HasLab` de nodo y su evaluación mediante `proponer`;
+  `Type` sigue rechazado técnicamente. La persistencia de `Parent` corresponde
+  a Unidad 3.
 
   `crates/universo-core/tests/candidato_delta.rs`
   (`cargo test -p universo-core --test candidato_delta`) pasa 3/3 casos de
@@ -221,36 +222,47 @@ Chain strategy: feature-branch-chain
   ni tamaño del bundle. La medición de un retiro por grupo no descarta ni
   optimiza el posible costo O(R×D) con muchos retiros. Rollback: descartar el
   candidato. Los commits de la unidad se mantuvieron bajo 400 líneas authored.
-- [ ] 2 — Conflictos funcionales: `crates/universo-core/src/transaccion/conflictos.rs`.
-  Test `crates/universo-core/tests/conflictos_delta.rs`
-  (`cargo test -p universo-core --test conflictos_delta`) cubre conflictos
-  funcionales de tipo/etiqueta/padre y permite igual etiqueta en sujetos
-  distintos; la incidencia v1 no es representable.
+- [x] 2 — Conflictos funcionales y propuesta core: `nodos.rs`,
+  `conflictos.rs` y `propuesta.rs` en
+  `crates/universo-core/src/transaccion/`.
+  `detectar_conflictos_funcionales` acumula el estado final
+  (`snapshot - remove + add`) para claves `Type`, `HasLab` y `Parent`, y
+  normaliza labels de arista por handle/topología final. La misma etiqueta en
+  sujetos distintos se permite; una clave con más de un valor final distinto
+  se cuenta como conflicto. Los diagnósticos incluyen solo clase y cantidad.
 
-  Avance parcial: `detectar_conflictos_funcionales` acumula el estado final
-  (`snapshot - remove + add`) para claves `Type`, `HasLab` y `Parent`. Normaliza
-  las etiquetas `HasLab` de arista por handle y topología final, así la
-  compactación de ordinales no cambia qué etiqueta pertenece a cada arista.
-  La misma etiqueta en sujetos distintos se permite; una clave funcional con
-  más de un valor final distinto se cuenta como conflicto. Los diagnósticos
-  resumen clase y cantidad, sin identidades ni valores.
+  El candidato core ahora aplica `Parent` y `HasLab` de nodo. `proponer` separa
+  errores técnicos (`Err(ErrorPropuesta)`) de veredictos funcionales:
+  `Admitida`, `RechazadaConflictos` y `RechazadaInvariantes`. Expande y evalúa
+  las invariantes sobre el candidato; la procedencia de instancias falsas se
+  redacta y omite fórmula y sustituciones. Errores técnicos de integridad
+  (como labels ausentes/huérfanos, ciclo o retiro inválido) permanecen técnicos
+  incluso si el plan contiene conflictos funcionales. `Type` siempre sigue
+  siendo `unsupported_operation` técnico en `proponer`; sus conflictos solo
+  están disponibles mediante el detector standalone. Los conflictos `Ext`
+  siguen siendo técnicos según Unidad 1. El rechazo no muta el snapshot en
+  memoria; esta ruta core no lee ni modifica archivos.
 
-  La incidencia no es un conflicto representable en v1: `IdArista` ya codifica
+  La incidencia no es representable como conflicto v1: `IdArista` ya codifica
   origen, tipo, destino y ordinal, y la canonicalización rechaza una identidad
-  inconsistente antes del detector. La API devuelve conflictos en `Ok`; `Err`
-  queda para topología `Edge` inválida o inconsistente. El detector no valida
-  `HasLab` huérfanos ni exige etiqueta para cada arista nueva: eso corresponde
-  al constructor del candidato y al futuro flujo `proponer`. Tampoco valida
-  invariantes, acepta el delta como veredicto ni aplica cambios. La
-  construcción de candidatos para `Type`, `Parent` y `HasLab` de nodo, la
-  evaluación por `proponer`, las invariantes y la aplicación siguen pendientes.
+  inconsistente antes del detector. El detector standalone no valida
+  `HasLab` huérfanos ni exige etiqueta para cada arista nueva; la construcción
+  del candidato y `proponer` clasifican etiquetas ausentes/huérfanas como
+  errores técnicos. `proponer` informa conflictos antes de expandir/evaluar
+  invariantes; el detector no aplica ni publica cambios. La persistencia
+  `Parent` queda para Unidad 3.
 
-  `conflictos_delta` pasa 13/13 casos de claves funcionales finales, reemplazos
-  remove+add, orden determinista, etiquetas iguales en sujetos distintos,
-  normalización por handle, topología Edge irrepresentable y redacción. Runtime
-  release (`cargo test -p universo-core --release --test conflictos_runtime
-  -- --ignored --nocapture`): exactamente 1.000 conflictos (334 `Type`, 333
-  `HasLab`, 333 `Parent`) y 3 clases resumen. Dos ejecuciones disponibles:
+  Las pruebas finales pasan: `nodo_parent_transaccional` 13/13,
+  `conflictos_delta` 13/13, `proponer_preflight` 4/4 y
+  `proponer_transaccional` 10/10. Cubren retiros/altas de nodo, reemplazos,
+  ciclos y precedencia técnica, conflictos frente a invariantes, privacidad,
+  orden estable, igualdad de etiqueta entre sujetos y repetición determinista
+  del mismo delta sobre el mismo snapshot.
+
+  Runtime release del detector (`cargo test -p universo-core --release --test
+  conflictos_runtime -- --ignored --nocapture`): exactamente 1.000 conflictos
+  (334 `Type`, 333 `HasLab`, 333 `Parent`) y 3 clases resumen. Dos ejecuciones
+  disponibles:
 
   | Muestra | Tiempo | Conflictos/s | Nota |
   |---|---:|---:|---|
@@ -260,8 +272,10 @@ Chain strategy: feature-branch-chain
   Cada valor procede de una muestra única, sin warmup ni distribución
   estadística; son orientativos y no constituyen SLA. El resumen indica
   `snapshot_unchanged=true`; la salida no expone hashes, identidades ni valores.
-  Rollback: no publicar cambios. Los commits del slice se mantuvieron bajo 400
-  líneas de authored/churn.
+  Rollback: no publicar cambios. El presupuesto del evaluador está acotado por
+  fórmula, no tiene una cota agregada para todas las fórmulas de una propuesta;
+  definir y probar ese hardening sigue pendiente, sin promesa de costo global.
+  Los commits del slice se mantuvieron bajo 400 líneas authored/churn.
 - [ ] 3 — Persistencia `Parent`: core `crates/universo-core/src/transaccion/padre.rs`
   y `crates/universo-core/src/manifiesto.rs`; OKF
   `crates/universo-okf/src/manifiesto_toml.rs`, `crates/universo-okf/src/bundle.rs`,
@@ -269,8 +283,17 @@ Chain strategy: feature-branch-chain
   `crates/universo-okf/tests/padre_persistible.rs`
   (`cargo test -p universo-okf --test padre_persistible`) cubre BundlePath
   exacto, raíz vacía, `parent_not_persistable` y carga/serialización. Runtime:
-  1.000 cambios, ms; rollback: conservar padre anterior. Objetivo por slice:
-  <400 líneas authored.
+  1.000 cambios, ms; rollback: conservar padre anterior. Decisión de Unidad 3,
+  aún no implementada: `Some(Some(path))` es el `BundlePath` lógico exacto del
+  padre, no una ruta nueva del hijo ni de almacenamiento; `Some(None)` es raíz.
+  El opt-in es la clave opcional de manifiesto `layout.parent_key`. Sin ella se
+  mantiene inferencia legacy y un cambio `Parent` no es persistible (`None`
+  devuelve `parent_not_persistable`). Con ella, frontmatter ausente cae a
+  inferencia legacy, una cadena no vacía declara el padre exacto y una cadena
+  vacía declara raíz explícita. El override debe coincidir con el `Parent`
+  final del candidato o producir un error redactado; no altera la semántica de
+  la relación. Unidad 3 permanece pendiente. Objetivo por slice: <400 líneas
+  authored.
 - [ ] 4 — Snapshot/stale: `crates/universo-okf/src/transaccion/snapshot.rs`.
   Test `crates/universo-okf/tests/snapshot_transaccional.rs`
   (`cargo test -p universo-okf --test snapshot_transaccional`) compara replay,
@@ -364,19 +387,19 @@ Chain strategy: feature-branch-chain
   en orden snapshot. Adds canónicos exigen ordinales finales contiguos.
 - [x] `Ext` valida predicado declarado/dominio; cambiar valor para
   `(predicado, nodo)` exige remove+add.
-- [ ] `HasLab` es funcional para todo tipo de sujeto; etiquetas iguales en
+- [x] `HasLab` es funcional para todo tipo de sujeto; etiquetas iguales en
   sujetos distintos se permiten salvo invariante.
 - [x] Cambiar `HasLab` de una arista exige remove+add y mantiene la asociación
   por handle durante la compactación.
 - [ ] Cambiar `HasLab` de nodo exige remove+add. `Parent` se persiste solo con
   override de `BundlePath` exacto o raíz vacía; ausente produce
   `parent_not_persistable`.
-- [ ] La salida separa error técnico de veredicto funcional y redacta valores
+- [x] La salida separa error técnico de veredicto funcional y redacta valores
   privados por defecto.
 - [ ] `universo-core::proponer(...)` no hace I/O; `universo-okf`/CLI
   `aplicar(..., expected_snapshot, ...)` hace recovery, CAS, re-evaluación y
   publicación bajo lock.
-- [ ] Los conflictos funcionales se distinguen de las violaciones de
+- [x] Los conflictos funcionales se distinguen de las violaciones de
   invariantes y se informan sin publicar valores privados por defecto.
 - [x] Un error al construir candidato no muta la estructura snapshot en memoria.
 - [ ] Un delta rechazado por la transacción completa no cambia los archivos.
@@ -402,7 +425,7 @@ Chain strategy: feature-branch-chain
 - [x] El mismo delta y snapshot producen el mismo candidato para las
   operaciones soportadas; los retiros de Edge son independientes del orden de
   entrada.
-- [ ] El mismo delta contra el mismo estado produce el mismo veredicto
+- [x] El mismo delta contra el mismo estado produce el mismo veredicto
   funcional.
 - [ ] Un delta contra un estado diferente se detecta y no se aplica a ciegas.
 - [ ] Decidir optimización incremental con mediciones reproducibles y
@@ -457,16 +480,28 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | `ec29ea6985907fcc6992e47753325e7fec8d5d45` | Agregación por identidad final; 211 añadidas/74 borradas (285 authored/churn). | Aporte parcial a Unidad 2. |
 | 2026-10-11 | `875915ca82fbc1449c731734711f0203a0521e83` | Casos límite y redacción; 321 añadidas/1 borrada (322 authored/churn). | Aporte parcial a Unidad 2. |
 | 2026-10-11 | `dfc359f9a2339b14cedd6c16c35a550446746461` | Ajuste de métricas runtime; 3 añadidas/3 borradas (6 authored/churn). | Runtime final: 1.000 conflictos, 3 clases resumen; muestra única orientativa. |
+| 2026-10-11 | `64206882d7cee4c5c9262c056e9edb54270cbdba` | Construcción core de `Parent` y `HasLab` nodo; 310 añadidas/50 borradas (360 authored/churn). | Aporte a Unidad 2; sin persistencia de `Parent`. |
+| 2026-10-11 | `9ccf8b3d51a018dacf6034c5dc87d884d091a3d7` | Pruebas de `Parent`/`HasLab` nodo; 374 líneas añadidas (374 authored/churn). | Aporte a Unidad 2. |
+| 2026-10-11 | `d382fd5b4037b899ba6969aaae2bca5aa185a9b2` | Simplificación de validación; 1 añadida/3 borradas (4 authored/churn). | Aporte a Unidad 2. |
+| 2026-10-11 | `3d40561fe717ba9f0e10349eead1e1639457dbf7` | Aserciones de transacción `Parent`/nodo; 112 añadidas/23 borradas (135 authored/churn). | Aporte a Unidad 2. |
+| 2026-10-11 | `7d50be550bd093e24b89be710c6d79f05171da9a` | Orden de comprobación de ciclos `Parent`; 7 añadidas/12 borradas (19 authored/churn). | Aporte a Unidad 2. |
+| 2026-10-11 | `595f0e2bf6fece6db319305890804f6245b03d43` | Clasificación de errores y preflight de propuesta; 243 añadidas/44 borradas (287 authored/churn); `proponer_preflight` 4/4. | Aporte a Unidad 2. |
+| 2026-10-11 | `e6b4f60f2d623d60445396969d9150d1f61e311b` | API core `proponer`; 223 añadidas/1 borrada (224 authored/churn). | Aporte a Unidad 2. |
+| 2026-10-11 | `15ed4b83af1c25883c83910cd60333f47c2c6748` | Pruebas de propuesta y privacidad; 373 líneas añadidas (373 authored/churn). | Aporte a Unidad 2. |
+| 2026-10-11 | `9607a9a8191bbba3ae334178f5a61147359dc48e` | Clasificación técnica de `HasLab` incompleto; 49 añadidas/22 borradas (71 authored/churn). | Aporte a Unidad 2. |
+| 2026-10-11 | `12bcc314918a4b4738b582475a3e0b1d33ed5469` | Precedencia técnica y casos `HasLab`; 185 añadidas/37 borradas (222 authored/churn). | Aporte a Unidad 2. |
+| 2026-10-11 | `eb497cc2e60db1dd9e2df7397797855d142ce663` | Privacidad/agregación de `proponer`; 91 añadidas/7 borradas (98 authored/churn). | Unidad 2 cerrada en core. |
 | 2026-10-11 | Verificación en HEAD `f42cdb9` | Workspace, clippy, fmt y frontera pública pasan en el HEAD de código; enlaces, frontera, fmt y diff pasan tras editar los planes. | Aprobada; no incluye medición de rendimiento. |
 | 2026-10-11 | Verificación en HEAD `826b381` | `delta_aristas` 14/14, `candidato_delta` 3/3, workspace, clippy, fmt y frontera pública pasan; diff y enlaces pasan tras editar los planes. | Aprobada; runtime sigue pendiente. |
 | 2026-10-11 | Verificación en HEAD `59dc0dd` | `candidato_delta` 3/3, `delta_aristas` 14/14, `ext_transaccional` 10/10, `ext_roundtrip` 3/3; workspace, clippy, fmt y frontera pública pasan. Tras editar, enlaces locales y `git diff --check` pasan. | Unidad 1 cerrada; fase 04 sigue en curso. |
 | 2026-10-11 | Verificación en HEAD `dfc359f` | `conflictos_delta` 13/13; workspace, clippy, fmt, frontera pública, enlaces locales y `git diff --check` pasan. | Avance parcial de Unidad 2; no se cierra veredicto ni invariantes. |
+| 2026-10-11 | Verificación en HEAD `eb497cc` | `nodo_parent_transaccional` 13/13, `conflictos_delta` 13/13, `proponer_preflight` 4/4, `proponer_transaccional` 10/10; workspace, clippy, fmt y frontera pública pasan; enlaces locales y diff tras editar. | Unidad 2 cerrada en core; persistencia Parent y resto de fase 04 pendientes. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
-| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada; siguen pendientes `Type`, `Parent`, `HasLab` de nodo, conflictos/invariantes funcionales, stale y publicación |
-| 2 | Core `conflictos_delta`: detector de conflictos funcionales | Parcial; Unidad 2 sigue abierta: veredicto, invariantes e integración con `proponer` pendientes |
+| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada como unidad; Unidad 2 añadió `Parent`/`HasLab` nodo y propuesta core. Construcción `Type`, persistencia `Parent`, stale y publicación siguen fuera |
+| 2 | Core `nodos`, `conflictos` y `propuesta`: Parent/HasLab de nodo, conflictos funcionales y veredicto puro | Cerrada en core; persistencia Parent queda en Unidad 3; Type en `proponer`, filesystem, stale y CLI siguen pendientes |
 | 3–4 | OKF `padre_persistible`, `snapshot_transaccional` | Pendiente |
 | 5–7 | `writer_lock_transaccional`, `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
