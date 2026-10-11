@@ -187,3 +187,29 @@ fn parent_key_toml_es_optativo_y_se_valida_contra_claves_administradas() {
         assert!(manifiesto.validar().unwrap_err().contains(&esperado));
     }
 }
+
+#[test]
+fn parent_key_usa_la_misma_gramatica_ascii_que_el_parser_frontmatter() {
+    for clave in ["parent_2", "Parent-2", "_parent"] {
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.parent_key = Some(clave.into());
+        manifiesto.validar().unwrap();
+    }
+
+    for clave in ["1parent", "parent/key", "parent.key", "áparent"] {
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.parent_key = Some(clave.into());
+        assert!(
+            manifiesto
+                .validar()
+                .unwrap_err()
+                .contains(&ErrorManifiesto::ParentKeyInvalida),
+            "la clave {clave:?} no respeta la gramática del parser"
+        );
+
+        let texto = format!(
+            "version = \"x/1\"\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = {clave:?}"
+        );
+        assert!(parsear_manifiesto(&texto).is_err());
+    }
+}

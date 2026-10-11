@@ -19,6 +19,17 @@ pub const PREDICADOS_BASE: [&str; 4] = ["Type", "Edge", "Parent", "HasLab"];
 /// ninguna clave de arista o de predicado puede reutilizar.
 const CLAVES_FRONTMATTER_RESERVADAS: [&str; 2] = ["type", "title"];
 
+/// El parser de frontmatter acepta esta misma gramática para las claves.
+fn clave_frontmatter_valida(clave: &str) -> bool {
+    let mut caracteres = clave.chars();
+    let Some(primera) = caracteres.next() else {
+        return false;
+    };
+    (primera.is_ascii_alphabetic() || primera == '_')
+        && caracteres
+            .all(|caracter| caracter.is_ascii_alphanumeric() || matches!(caracter, '_' | '-'))
+}
+
 /// Parámetros de instanciación del motor sobre un bundle concreto: los
 /// alfabetos $K_V$ (sortes de nodo) y $K_E$ (declaraciones de arista), los
 /// predicados de extensión y el layout de disco.
@@ -129,6 +140,8 @@ pub enum ErrorManifiesto {
     DirectoriosVacio,
     /// `layout.parent_key` se declaró vacío.
     ParentKeyVacia,
+    /// `layout.parent_key` no coincide con la gramática de claves frontmatter.
+    ParentKeyInvalida,
     /// Un valor de `sortes_nodo_disco` coincide con el nombre de otro
     /// sorte de `sortes_nodo` distinto de su propia clave.
     AliasDeDiscoColisiona(String),
@@ -198,6 +211,9 @@ impl std::fmt::Display for ErrorManifiesto {
             }
             ErrorManifiesto::DirectoriosVacio => write!(f, "layout.directorios está vacío"),
             ErrorManifiesto::ParentKeyVacia => write!(f, "layout.parent_key está vacío"),
+            ErrorManifiesto::ParentKeyInvalida => {
+                write!(f, "layout.parent_key no es una clave frontmatter válida")
+            }
             ErrorManifiesto::AliasDeDiscoColisiona(v) => write!(
                 f,
                 "el alias de disco {v:?} coincide con el nombre de otro sorte declarado"
@@ -369,6 +385,13 @@ impl Manifiesto {
         }
         if self.layout.parent_key.as_deref() == Some("") {
             errores.push(ErrorManifiesto::ParentKeyVacia);
+        } else if self
+            .layout
+            .parent_key
+            .as_deref()
+            .is_some_and(|clave| !clave_frontmatter_valida(clave))
+        {
+            errores.push(ErrorManifiesto::ParentKeyInvalida);
         }
 
         let mut reportados_alias_colision: BTreeSet<&str> = BTreeSet::new();
