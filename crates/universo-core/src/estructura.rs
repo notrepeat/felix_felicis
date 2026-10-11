@@ -584,6 +584,23 @@ impl Estructura {
         Ok(())
     }
 
+    pub(crate) fn reemplazar_etiqueta_nodo(
+        &mut self,
+        id: NodoId,
+        etiqueta: Etiqueta,
+    ) -> Result<(), ErrorEstructura> {
+        if etiqueta.como_str().contains(['\n', '\r']) {
+            return Err(ErrorEstructura::EtiquetaInvalida(
+                etiqueta.como_str().to_string(),
+            ));
+        }
+        self.nodos
+            .get_mut(id)
+            .ok_or(ErrorEstructura::NodoInexistente)?
+            .etiqueta = etiqueta;
+        Ok(())
+    }
+
     /// El id del nodo con ese path exacto, si existe.
     pub fn por_path(&self, path: &BundlePath) -> Option<NodoId> {
         self.indice.get(path).copied()

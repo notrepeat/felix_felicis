@@ -1,6 +1,6 @@
 use universo_core::{
     Anexo, Atomo, BundlePath, ClaseOperacion, Delta, Entrada, ErrorCandidato, Estructura, Etiqueta,
-    IdArista, LadoDelta, Sorte, Sujeto, construir_candidato,
+    IdArista, LadoDelta, Sorte, construir_candidato,
 };
 
 fn p(texto: &str) -> BundlePath {
@@ -139,32 +139,16 @@ fn operacion_no_soportada_rechaza_sin_reflejar_datos_privados() {
 }
 
 #[test]
-fn operaciones_fuera_de_alcance_se_rechazan_en_ambos_lados_y_sin_mutar() {
+fn type_sigue_fail_closed_en_ambos_lados_y_sin_mutar() {
     let (entrada, _, _, _) = base();
     let antes = entrada.atomos();
-    let casos = [
-        (
-            Atomo::Type {
-                sujeto: p("n/PRIVATE_PATH"),
-                sorte: Sorte::nuevo("PRIVATE_TYPE"),
-            },
-            ClaseOperacion::Type,
-        ),
-        (
-            Atomo::Parent {
-                hijo: p("n/PRIVATE_CHILD"),
-                padre: p("n/PRIVATE_PARENT"),
-            },
-            ClaseOperacion::Parent,
-        ),
-        (
-            Atomo::HasLab {
-                sujeto: Sujeto::Nodo(p("n/PRIVATE_NODE")),
-                etiqueta: Etiqueta::nuevo("PRIVATE_LABEL"),
-            },
-            ClaseOperacion::HasLab,
-        ),
-    ];
+    let casos = [(
+        Atomo::Type {
+            sujeto: p("n/PRIVATE_PATH"),
+            sorte: Sorte::nuevo("PRIVATE_TYPE"),
+        },
+        ClaseOperacion::Type,
+    )];
 
     for (atomo, clase) in casos {
         for (delta, lado) in [
@@ -180,14 +164,7 @@ fn operaciones_fuera_de_alcance_se_rechazan_en_ambos_lados_y_sin_mutar() {
                 } if actual_lado == lado && actual_clase == clase
             ));
             let texto = format!("{error} {error:?}");
-            for canario in [
-                "PRIVATE_PATH",
-                "PRIVATE_TYPE",
-                "PRIVATE_CHILD",
-                "PRIVATE_PARENT",
-                "PRIVATE_NODE",
-                "PRIVATE_LABEL",
-            ] {
+            for canario in ["PRIVATE_PATH", "PRIVATE_TYPE"] {
                 assert!(!texto.contains(canario));
             }
             assert_eq!(entrada.atomos(), antes);
