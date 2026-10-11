@@ -203,6 +203,39 @@ pub(crate) fn planificar_staging(
     planificar_staging_desde_inventario(snapshot.entradas(), &managed_old, documentos)
 }
 
+/// Materializa un plan desde los buffers raw en un sibling nuevo. El parent
+/// validado se asume estable durante la operación: esta API path-based no debe
+/// alimentar apply hasta que parent y stage queden anclados a handles.
+#[allow(dead_code)] // Se integra a apply en la siguiente unidad.
+pub(crate) fn materializar_staging(
+    ubicacion: &UbicacionRaiz,
+    plan: &PlanStaging,
+) -> Result<StagePropio, ErrorEscrituraStage> {
+    materializar_staging_con(ubicacion, plan, generar_id_stage, escribir_archivo_nuevo)
+}
+
+#[allow(dead_code)] // Se mantiene como seam de fault injection para pruebas.
+fn materializar_staging_con<G, W>(
+    ubicacion: &UbicacionRaiz,
+    plan: &PlanStaging,
+    mut siguiente_id: G,
+    mut escribir_archivo: W,
+) -> Result<StagePropio, ErrorEscrituraStage>
+where
+    G: FnMut() -> Result<String, CodigoEscrituraStage>,
+    W: FnMut(&Path, &[u8]) -> Result<(), CodigoEscrituraStage>,
+{
+    validar_plan_para_escritura(plan).map_err(ErrorEscrituraStage::nuevo)?;
+    let stage = crear_stage_unico(ubicacion, &mut siguiente_id)?;
+    if let Err(codigo) = escribir_plan_en_stage(&stage, plan, &mut escribir_archivo) {
+        return Err(ErrorEscrituraStage {
+            codigo,
+            stage_parcial: Some(stage),
+        });
+    }
+    Ok(stage)
+}
+
 #[allow(dead_code)] // Se consume desde materializar_staging.
 fn crear_stage_unico<G>(
     ubicacion: &UbicacionRaiz,
@@ -254,6 +287,133 @@ fn generar_id_stage() -> Result<String, CodigoEscrituraStage> {
 }
 
 #[allow(dead_code)] // Se consume desde materializar_staging.
+fn validar_plan_para_escritura(plan: &PlanStaging) -> Result<(), CodigoEscrituraStage> {
+    let mut directorios = BTreeSet::new();
+    for ruta in &plan.directorios {
+        validar_ruta_relativa(ruta).map_err(CodigoEscrituraStage::Plan)?;
+        if !directorios.insert(ruta.as_str()) {
+            return Err(CodigoEscrituraStage::Plan(
+                ErrorPlanStaging::EntradaDuplicada,
+            ));
+        }
+    }
+
+    let mut entradas = BTreeSet::new();
+    let mut directorios_vistos = BTreeSet::new();
+    for entrada in &plan.entradas_objetivo {
+        validar_ruta_relativa(&entrada.ruta).map_err(CodigoEscrituraStage::Plan)?;
+        if !entradas.insert(entrada.ruta.as_str()) {
+            return Err(CodigoEscrituraStage::Plan(
+                ErrorPlanStaging::EntradaDuplicada,
+            ));
+        }
+        match entrada.fuente {
+            FuenteEntradaStage::Directorio => {
+                if !directorios.contains(entrada.ruta.as_str()) {
+                    return Err(CodigoEscrituraStage::Plan(
+                        ErrorPlanStaging::SnapshotInconsistente,
+                    ));
+                }
+                directorios_vistos.insert(entrada.ruta.as_str());
+            }
+            FuenteEntradaStage::Auxiliar(indice) => {
+                let auxiliar = plan
+                    .auxiliares
+                    .get(indice)
+                    .ok_or(CodigoEscrituraStage::Plan(
+                        ErrorPlanStaging::SnapshotInconsistente,
+                    ))?;
+                if auxiliar.tipo() != TipoEntradaSnapshot::Archivo
+                    || auxiliar.bytes().is_none()
+                    || auxiliar.ruta() != entrada.ruta
+                {
+                    return Err(CodigoEscrituraStage::Plan(
+                        ErrorPlanStaging::SnapshotInconsistente,
+                    ));
+                }
+            }
+            FuenteEntradaStage::DocumentoNuevo(indice) => {
+                let documento = plan
+                    .managed_new
+                    .get(indice)
+                    .ok_or(CodigoEscrituraStage::Plan(
+                        ErrorPlanStaging::SnapshotInconsistente,
+                    ))?;
+                if ruta_documento(documento.path()) != entrada.ruta {
+                    return Err(CodigoEscrituraStage::Plan(
+                        ErrorPlanStaging::SnapshotInconsistente,
+                    ));
+                }
+            }
+        }
+        for padre in directorios_padre(&entrada.ruta) {
+            if !directorios.contains(padre) {
+                return Err(CodigoEscrituraStage::Plan(
+                    ErrorPlanStaging::SnapshotInconsistente,
+                ));
+            }
+        }
+    }
+    if directorios.len() != directorios_vistos.len()
+        || directorios
+            .iter()
+            .any(|ruta| !directorios_vistos.contains(ruta))
+    {
+        return Err(CodigoEscrituraStage::Plan(
+            ErrorPlanStaging::SnapshotInconsistente,
+        ));
+    }
+    #[cfg(windows)]
+    validar_colisiones_case_insensitive(plan.entradas_objetivo.iter().map(|e| e.ruta.as_str()))
+        .map_err(CodigoEscrituraStage::Plan)?;
+    Ok(())
+}
+
+#[allow(dead_code)] // Se consume desde materializar_staging.
+fn escribir_plan_en_stage<W>(
+    stage: &StagePropio,
+    plan: &PlanStaging,
+    mut escribir_archivo: W,
+) -> Result<(), CodigoEscrituraStage>
+where
+    W: FnMut(&Path, &[u8]) -> Result<(), CodigoEscrituraStage>,
+{
+    validar_directorio_stage(stage.ruta())?;
+    let mut directorios = plan.directorios.iter().collect::<Vec<_>>();
+    directorios.sort_by(|a, b| {
+        a.matches('/')
+            .count()
+            .cmp(&b.matches('/').count())
+            .then_with(|| a.as_bytes().cmp(b.as_bytes()))
+    });
+    for ruta in directorios {
+        let destino = unir_ruta(stage.ruta(), ruta);
+        validar_padres_stage(stage.ruta(), ruta)?;
+        fs::create_dir(&destino).map_err(mapear_error_creacion)?;
+        validar_directorio_stage(&destino)?;
+    }
+
+    for entrada in &plan.entradas_objetivo {
+        let bytes = match entrada.fuente {
+            FuenteEntradaStage::Directorio => continue,
+            FuenteEntradaStage::Auxiliar(indice) => {
+                plan.auxiliares[indice]
+                    .bytes()
+                    .ok_or(CodigoEscrituraStage::Plan(
+                        ErrorPlanStaging::SnapshotInconsistente,
+                    ))?
+            }
+            FuenteEntradaStage::DocumentoNuevo(indice) => {
+                plan.managed_new[indice].contenido().as_bytes()
+            }
+        };
+        validar_padres_stage(stage.ruta(), &entrada.ruta)?;
+        escribir_archivo(&unir_ruta(stage.ruta(), &entrada.ruta), bytes)?;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // Se consume desde materializar_staging.
 fn escribir_archivo_nuevo(path: &Path, bytes: &[u8]) -> Result<(), CodigoEscrituraStage> {
     let mut archivo = OpenOptions::new()
         .write(true)
@@ -292,6 +452,30 @@ fn validar_directorio_stage(path: &Path) -> Result<(), CodigoEscrituraStage> {
     }
     Ok(())
 }
+
+#[allow(dead_code)] // Se consume desde el escritor del stage.
+fn validar_padres_stage(stage: &Path, ruta: &str) -> Result<(), CodigoEscrituraStage> {
+    validar_directorio_stage(stage)?;
+    let Some((padres, _)) = ruta.rsplit_once('/') else {
+        return Ok(());
+    };
+    let mut actual = stage.to_path_buf();
+    for componente in padres.split('/') {
+        actual.push(componente);
+        validar_directorio_stage(&actual)?;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)] // Se consume desde el escritor del stage.
+fn unir_ruta(base: &Path, ruta: &str) -> PathBuf {
+    let mut resultado = base.to_path_buf();
+    for componente in ruta.split('/') {
+        resultado.push(componente);
+    }
+    resultado
+}
+
 fn planificar_staging_desde_inventario(
     entradas: &[EntradaSnapshot],
     managed_old: &[BundlePath],
@@ -446,7 +630,9 @@ fn validar_ruta_relativa(ruta: &str) -> Result<(), ErrorPlanStaging> {
     if matches!(
         std::path::Path::new(ruta).components().next(),
         Some(std::path::Component::Prefix(_))
-    ) {
+    ) || ruta.split('/').any(|componente| {
+        super::raiz::validar_basename_prospectivo(std::ffi::OsStr::new(componente)).is_err()
+    }) {
         return Err(ErrorPlanStaging::RutaInvalida);
     }
     Ok(())
@@ -668,25 +854,104 @@ ignorados = ["ignored.md"]
         (temp, snapshot)
     }
 
-#[test]
-fn crea_sibling_unico_y_reintenta_colision_sin_tocar_el_objeto_anterior() {
-    let temp = tempdir().unwrap();
-    let raiz = temp.path().join("bundle");
-    let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
-    let colision = ubicacion.stage("occupied").unwrap();
-    fs::write(colision.as_path(), b"preexisting").unwrap();
-    let mut ids = ["occupied", "fresh"].into_iter();
+    #[test]
+    fn crea_sibling_unico_y_reintenta_colision_sin_tocar_el_objeto_anterior() {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let colision = ubicacion.stage("occupied").unwrap();
+        fs::write(colision.as_path(), b"preexisting").unwrap();
+        let mut ids = ["occupied", "fresh"].into_iter();
 
-    let stage =
-        crear_stage_unico(&ubicacion, &mut || Ok(ids.next().unwrap().to_owned())).unwrap();
+        let stage =
+            crear_stage_unico(&ubicacion, &mut || Ok(ids.next().unwrap().to_owned())).unwrap();
 
-    let parent = fs::canonicalize(temp.path()).unwrap();
-    assert_eq!(stage.ruta().parent(), Some(parent.as_path()));
-    assert_eq!(fs::read(colision.as_path()).unwrap(), b"preexisting");
-    assert!(stage.ruta().is_dir());
-    assert_ne!(stage.ruta(), colision.as_path());
-    assert!(!raiz.exists());
-}
+        let parent = fs::canonicalize(temp.path()).unwrap();
+        assert_eq!(stage.ruta().parent(), Some(parent.as_path()));
+        assert_eq!(fs::read(colision.as_path()).unwrap(), b"preexisting");
+        assert!(stage.ruta().is_dir());
+        assert_ne!(stage.ruta(), colision.as_path());
+        assert!(!raiz.exists());
+    }
+
+    #[test]
+    fn materializa_raw_auxiliares_directorios_vacios_y_documento_junto_a_md_tmp() {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        fs::create_dir(&raiz).unwrap();
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let entradas = [
+            directorio("vacio"),
+            directorio("assets"),
+            archivo("assets/data.bin", &[0, 255, 17]),
+            archivo("doc.md.tmp", b"temporary sentinel"),
+        ];
+        let plan = plan(&entradas, &[], &[documento("doc", "candidate bytes")]).unwrap();
+        let mut ids = ["stage-write"].into_iter();
+
+        let stage = materializar_staging_con(
+            &ubicacion,
+            &plan,
+            || Ok(ids.next().unwrap().to_owned()),
+            escribir_archivo_nuevo,
+        )
+        .unwrap();
+
+        let parent = fs::canonicalize(temp.path()).unwrap();
+        assert_eq!(stage.ruta().parent(), Some(parent.as_path()));
+        assert_eq!(
+            fs::read(stage.ruta().join("doc.md.tmp")).unwrap(),
+            b"temporary sentinel"
+        );
+        assert_eq!(
+            fs::read(stage.ruta().join("doc.md")).unwrap(),
+            b"candidate bytes"
+        );
+        assert_eq!(
+            fs::read(stage.ruta().join("assets/data.bin")).unwrap(),
+            [0, 255, 17]
+        );
+        assert!(stage.ruta().join("vacio").is_dir());
+        assert!(!raiz.join("doc.md").exists());
+    }
+
+    #[test]
+    fn conflicto_create_new_deja_stage_parcial_y_no_cambia_el_hash_del_root() {
+        let (temp, snapshot) = snapshot_minimo();
+        let raiz = temp.path().join("bundle");
+        let manifiesto = temp.path().join("manifest.toml");
+        let invariantes = temp.path().join("invariants.smt2");
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let documentos = [documento("knowledge/new", "candidate")];
+        let plan = planificar_staging(&snapshot, &documentos).unwrap();
+        let mut ids = ["partial"].into_iter();
+
+        let error = materializar_staging_con(
+            &ubicacion,
+            &plan,
+            || Ok(ids.next().unwrap().to_owned()),
+            |path, bytes| {
+                fs::write(path, b"preexisting stage file").map_err(|_| CodigoEscrituraStage::Io)?;
+                escribir_archivo_nuevo(path, bytes)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_create_conflict");
+        assert!(!format!("{error:?} {error}").contains("partial"));
+        let stage = error.stage_parcial().unwrap();
+        assert_eq!(
+            fs::read(stage.ruta().join("documento.md.tmp")).unwrap(),
+            b"preexisting stage file"
+        );
+        assert_eq!(
+            snapshot.token(),
+            capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1",)
+                .unwrap()
+                .token()
+        );
+    }
+
     #[test]
     fn planifica_deterministicamente_y_preserva_directorios_y_auxiliares() {
         let entradas = vec![
@@ -853,6 +1118,26 @@ fn crea_sibling_unico_y_reintenta_colision_sin_tocar_el_objeto_anterior() {
         assert_eq!(error.codigo(), "stage_duplicate_entry");
         assert!(!format!("{error:?} {error}").contains("docs/doc"));
         assert!(!format!("{error:?} {error}").contains("uno"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rechaza_componentes_auxiliares_que_no_preservan_identidad_raw() {
+        for ruta in [
+            "folder/file:stream",
+            "folder/trailing.",
+            "folder/trailing ",
+            "folder/CON.txt",
+            "folder/ALIAS~1.txt",
+        ] {
+            assert_eq!(
+                plan(&[archivo(ruta, b"bytes")], &[], &[])
+                    .unwrap_err()
+                    .codigo(),
+                "stage_path_invalid",
+                "ruta: {ruta}"
+            );
+        }
     }
 
     #[test]

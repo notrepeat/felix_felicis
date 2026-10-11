@@ -224,7 +224,7 @@ fn validar_metadata_raiz(metadata: &Metadata) -> Result<(), ErrorRaiz> {
     Ok(())
 }
 
-fn validar_basename_prospectivo(basename: &std::ffi::OsStr) -> Result<(), ErrorRaiz> {
+pub(super) fn validar_basename_prospectivo(basename: &std::ffi::OsStr) -> Result<(), ErrorRaiz> {
     let nombre = basename.to_str().ok_or(ErrorRaiz::TipoNoAdmitido)?;
     if nombre.is_empty()
         || matches!(nombre, "." | "..")
