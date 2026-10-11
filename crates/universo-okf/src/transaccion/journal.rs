@@ -12,6 +12,8 @@ pub(crate) mod recovery;
 
 const SCHEMA_V1: &str = "felix-journal-v1";
 const RAW_TREE_DIGEST_V1: &str = "felix-raw-tree-sha256-v1";
+/// Tamaño máximo del JSON canónico persistido del journal, en bytes.
+pub(crate) const MAX_JOURNAL_BYTES: usize = 1024;
 
 /// Registro v1. La representación de depuración omite toda identidad y digest.
 #[derive(Clone, PartialEq, Eq)]
@@ -241,6 +243,7 @@ impl ArtifactFingerprint {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JournalError {
     Malformed,
+    TooLarge,
     UnsupportedVersion,
     UnsupportedDigestVersion,
     InvalidTransactionId,
@@ -255,6 +258,7 @@ impl JournalError {
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::Malformed => "journal_malformed",
+            Self::TooLarge => "journal_too_large",
             Self::UnsupportedVersion => "journal_version_unsupported",
             Self::UnsupportedDigestVersion => "journal_digest_version_unsupported",
             Self::InvalidTransactionId => "journal_transaction_id_invalid",

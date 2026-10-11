@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ArtifactFingerprint, DirectoryIdentity, Journal, JournalError, JournalState};
+use super::{
+    ArtifactFingerprint, DirectoryIdentity, Journal, JournalError, JournalState, MAX_JOURNAL_BYTES,
+};
 #[cfg(test)]
 use super::{RawTreeDigest, SCHEMA_V1};
 
@@ -19,7 +21,7 @@ struct JournalWire {
 
 pub(super) fn encode(record: &Journal) -> Result<Vec<u8>, JournalError> {
     record.validate()?;
-    serde_json::to_vec(&JournalWire {
+    let bytes = serde_json::to_vec(&JournalWire {
         schema: record.schema.clone(),
         transaction_id: record.transaction_id.clone(),
         state: record.state,
@@ -27,11 +29,18 @@ pub(super) fn encode(record: &Journal) -> Result<Vec<u8>, JournalError> {
         old: record.old.clone(),
         new: record.new.clone(),
     })
-    .map_err(|_| JournalError::Malformed)
+    .map_err(|_| JournalError::Malformed)?;
+    if bytes.len() > MAX_JOURNAL_BYTES {
+        return Err(JournalError::TooLarge);
+    }
+    Ok(bytes)
 }
 
 impl Journal {
     pub(crate) fn parse(bytes: &[u8]) -> Result<Self, JournalError> {
+        if bytes.len() > MAX_JOURNAL_BYTES {
+            return Err(JournalError::TooLarge);
+        }
         let wire: JournalWire =
             serde_json::from_slice(bytes).map_err(|_| JournalError::Malformed)?;
         let record = Self {
@@ -82,6 +91,43 @@ mod tests {
         .unwrap()
     }
 
+    fn maximum_valid_record() -> Journal {
+        fn maximum_identity() -> DirectoryIdentity {
+            #[cfg(unix)]
+            {
+                DirectoryIdentity::Unix {
+                    device: u64::MAX,
+                    inode: u64::MAX,
+                }
+            }
+            #[cfg(windows)]
+            {
+                DirectoryIdentity::Windows {
+                    volume: u64::MAX,
+                    file_id: "f".repeat(32),
+                }
+            }
+        }
+
+        fn maximum_fingerprint(byte: char) -> ArtifactFingerprint {
+            ArtifactFingerprint::new(
+                maximum_identity(),
+                RawTreeDigest::from_hex(byte.to_string().repeat(64)).unwrap(),
+            )
+        }
+
+        let mut record = Journal::new(
+            "f".repeat(32),
+            maximum_identity(),
+            maximum_fingerprint('a'),
+            maximum_fingerprint('b'),
+        )
+        .unwrap();
+        // `backup_ready` is the longest valid serialized state name.
+        record.advance(JournalState::BackupReady).unwrap();
+        record
+    }
+
     fn alter(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
         String::from_utf8(bytes.to_vec())
             .unwrap()
@@ -96,6 +142,45 @@ mod tests {
         let parsed = Journal::parse(&bytes).unwrap();
         assert_eq!(parsed, record);
         assert_eq!(parsed.encode().unwrap(), bytes);
+    }
+
+    #[test]
+    fn maximum_valid_record_round_trips_below_the_wire_limit() {
+        let record = maximum_valid_record();
+        let bytes = record.encode().unwrap();
+        assert!(bytes.len() < MAX_JOURNAL_BYTES);
+        assert_eq!(Journal::parse(&bytes).unwrap(), record);
+    }
+
+    #[test]
+    fn parser_allows_exact_limit_bytes_through_to_strict_json_validation() {
+        let canonical = record().encode().unwrap();
+        let mut bytes = canonical[..canonical.len() - 1].to_vec();
+        let unknown_field_prefix = br#","unknown":""#;
+        let unknown_field_suffix = b"\"}";
+        let value_len = MAX_JOURNAL_BYTES
+            - bytes.len()
+            - unknown_field_prefix.len()
+            - unknown_field_suffix.len();
+
+        // A real unknown JSON field exercises the exact byte boundary without
+        // padding a valid journal or weakening the strict schema.
+        bytes.extend_from_slice(unknown_field_prefix);
+        bytes.extend(std::iter::repeat_n(b'x', value_len));
+        bytes.extend_from_slice(unknown_field_suffix);
+
+        assert_eq!(bytes.len(), MAX_JOURNAL_BYTES);
+        assert_eq!(Journal::parse(&bytes), Err(JournalError::Malformed));
+    }
+
+    #[test]
+    fn parser_rejects_1025_raw_bytes_with_a_stable_redacted_error() {
+        let bytes = vec![0xff; MAX_JOURNAL_BYTES + 1];
+        let error = Journal::parse(&bytes).unwrap_err();
+        assert_eq!(error, JournalError::TooLarge);
+        assert_eq!(error.code(), "journal_too_large");
+        assert_eq!(error.to_string(), "journal_too_large");
+        assert!(!format!("{error:?}").contains("1025"));
     }
 
     #[test]
