@@ -12,8 +12,8 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0–3 completadas en sus alcances documentados; verificación de workspace/clippy en HEAD `27289a9`. |
-| Foco actual | Fase 04, Unidad 4: snapshot y detección `stale`; también siguen pendientes `Type`, publicación filesystem y hardening del presupuesto agregado del evaluador. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. Unidades 0–4 cerradas en sus límites; U5 tiene avance parcial. Verificación integrada en HEAD `2475dc3`. |
+| Foco actual | Fase 04, Unidad 5: integrar lock single-writer al flujo transaccional. U4 solo entrega snapshot raw y CAS interno antes del parseo; siguen pendientes root anclado U6, `Type`, apply/publicación filesystem y hardening del presupuesto agregado. |
 | Última actualización | 2026-10-11 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0–3: candidato `Parent`/`HasLab` de nodo, conflictos, `proponer` y carga/serialización de `Parent` a documentos en memoria con opt-in. Unidad 3 no publica archivos. `Type`, snapshot/stale, filesystem, lock, staging, recovery y CLI siguen pendientes. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | Unidades 0–4 cerradas en sus límites; U4 calcula identidad raw e informa `stale` antes del parseo, sin escritura ni publicación. U5 aporta lock/root validation parcial; apply, root anclado U6, `Type`, staging, recovery y CLI siguen pendientes. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: continuar la Unidad 4 de [04 — Operación transaccional](04-operacion-transaccional.md), snapshot y detección `stale`. La Unidad 3 genera documentos de candidato en memoria; apply, escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
+Foco actual: continuar la Unidad 5 de [04 — Operación transaccional](04-operacion-transaccional.md), integrar el lock al flujo transaccional. U4 cierra captura raw y CAS interno; la captura aún requiere un root anclado por U6. Apply, escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -216,18 +216,23 @@ siguen pendientes, sin promesa de costo total. Todos los commits de los dos
 slices recientes se mantuvieron bajo 400 líneas authored/churn.
 
 Fase 04 sigue en curso y el progreso maestro permanece en 3/9. Unidad 3 queda
-cerrada en su límite de carga/serialización en memoria. En HEAD `27289a9`,
-`cargo test --locked -p universo-okf --test padre_persistible` pasó 16 casos y
-dejó 1 runtime harness ignorado; `cargo test --locked --workspace --all-targets`,
-`cargo clippy --locked --workspace --all-targets -- -D warnings`,
-`cargo fmt --all -- --check` y `python tools/check_public_boundary.py` también
-pasan. El harness release midió 1.791 ms para exactamente 1.000 cambios y
-1.000 overrides en Windows `x86_64-pc-windows-msvc` con Rust/Cargo 1.88.0; el
-intervalo mide solo `serializar_candidato`, con setup, segundo pase y recarga
-fuera. La muestra es orientativa y no constituye SLA; no mide escritura ni
+cerrada en carga y serialización en memoria de `Parent`; el harness release
+anterior midió 1.791 ms para 1.000 cambios y overrides, sin medir escritura ni
 publicación filesystem.
 
-El siguiente paso es Unidad 4, snapshot/stale. Apply/publicador filesystem,
-hashes antes/después, lock, staging, journal/recovery, CLI y soporte
-transaccional de `Type` siguen pendientes. El presupuesto agregado de evaluación
-tampoco tiene aún una cota global.
+Unidad 4 queda cerrada como primitiva interna. En HEAD `2475dc3` (sin cambios
+de pruebas respecto de `61b22fd`) la verificación integrada registra workspace
+377 passed/5 ignored, snapshot focal 2/2 y captura 8/8 más 1 harness ignorado;
+clippy, fmt y frontera pública pasan. La captura lee una vez a buffers raw,
+incluye archivos y directorios vacíos, y compara el token antes de parsear; el
+token es opaco y `to_hex()` explícito. No hay apply, escritura ni publicación.
+El runtime de captura y su comando reproducible están en el registro de [04](04-operacion-transaccional.md).
+
+Unidad 5 tiene avance parcial, no está cerrada. El harness release de locks
+registró en una muestra: 2 writers, 5 busy/7 intentos (71,4%) y espera máxima
+54,842 ms; 8 writers, 92 busy/100 (92,0%) y espera máxima 363,207 ms. El máximo
+de intervalos marcados fue 1 en ambos escenarios; el marcador no cubre la vida
+completa del guard. El root anclado queda para U6 por el límite TOCTOU de la
+inspección por ruta. Apply/publicador filesystem, hashes antes/después, staging,
+journal/recovery, CLI y soporte transaccional de `Type` siguen pendientes. El
+presupuesto agregado de evaluación tampoco tiene aún una cota global.

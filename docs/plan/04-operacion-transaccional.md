@@ -24,6 +24,11 @@ delta (tipo, etiqueta, padre e incidencia). Esta asignación de alcance cierra
 el criterio 17 de fase 03; no afirma que la detección o diagnóstico ya estén
 implementados.
 
+Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; la
+Unidad 4 aporta identidad raw y CAS antes del parseo, no un flujo de apply.
+Fase 04 sigue en curso y ahora trabaja la Unidad 5. La primitiva U4 no escribe
+archivos ni publica candidatos.
+
 ## Decisiones de contrato v1
 
 - `add`/`remove` es un parche transaccional explícito sobre un snapshot; es
@@ -61,15 +66,20 @@ implementados.
   valor perteneciente al dominio declarado. Para el mismo par
   `(predicado, nodo)`, reemplazar un valor exige `remove` del valor vigente y
   `add` del nuevo; `add` no sobrescribe y `remove` identifica el valor exacto.
-- El snapshot token se calcula en OKF con framing de longitudes y separación
-  de dominio/version (`FELIX-SNAPSHOT-v1`) para cada campo. Incluye, por cada
-  archivo de root, path normalizado, longitud del path, bytes del path,
-  longitud del contenido y bytes crudos; paths ordenados por bytes
-  normalizados. También incluye manifiesto e invariantes raw, versión de motor
-  y política, cada uno con longitud explícita. Leer cada entrada una vez a
-  buffers inmutables; parsear desde esos mismos bytes y calcular el token
-  desde ellos, sin relectura que permita TOCTOU. Simulación conserva lectura
-  legacy de links; apply los rechaza antes del snapshot transaccional.
+- El token de snapshot usa framing etiquetado con longitudes y separación de
+  dominio/version (`FELIX-SNAPSHOT-v1`). La política
+  `files-and-directories-v1` incluye archivos (también vacíos) y entradas de
+  directorio (también vacíos), con rutas UTF-8 exactas, separadores `/`, orden
+  por bytes y sin normalización Unicode. También incluye manifiesto e
+  invariantes raw, versión de motor y política. `SnapshotToken` es público y
+  opaco: `Debug`/`Display` redactan el digest; `to_hex()` solo lo revela cuando
+  se invoca explícitamente. La captura y el CAS de captura permanecen
+  `pub(crate)`. Cada archivo se lee una vez a buffers inmutables; el token se
+  calcula desde esos bytes, el token esperado se compara antes del parseo y la
+  materialización usa los mismos buffers. Una diferencia produce `stale`
+  fijo/redactado antes de parsear manifiesto, invariantes o bundle. Esta
+  primitiva no escribe ni publica; la captura por ruta aún tiene límite TOCTOU
+  y no puede conectarse a apply hasta que U6 aporte un root anclado.
 - Cargar y serializar `Parent` requiere opt-in por `layout.parent_key`. La
   Unidad 3 cierra la carga exacta, raíz explícita, fallback legacy y
   serialización determinista del candidato a documentos en memoria. Esto no
@@ -77,9 +87,10 @@ implementados.
 - La API pura de `universo-core` es
   `proponer(estructura, delta, invariantes) -> Result<ResultadoPropuesta, ErrorPropuesta>`;
   construye/evalúa candidato y separa errores técnicos del veredicto
-  funcional, sin filesystem ni publicación. La API de `universo-okf`/CLI
-  `aplicar(..., expected_snapshot, ...)` adquiere lock, hace CAS del snapshot,
-  reevalúa con core y coordina staging/publicación solo para `admit`.
+  funcional, sin filesystem ni publicación. La API objetivo de
+  `universo-okf`/CLI `aplicar(..., expected_snapshot, ...)` adquiere lock,
+  hace CAS del snapshot, reevalúa con core y coordina staging/publicación solo
+  para `admit`; esa integración todavía no está implementada.
 - `propose` simula por defecto y omite el token de snapshot. Solo
   `--emit-snapshot-token` lo incluye. Aplicar exige el comando concreto:
 
@@ -95,8 +106,7 @@ implementados.
 
 - Un lock advisory/exclusivo de sibling
   (`<parent-canónico>/.<basename-canónico>.felix.lock`) usa un file handle
-  sobre un lockfile reutilizable; la dependencia Rust que provee
-  el lock queda por elegir. No borrar ni reemplazar el lockfile. El OS libera
+  sobre un lockfile reutilizable mediante `fs4`. No borrar ni reemplazar el lockfile. El OS libera
   el lock al morir el proceso. Tras adquirirlo, siempre correr recovery antes
   del stale recheck; retenerlo hasta terminar publicación y cleanup. Con lock
   ocupado, el segundo writer responde `busy`; si lo adquiere luego, compara
@@ -301,32 +311,69 @@ Chain strategy: feature-branch-chain
   `serializar_candidato`; setup, segundo pase determinista y recarga ocurren
   fuera. Es una muestra orientativa, sin SLA; no mide bytes escritos ni costo
   de publicación. Los siete commits y la verificación completa de este cierre
-  figuran en el registro de evidencia. Siguen pendientes `Type`, snapshot/token
-  y stale, apply/publicador filesystem, hashes antes/después de una propuesta
-  rechazada, lock, staging, journal/recovery, CLI y una cota global del
-  presupuesto de evaluación.
+  figuran en el registro de evidencia. U4 ya cubre snapshot/token y CAS interno;
+  siguen pendientes `Type`, integrar captura/CAS en apply, el publicador
+  filesystem, hashes antes/después de una propuesta rechazada, staging,
+  journal/recovery, CLI y una cota global del presupuesto de evaluación.
 
   Comando reproducible del harness ignorado:
 
   ```text
   cargo test --release -p universo-okf --test padre_persistible runtime_parent_mide_serializacion_de_1000_cambios -- --ignored --nocapture
   ```
-- [ ] 4 — Snapshot/stale: `crates/universo-okf/src/transaccion/snapshot.rs`.
-  Test `crates/universo-okf/tests/snapshot_transaccional.rs`
-  (`cargo test -p universo-okf --test snapshot_transaccional`) compara replay,
-  framing/domain `FELIX-SNAPSHOT-v1`, paths normalizados con longitudes y
-  bytes crudos de todos los archivos, manifest/invariants raw, versión y
-  política de motor; confirma mismos bytes parseados y `stale` al cambiar
-  cualquier campo.
-  Runtime: bundle 1/10/100 MiB, MB/s y costo de framing; rollback: no aplicar
-  token stale. Objetivo por slice: <400 líneas authored.
-- [ ] 5 — Lock single-writer: `crates/universo-okf/src/transaccion/lock.rs`.
-  Test `crates/universo-okf/tests/writer_lock_transaccional.rs`
-  (`cargo test -p universo-okf --test writer_lock_transaccional`) confirma un
-  solo commit; `proceso_muerto_libera_lock_y_restart_recupera` mata child con
-  lock y verifica liberación OS más recovery antes de stale recheck. Runtime:
-  2/8 writers, espera y tasa busy; rollback: quitar solo artefactos fallidos,
-  lockfile reutilizable. Objetivo por slice: <400 líneas authored.
+- [x] 4 — Captura snapshot raw y CAS antes del parseo: OKF
+  `transaccion/{snapshot,inventario,captura}.rs`.
+  `snapshot_transaccional` pasa 2/2 casos públicos; la captura pasa 8/8 pruebas
+  unitarias y deja ignorado el harness runtime. El contrato usa framing
+  etiquetado `FELIX-SNAPSHOT-v1` y política `files-and-directories-v1`, que
+  incluye archivos y directorios vacíos, manifiesto/invariantes raw, versión y
+  política de motor. `SnapshotToken` es público y opaco; `to_hex()` es una
+  revelación explícita, mientras `Debug`/`Display` redactan. Captura y CAS son
+  `pub(crate)`: leen una vez a buffers inmutables, comparan la identidad antes
+  de parsear y materializan desde esos mismos buffers. La diferencia devuelve
+  `stale` fijo/redactado; no se escribe ni publica nada. La captura por ruta
+  conserva límite TOCTOU, por lo que no puede alimentar apply hasta el root
+  anclado de U6. La CLI todavía no invoca `to_hex()`; su opt-in será
+  `--emit-snapshot-token`.
+
+  Harness release verificado en Windows `x86_64-pc-windows-msvc`, Rust/Cargo
+  1.88.0:
+
+  | Bundle | Captura | MB/s | Framing | Replay |
+  |---|---:|---:|---:|---:|
+  | 1 MiB | 6,124 ms | 171,23 | 0,616 ms (10,1%) | 2,552 ms |
+  | 10 MiB | 20,274 ms | 517,21 | 6,515 ms (32,1%) | 16,407 ms |
+  | 100 MiB | 168,517 ms | 622,24 | 66,216 ms (39,3%) | 147,430 ms |
+
+  Son muestras orientativas, sin SLA. Comando exacto:
+
+  ```text
+  cargo test --release -p universo-okf runtime_snapshot_mide_bundles_de_1_10_y_100_mib -- --ignored --nocapture
+  ```
+- [ ] 5 — Lock single-writer: `crates/universo-okf/src/transaccion/lock.rs` y
+  validación de raíz en `raiz.rs`. El lockfile sibling reutilizable mantiene
+  un handle `fs4`, responde `busy`, y el OS lo libera al cerrar el handle o el
+  proceso. La prueba de contención del registro confirma una adquisición por
+  proceso en escenarios de 2 y 8 escritores. Es avance parcial: apply aún no
+  integra lock, recovery-before-CAS ni retención hasta cleanup; la inspección
+  de raíz por ruta no cierra la sustitución concurrente de ancestros. U6
+  diseñará el root anclado para resolver ese límite.
+
+  Muestra release multiproceso más reciente en este checkout:
+
+  | Writers | Total | Espera total / media / máxima | Intentos | Busy | Máximo de intervalos marcados |
+  |---:|---:|---:|---:|---:|---:|
+  | 2 | 103,390 ms | 55,635 / 27,817 / 54,842 ms | 7 | 5 (71,4%) | 1 |
+  | 8 | 413,403 ms | 1.423,391 / 177,924 / 363,207 ms | 100 | 92 (92,0%) | 1 |
+
+  Una muestra, orientativa y sin SLA. El máximo solo cubre la sección marcada
+  de 40 ms; pausas antes/después de los marcadores pueden quedar fuera aunque
+  el proceso conserve el guard, así que no mide el tiempo de vida completo del
+  lock. Comando exacto:
+
+  ```text
+  cargo test --locked --release -p universo-okf --test writer_lock_transaccional runtime_lock_mide_contencion_multiproceso -- --ignored --nocapture
+  ```
 - [ ] 6 — Root y builder de staging: `crates/universo-okf/src/transaccion/stage.rs`.
   Test `crates/universo-okf/tests/stage_bundle_transaccional.rs`
   (`cargo test -p universo-okf --test stage_bundle_transaccional`) rechaza
@@ -401,7 +448,8 @@ Chain strategy: feature-branch-chain
   atribuir al delta minimalidad o prioridad de AGM/R.
 - [x] `add`/`remove` se canonicalizan con orden determinista y el solapamiento
   se rechaza.
-- [ ] Un snapshot distinto se informa como `stale` antes de aplicar el delta.
+- [x] El CAS interno compara la identidad raw esperada antes del parseo y un
+  cambio devuelve `stale` fijo/redactado, sin revelar los tokens.
 - [x] Los retiros Edge/HasLab se resuelven a handles del snapshot antes de
   mutar; las removals por `(origen, tipo, destino)` compactan supervivientes
   en orden snapshot. Adds canónicos exigen ordinales finales contiguos.
@@ -419,8 +467,8 @@ Chain strategy: feature-branch-chain
 - [x] La salida separa error técnico de veredicto funcional y redacta valores
   privados por defecto.
 - [ ] `universo-core::proponer(...)` no hace I/O; `universo-okf`/CLI
-  `aplicar(..., expected_snapshot, ...)` hace recovery, CAS, re-evaluación y
-  publicación bajo lock.
+  `aplicar(..., expected_snapshot, ...)` conecta recovery, CAS, re-evaluación
+  y publicación bajo lock. La primitiva U4 aún no está integrada en `apply`.
 - [x] Los conflictos funcionales se distinguen de las violaciones de
   invariantes y se informan sin publicar valores privados por defecto.
 - [x] Un error al construir candidato no muta la estructura snapshot en memoria.
@@ -449,7 +497,8 @@ Chain strategy: feature-branch-chain
   entrada.
 - [x] El mismo delta contra el mismo estado produce el mismo veredicto
   funcional.
-- [ ] Un delta contra un estado diferente se detecta y no se aplica a ciegas.
+- [ ] Un delta contra un estado diferente se detecta y no se aplica a ciegas
+  en el flujo completo de apply; U4 solo entrega el CAS interno.
 - [ ] Decidir optimización incremental con mediciones reproducibles y
   suficientes; las muestras actuales son orientativas y no definen SLA.
 
@@ -520,21 +569,38 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | `0ac65d8a7f48d1f7f1376c777c3e3ae2db785ed5` | Valida serialización en memoria de candidatos y overrides `Parent`. | Núcleo funcional de Unidad 3. |
 | 2026-10-11 | `7dc774726fe1ef89e06110af067cc2d2c37bff6e` | Cubre casos límite del serializador de candidatos `Parent`. | Complementa roundtrip, errores y redacción. |
 | 2026-10-11 | `27289a9a14d5fba8bc0e7b61726e58069bf5bd39` | Añade harness release de serialización `Parent`. | 1.791 ms para 1.000 cambios; solo mide `serializar_candidato`. |
+| 2026-10-11 | `36e130f` | Framing etiquetado SHA-256 `FELIX-SNAPSHOT-v1` y token opaco; 362 líneas añadidas. | Aporte U4; bajo 400 líneas authored/churn. |
+| 2026-10-11 | `3601ac4` | Inventario raw de archivos y directorios; 234 líneas añadidas. | Aporte U4; bajo 400 líneas authored/churn. |
+| 2026-10-11 | `dbb0d27` | Digest de referencia para el framing v1; 4 líneas añadidas. | Aporte U4; bajo 400 líneas authored/churn. |
+| 2026-10-11 | `cfa7a2a` | Captura inmutable y parseo desde los buffers capturados; 367 añadidas/5 borradas (372 authored/churn). | Aporte U4; bajo 400 líneas authored/churn. |
+| 2026-10-11 | `540fba9` | Contrato público determinista, opaco y redactado del token; 87 líneas añadidas. | Aporte U4; bajo 400 líneas authored/churn. |
+| 2026-10-11 | `dc87001` | Reutiliza buffers para aliases de case; 271 añadidas/15 borradas (286 authored/churn). | Aporte U4; bajo 400 líneas authored/churn. |
+| 2026-10-11 | `bf39602` | Harness release de captura, framing y replay; 116 líneas añadidas. | Aporte U4; bajo 400 líneas authored/churn. |
+| 2026-10-11 | `1c3df9d` | CAS del snapshot raw antes de parsear; pruebas `stale` y redacción; 360 añadidas/10 borradas (370 authored/churn). | Cierra U4 como primitiva interna; bajo 400 líneas authored/churn. |
+| 2026-10-11 | `fdfdb0b` | Valida raíces de transacción y deriva siblings canónicos; 162 líneas añadidas. | Avance parcial U5; la carrera de reemplazo concurrente queda para U6. |
+| 2026-10-11 | `de514b9` | Lock single-writer con file handle y pruebas; 322 añadidas/1 borrada (323 authored/churn). | Avance parcial U5; el lock no está integrado a apply/recovery. |
+| 2026-10-11 | `de86ad6` | Resuelve aliases de raíz según semántica del filesystem; 247 añadidas/12 borradas (259 authored/churn). | Avance parcial U5; inspección por ruta aún no ancla ancestros. |
+| 2026-10-11 | `506224c` | Aclara el límite de carrera en validación de raíz; 2 añadidas/2 borradas (4 authored/churn). | Avance parcial U5; el root anclado se diseña en U6. |
+| 2026-10-11 | `61b22fd` | Harness de contención de procesos escritores 2/8; 317 añadidas/1 borrada (318 authored/churn). | Aporte parcial U5; una muestra orientativa. |
+| 2026-10-11 | `2475dc3` | Califica la métrica como intervalo marcado; 11 añadidas/5 borradas (16 authored/churn). | Aporte parcial U5; no mide la vida completa del guard. |
 | 2026-10-11 | Verificación en HEAD `f42cdb9` | Workspace, clippy, fmt y frontera pública pasan en el HEAD de código; enlaces, frontera, fmt y diff pasan tras editar los planes. | Aprobada; no incluye medición de rendimiento. |
 | 2026-10-11 | Verificación en HEAD `826b381` | `delta_aristas` 14/14, `candidato_delta` 3/3, workspace, clippy, fmt y frontera pública pasan; diff y enlaces pasan tras editar los planes. | Aprobada; runtime sigue pendiente. |
 | 2026-10-11 | Verificación en HEAD `59dc0dd` | `candidato_delta` 3/3, `delta_aristas` 14/14, `ext_transaccional` 10/10, `ext_roundtrip` 3/3; workspace, clippy, fmt y frontera pública pasan. Tras editar, enlaces locales y `git diff --check` pasan. | Unidad 1 cerrada; fase 04 sigue en curso. |
 | 2026-10-11 | Verificación en HEAD `dfc359f` | `conflictos_delta` 13/13; workspace, clippy, fmt, frontera pública, enlaces locales y `git diff --check` pasan. | Avance parcial de Unidad 2; no se cierra veredicto ni invariantes. |
 | 2026-10-11 | Verificación en HEAD `eb497cc` | `nodo_parent_transaccional` 13/13, `conflictos_delta` 13/13, `proponer_preflight` 4/4, `proponer_transaccional` 10/10; workspace, clippy, fmt y frontera pública pasan; enlaces locales y diff tras editar. | Unidad 2 cerrada en core; persistencia Parent y resto de fase 04 pendientes. |
 | 2026-10-11 | Verificación en HEAD `27289a9` | `cargo test --locked -p universo-okf --test padre_persistible` 16 passed/1 ignored; `cargo test --locked --workspace --all-targets`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check` y `python tools/check_public_boundary.py` pasan. | Unidad 3 cerrada para carga y serialización en memoria; apply/publicación siguen pendientes. |
+| 2026-10-11 | Verificación integrada en HEAD `2475dc3` (sobre `61b22fd`) | Workspace 377 passed/5 ignored; `snapshot_transaccional` 2/2; captura 8/8 y harness 1 ignored; clippy, fmt y `check_public_boundary.py` pasan. `2475dc3` solo califica métricas, sin agregar pruebas. | U4 cerrada como primitiva interna; U5 conserva avance parcial. |
+| 2026-10-11 | Harness U5 en HEAD `2475dc3` | 2 writers: total 103,390 ms, espera 55,635/27,817/54,842 ms, 5 busy de 7 (71,4%); 8 writers: total 413,403 ms, espera 1.423,391/177,924/363,207 ms, 92 busy de 100 (92,0%). Máximo de intervalos marcados: 1 en ambos escenarios. | Una muestra release orientativa; los marcadores no cubren toda la vida del lock. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
-| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada como unidad; Unidad 2 añadió `Parent`/`HasLab` nodo y propuesta core. Construcción `Type`, publicación filesystem, stale y CLI siguen fuera |
-| 2 | Core `nodos`, `conflictos` y `propuesta`: Parent/HasLab de nodo, conflictos funcionales y veredicto puro | Cerrada en core; Unidad 3 añade carga/serialización `Parent` en memoria; `Type` en `proponer`, filesystem, stale y CLI siguen pendientes |
+| 1 | Candidato aislado; retiros/altas `Edge` y `HasLab` de arista, `Ext`, ordinales finales y reemplazo de etiqueta por handles | Cerrada como unidad; Unidad 2 añadió `Parent`/`HasLab` nodo y propuesta core. Construcción `Type`, apply/publicación filesystem, stale de extremo a extremo y CLI siguen fuera |
+| 2 | Core `nodos`, `conflictos` y `propuesta`: Parent/HasLab de nodo, conflictos funcionales y veredicto puro | Cerrada en core; Unidad 3 añade carga/serialización `Parent` en memoria; `Type` en `proponer`, filesystem, stale de extremo a extremo y CLI siguen pendientes |
 | 3 | OKF `padre_persistible`: carga optativa y serialización determinista de `Parent` a documentos en memoria | Cerrada; no incluye escritura en filesystem ni publicación |
-| 4 | OKF `snapshot_transaccional`: framing estable, replay y detección `stale` | Pendiente |
-| 5–7 | `writer_lock_transaccional`, `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
+| 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. Límite TOCTOU queda para root anclado en U6 |
+| 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery; root anclado corresponde a U6 |
+| 6–7 | `stage_bundle_transaccional`, `journal_recuperacion_transaccional` | Pendiente |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 
 ## Siguiente fase
