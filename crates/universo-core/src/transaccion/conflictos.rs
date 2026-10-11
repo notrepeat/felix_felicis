@@ -98,6 +98,11 @@ impl std::fmt::Display for ResultadoConflictos {
 /// aplica/publica el candidato. `Ext` se omite porque su validación pertenece
 /// al procesamiento de candidato de otra etapa.
 ///
+/// Este detector no valida `HasLab` huérfanos ni exige que una arista nueva
+/// tenga una etiqueta suministrada por el parche. La validación completa del
+/// parche corresponde a `construir_candidato` y al flujo transaccional de
+/// `proponer`.
+///
 /// No se informa conflicto de incidencia en v1: `IdArista` ya contiene
 /// origen, tipo, destino y ordinal, y `Atomo`/`Delta::nuevo` rechazan una
 /// identidad de arista inconsistente con esos campos antes de esta llamada.

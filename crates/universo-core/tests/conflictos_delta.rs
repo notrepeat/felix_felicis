@@ -1,6 +1,7 @@
 use universo_core::{
     Atomo, BundlePath, ClaseConflicto, ClaseOperacion, Delta, ErrorCandidato, ErrorDelta,
-    Estructura, Etiqueta, IdArista, Sorte, Sujeto, detectar_conflictos_funcionales,
+    Estructura, Etiqueta, IdArista, Sorte, Sujeto, construir_candidato,
+    detectar_conflictos_funcionales,
 };
 
 fn p(texto: &str) -> BundlePath {
@@ -28,6 +29,190 @@ fn cantidad(resultado: &universo_core::ResultadoConflictos, clase: ClaseConflict
         .iter()
         .find(|diagnostico| diagnostico.clase() == clase)
         .map_or(0, |diagnostico| diagnostico.cantidad())
+}
+
+fn estructura_con_arista(etiqueta: &str) -> (Estructura, IdArista) {
+    let mut snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
+    nodo(&mut snapshot, "n/PRIVATE_EDGE_ORIGIN", "a", "origen");
+    nodo(&mut snapshot, "n/PRIVATE_EDGE_DEST", "b", "destino");
+    let origen = snapshot.por_path(&p("n/PRIVATE_EDGE_ORIGIN")).unwrap();
+    let destino = snapshot.por_path(&p("n/PRIVATE_EDGE_DEST")).unwrap();
+    let handle = snapshot
+        .insertar_arista(
+            origen,
+            destino,
+            Sorte::nuevo("rel"),
+            Etiqueta::nuevo(etiqueta),
+        )
+        .unwrap();
+    let edge = snapshot.arista(handle).unwrap();
+    let id = id_arista(
+        "n/PRIVATE_EDGE_ORIGIN",
+        "n/PRIVATE_EDGE_DEST",
+        "rel",
+        edge.ordinal,
+    );
+    (snapshot, id)
+}
+
+fn alta_edge_con_etiqueta(id: &IdArista, etiqueta: &str) -> [Atomo; 2] {
+    [
+        Atomo::Edge {
+            id: id.clone(),
+            origen: id.origen.clone(),
+            destino: id.destino.clone(),
+            sorte: id.sorte.clone(),
+        },
+        Atomo::HasLab {
+            sujeto: Sujeto::Arista(id.clone()),
+            etiqueta: Etiqueta::nuevo(etiqueta),
+        },
+    ]
+}
+
+fn assert_error_edge_redactado(error: &ErrorCandidato, canarios: &[&str]) {
+    assert!(matches!(
+        error,
+        ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::Edge
+        }
+    ));
+    let salida = format!("{error} {error:?}");
+    for canario in canarios {
+        assert!(!salida.contains(canario), "se filtró {canario}: {salida}");
+    }
+}
+
+#[test]
+fn alta_edge_idempotente_con_etiqueta_igual_no_es_conflicto() {
+    let (snapshot, id) = estructura_con_arista("PRIVATE_EDGE_LABEL");
+    let antes = snapshot.atomos();
+    let delta = Delta::nuevo(alta_edge_con_etiqueta(&id, "PRIVATE_EDGE_LABEL"), []).unwrap();
+
+    let resultado = detectar_conflictos_funcionales(&snapshot, &delta).unwrap();
+
+    assert!(!resultado.hay_conflictos());
+    assert_eq!(resultado.total_conflictos(), 0);
+    assert_eq!(snapshot.atomos(), antes);
+}
+
+#[test]
+fn alta_edge_idempotente_con_etiqueta_distinta_es_conflicto_haslab() {
+    let (snapshot, id) = estructura_con_arista("PRIVATE_EDGE_LABEL_OLD");
+    let antes = snapshot.atomos();
+    let delta = Delta::nuevo(alta_edge_con_etiqueta(&id, "PRIVATE_EDGE_LABEL_NEW"), []).unwrap();
+
+    let resultado = detectar_conflictos_funcionales(&snapshot, &delta).unwrap();
+
+    assert_eq!(resultado.diagnosticos().len(), 1);
+    assert_eq!(cantidad(&resultado, ClaseConflicto::HasLab), 1);
+    assert_eq!(resultado.total_conflictos(), 1);
+    let salida = format!("{resultado} {resultado:?}");
+    for canario in [
+        "PRIVATE_EDGE_ORIGIN",
+        "PRIVATE_EDGE_DEST",
+        "PRIVATE_EDGE_LABEL",
+    ] {
+        assert!(!salida.contains(canario), "se filtró {canario}: {salida}");
+    }
+    assert_eq!(snapshot.atomos(), antes);
+}
+
+#[test]
+fn alta_edge_con_endpoint_ausente_devuelve_error_redactado() {
+    let (snapshot, _) = estructura_con_arista("label");
+    let id = id_arista(
+        "n/PRIVATE_ENDPOINT_MISSING",
+        "n/PRIVATE_EDGE_DEST",
+        "rel",
+        0,
+    );
+    let delta = Delta::nuevo(
+        [Atomo::Edge {
+            id: id.clone(),
+            origen: id.origen.clone(),
+            destino: id.destino.clone(),
+            sorte: id.sorte.clone(),
+        }],
+        [],
+    )
+    .unwrap();
+
+    let error = detectar_conflictos_funcionales(&snapshot, &delta).unwrap_err();
+
+    assert_error_edge_redactado(&error, &["PRIVATE_ENDPOINT", "PRIVATE_EDGE_DEST"]);
+}
+
+#[test]
+fn alta_edge_con_ordinal_no_contiguo_devuelve_error_redactado() {
+    let (snapshot, _) = estructura_con_arista("label");
+    let id = id_arista("n/PRIVATE_EDGE_ORIGIN", "n/PRIVATE_EDGE_DEST", "rel", 2);
+    let delta = Delta::nuevo(
+        [Atomo::Edge {
+            id: id.clone(),
+            origen: id.origen.clone(),
+            destino: id.destino.clone(),
+            sorte: id.sorte.clone(),
+        }],
+        [],
+    )
+    .unwrap();
+
+    let error = detectar_conflictos_funcionales(&snapshot, &delta).unwrap_err();
+
+    assert_error_edge_redactado(&error, &["PRIVATE_EDGE_ORIGIN", "PRIVATE_EDGE_DEST"]);
+}
+
+#[test]
+fn detector_deja_validar_labels_ausentes_y_huerfanos_al_constructor() {
+    let (snapshot, _) = estructura_con_arista("label");
+    let id_nueva = id_arista("n/PRIVATE_EDGE_ORIGIN", "n/PRIVATE_EDGE_DEST", "rel", 1);
+    let edge_sin_label = Delta::nuevo(
+        [Atomo::Edge {
+            id: id_nueva.clone(),
+            origen: id_nueva.origen.clone(),
+            destino: id_nueva.destino.clone(),
+            sorte: id_nueva.sorte.clone(),
+        }],
+        [],
+    )
+    .unwrap();
+
+    let resultado = detectar_conflictos_funcionales(&snapshot, &edge_sin_label).unwrap();
+    let error = construir_candidato(&snapshot, &edge_sin_label).unwrap_err();
+    assert!(!resultado.hay_conflictos());
+    assert!(matches!(
+        error,
+        ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab
+        }
+    ));
+
+    let identidad_huerfana = id_arista("n/PRIVATE_EDGE_ORIGIN", "n/PRIVATE_EDGE_DEST", "rel", 8);
+    let labels_huerfanos = Delta::nuevo(
+        [
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(identidad_huerfana.clone()),
+                etiqueta: Etiqueta::nuevo("PRIVATE_ORPHAN_LABEL_A"),
+            },
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(identidad_huerfana),
+                etiqueta: Etiqueta::nuevo("PRIVATE_ORPHAN_LABEL_B"),
+            },
+        ],
+        [],
+    )
+    .unwrap();
+
+    let resultado = detectar_conflictos_funcionales(&snapshot, &labels_huerfanos).unwrap();
+    let error = construir_candidato(&snapshot, &labels_huerfanos).unwrap_err();
+    assert!(!resultado.hay_conflictos());
+    assert!(matches!(
+        error,
+        ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::HasLab
+        }
+    ));
 }
 
 #[test]
