@@ -40,7 +40,10 @@ pub use manifiesto::{
 pub use path::{BundlePath, ErrorPath};
 pub use sexpr::{ErrorAutoria, MotivoAutoria, SentenciaFuente, parsear, parsear_programa};
 pub use tipos::{Etiqueta, Sorte};
-pub use transaccion::{Candidato, ClaseOperacion, ErrorCandidato, construir_candidato};
+pub use transaccion::{
+    Candidato, ClaseConflicto, ClaseOperacion, DiagnosticoConflicto, ErrorCandidato,
+    ResultadoConflictos, construir_candidato, detectar_conflictos_funcionales,
+};
 pub use veredicto::{
     Contraejemplo, ErrorVeredicto, MAX_EXPLICACIONES_POR_DEFECTO, ModoExplicacion,
     ObjetoExplicacion, PRESUPUESTO_EXPLICACION_POR_DEFECTO, ProcedenciaExplicacion,
