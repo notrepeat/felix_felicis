@@ -305,6 +305,12 @@ Chain strategy: feature-branch-chain
   y stale, apply/publicador filesystem, hashes antes/después de una propuesta
   rechazada, lock, staging, journal/recovery, CLI y una cota global del
   presupuesto de evaluación.
+
+  Comando reproducible del harness ignorado:
+
+  ```text
+  cargo test --release -p universo-okf --test padre_persistible runtime_parent_mide_serializacion_de_1000_cambios -- --ignored --nocapture
+  ```
 - [ ] 4 — Snapshot/stale: `crates/universo-okf/src/transaccion/snapshot.rs`.
   Test `crates/universo-okf/tests/snapshot_transaccional.rs`
   (`cargo test -p universo-okf --test snapshot_transaccional`) compara replay,
