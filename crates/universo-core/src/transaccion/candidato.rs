@@ -171,6 +171,49 @@ pub fn construir_candidato(
     Ok(Candidato { estructura })
 }
 
+/// Construye solo la topología Edge final requerida por el detector de
+/// conflictos. Las etiquetas provienen de una capa lógica separada: cada
+/// arista realmente nueva recibe una etiqueta vacía sintética para reutilizar
+/// la misma validación e inserción de aristas que el constructor normal.
+pub(super) fn construir_topologia_aristas(
+    snapshot: &Estructura,
+    delta: &Delta,
+) -> Result<Candidato, ErrorCandidato> {
+    let retiros = delta
+        .retirar()
+        .iter()
+        .filter(|atomo| matches!(atomo, Atomo::Edge { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    let delta_retiros = Delta::nuevo(std::iter::empty(), retiros)
+        .expect("filtrar operaciones Edge conserva el delta canónico");
+    let mut candidato = construir_candidato(snapshot, &delta_retiros)?;
+
+    let mut altas_topologicas = Vec::new();
+    for atomo in delta.agregar() {
+        let Atomo::Edge { id, .. } = atomo else {
+            continue;
+        };
+        // Las altas Edge que ya resuelven tras los retiros son no-op. Omitirlas
+        // evita que una etiqueta sintética sustituya la del handle existente.
+        if aristas::resolver(candidato.estructura(), id).is_some() {
+            continue;
+        }
+        altas_topologicas.push(atomo.clone());
+        altas_topologicas.push(Atomo::HasLab {
+            sujeto: Sujeto::Arista(id.clone()),
+            etiqueta: Etiqueta::nuevo(""),
+        });
+    }
+
+    aplicar_altas(
+        &mut candidato.estructura,
+        &altas_topologicas,
+        &HashMap::new(),
+    )?;
+    Ok(candidato)
+}
+
 type GrupoArista = (BundlePath, Sorte, BundlePath);
 
 fn aplicar_altas(
@@ -377,7 +420,7 @@ fn aplicar_altas(
     Ok(())
 }
 
-fn identidad_arista(estructura: &Estructura, handle: AristaId) -> Option<IdArista> {
+pub(super) fn identidad_arista(estructura: &Estructura, handle: AristaId) -> Option<IdArista> {
     let arista = estructura.arista(handle)?;
     Some(IdArista {
         origen: estructura.nodo(arista.origen)?.path.clone(),

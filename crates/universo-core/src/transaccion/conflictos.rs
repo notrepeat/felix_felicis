@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{Atomo, BundlePath, Delta, Estructura, Etiqueta, Sorte, Sujeto};
 
-use super::candidato::{ErrorCandidato, construir_candidato};
+use super::aristas;
+use super::candidato::{ErrorCandidato, construir_topologia_aristas, identidad_arista};
 
 /// Clase de conflicto funcional detectada sobre el estado lógico final.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,13 +88,15 @@ impl std::fmt::Display for ResultadoConflictos {
 
 /// Detecta conflictos funcionales sobre `snapshot - remove + add`.
 ///
-/// Las operaciones `Edge` y `HasLab` de arista se normalizan con el constructor
-/// de candidato para conservar la identidad por handle tras compactar
-/// ordinales. Sus errores técnicos se devuelven redactados en vez de ocultarse.
-/// `Type`, `Parent` y `HasLab` de nodo se superponen sobre el snapshot usando
-/// retiros exactos y altas; las altas idénticas no duplican valores. No evalúa
-/// invariantes ni aplica/publica el candidato. `Ext` se omite porque su
-/// validación pertenece al procesamiento de candidato de otra etapa.
+/// La topología `Edge` final se normaliza con el constructor de candidato para
+/// conservar la identidad por handle tras compactar ordinales. Las etiquetas
+/// se agrupan aparte por identidad final, combinando las etiquetas de handles
+/// supervivientes con altas válidas para esa topología; las altas idénticas no
+/// duplican valores. Los errores técnicos de topología se devuelven redactados
+/// en vez de ocultarse. `Type`, `Parent` y `HasLab` de nodo se superponen sobre
+/// el snapshot usando retiros exactos y altas. No evalúa invariantes ni
+/// aplica/publica el candidato. `Ext` se omite porque su validación pertenece
+/// al procesamiento de candidato de otra etapa.
 ///
 /// No se informa conflicto de incidencia en v1: `IdArista` ya contiene
 /// origen, tipo, destino y ordinal, y `Atomo`/`Delta::nuevo` rechazan una
@@ -106,24 +109,13 @@ pub fn detectar_conflictos_funcionales(
     let mut etiquetas = HashMap::<Sujeto, HashSet<Etiqueta>>::new();
     let mut padres = HashMap::<BundlePath, HashSet<BundlePath>>::new();
 
-    let delta_aristas = delta.filtrar(es_operacion_arista);
-    let candidato = construir_candidato(snapshot, &delta_aristas)?;
-    let finales = candidato
-        .estructura()
+    let candidato = construir_topologia_aristas(snapshot, delta)?;
+    let topologia_final = candidato.estructura();
+    let finales = snapshot
         .atomos()
         .into_iter()
-        .filter(|atomo| {
-            if matches!(
-                atomo,
-                Atomo::HasLab {
-                    sujeto: Sujeto::Arista(_),
-                    ..
-                }
-            ) {
-                return true;
-            }
-            es_hecho_funcional_de_nodo(atomo) && delta.retirar().binary_search(atomo).is_err()
-        })
+        .filter(es_hecho_funcional_de_nodo)
+        .filter(|atomo| delta.retirar().binary_search(atomo).is_err())
         .chain(
             delta
                 .agregar()
@@ -131,6 +123,45 @@ pub fn detectar_conflictos_funcionales(
                 .filter(|atomo| es_hecho_funcional_de_nodo(atomo))
                 .cloned(),
         );
+
+    for (handle, arista_snapshot) in snapshot.aristas() {
+        if topologia_final.arista(handle).is_none() {
+            continue;
+        }
+        let identidad_snapshot =
+            identidad_arista(snapshot, handle).ok_or(ErrorCandidato::SnapshotInconsistente)?;
+        let identidad_final = identidad_arista(topologia_final, handle)
+            .ok_or(ErrorCandidato::SnapshotInconsistente)?;
+        let etiqueta_snapshot = Atomo::HasLab {
+            sujeto: Sujeto::Arista(identidad_snapshot),
+            etiqueta: arista_snapshot.etiqueta.clone(),
+        };
+        if delta.retirar().binary_search(&etiqueta_snapshot).is_err() {
+            etiquetas
+                .entry(Sujeto::Arista(identidad_final))
+                .or_default()
+                .insert(arista_snapshot.etiqueta.clone());
+        }
+    }
+
+    for atomo in delta.agregar() {
+        let Atomo::HasLab {
+            sujeto: Sujeto::Arista(identidad),
+            etiqueta,
+        } = atomo
+        else {
+            continue;
+        };
+        let Some(handle) = aristas::resolver(topologia_final, identidad) else {
+            continue;
+        };
+        let identidad_final = identidad_arista(topologia_final, handle)
+            .ok_or(ErrorCandidato::SnapshotInconsistente)?;
+        etiquetas
+            .entry(Sujeto::Arista(identidad_final))
+            .or_default()
+            .insert(etiqueta.clone());
+    }
 
     for atomo in finales {
         match atomo {
@@ -148,17 +179,6 @@ pub fn detectar_conflictos_funcionales(
     agregar_diagnostico(&mut diagnosticos, ClaseConflicto::HasLab, &etiquetas);
     agregar_diagnostico(&mut diagnosticos, ClaseConflicto::Parent, &padres);
     Ok(ResultadoConflictos { diagnosticos })
-}
-
-fn es_operacion_arista(atomo: &Atomo) -> bool {
-    matches!(
-        atomo,
-        Atomo::Edge { .. }
-            | Atomo::HasLab {
-                sujeto: Sujeto::Arista(_),
-                ..
-            }
-    )
 }
 
 fn es_hecho_funcional_de_nodo(atomo: &Atomo) -> bool {

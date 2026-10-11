@@ -59,26 +59,6 @@ impl Delta {
     pub fn retirar(&self) -> &[Atomo] {
         &self.remove
     }
-
-    /// Conserva un subconjunto canónico de operaciones para una fase interna.
-    /// Filtrar los vectores ordenados preserva orden, deduplicación y la
-    /// ausencia de solapamiento entre ambos lados.
-    pub(crate) fn filtrar(&self, mut incluir: impl FnMut(&Atomo) -> bool) -> Self {
-        Self {
-            add: self
-                .add
-                .iter()
-                .filter(|&atomo| incluir(atomo))
-                .cloned()
-                .collect(),
-            remove: self
-                .remove
-                .iter()
-                .filter(|&atomo| incluir(atomo))
-                .cloned()
-                .collect(),
-        }
-    }
 }
 
 fn canonicalizar(
