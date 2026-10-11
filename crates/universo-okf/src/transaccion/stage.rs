@@ -220,8 +220,8 @@ impl fmt::Debug for StagePropio {
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
 pub(crate) struct ErrorEscrituraStage {
     codigo: CodigoEscrituraStage,
-    stage_parcial: Option<StagePropio>,
-    stage_anclado_parcial: Option<StageAnclado>,
+    stage_parcial: Option<Box<StagePropio>>,
+    stage_anclado_parcial: Option<Box<StageAnclado>>,
 }
 
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
@@ -231,11 +231,11 @@ impl ErrorEscrituraStage {
     }
 
     pub(crate) fn stage_parcial(&self) -> Option<&StagePropio> {
-        self.stage_parcial.as_ref()
+        self.stage_parcial.as_deref()
     }
 
     pub(crate) fn stage_anclado_parcial(&self) -> Option<&StageAnclado> {
-        self.stage_anclado_parcial.as_ref()
+        self.stage_anclado_parcial.as_deref()
     }
 
     fn nuevo(codigo: CodigoEscrituraStage) -> Self {
@@ -337,7 +337,7 @@ pub(crate) fn materializar_staging(
     if validar_candidato_recargado(snapshot, candidato, &recapturado).is_err() {
         return Err(ErrorEscrituraStage {
             codigo: CodigoEscrituraStage::CandidatoInconsistente,
-            stage_parcial: Some(stage),
+            stage_parcial: Some(Box::new(stage)),
             stage_anclado_parcial: None,
         });
     }
@@ -370,7 +370,7 @@ pub(crate) fn materializar_staging_anclado(
         return Err(ErrorEscrituraStage {
             codigo: CodigoEscrituraStage::CandidatoInconsistente,
             stage_parcial: None,
-            stage_anclado_parcial: Some(stage),
+            stage_anclado_parcial: Some(Box::new(stage)),
         });
     }
     stage.recibo = Some(ReciboStage {
@@ -397,7 +397,7 @@ where
         Err(codigo) => Err(ErrorEscrituraStage {
             codigo,
             stage_parcial: None,
-            stage_anclado_parcial: Some(stage),
+            stage_anclado_parcial: Some(Box::new(stage)),
         }),
     }
 }
@@ -424,7 +424,7 @@ where
         return Err(ErrorEscrituraStage {
             codigo,
             stage_parcial: None,
-            stage_anclado_parcial: Some(stage),
+            stage_anclado_parcial: Some(Box::new(stage)),
         });
     }
     Ok(stage)
@@ -666,7 +666,7 @@ where
         Ok(snapshot_recapturado) => Ok((stage, snapshot_recapturado)),
         Err(codigo) => Err(ErrorEscrituraStage {
             codigo,
-            stage_parcial: Some(stage),
+            stage_parcial: Some(Box::new(stage)),
             stage_anclado_parcial: None,
         }),
     }
@@ -796,7 +796,7 @@ where
     if let Err(codigo) = escribir_plan_en_stage(&stage, plan, &mut escribir_archivo) {
         return Err(ErrorEscrituraStage {
             codigo,
-            stage_parcial: Some(stage),
+            stage_parcial: Some(Box::new(stage)),
             stage_anclado_parcial: None,
         });
     }
@@ -826,7 +826,7 @@ where
                 if let Err(codigo) = validar_directorio_stage(stage.ruta()) {
                     return Err(ErrorEscrituraStage {
                         codigo,
-                        stage_parcial: Some(stage),
+                        stage_parcial: Some(Box::new(stage)),
                         stage_anclado_parcial: None,
                     });
                 }
