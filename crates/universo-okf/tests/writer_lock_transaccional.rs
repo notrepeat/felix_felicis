@@ -176,13 +176,13 @@ fn alias_parent_converge_en_el_mismo_lock() {
 }
 
 #[test]
-fn raiz_vacia_ausente_o_archivo_devuelve_io_redactado() {
+fn ruta_vacia_y_archivo_devuelven_io_redactado_root_ausente_se_admite() {
     let temp = tempfile::tempdir().unwrap();
     let absent = temp.path().join("missing-root");
     let file = temp.path().join("not-a-directory");
     std::fs::write(&file, b"not a root").unwrap();
 
-    for path in [Path::new(""), absent.as_path(), file.as_path()] {
+    for path in [Path::new(""), file.as_path()] {
         let error = LockEscritura::adquirir(path).unwrap_err();
         assert_eq!(error, ErrorLockEscritura::Io);
         assert_eq!(error.to_string(), "writer_lock_io");
@@ -197,6 +197,15 @@ fn raiz_vacia_ausente_o_archivo_devuelve_io_redactado() {
         );
         assert!(!format!("{error:?}").contains(file.to_string_lossy().as_ref()));
     }
+
+    let guard = LockEscritura::adquirir(&absent).unwrap();
+    assert!(!absent.exists());
+    assert_eq!(
+        guard.raiz_canonica(),
+        std::fs::canonicalize(temp.path())
+            .unwrap()
+            .join("missing-root")
+    );
 }
 
 #[test]
@@ -229,6 +238,21 @@ fn junction_ancestro_antes_de_parent_se_rechaza() {
     let (temp, alias) = preparar_alias_ancestro();
     crear_junction(&alias, &temp.path().join("target/inside"));
     assert_alias_ancestro_rechazado(&temp, &alias);
+}
+
+#[cfg(windows)]
+#[test]
+fn junction_root_se_rechaza_sin_seguirla() {
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    let alias = temp.path().join("bundle");
+    std::fs::create_dir(&target).unwrap();
+    crear_junction(&alias, &target);
+
+    let error = LockEscritura::adquirir(&alias).unwrap_err();
+    assert_eq!(error, ErrorLockEscritura::Io);
+    assert_eq!(error.to_string(), "writer_lock_io");
+    assert!(!format!("{error:?}").contains(temp.path().to_string_lossy().as_ref()));
 }
 
 fn preparar_alias_ancestro() -> (tempfile::TempDir, std::path::PathBuf) {

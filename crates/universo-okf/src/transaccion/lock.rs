@@ -14,7 +14,7 @@ use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
-use super::raiz::{ErrorRaiz, RaizValidada, metadata_es_enlace_o_reparse};
+use super::raiz::{ErrorRaiz, UbicacionRaiz, metadata_es_enlace_o_reparse};
 
 /// Resultado redactado de adquirir el lock de escritor.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,28 +53,34 @@ impl std::error::Error for ErrorLockEscritura {}
 #[must_use = "el lock se libera cuando se descarta este guard"]
 pub struct LockEscritura {
     _archivo_lock: File,
-    raiz: RaizValidada,
+    ubicacion: UbicacionRaiz,
 }
 
 impl LockEscritura {
-    /// Adquiere sin espera el lock sibling de la raíz canónica.
+    /// Valida la ubicación y adquiere sin espera su lock sibling estable.
     pub fn adquirir(raiz: impl AsRef<Path>) -> Result<Self, ErrorLockEscritura> {
-        let raiz = RaizValidada::nueva(raiz.as_ref()).map_err(mapear_error_raiz)?;
-        let archivo = abrir_lockfile(&raiz).map_err(|_| ErrorLockEscritura::Io)?;
+        let ubicacion = UbicacionRaiz::nueva(raiz.as_ref()).map_err(mapear_error_raiz)?;
+        Self::adquirir_en(&ubicacion)
+    }
+
+    /// Adquiere el lock desde una ubicación validada, aunque la raíz falte
+    /// temporalmente durante recovery.
+    pub(crate) fn adquirir_en(ubicacion: &UbicacionRaiz) -> Result<Self, ErrorLockEscritura> {
+        let archivo = abrir_lockfile(ubicacion).map_err(|_| ErrorLockEscritura::Io)?;
 
         match fs4::FileExt::try_lock(&archivo) {
             Ok(()) => Ok(Self {
                 _archivo_lock: archivo,
-                raiz,
+                ubicacion: ubicacion.clone(),
             }),
             Err(fs4::TryLockError::WouldBlock) => Err(ErrorLockEscritura::Busy),
             Err(fs4::TryLockError::Error(_)) => Err(ErrorLockEscritura::Io),
         }
     }
 
-    /// Ruta canónica que determina la identidad y los siblings de este guard.
+    /// Ruta de ubicación compuesta por parent canónico y basename exacto.
     pub fn raiz_canonica(&self) -> &Path {
-        self.raiz.ruta()
+        self.ubicacion.ruta()
     }
 }
 
@@ -92,7 +98,7 @@ fn mapear_error_raiz(error: ErrorRaiz) -> ErrorLockEscritura {
     }
 }
 
-fn abrir_lockfile(raiz: &RaizValidada) -> std::io::Result<File> {
+fn abrir_lockfile(ubicacion: &UbicacionRaiz) -> std::io::Result<File> {
     let mut opciones = OpenOptions::new();
     opciones.read(true).write(true).create(true);
 
@@ -108,7 +114,7 @@ fn abrir_lockfile(raiz: &RaizValidada) -> std::io::Result<File> {
         opciones.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
 
-    let archivo = opciones.open(raiz.ruta_lock())?;
+    let archivo = opciones.open(ubicacion.lock().as_path())?;
     let metadata = archivo.metadata()?;
     if metadata_es_enlace_o_reparse(&metadata) || !metadata.is_file() {
         return Err(std::io::Error::other("invalid lockfile type"));
@@ -149,5 +155,36 @@ mod tests {
         assert_eq!(ErrorLockEscritura::Busy.codigo(), "writer_lock_busy");
         assert_eq!(ErrorLockEscritura::Io.to_string(), "writer_lock_io");
         assert!(!format!("{:?}", ErrorLockEscritura::Io).contains("C:\\"));
+    }
+
+    #[test]
+    fn lock_se_adquiere_con_root_ausente_despues_de_root_a_backup() {
+        let temp = tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        fs::create_dir(&raiz).unwrap();
+
+        let ubicacion = UbicacionRaiz::nueva(&raiz).unwrap();
+        let backup = ubicacion.backup();
+        fs::rename(&raiz, backup.as_path()).unwrap();
+        let lock_path = ubicacion.lock().as_path().to_path_buf();
+
+        let guard = LockEscritura::adquirir_en(&ubicacion).unwrap();
+        assert!(!raiz.exists());
+        assert!(backup.as_path().is_dir());
+        assert!(lock_path.is_file());
+        assert_eq!(
+            guard.raiz_canonica(),
+            fs::canonicalize(temp.path()).unwrap().join("bundle")
+        );
+        assert!(matches!(
+            LockEscritura::adquirir(&raiz),
+            Err(ErrorLockEscritura::Busy)
+        ));
+        drop(guard);
+
+        fs::rename(backup.as_path(), &raiz).unwrap();
+        let ubicacion_existente = UbicacionRaiz::nueva(&raiz).unwrap();
+        assert_eq!(ubicacion_existente.lock().as_path(), lock_path);
+        assert!(LockEscritura::adquirir_en(&ubicacion_existente).is_ok());
     }
 }
