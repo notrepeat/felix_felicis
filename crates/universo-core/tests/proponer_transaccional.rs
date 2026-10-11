@@ -101,6 +101,7 @@ fn rechaza_conflictos_type_haslab_y_parent_con_diagnosticos_redactados() {
                 etiqueta: Etiqueta::nuevo("PRIVATE_LABEL_NEW"),
             }]),
             ClaseConflicto::HasLab,
+            &["PRIVATE_A", "PRIVATE_LABEL_NEW"][..],
         ),
         (
             delta(edge(
@@ -113,6 +114,12 @@ fn rechaza_conflictos_type_haslab_y_parent_con_diagnosticos_redactados() {
                 "PRIVATE_EDGE_NEW",
             )),
             ClaseConflicto::HasLab,
+            &[
+                "PRIVATE_A",
+                "PRIVATE_B",
+                "PRIVATE_EDGE_OLD",
+                "PRIVATE_EDGE_NEW",
+            ][..],
         ),
         (
             delta([Atomo::Parent {
@@ -120,18 +127,87 @@ fn rechaza_conflictos_type_haslab_y_parent_con_diagnosticos_redactados() {
                 padre: path_c,
             }]),
             ClaseConflicto::Parent,
+            &["PRIVATE_B", "PRIVATE_C"][..],
         ),
     ];
 
-    for (delta, clase) in casos {
+    for (delta, clase, canarios) in casos {
         let resultado = proponer(&snapshot, &delta, &[]).unwrap();
         let salida = format!("{resultado} {resultado:?}");
-        for canario in ["PRIVATE_A", "PRIVATE_LABEL"] {
+        for canario in canarios {
             assert!(!salida.contains(canario), "se filtró {canario}: {salida}");
         }
         assert_conflicto(resultado, clase);
         assert_eq!(snapshot.atomos(), antes);
     }
+}
+
+#[test]
+fn proponer_agrega_conflictos_edge_haslab_y_parent_en_orden_redactado() {
+    let mut snapshot = base();
+    let origen = snapshot.por_path(&p("n/PRIVATE_A")).unwrap();
+    let destino = snapshot.por_path(&p("n/PRIVATE_B")).unwrap();
+    snapshot
+        .insertar_arista(
+            origen,
+            destino,
+            Sorte::nuevo("rel"),
+            Etiqueta::nuevo("PRIVATE_EDGE_OLD"),
+        )
+        .unwrap();
+    let antes = snapshot.atomos();
+    let id_edge = IdArista {
+        origen: p("n/PRIVATE_A"),
+        sorte: Sorte::nuevo("rel"),
+        destino: p("n/PRIVATE_B"),
+        ordinal: 0,
+    };
+    let delta = Delta::nuevo(
+        [
+            Atomo::HasLab {
+                sujeto: Sujeto::Nodo(p("n/PRIVATE_A")),
+                etiqueta: Etiqueta::nuevo("PRIVATE_NODE_LABEL_NEW"),
+            },
+            Atomo::Parent {
+                hijo: p("n/PRIVATE_B"),
+                padre: p("n/PRIVATE_C"),
+            },
+            edge(&id_edge, "PRIVATE_EDGE_NEW")[0].clone(),
+            edge(&id_edge, "PRIVATE_EDGE_NEW")[1].clone(),
+        ],
+        [],
+    )
+    .unwrap();
+
+    let primera = proponer(&snapshot, &delta, &[]).unwrap();
+    let segunda = proponer(&snapshot, &delta, &[]).unwrap();
+    let salida = format!("{primera} {primera:?}");
+    assert_eq!(format!("{primera:?}"), format!("{segunda:?}"));
+    assert_eq!(primera.to_string(), segunda.to_string());
+    for canario in [
+        "PRIVATE_A",
+        "PRIVATE_B",
+        "PRIVATE_C",
+        "PRIVATE_EDGE_OLD",
+        "PRIVATE_EDGE_NEW",
+        "PRIVATE_NODE_LABEL_NEW",
+        "candidate_error",
+        "add_conflict",
+        "remove_not_found",
+    ] {
+        assert!(!salida.contains(canario), "se filtró {canario}: {salida}");
+    }
+    let ResultadoPropuesta::RechazadaConflictos(conflictos) = primera else {
+        panic!("se esperaba rechazo funcional agregado: {primera:?}");
+    };
+    let diagnosticos = conflictos.diagnosticos();
+    assert_eq!(diagnosticos.len(), 2);
+    assert_eq!(diagnosticos[0].clase(), ClaseConflicto::HasLab);
+    assert_eq!(diagnosticos[0].cantidad(), 2);
+    assert_eq!(diagnosticos[1].clase(), ClaseConflicto::Parent);
+    assert_eq!(diagnosticos[1].cantidad(), 1);
+    assert_eq!(conflictos.total_conflictos(), 3);
+    assert_eq!(snapshot.atomos(), antes);
 }
 
 #[test]
@@ -256,8 +332,14 @@ fn invariantes_se_evalúan_sobre_candidato_edge_y_ext_y_solo_exponen_procedencia
     let casos = [
         (
             edge_delta,
-            "; cabecera privada\n(not (exists ((e E)) (Edge e @n/PRIVATE_A @n/PRIVATE_B rel)))",
-            "PRIVATE_EDGE_LABEL",
+            "; PRIVATE_EDGE_COMMENT_CANARY\n(not (exists ((e E)) (Edge e @n/PRIVATE_A @n/PRIVATE_B rel)))",
+            &[
+                "PRIVATE_EDGE_LABEL",
+                "PRIVATE_A",
+                "PRIVATE_B",
+                "PRIVATE_EDGE_COMMENT_CANARY",
+                "(not (exists",
+            ][..],
         ),
         (
             delta([Atomo::Ext {
@@ -266,11 +348,11 @@ fn invariantes_se_evalúan_sobre_candidato_edge_y_ext_y_solo_exponen_procedencia
                 constante: "alto".into(),
             }]),
             "; cabecera privada\n(not (Nivel @n/PRIVATE_A alto))",
-            "PRIVATE_A",
+            &["PRIVATE_A"][..],
         ),
     ];
 
-    for (delta, texto, canario) in casos {
+    for (delta, texto, canarios) in casos {
         let resultado = proponer(&snapshot, &delta, &fuentes(texto)).unwrap();
         let ResultadoPropuesta::RechazadaInvariantes(procedencias) = &resultado else {
             panic!("se esperaba rechazo por invariante: {resultado:?}");
@@ -281,7 +363,9 @@ fn invariantes_se_evalúan_sobre_candidato_edge_y_ext_y_solo_exponen_procedencia
         assert_eq!(procedencias[0].columna, Some(1));
         assert_eq!(procedencias[0].instance_index, None);
         let salida = format!("{resultado} {resultado:?}");
-        assert!(!salida.contains(canario), "se filtró {canario}: {salida}");
+        for canario in canarios {
+            assert!(!salida.contains(canario), "se filtró {canario}: {salida}");
+        }
         assert!(!salida.contains("exists"));
         assert_eq!(snapshot.atomos(), antes);
     }
