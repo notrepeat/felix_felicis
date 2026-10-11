@@ -27,6 +27,9 @@ pub(crate) enum ErrorJournalAnclado {
     ReparseNotAllowed,
     RegularFileRequired,
     ParentChanged,
+    SourceMissing,
+    IdentityMismatch,
+    CanonicalConflict,
 }
 
 impl ErrorJournalAnclado {
@@ -38,8 +41,21 @@ impl ErrorJournalAnclado {
             Self::ReparseNotAllowed => "journal_reparse_not_allowed",
             Self::RegularFileRequired => "journal_regular_file_required",
             Self::ParentChanged => "journal_parent_changed",
+            Self::SourceMissing => "journal_source_missing",
+            Self::IdentityMismatch => "journal_identity_mismatch",
+            Self::CanonicalConflict => "journal_canonical_conflict",
         }
     }
+}
+
+#[path = "journal_temporal/publicar.rs"]
+mod publicar;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResultadoPublicacionJournal {
+    Publicado,
+    YaPublicado,
+    PublicadoTemporalPendiente,
 }
 
 impl fmt::Debug for ErrorJournalAnclado {
