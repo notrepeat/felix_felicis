@@ -19,6 +19,24 @@ fn root_ausente_conserva_parent_y_se_abre_despues_de_recovery() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn derechos_parent_transaccional_incluyen_permisos_de_creacion_del_temporal() {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
+        FILE_TRAVERSE,
+    };
+
+    assert_eq!(
+        derechos_parent_transaccional(),
+        FILE_READ_ATTRIBUTES
+            | FILE_LIST_DIRECTORY
+            | FILE_TRAVERSE
+            | FILE_ADD_FILE
+            | FILE_ADD_SUBDIRECTORY
+    );
+}
+
 #[test]
 fn file_id_hex_conserva_el_orden_literal_de_bytes_en_minusculas() {
     assert_eq!(

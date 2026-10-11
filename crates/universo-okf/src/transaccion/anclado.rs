@@ -480,43 +480,28 @@ fn opciones_parent_stage() -> OpenOptionsAt {
     #[cfg(windows)]
     {
         use fs_at::os::windows::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_ADD_SUBDIRECTORY, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
-        };
-        opciones.desired_access(
-            FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY,
-        );
+        opciones.desired_access(derechos_parent_transaccional());
     }
     opciones
 }
 
-fn abrir_directorio_absoluto(ruta: &Path) -> Result<File, ErrorDirectorioAnclado> {
-    #[cfg(unix)]
-    let mut actual = abrir_directorio_por_ruta(Path::new("/"))?;
-
-    #[cfg(windows)]
-    let mut actual = {
-        let mut componentes = ruta.components();
-        let prefijo = match componentes.next() {
-            Some(Component::Prefix(prefijo)) => prefijo,
-            _ => return Err(ErrorDirectorioAnclado::TipoNoAdmitido),
-        };
-        if !matches!(
-            prefijo.kind(),
-            std::path::Prefix::Disk(_)
-                | std::path::Prefix::VerbatimDisk(_)
-                | std::path::Prefix::UNC(_, _)
-                | std::path::Prefix::VerbatimUNC(_, _)
-        ) {
-            return Err(ErrorDirectorioAnclado::TipoNoAdmitido);
-        }
-        if !matches!(componentes.next(), Some(Component::RootDir)) {
-            return Err(ErrorDirectorioAnclado::TipoNoAdmitido);
-        }
-        let mut volumen = PathBuf::from(prefijo.as_os_str());
-        volumen.push("\\");
-        abrir_directorio_por_ruta(&volumen)?
+#[cfg(windows)]
+fn derechos_parent_transaccional() -> u32 {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
+        FILE_TRAVERSE,
     };
+
+    FILE_READ_ATTRIBUTES
+        | FILE_LIST_DIRECTORY
+        | FILE_TRAVERSE
+        | FILE_ADD_FILE
+        | FILE_ADD_SUBDIRECTORY
+}
+
+fn abrir_directorio_absoluto(ruta: &Path) -> Result<File, ErrorDirectorioAnclado> {
+    #[cfg(windows)]
+    let volumen = raiz_parent_windows(ruta)?;
 
     let mut nombres = Vec::new();
     for componente in ruta.components() {
@@ -527,6 +512,12 @@ fn abrir_directorio_absoluto(ruta: &Path) -> Result<File, ErrorDirectorioAnclado
             Component::ParentDir => return Err(ErrorDirectorioAnclado::TipoNoAdmitido),
         }
     }
+
+    #[cfg(unix)]
+    let mut actual = abrir_directorio_por_ruta(Path::new("/"), nombres.is_empty())?;
+    #[cfg(windows)]
+    let mut actual = abrir_directorio_por_ruta(&volumen, nombres.is_empty())?;
+
     for (indice, nombre) in nombres.iter().enumerate() {
         let opciones = if indice + 1 == nombres.len() {
             opciones_parent_stage()
@@ -540,12 +531,38 @@ fn abrir_directorio_absoluto(ruta: &Path) -> Result<File, ErrorDirectorioAnclado
     Ok(actual)
 }
 
-fn abrir_directorio_por_ruta(ruta: &Path) -> Result<File, ErrorDirectorioAnclado> {
+#[cfg(windows)]
+fn raiz_parent_windows(ruta: &Path) -> Result<PathBuf, ErrorDirectorioAnclado> {
+    let mut componentes = ruta.components();
+    let prefijo = match componentes.next() {
+        Some(Component::Prefix(prefijo)) => prefijo,
+        _ => return Err(ErrorDirectorioAnclado::TipoNoAdmitido),
+    };
+    if !matches!(
+        prefijo.kind(),
+        std::path::Prefix::Disk(_)
+            | std::path::Prefix::VerbatimDisk(_)
+            | std::path::Prefix::UNC(_, _)
+            | std::path::Prefix::VerbatimUNC(_, _)
+    ) || !matches!(componentes.next(), Some(Component::RootDir))
+    {
+        return Err(ErrorDirectorioAnclado::TipoNoAdmitido);
+    }
+    let mut raiz = PathBuf::from(prefijo.as_os_str());
+    raiz.push("\\");
+    Ok(raiz)
+}
+
+fn abrir_directorio_por_ruta(
+    ruta: &Path,
+    parent_transaccional: bool,
+) -> Result<File, ErrorDirectorioAnclado> {
     let mut opciones = OpenOptions::new();
     opciones.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
+        let _ = parent_transaccional;
         opciones.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
     }
     #[cfg(windows)]
@@ -555,6 +572,9 @@ fn abrir_directorio_por_ruta(ruta: &Path) -> Result<File, ErrorDirectorioAnclado
             FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         };
         opciones.custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+        if parent_transaccional {
+            opciones.access_mode(derechos_parent_transaccional());
+        }
     }
     let directorio = opciones.open(ruta).map_err(mapear_io)?;
     metadata_directorio(&directorio)?;
