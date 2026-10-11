@@ -92,6 +92,8 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
     let readonly = ancla.abrir_directorio("readonly").unwrap();
     assert!(readonly.crear_nuevo("denied.txt").is_err());
     assert!(readonly.crear_directorio("denied").is_err());
+    assert!(readonly.crear_stage_sibling("nested-stage").is_err());
+    assert!(!ruta.join(".readonly.felix.stage.nested-stage").exists());
     let (stage, componente_stage) = ancla.crear_stage_sibling("operaciones").unwrap();
     let mut stage_file = stage.crear_nuevo("read.txt").unwrap();
     stage_file.write_all(b"stage read").unwrap();

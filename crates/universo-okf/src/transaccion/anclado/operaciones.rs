@@ -63,6 +63,7 @@ impl DirectorioAnclado {
                 identidad_parent,
                 identidad_raiz: Some(identidad_raiz),
                 permite_escritura: false,
+                puede_crear_stage_sibling: false,
             }))
         } else if metadata.is_file() {
             Ok(EntradaLecturaAnclada::Archivo(entrada))
@@ -90,6 +91,7 @@ impl DirectorioAnclado {
             identidad_parent,
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: false,
+            puede_crear_stage_sibling: false,
         })
     }
 
@@ -115,6 +117,7 @@ impl DirectorioAnclado {
             identidad_parent,
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: true,
+            puede_crear_stage_sibling: false,
         })
     }
 
@@ -145,6 +148,7 @@ impl DirectorioAnclado {
             identidad_parent,
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: true,
+            puede_crear_stage_sibling: false,
         })
     }
 

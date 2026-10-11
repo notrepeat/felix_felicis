@@ -99,6 +99,7 @@ pub(crate) struct DirectorioAnclado {
     identidad_parent: IdentidadDirectorio,
     identidad_raiz: Option<IdentidadDirectorio>,
     permite_escritura: bool,
+    puede_crear_stage_sibling: bool,
 }
 
 /// Entrada de lectura clasificada desde el handle devuelto por fs_at.
@@ -135,6 +136,7 @@ impl DirectorioAnclado {
             identidad_parent,
             identidad_raiz,
             permite_escritura: false,
+            puede_crear_stage_sibling: true,
         })
     }
 
@@ -159,6 +161,7 @@ impl DirectorioAnclado {
             identidad_parent: self.identidad_parent,
             identidad_raiz: self.identidad_raiz,
             permite_escritura: self.permite_escritura,
+            puede_crear_stage_sibling: self.puede_crear_stage_sibling,
         })
     }
 
@@ -173,6 +176,7 @@ impl DirectorioAnclado {
             identidad_parent: self.identidad_parent,
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: false,
+            puede_crear_stage_sibling: self.puede_crear_stage_sibling,
         })
     }
 
@@ -198,6 +202,11 @@ impl DirectorioAnclado {
     where
         F: FnMut(&File, &OsStr, &File) -> Result<File, ErrorDirectorioAnclado>,
     {
+        if !self.puede_crear_stage_sibling {
+            return Err(ErrorCrearStageSibling::nuevo(
+                ErrorDirectorioAnclado::TipoNoAdmitido,
+            ));
+        }
         if stage_id.is_empty()
             || !stage_id
                 .bytes()
@@ -245,6 +254,7 @@ impl DirectorioAnclado {
                     identidad_parent,
                     identidad_raiz: None,
                     permite_escritura: false,
+                    puede_crear_stage_sibling: false,
                 };
                 return Err(ErrorCrearStageSibling::con_parcial(
                     error, parcial, componente,
@@ -264,6 +274,7 @@ impl DirectorioAnclado {
                     identidad_parent,
                     identidad_raiz: identidad_creado,
                     permite_escritura: false,
+                    puede_crear_stage_sibling: false,
                 };
                 return Err(ErrorCrearStageSibling::con_parcial(
                     error, parcial, componente,
@@ -280,6 +291,7 @@ impl DirectorioAnclado {
                     identidad_parent,
                     identidad_raiz: identidad_creado,
                     permite_escritura: false,
+                    puede_crear_stage_sibling: false,
                 };
                 return Err(ErrorCrearStageSibling::con_parcial(
                     ErrorDirectorioAnclado::Io,
@@ -295,6 +307,7 @@ impl DirectorioAnclado {
                     identidad_parent,
                     identidad_raiz: identidad_creado,
                     permite_escritura: false,
+                    puede_crear_stage_sibling: false,
                 };
                 return Err(ErrorCrearStageSibling::con_parcial(
                     error, parcial, componente,
@@ -308,6 +321,7 @@ impl DirectorioAnclado {
             identidad_parent,
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: true,
+            puede_crear_stage_sibling: false,
         };
         Ok((stage, componente))
     }
