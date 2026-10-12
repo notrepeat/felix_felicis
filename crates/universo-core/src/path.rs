@@ -111,6 +111,10 @@ fn caracter_no_portable(c: char) -> bool {
     matches!(c, '<' | '>' | '|' | '?' | '*')
 }
 
+pub(crate) fn clave_case_ruta(ruta: &str) -> String {
+    ruta.to_lowercase()
+}
+
 pub(crate) fn validar_segmento_portable_windows(segmento: &str) -> Result<(), ErrorPath> {
     if segmento.ends_with('.') {
         return Err(ErrorPath::SegmentoTerminaEnPunto);
@@ -187,7 +191,7 @@ impl BundlePath {
     /// Forma en minúsculas de la ruta, solo para detectar colisiones;
     /// nunca para resolver identidad.
     pub fn clave_case(&self) -> String {
-        self.0.to_lowercase()
+        clave_case_ruta(&self.0)
     }
 
     /// Segmentos previos al último, si los hay.

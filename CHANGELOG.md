@@ -36,9 +36,10 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   `layout.directorios`, `layout.sin_iota`, `layout.ignorados`, los wikilinks y
   cualquier referencia `Parent` explícita que apunte a las rutas renombradas.
 - `layout.directorios` exige rutas disjuntas: no se admiten declaraciones
-  iguales ni rutas que sean ancestro/descendiente entre sí; también se rechazan
-  raíces que resuelvan por symlink/junction al mismo directorio o a directorios
-  físicamente solapados.
+  iguales ni rutas que sean ancestro/descendiente entre sí, comparando también
+  sin distinguir mayúsculas/minúsculas para portabilidad; por ejemplo, `Docs`
+  y `docs/sub` se solapan. También se rechazan raíces que resuelvan por
+  symlink/junction al mismo directorio o a directorios físicamente solapados.
 - Para errores, `regla` y `path` sirven para clasificar y localizar. El campo
   `detalle` es texto humano no estable y no debe analizarse programáticamente;
   si se exceden varias cuotas a la vez, cuál se reporta primero tampoco es un

@@ -2849,6 +2849,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parsear_bundle_rechaza_roots_case_insensitive_repetidos_o_solapados() {
+        for (directorios, detalle) in [
+            (vec!["Docs".into(), "docs".into()], "rutas duplicadas"),
+            (vec!["Docs".into(), "docs/sub".into()], "rutas solapadas"),
+        ] {
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = directorios;
+            manifiesto.layout.sin_iota.clear();
+            let errores = parsear_bundle(&[], manifiesto).unwrap_err();
+            assert_eq!(errores.len(), 1, "{errores:?}");
+            assert_eq!(errores[0].regla, Regla::Estructura);
+            assert!(errores[0].detalle.contains(detalle), "{errores:?}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn cargar_bundle_mapea_nombre_windows_no_portable_a_path_invalido() {

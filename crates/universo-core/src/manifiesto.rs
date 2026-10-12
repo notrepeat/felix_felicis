@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::path::validar_segmento_portable_windows;
+use crate::path::{clave_case_ruta, validar_segmento_portable_windows};
 use crate::tipos::Sorte;
 
 /// Sortes de nodo reservados por el motor (plan 07: `Retirado`, lápida con
@@ -342,6 +342,18 @@ impl<'a> IndiceRutas<'a> {
         for par in rutas.windows(2) {
             conflictos.duplicados |= par[0] == par[1];
             conflictos.solapados |= rutas_solapadas(par[0], par[1]);
+        }
+        let mut rutas_case: Vec<String> = directorios
+            .iter()
+            .map(|ruta| clave_case_ruta(ruta))
+            .collect();
+        rutas_case.sort_unstable_by(|a, b| {
+            observar_comparacion();
+            comparar_rutas(a, b)
+        });
+        for par in rutas_case.windows(2) {
+            conflictos.duplicados |= par[0] == par[1];
+            conflictos.solapados |= rutas_solapadas(&par[0], &par[1]);
         }
 
         Self { rutas, conflictos }
@@ -921,6 +933,27 @@ pub(crate) mod tests {
         m.layout.directorios = vec!["n".into(), "notes".into()];
         m.layout.sin_iota = vec!["n/sub".into()];
         m.validar().unwrap();
+
+        let mut case_insensitive_near_miss = base();
+        case_insensitive_near_miss.layout.directorios = vec!["Docs".into(), "docs-extra".into()];
+        case_insensitive_near_miss.layout.sin_iota = vec!["Docs/sub".into()];
+        case_insensitive_near_miss
+            .validar()
+            .expect("prefijo de nombre no es solapamiento de componente");
+    }
+
+    #[test]
+    fn rechaza_duplicados_y_solapamientos_case_insensitive_en_directorios() {
+        let mut duplicados = base();
+        duplicados.layout.directorios = vec!["Docs".into(), "docs".into()];
+        let errores = duplicados.validar().unwrap_err();
+        assert!(errores.contains(&ErrorManifiesto::DirectoriosDuplicados));
+        assert!(!errores.contains(&ErrorManifiesto::DirectoriosSolapados));
+
+        let mut solapados = base();
+        solapados.layout.directorios = vec!["Docs".into(), "docs/sub".into()];
+        let errores = solapados.validar().unwrap_err();
+        assert!(errores.contains(&ErrorManifiesto::DirectoriosSolapados));
     }
 
     #[test]
