@@ -466,6 +466,54 @@ impl Estructura {
         Ok(())
     }
 
+    /// Quita las relaciones Parent de varios hijos en una sola pasada por
+    /// cada lista de hijos afectada. La validación completa precede la mutación.
+    pub(crate) fn quitar_padres_en_lote(
+        &mut self,
+        hijos: &[NodoId],
+    ) -> Result<(), ErrorEstructura> {
+        self.quitar_padres_en_lote_observando(hijos, || {})
+    }
+
+    fn quitar_padres_en_lote_observando(
+        &mut self,
+        hijos: &[NodoId],
+        mut observar_operacion: impl FnMut(),
+    ) -> Result<(), ErrorEstructura> {
+        let mut vistos = HashSet::with_capacity(hijos.len());
+        let mut unicos = Vec::with_capacity(hijos.len());
+        for &hijo in hijos {
+            observar_operacion();
+            if !self.nodos.contains_key(hijo) {
+                return Err(ErrorEstructura::NodoInexistente);
+            }
+            if vistos.insert(hijo) {
+                unicos.push(hijo);
+            }
+        }
+
+        let mut padres_afectados = HashSet::new();
+        for &hijo in &unicos {
+            observar_operacion();
+            if let Some(&padre) = self.padre.get(hijo) {
+                padres_afectados.insert(padre);
+            }
+        }
+        for &hijo in &unicos {
+            observar_operacion();
+            self.padre.remove(hijo);
+        }
+        for padre in padres_afectados {
+            if let Some(lista) = self.hijos.get_mut(padre) {
+                lista.retain(|hijo| {
+                    observar_operacion();
+                    !vistos.contains(hijo)
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Asigna el valor de un predicado de extensión sobre un nodo.
     /// Rechaza predicado no declarado o constante fuera de su dominio.
     pub fn asignar_atributo(
@@ -1427,6 +1475,50 @@ mod tests {
             Err(vec![(ids.len() - 1, ErrorEstructura::CicloEnIota)])
         );
         assert_eq!(ciclo.atomos(), sin_padres.atomos());
+    }
+
+    #[test]
+    fn quitar_padres_en_lote_filtra_listas_una_vez_y_es_atomico() {
+        let mut u = e();
+        let padre = u.insertar_nodo(p("n/padre"), s("a"), l("padre")).unwrap();
+        let ids: Vec<_> = (0..4_000)
+            .map(|indice| {
+                u.insertar_nodo(p(&format!("n/{indice:04}")), s("a"), l("hijo"))
+                    .unwrap()
+            })
+            .collect();
+        let asignaciones: Vec<_> = ids.iter().map(|&hijo| (hijo, padre)).collect();
+        u.asignar_padres_en_lote(&asignaciones).unwrap();
+        let antes = u.atomos();
+        let removals: Vec<_> = ids.iter().step_by(2).copied().chain([ids[0]]).collect();
+
+        assert_eq!(
+            u.quitar_padres_en_lote(&[ids[0], NodoId::null()]),
+            Err(ErrorEstructura::NodoInexistente)
+        );
+        assert_eq!(u.atomos(), antes);
+
+        let mut operaciones = 0;
+        u.quitar_padres_en_lote_observando(&removals, || operaciones += 1)
+            .unwrap();
+
+        assert!(
+            operaciones <= removals.len() * 3 + ids.len(),
+            "se observaron {operaciones} operaciones para {} hijos y {} relaciones",
+            ids.len(),
+            removals.len()
+        );
+        assert_eq!(
+            u.hijos(padre),
+            &ids[1..].iter().step_by(2).copied().collect::<Vec<_>>()
+        );
+        for hijo in ids.iter().step_by(2) {
+            assert_eq!(u.padre(*hijo), None);
+        }
+        for hijo in ids.iter().skip(1).step_by(2) {
+            assert_eq!(u.padre(*hijo), Some(padre));
+        }
+        u.verificar_representacion().unwrap();
     }
 
     #[test]

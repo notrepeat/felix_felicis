@@ -247,14 +247,14 @@ pub(super) fn aplicar(
     candidato: &mut Estructura,
     cambios: &CambiosNodos,
 ) -> Result<(), ErrorCandidato> {
-    for &hijo in &cambios.retirar_padres {
+    if !cambios.retirar_padres.is_empty() {
         candidato
-            .quitar_padre(hijo)
+            .quitar_padres_en_lote(&cambios.retirar_padres)
             .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
     }
-    for &(hijo, padre) in &cambios.agregar_padres {
+    if !cambios.agregar_padres.is_empty() {
         candidato
-            .asignar_padre(hijo, padre)
+            .asignar_padres_en_lote(&cambios.agregar_padres)
             .map_err(|_| ErrorCandidato::InvalidOperation {
                 clase: ClaseOperacion::Parent,
                 codigo: "parent_assignment_failed",
