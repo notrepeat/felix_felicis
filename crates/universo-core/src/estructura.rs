@@ -351,18 +351,19 @@ impl Estructura {
     ) -> Result<(), Vec<(usize, ErrorEstructura)>> {
         let mut errores = vec![None; asignaciones.len()];
         let mut propuestas = HashMap::<NodoId, (usize, NodoId)>::new();
+        let mut hijos_vistos = HashSet::new();
         for (indice, &(hijo, padre)) in asignaciones.iter().enumerate() {
             observar_operacion();
+            if !hijos_vistos.insert(hijo) {
+                errores[indice] = Some(ErrorEstructura::HijoDuplicadoEnLote);
+                continue;
+            }
             if !self.nodos.contains_key(hijo) || !self.nodos.contains_key(padre) {
                 errores[indice] = Some(ErrorEstructura::NodoInexistente);
                 continue;
             }
             if hijo == padre {
                 errores[indice] = Some(ErrorEstructura::PadreDeSiMismo);
-                continue;
-            }
-            if propuestas.contains_key(&hijo) {
-                errores[indice] = Some(ErrorEstructura::HijoDuplicadoEnLote);
                 continue;
             }
             propuestas.insert(hijo, (indice, padre));
@@ -1341,6 +1342,28 @@ mod tests {
                 (0, ErrorEstructura::NodoInexistente),
                 (1, ErrorEstructura::PadreDeSiMismo),
                 (3, ErrorEstructura::HijoDuplicadoEnLote),
+            ])
+        );
+        assert_eq!(u.atomos(), antes.atomos());
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn asignar_padres_en_lote_reporta_duplicados_aunque_la_primera_propuesta_falle() {
+        let mut u = e();
+        let a = u.insertar_nodo(p("n/a"), s("a"), l("A")).unwrap();
+        let b = u.insertar_nodo(p("n/b"), s("a"), l("B")).unwrap();
+        let antes = u.clonar_para_candidato();
+        let ausente = NodoId::null();
+
+        assert_eq!(
+            u.asignar_padres_en_lote(&[(ausente, a), (ausente, b), (a, a), (a, b), (a, ausente),]),
+            Err(vec![
+                (0, ErrorEstructura::NodoInexistente),
+                (1, ErrorEstructura::HijoDuplicadoEnLote),
+                (2, ErrorEstructura::PadreDeSiMismo),
+                (3, ErrorEstructura::HijoDuplicadoEnLote),
+                (4, ErrorEstructura::HijoDuplicadoEnLote),
             ])
         );
         assert_eq!(u.atomos(), antes.atomos());
