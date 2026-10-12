@@ -53,7 +53,10 @@ fn preparar_fila(state: JournalState) -> (TempDir, PathBuf, LockEscritura, PathB
     let mut journal =
         Journal::new(TXN, identidad_parent(&lock), old, fingerprint(&new_fixture)).unwrap();
     if state != JournalState::Prepared {
-        journal.advance(state).unwrap();
+        journal.advance(JournalState::BackupReady).unwrap();
+    }
+    if state == JournalState::Installed {
+        journal.advance(JournalState::Installed).unwrap();
     }
     let canonical = lock.ubicacion().journal().as_path().to_path_buf();
     fs::write(&canonical, journal.encode().unwrap()).unwrap();
@@ -78,6 +81,30 @@ fn stage_path(lock: &LockEscritura) -> PathBuf {
 fn assert_root_intact(root: &Path) {
     assert_eq!(fs::read(root.join("data.bin")).unwrap(), b"old-tree");
     assert!(root.join("empty-dir").is_dir());
+}
+
+#[test]
+fn restore_old_restaura_backup_en_las_tres_fases_y_conserva_identidad_y_bytes() {
+    for state in [
+        JournalState::Prepared,
+        JournalState::BackupReady,
+        JournalState::Installed,
+    ] {
+        let (_temp, root, mut lock, canonical, journal) = preparar_fila(state);
+        let backup = backup_path(&lock);
+        fs::rename(&root, &backup).unwrap();
+
+        assert_eq!(
+            ejecutar_fila_journal_restore_old(&mut lock),
+            Ok(ResultadoFilaJournalRestoreOld::Eliminado),
+            "fase {state:?}"
+        );
+
+        assert!(!backup.exists());
+        assert!(!canonical.exists());
+        assert_root_intact(&root);
+        assert!(fingerprint(&root) == *journal.old());
+    }
 }
 
 #[test]
