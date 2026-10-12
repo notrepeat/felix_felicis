@@ -263,6 +263,56 @@ fn parent_identity_mismatch_fails_closed_before_observing_artifacts() {
     assert_eq!(error.to_string(), "recovery_parent_identity_mismatch");
 }
 
+#[cfg(unix)]
+#[test]
+fn sibling_fifo_root_backup_stage_se_rechaza_rapido() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::{Duration, Instant};
+
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    fs::create_dir(&root).unwrap();
+    let lock = LockEscritura::adquirir(&root).unwrap();
+    let location = lock.ubicacion();
+    let parent = DirectorioAnclado::parent_solo_lectura_desde_ubicacion(location).unwrap();
+    let names = [
+        location.ruta().file_name().unwrap().to_os_string(),
+        location
+            .backup()
+            .as_path()
+            .file_name()
+            .unwrap()
+            .to_os_string(),
+        location
+            .stage(TXN)
+            .unwrap()
+            .as_path()
+            .file_name()
+            .unwrap()
+            .to_os_string(),
+    ];
+
+    for name in names {
+        let path = temp.path().join(&name);
+        let c_path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the nul-terminated path is live for this synchronous call.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+
+        let started = Instant::now();
+        let error = parent
+            .abrir_artifacto_sibling_directorio_lectura(location, &name)
+            .err()
+            .expect("FIFO must not open as a directory");
+        assert_eq!(error, ErrorDirectorioAnclado::TipoNoAdmitido);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "opening FIFO sibling {name:?} must not block"
+        );
+        fs::remove_file(path).unwrap();
+    }
+}
+
 #[test]
 fn regular_file_at_artifact_name_is_error_and_preserves_canary() {
     let temp = tempdir().unwrap();

@@ -455,9 +455,9 @@ fn abrir_directorio_hijo_lectura(
     parent: &File,
     nombre: &OsStr,
 ) -> Result<File, ErrorDirectorioAnclado> {
-    let mut opciones = OpenOptionsAt::default();
-    opciones.read(true).follow(false);
-    abrir_directorio_hijo_con_opciones(parent, nombre, &opciones)
+    let directorio = abrir::abrir_entrada_relativa(parent, nombre, TipoEntradaAnclada::Directorio)?;
+    metadata_directorio(&directorio)?;
+    Ok(directorio)
 }
 
 fn abrir_directorio_hijo_con_opciones(
