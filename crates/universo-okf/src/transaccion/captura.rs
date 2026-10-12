@@ -24,6 +24,7 @@ use super::inventario::{
     ruta_absoluta_lexica, validar_archivo_sin_enlaces,
 };
 use super::journal::RawTreeDigest;
+use super::lock::LockEscritura;
 use super::snapshot::{
     EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_digest_raw_tree,
     calcular_token_snapshot,
@@ -244,6 +245,20 @@ pub(crate) fn capturar_snapshot_con_cas_anclado(
         capturar_snapshot_raw_anclado_sin_validar(raiz, configuracion, version_motor, policy_id)?;
     super::snapshot::comparar_snapshot_esperado(esperado, captura.token)?;
     materializar(captura)
+}
+
+/// Abre el root desde la ubicación protegida por el lock y ejecuta el CAS
+/// anclado sin adquirir ni liberar el guard.
+pub(crate) fn capturar_snapshot_con_cas_bajo_lock(
+    lock: &mut LockEscritura,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let raiz =
+        DirectorioAnclado::desde_ubicacion(lock.ubicacion()).map_err(|_| ErrorSnapshot::Io)?;
+    capturar_snapshot_con_cas_anclado(&raiz, configuracion, version_motor, policy_id, esperado)
 }
 
 fn capturar_snapshot_raw_anclado_sin_validar(
