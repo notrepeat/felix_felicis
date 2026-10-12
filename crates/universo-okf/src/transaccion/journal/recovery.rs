@@ -8,7 +8,6 @@ mod observer;
 pub(crate) use observer::{ErrorObservadorRecovery, observar_inventario_recovery};
 
 #[path = "recovery/preflight.rs"]
-#[allow(dead_code)] // Both legacy runners are wired to this preflight in the next work unit.
 mod preflight;
 pub(crate) use preflight::{
     ErrorPreflightRecovery, FilaRecoverySoportada, ResultadoPreflightRecovery,

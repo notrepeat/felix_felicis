@@ -423,6 +423,33 @@ fn committed_root_old_sin_vecinos_falla_y_conserva_estado() {
 }
 
 #[test]
+fn committed_rechaza_antes_de_observar_un_backup_que_fallaria_cerrado() {
+    let (_temp, root, mut lock, canonical, mut journal) = preparar_fila(JournalState::Prepared);
+    journal.advance(JournalState::BackupReady).unwrap();
+    journal.advance(JournalState::Installed).unwrap();
+    journal.advance(JournalState::Committed).unwrap();
+    let journal_bytes = journal.encode().unwrap();
+    fs::write(&canonical, &journal_bytes).unwrap();
+
+    let backup = backup_path(&lock);
+    let canary = b"regular-file-at-backup-name";
+    fs::write(&backup, canary).unwrap();
+    assert!(observar_inventario_recovery(&lock, &journal).is_err());
+
+    assert_eq!(
+        ejecutar_fila_journal_old(&mut lock),
+        Err(ErrorFilaJournalOld::FilaNoAutorizada)
+    );
+    assert_eq!(
+        ejecutar_fila_journal_restore_old(&mut lock),
+        Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert_eq!(fs::read(backup).unwrap(), canary);
+    assert_root_intact(&root);
+}
+
+#[test]
 fn repeticion_tras_reinicio_sin_journal_es_no_aplicable_y_no_toca_root() {
     let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
     escribir_installed(&canonical, journal);

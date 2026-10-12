@@ -6,12 +6,14 @@ use crate::transaccion::anclado::journal_temporal::{
     ErrorJournalAnclado, ResultadoEliminacionJournal,
 };
 use crate::transaccion::anclado::renombrar::ErrorRenombrarAnclado;
+#[cfg(test)]
 use crate::transaccion::journal::JournalState;
 use crate::transaccion::lock::LockEscritura;
 
 use super::{
-    ArtifactState, ErrorObservadorRecovery, RecoveryDecision, RecoveryInventory, RecoveryStep,
-    decide_recovery, observar_inventario_recovery,
+    ArtifactState, ErrorObservadorRecovery, FilaRecoverySoportada, RecoveryInventory,
+    ResultadoPreflightRecovery, clasificar_fila_recovery, observar_inventario_recovery,
+    preflight_recovery,
 };
 
 /// Resultado explícito de ejecutar o no la fila acotada.
@@ -127,38 +129,17 @@ fn ejecutar_fila_journal_old_con(
     lock: &mut LockEscritura,
     antes_de_eliminar: impl FnOnce(&LockEscritura),
 ) -> Result<ResultadoFilaJournalOld, ErrorFilaJournalOld> {
-    let (identidad_esperada, journal) = {
-        let temporal = lock
-            .journal_temporal_anclado()
-            .map_err(ErrorFilaJournalOld::Journal)?;
-        let Some(contexto) = temporal
-            .cargar_canonico()
-            .map_err(ErrorFilaJournalOld::Journal)?
-        else {
+    let contexto = match preflight_recovery(lock).map_err(mapear_error_preflight_old)? {
+        ResultadoPreflightRecovery::JournalAusente => {
             return Ok(ResultadoFilaJournalOld::NoAplicableJournalAusente);
-        };
-        contexto
+        }
+        ResultadoPreflightRecovery::FaseNoSoportada => {
+            return Err(ErrorFilaJournalOld::FilaNoAutorizada);
+        }
+        ResultadoPreflightRecovery::Contexto(contexto) => contexto,
     };
-
-    if !matches!(
-        journal.state(),
-        JournalState::Prepared | JournalState::BackupReady | JournalState::Installed
-    ) {
-        return Err(ErrorFilaJournalOld::FilaNoAutorizada);
-    }
-
-    let inventario =
-        observar_inventario_recovery(lock, &journal).map_err(ErrorFilaJournalOld::Observacion)?;
-    let fila_esperada = RecoveryInventory {
-        root: ArtifactState::Old,
-        backup: ArtifactState::Absent,
-        stage: ArtifactState::Absent,
-        root_new_validated: false,
-    };
-    let decision = decide_recovery(journal.state(), inventario);
-    if inventario != fila_esperada
-        || decision != RecoveryDecision::KeepOld
-        || decision.steps(inventario) != [RecoveryStep::RemoveJournal]
+    if clasificar_fila_recovery(&contexto.journal, contexto.inventario)
+        != Some(FilaRecoverySoportada::KeepOld)
     {
         return Err(ErrorFilaJournalOld::FilaNoAutorizada);
     }
@@ -168,7 +149,7 @@ fn ejecutar_fila_journal_old_con(
     let temporal = lock
         .journal_temporal_anclado()
         .map_err(ErrorFilaJournalOld::Journal)?;
-    match temporal.eliminar_canonico_si_coincide(identidad_esperada, &journal) {
+    match temporal.eliminar_canonico_si_coincide(contexto.identidad_journal, &contexto.journal) {
         ResultadoEliminacionJournal::Eliminado => Ok(ResultadoFilaJournalOld::Eliminado),
         ResultadoEliminacionJournal::Ausente => Ok(ResultadoFilaJournalOld::AusenteTrasContexto),
         ResultadoEliminacionJournal::Conflicto(error) => {
@@ -194,42 +175,17 @@ fn ejecutar_fila_journal_restore_old_con(
     antes_de_renombrar: impl FnOnce(&LockEscritura),
     antes_de_eliminar: impl FnOnce(&LockEscritura),
 ) -> Result<ResultadoFilaJournalRestoreOld, ErrorFilaJournalRestoreOld> {
-    let (identidad_esperada, journal) = {
-        let temporal = lock
-            .journal_temporal_anclado()
-            .map_err(ErrorFilaJournalRestoreOld::Journal)?;
-        let Some(contexto) = temporal
-            .cargar_canonico()
-            .map_err(ErrorFilaJournalRestoreOld::Journal)?
-        else {
+    let contexto = match preflight_recovery(lock).map_err(mapear_error_preflight_restore_old)? {
+        ResultadoPreflightRecovery::JournalAusente => {
             return Ok(ResultadoFilaJournalRestoreOld::NoAplicableJournalAusente);
-        };
-        contexto
+        }
+        ResultadoPreflightRecovery::FaseNoSoportada => {
+            return Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada);
+        }
+        ResultadoPreflightRecovery::Contexto(contexto) => contexto,
     };
-
-    if !matches!(
-        journal.state(),
-        JournalState::Prepared | JournalState::BackupReady | JournalState::Installed
-    ) {
-        return Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada);
-    }
-
-    let inventario_inicial = observar_inventario_recovery(lock, &journal)
-        .map_err(ErrorFilaJournalRestoreOld::Observacion)?;
-    let fila_inicial = RecoveryInventory {
-        root: ArtifactState::Absent,
-        backup: ArtifactState::Old,
-        stage: ArtifactState::Absent,
-        root_new_validated: false,
-    };
-    let receta_esperada = [
-        RecoveryStep::RemoveKnownStage,
-        RecoveryStep::RestoreBackupToRoot,
-        RecoveryStep::RemoveJournal,
-    ];
-    if inventario_inicial != fila_inicial
-        || decide_recovery(journal.state(), inventario_inicial) != RecoveryDecision::RestoreOld
-        || RecoveryDecision::RestoreOld.steps(inventario_inicial) != receta_esperada
+    if clasificar_fila_recovery(&contexto.journal, contexto.inventario)
+        != Some(FilaRecoverySoportada::RestoreOld)
     {
         return Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada);
     }
@@ -248,8 +204,12 @@ fn ejecutar_fila_journal_restore_old_con(
             .map_err(ErrorFilaJournalRestoreOld::Renombrar)?;
         let mut backup = espacio
             .reabrir_backup_sibling(
-                |identidad| identidad.journal_identity().as_ref() == Some(journal.parent()),
-                |identidad| identidad.journal_identity().as_ref() == Some(journal.old().identity()),
+                |identidad| {
+                    identidad.journal_identity().as_ref() == Some(contexto.journal.parent())
+                },
+                |identidad| {
+                    identidad.journal_identity().as_ref() == Some(contexto.journal.old().identity())
+                },
             )
             .map_err(ErrorFilaJournalRestoreOld::Renombrar)?;
         let intento = espacio.renombrar_directorio(&mut backup, &destino);
@@ -259,12 +219,12 @@ fn ejecutar_fila_journal_restore_old_con(
 
     // Reobservar incluso tras error: algunas plataformas pueden completar el
     // rename y reportar un fallo al caller.
-    let inventario_posterior = observar_inventario_recovery(lock, &journal)
+    let inventario_posterior = observar_inventario_recovery(lock, &contexto.journal)
         .map_err(ErrorFilaJournalRestoreOld::Observacion)?;
     reconciliar_intento_renombrado_restore_old(
         intento_renombrar,
         inventario_posterior,
-        fila_inicial,
+        contexto.inventario,
     )?;
 
     antes_de_eliminar(lock);
@@ -272,7 +232,7 @@ fn ejecutar_fila_journal_restore_old_con(
     let temporal = lock
         .journal_temporal_anclado()
         .map_err(ErrorFilaJournalRestoreOld::Journal)?;
-    match temporal.eliminar_canonico_si_coincide(identidad_esperada, &journal) {
+    match temporal.eliminar_canonico_si_coincide(contexto.identidad_journal, &contexto.journal) {
         ResultadoEliminacionJournal::Eliminado => Ok(ResultadoFilaJournalRestoreOld::Eliminado),
         ResultadoEliminacionJournal::Ausente => {
             Ok(ResultadoFilaJournalRestoreOld::AusenteTrasContexto)
@@ -282,6 +242,26 @@ fn ejecutar_fila_journal_restore_old_con(
         }
         ResultadoEliminacionJournal::Indeterminado(error) => {
             Err(ErrorFilaJournalRestoreOld::EliminacionIndeterminada(error))
+        }
+    }
+}
+
+fn mapear_error_preflight_old(error: super::ErrorPreflightRecovery) -> ErrorFilaJournalOld {
+    match error {
+        super::ErrorPreflightRecovery::Journal(error) => ErrorFilaJournalOld::Journal(error),
+        super::ErrorPreflightRecovery::Observacion(error) => {
+            ErrorFilaJournalOld::Observacion(error)
+        }
+    }
+}
+
+fn mapear_error_preflight_restore_old(
+    error: super::ErrorPreflightRecovery,
+) -> ErrorFilaJournalRestoreOld {
+    match error {
+        super::ErrorPreflightRecovery::Journal(error) => ErrorFilaJournalRestoreOld::Journal(error),
+        super::ErrorPreflightRecovery::Observacion(error) => {
+            ErrorFilaJournalRestoreOld::Observacion(error)
         }
     }
 }
