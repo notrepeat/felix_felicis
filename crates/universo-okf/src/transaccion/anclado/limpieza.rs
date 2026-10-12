@@ -1,6 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 
+use super::super::inventario::LimitesInventario;
 use super::super::stage::StageAnclado;
 use super::abrir::abrir_entrada_relativa;
 use super::{
@@ -12,6 +13,7 @@ use super::{
 pub(crate) enum ErrorLimpiezaAnclado {
     Directorio(ErrorDirectorioAnclado),
     IdentidadInconsistente,
+    LimiteEstructuralExcedido,
 }
 
 enum EntradaLimpieza {
@@ -23,8 +25,65 @@ enum EntradaLimpieza {
     },
 }
 
+#[derive(Clone, Copy)]
+struct PresupuestoLimpieza {
+    limites: LimitesInventario,
+    entradas: usize,
+    bytes_rutas: usize,
+}
+
+impl PresupuestoLimpieza {
+    fn nuevo(limites: LimitesInventario) -> Self {
+        Self {
+            limites,
+            entradas: 0,
+            bytes_rutas: 0,
+        }
+    }
+
+    fn reservar(
+        &mut self,
+        bytes_ruta: usize,
+        profundidad: usize,
+    ) -> Result<(), ErrorLimpiezaAnclado> {
+        if profundidad > self.limites.profundidad {
+            return Err(ErrorLimpiezaAnclado::LimiteEstructuralExcedido);
+        }
+        let entradas = self
+            .entradas
+            .checked_add(1)
+            .filter(|total| *total <= self.limites.entradas)
+            .ok_or(ErrorLimpiezaAnclado::LimiteEstructuralExcedido)?;
+        let bytes_rutas = self
+            .bytes_rutas
+            .checked_add(bytes_ruta)
+            .filter(|total| *total <= self.limites.bytes_rutas)
+            .ok_or(ErrorLimpiezaAnclado::LimiteEstructuralExcedido)?;
+        self.entradas = entradas;
+        self.bytes_rutas = bytes_rutas;
+        Ok(())
+    }
+}
+
+struct NombreLimpieza {
+    nombre: OsString,
+    profundidad: usize,
+    bytes_ruta: usize,
+}
+
 pub(crate) fn limpiar_stage_anclado<F>(
     stage: &StageAnclado,
+    eliminar: &mut F,
+) -> Result<(), ErrorLimpiezaAnclado>
+where
+    F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
+{
+    limpiar_stage_anclado_con_limites(stage, LimitesInventario::CONTRATO, eliminar)
+}
+
+pub(in crate::transaccion) fn limpiar_stage_anclado_con_limites<F>(
+    stage: &StageAnclado,
+    limites: LimitesInventario,
     eliminar: &mut F,
 ) -> Result<(), ErrorLimpiezaAnclado>
 where
@@ -62,7 +121,8 @@ where
     // Reject the whole tree before the first unlink/rmdir. In particular,
     // links, reparse points, special files, and invalid names leave every
     // staged entry untouched.
-    let entradas = preflight_directorio(&mut raiz)?;
+    let mut presupuesto = PresupuestoLimpieza::nuevo(limites);
+    let entradas = preflight_directorio(&mut raiz, 0, 0, &mut presupuesto)?;
     eliminar_entradas(&raiz, &entradas, eliminar)?;
 
     validar_identidad(parent, identidad_parent)?;
@@ -76,11 +136,18 @@ where
 
 fn preflight_directorio(
     directorio: &mut File,
+    profundidad: usize,
+    bytes_ruta: usize,
+    presupuesto: &mut PresupuestoLimpieza,
 ) -> Result<Vec<EntradaLimpieza>, ErrorLimpiezaAnclado> {
-    let nombres = nombres_hijos(directorio)?;
-    let mut entradas = Vec::with_capacity(nombres.len());
-    for nombre in nombres {
-        validar_componente(&nombre).map_err(ErrorLimpiezaAnclado::Directorio)?;
+    let nombres = nombres_hijos(directorio, profundidad, bytes_ruta, presupuesto)?;
+    let mut entradas = Vec::new();
+    for hijo in nombres {
+        let NombreLimpieza {
+            nombre,
+            profundidad,
+            bytes_ruta,
+        } = hijo;
         match clasificar_entrada_sin_seguir(directorio, &nombre)
             .map_err(ErrorLimpiezaAnclado::Directorio)?
         {
@@ -104,7 +171,8 @@ fn preflight_directorio(
                 let mut entrada = abrir_directorio_sin_seguir(directorio, &nombre)?;
                 let identidad =
                     metadata_directorio(&entrada).map_err(ErrorLimpiezaAnclado::Directorio)?;
-                let hijos = preflight_directorio(&mut entrada)?;
+                let hijos =
+                    preflight_directorio(&mut entrada, profundidad, bytes_ruta, presupuesto)?;
                 let reabierta = abrir_directorio_sin_seguir(directorio, &nombre)?;
                 validar_identidad(&reabierta, identidad)?;
                 entradas.push(EntradaLimpieza::Directorio {
@@ -164,11 +232,16 @@ where
     Ok(())
 }
 
-fn nombres_hijos(directorio: &mut File) -> Result<Vec<OsString>, ErrorLimpiezaAnclado> {
+fn nombres_hijos(
+    directorio: &mut File,
+    profundidad: usize,
+    bytes_ruta: usize,
+    presupuesto: &mut PresupuestoLimpieza,
+) -> Result<Vec<NombreLimpieza>, ErrorLimpiezaAnclado> {
     let mut entradas = fs_at::read_dir(directorio)
         .map_err(mapear_io)
         .map_err(ErrorLimpiezaAnclado::Directorio)?;
-    let mut nombres = Vec::new();
+    let mut nombres: Vec<NombreLimpieza> = Vec::new();
     for entrada in &mut entradas {
         let entrada = entrada
             .map_err(mapear_io)
@@ -177,10 +250,23 @@ fn nombres_hijos(directorio: &mut File) -> Result<Vec<OsString>, ErrorLimpiezaAn
         if nombre == OsStr::new(".") || nombre == OsStr::new("..") {
             continue;
         }
-        nombres.push(nombre.to_os_string());
+        validar_componente(nombre).map_err(ErrorLimpiezaAnclado::Directorio)?;
+        let profundidad_hijo = profundidad
+            .checked_add(1)
+            .ok_or(ErrorLimpiezaAnclado::LimiteEstructuralExcedido)?;
+        let bytes_ruta_hijo = bytes_ruta
+            .checked_add(usize::from(bytes_ruta > 0))
+            .and_then(|bytes| bytes.checked_add(nombre.len()))
+            .ok_or(ErrorLimpiezaAnclado::LimiteEstructuralExcedido)?;
+        presupuesto.reservar(bytes_ruta_hijo, profundidad_hijo)?;
+        nombres.push(NombreLimpieza {
+            nombre: nombre.to_os_string(),
+            profundidad: profundidad_hijo,
+            bytes_ruta: bytes_ruta_hijo,
+        });
     }
-    nombres.sort_unstable();
-    if nombres.windows(2).any(|par| par[0] == par[1]) {
+    nombres.sort_unstable_by(|a, b| a.nombre.cmp(&b.nombre));
+    if nombres.windows(2).any(|par| par[0].nombre == par[1].nombre) {
         return Err(ErrorLimpiezaAnclado::Directorio(
             ErrorDirectorioAnclado::ComponenteInvalido,
         ));

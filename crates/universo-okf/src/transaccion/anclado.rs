@@ -25,7 +25,9 @@ mod operaciones;
 pub(crate) mod renombrar;
 
 pub(super) use clasificar::{TipoEntradaAnclada, clasificar_entrada_sin_seguir};
-pub(super) use limpieza::{ErrorLimpiezaAnclado, limpiar_stage_anclado};
+pub(super) use limpieza::{
+    ErrorLimpiezaAnclado, limpiar_stage_anclado, limpiar_stage_anclado_con_limites,
+};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ErrorDirectorioAnclado {
     Io,

@@ -20,7 +20,8 @@ use super::anclado::{
 };
 use super::captura::{Snapshot, materializar_desde_entradas};
 use super::inventario::{
-    inventariar_root_anclado, inventariar_root_con_lector_limitado, leer_archivo_regular_limitado,
+    LimitesInventario, inventariar_root_anclado, inventariar_root_con_lector_limitado,
+    leer_archivo_regular_limitado,
 };
 use super::journal::{DirectoryIdentity, RawTreeDigest};
 use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
@@ -122,6 +123,7 @@ enum CodigoLimpiezaStage {
     EnlaceNoPermitido,
     TipoNoAdmitido,
     IdentidadInconsistente,
+    LimiteEstructuralExcedido,
 }
 
 impl CodigoLimpiezaStage {
@@ -131,6 +133,7 @@ impl CodigoLimpiezaStage {
             Self::EnlaceNoPermitido => "stage_cleanup_link_not_allowed",
             Self::TipoNoAdmitido => "stage_cleanup_entry_type_not_allowed",
             Self::IdentidadInconsistente => "stage_cleanup_identity_mismatch",
+            Self::LimiteEstructuralExcedido => "stage_cleanup_resource_limit",
         }
     }
 }
@@ -295,9 +298,28 @@ impl StageAnclado {
     where
         F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
     {
-        let resultado = super::anclado::limpiar_stage_anclado(&self, &mut eliminar)
-            .map_err(mapear_error_limpieza_stage);
-        match resultado {
+        let resultado = super::anclado::limpiar_stage_anclado(&self, &mut eliminar);
+        self.terminar_limpieza(resultado)
+    }
+
+    fn limpiar_con_limites<F>(
+        self,
+        limites: LimitesInventario,
+        mut eliminar: F,
+    ) -> Result<(), ErrorLimpiezaStage>
+    where
+        F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
+    {
+        let resultado =
+            super::anclado::limpiar_stage_anclado_con_limites(&self, limites, &mut eliminar);
+        self.terminar_limpieza(resultado)
+    }
+
+    fn terminar_limpieza(
+        self,
+        resultado: Result<(), ErrorLimpiezaAnclado>,
+    ) -> Result<(), ErrorLimpiezaStage> {
+        match resultado.map_err(mapear_error_limpieza_stage) {
             Ok(()) => Ok(()),
             Err(codigo) => Err(ErrorLimpiezaStage {
                 codigo,
@@ -697,6 +719,9 @@ fn mapear_error_directorio_stage(error: ErrorDirectorioAnclado) -> CodigoEscritu
 #[allow(dead_code)] // La integración de apply consume el resultado de cleanup.
 fn mapear_error_limpieza_stage(error: ErrorLimpiezaAnclado) -> CodigoLimpiezaStage {
     match error {
+        ErrorLimpiezaAnclado::LimiteEstructuralExcedido => {
+            CodigoLimpiezaStage::LimiteEstructuralExcedido
+        }
         ErrorLimpiezaAnclado::IdentidadInconsistente => CodigoLimpiezaStage::IdentidadInconsistente,
         ErrorLimpiezaAnclado::Directorio(ErrorDirectorioAnclado::EnlaceNoPermitido) => {
             CodigoLimpiezaStage::EnlaceNoPermitido
@@ -1886,6 +1911,79 @@ ignorados = ["ignored.md"]
         let stage = error.recuperar_stage();
         stage.limpiar().unwrap();
         assert!(!ruta_stage.exists());
+    }
+
+    #[test]
+    fn cleanup_presupuesta_estructura_exacta_y_falla_sin_unlink_antes_de_retry() {
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        fs::write(ruta_stage.join("a"), b"keep until retry").unwrap();
+        let exactos = LimitesInventario {
+            entradas: 1,
+            profundidad: 1,
+            bytes_rutas: 1,
+            ..LimitesInventario::CONTRATO
+        };
+        let mut eliminaciones = 0;
+
+        stage
+            .limpiar_con_limites(exactos, |parent, componente, es_directorio| {
+                eliminaciones += 1;
+                let opciones = OpenOptionsAt::default();
+                let resultado = if es_directorio {
+                    opciones.rmdir_at(parent, Path::new(componente))
+                } else {
+                    opciones.unlink_at(parent, Path::new(componente))
+                };
+                resultado.map_err(|_| ErrorDirectorioAnclado::Io)
+            })
+            .unwrap();
+
+        assert_eq!(eliminaciones, 2);
+        assert!(!ruta_stage.exists());
+
+        for limites in [
+            LimitesInventario {
+                entradas: 0,
+                profundidad: 1,
+                bytes_rutas: 1,
+                ..LimitesInventario::CONTRATO
+            },
+            LimitesInventario {
+                entradas: 1,
+                profundidad: 0,
+                bytes_rutas: 1,
+                ..LimitesInventario::CONTRATO
+            },
+            LimitesInventario {
+                entradas: 1,
+                profundidad: 1,
+                bytes_rutas: 0,
+                ..LimitesInventario::CONTRATO
+            },
+        ] {
+            let (temp, stage) = stage_anclado_vacio();
+            let ruta_stage = temp.path().join(stage.componente());
+            let archivo = ruta_stage.join("a");
+            fs::write(&archivo, b"preserve on limit error").unwrap();
+            let mut eliminaciones = 0;
+
+            let error = stage
+                .limpiar_con_limites(limites, |_, _, _| {
+                    eliminaciones += 1;
+                    Ok(())
+                })
+                .unwrap_err();
+
+            assert_eq!(error.codigo(), "stage_cleanup_resource_limit");
+            assert_eq!(eliminaciones, 0, "preflight must fail before unlink");
+            assert!(error.stage_parcial().identidad().is_some());
+            assert_eq!(fs::read(&archivo).unwrap(), b"preserve on limit error");
+            let retry = error.recuperar_stage();
+            fs::remove_file(&archivo).unwrap();
+            retry.limpiar().unwrap();
+            assert!(!ruta_stage.exists());
+        }
     }
 
     #[cfg(unix)]
