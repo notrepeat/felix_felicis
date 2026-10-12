@@ -1,5 +1,5 @@
 use super::renombrar::ErrorRenombrarAnclado;
-use super::renombrar_test_support::{rename_backup_name, saltar_sin_file_id};
+use super::renombrar_test_support::{rename_backup_name, rename_identity, saltar_sin_file_id};
 use super::{DirectorioAnclado, IdentidadDirectorio, UbicacionRaiz};
 use std::path::Path;
 use tempfile::tempdir;
@@ -136,6 +136,104 @@ fn rename_sibling_parent_junction_no_desvia_la_operacion_anclada() {
         b"outside decoy"
     );
     assert!(!outside.join(&backup_name).exists());
+}
+
+#[test]
+fn reabrir_backup_sibling_usa_parent_anclado_tras_reemplazo_por_junction() {
+    use crate::transaccion::lock::LockEscritura;
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    let temp = tempdir().unwrap();
+    if saltar_sin_file_id(temp.path()) {
+        return;
+    }
+    let parent = temp.path().join("parent");
+    let moved_parent = temp.path().join("parent-moved");
+    let outside = temp.path().join("outside");
+    let root = parent.join("bundle");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join("old.txt"), b"original backup canary").unwrap();
+
+    let backup_name = rename_backup_name(&root);
+    let backup = parent.join(&backup_name);
+    let parent_identity = rename_identity(&parent);
+    let old_identity = rename_identity(&root);
+    std::fs::rename(&root, &backup).unwrap();
+
+    let decoy = outside.join(&backup_name);
+    std::fs::create_dir(&decoy).unwrap();
+    std::fs::write(decoy.join("old.txt"), b"external backup decoy").unwrap();
+    std::fs::write(outside.join("canary.txt"), b"outside canary").unwrap();
+    let decoy_identity = rename_identity(&decoy);
+
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut espacio = lock.espacio_transaccional_anclado().unwrap();
+    if let Err(error) = std::fs::rename(&parent, &moved_parent) {
+        assert!(
+            matches!(error.raw_os_error(), Some(5) | Some(32)),
+            "{error}"
+        );
+        let metadata = std::fs::symlink_metadata(&parent).unwrap();
+        assert_eq!(
+            metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT,
+            0,
+            "parent remained a real directory after the blocked move"
+        );
+        assert_eq!(identidad_de_ruta_windows(&backup), old_identity);
+        assert_eq!(
+            std::fs::read(backup.join("old.txt")).unwrap(),
+            b"original backup canary"
+        );
+        assert_eq!(identidad_de_ruta_windows(&decoy), decoy_identity);
+        assert_eq!(
+            std::fs::read(decoy.join("old.txt")).unwrap(),
+            b"external backup decoy"
+        );
+        assert!(!moved_parent.exists());
+        eprintln!(
+            "SKIP explícito: Windows bloqueó el renombre del parent con error {}",
+            error.raw_os_error().unwrap_or_default()
+        );
+        return;
+    }
+    crear_rename_junction(&parent, &outside);
+
+    let mut old = espacio
+        .reabrir_backup_sibling(
+            |identidad| identidad == parent_identity,
+            |identidad| identidad == old_identity,
+        )
+        .unwrap();
+    espacio
+        .renombrar_directorio(&mut old, std::ffi::OsStr::new("bundle"))
+        .unwrap();
+
+    let parent_metadata = std::fs::symlink_metadata(&parent).unwrap();
+    assert_ne!(
+        parent_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT,
+        0
+    );
+    let restored = moved_parent.join("bundle");
+    assert_eq!(old.nombre(), std::ffi::OsStr::new("bundle"));
+    assert_eq!(identidad_de_ruta_windows(&restored), old_identity);
+    assert_eq!(
+        std::fs::read(restored.join("old.txt")).unwrap(),
+        b"original backup canary"
+    );
+    assert!(!moved_parent.join(&backup_name).exists());
+    assert_eq!(identidad_de_ruta_windows(&decoy), decoy_identity);
+    assert_eq!(
+        std::fs::read(decoy.join("old.txt")).unwrap(),
+        b"external backup decoy"
+    );
+    assert_eq!(
+        std::fs::read(outside.join("canary.txt")).unwrap(),
+        b"outside canary"
+    );
+    assert!(!outside.join("bundle").exists());
 }
 
 #[test]

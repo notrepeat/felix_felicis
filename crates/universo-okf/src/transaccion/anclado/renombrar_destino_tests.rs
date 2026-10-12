@@ -56,22 +56,28 @@ fn reabrir_backup_rechaza_predicados_parent_y_old_falsos() {
         return;
     }
     let root = temp.path().join("bundle");
+    let another_old = temp.path().join("another-old");
     let backup_name = rename_backup_name(&root);
     let backup_path = temp.path().join(&backup_name);
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("root.txt"), b"root canary").unwrap();
     std::fs::create_dir(&backup_path).unwrap();
     std::fs::write(backup_path.join("old.txt"), b"backup canary").unwrap();
+    std::fs::create_dir(&another_old).unwrap();
     let parent_identity = rename_identity(temp.path());
 
     let mut lock = LockEscritura::adquirir(&root).unwrap();
     let espacio = lock.espacio_transaccional_anclado().unwrap();
+    let another_old_identity = rename_identity(&another_old);
     let error_parent = espacio
         .reabrir_backup_sibling(|_| false, |_| true)
         .map(|_| ())
         .unwrap_err();
     let error_old = espacio
-        .reabrir_backup_sibling(|identidad| identidad == parent_identity, |_| false)
+        .reabrir_backup_sibling(
+            |identidad| identidad == parent_identity,
+            |identidad| identidad == another_old_identity,
+        )
         .map(|_| ())
         .unwrap_err();
 
