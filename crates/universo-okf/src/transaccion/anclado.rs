@@ -638,7 +638,7 @@ fn abrir_directorio_por_ruta(
         }
     }
     let directorio = opciones.open(ruta).map_err(mapear_io)?;
-    metadata_directorio(&directorio)?;
+    metadata_directorio_validada(&directorio)?;
     Ok(directorio)
 }
 
@@ -647,9 +647,16 @@ fn clonar_handle(handle: &File) -> Result<File, ErrorDirectorioAnclado> {
 }
 
 fn metadata_directorio(handle: &File) -> Result<IdentidadDirectorio, ErrorDirectorioAnclado> {
+    let metadata = metadata_directorio_validada(handle)?;
+    identidad_desde_metadata(handle, &metadata)
+}
+
+fn metadata_directorio_validada(
+    handle: &File,
+) -> Result<std::fs::Metadata, ErrorDirectorioAnclado> {
     let metadata = handle.metadata().map_err(mapear_io)?;
     validar_metadata_directorio_por_metadata(&metadata)?;
-    identidad_desde_metadata(handle, &metadata)
+    Ok(metadata)
 }
 
 /// Obtiene la identidad física del directorio abierto para una deduplicación
@@ -659,24 +666,19 @@ pub(crate) fn identidad_directorio_para_recorrido(
     ruta: &Path,
 ) -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado> {
     let handle = abrir_directorio_por_ruta(ruta, false)?;
-    let metadata = handle.metadata().map_err(mapear_io)?;
-    validar_metadata_directorio_por_metadata(&metadata)?;
 
     #[cfg(unix)]
     {
+        let metadata = metadata_directorio_validada(&handle)?;
         identidad_desde_metadata(&handle, &metadata).map(Some)
     }
     #[cfg(windows)]
     {
-        match identidad_windows(&handle) {
-            Ok(identidad) => Ok(Some(identidad)),
-            Err(error) if filesystem_sin_file_id(&error) => Ok(None),
-            Err(error) => Err(mapear_io(error)),
-        }
+        identidad_opcional(identidad_windows(&handle), filesystem_sin_file_id)
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (handle, metadata);
+        let _ = handle;
         Ok(None)
     }
 }
@@ -753,11 +755,23 @@ fn identidad_windows(handle: &File) -> io::Result<IdentidadDirectorio> {
     })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn filesystem_sin_file_id(error: &io::Error) -> bool {
     // These Win32 errors explicitly indicate that this filesystem/driver does
     // not implement the FileIdInfo query. Other failures must remain visible.
     matches!(error.raw_os_error(), Some(1 | 50))
+}
+
+#[cfg(any(windows, test))]
+fn identidad_opcional<T>(
+    resultado: io::Result<T>,
+    es_no_soportada: impl FnOnce(&io::Error) -> bool,
+) -> Result<Option<T>, ErrorDirectorioAnclado> {
+    match resultado {
+        Ok(identidad) => Ok(Some(identidad)),
+        Err(error) if es_no_soportada(&error) => Ok(None),
+        Err(error) => Err(mapear_io(error)),
+    }
 }
 
 fn mapear_io(error: io::Error) -> ErrorDirectorioAnclado {

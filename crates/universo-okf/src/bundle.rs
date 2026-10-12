@@ -10,7 +10,9 @@ use universo_core::{
 
 use crate::documento::{EntradaCruda, parsear_documento};
 use crate::errores::{ErrorBundle, ErrorDocumento, ErrorEntrada, Regla};
-use crate::transaccion::anclado::{IdentidadDirectorio, identidad_directorio_para_recorrido};
+use crate::transaccion::anclado::{
+    ErrorDirectorioAnclado, IdentidadDirectorio, identidad_directorio_para_recorrido,
+};
 
 /// Un archivo ya localizado como `BundlePath`, con su contenido crudo.
 struct ArchivoBundle {
@@ -732,6 +734,18 @@ pub(crate) fn parsear_bundle_desde_estructura(
 /// nombres de archivo en `layout.ignorados`, lee UTF-8, delega en
 /// `parsear_bundle`.
 pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, Vec<ErrorBundle>> {
+    cargar_bundle_observando(raiz, manifiesto, identidad_directorio_para_recorrido, || {})
+}
+
+fn cargar_bundle_observando(
+    raiz: &Path,
+    manifiesto: Manifiesto,
+    mut obtener_identidad: impl FnMut(
+        &Path,
+    )
+        -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado>,
+    mut observar_recorrido: impl FnMut(),
+) -> Result<Estructura, Vec<ErrorBundle>> {
     let mut errores: Vec<ErrorBundle> = Vec::new();
     let mut archivos: Vec<(String, String)> = Vec::new();
 
@@ -820,7 +834,7 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
             ));
             continue;
         }
-        let identidad_base = match identidad_directorio_para_recorrido(&base_canonica) {
+        let identidad_base = match obtener_identidad(&base_canonica) {
             Ok(Some(identidad)) => IdentidadBaseLayout::Fisica(identidad),
             Ok(None) => IdentidadBaseLayout::Canonica(base_canonica.clone()),
             Err(_) => {
@@ -851,6 +865,7 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
             base_canonica: &base_canonica,
             raiz_canonica: &raiz_canonica,
         };
+        observar_recorrido();
         recorrer(
             &recorrido,
             &base,
@@ -1560,6 +1575,44 @@ mod tests {
             &mut paths_case_sensitive,
             PathBuf::from("DOCS")
         ));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn identidad_no_soportada_deduplica_por_ruta_canonica_antes_del_recorrido() {
+        let temp = tempfile::tempdir().unwrap();
+        let docs = temp.path().join("docs");
+        let alias = temp.path().join("alias");
+        std::fs::create_dir(&docs).unwrap();
+        std::fs::write(docs.join("doc.md"), doc("a", "Doc", "")).unwrap();
+        enlazar_directorio(&alias, &docs);
+
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["docs".into(), "alias".into()];
+        manifiesto.layout.sin_iota.clear();
+        let mut rutas_identificadas = Vec::new();
+        let mut recorridos = 0;
+        let errores = cargar_bundle_observando(
+            temp.path(),
+            manifiesto,
+            |ruta| {
+                rutas_identificadas.push(ruta.to_path_buf());
+                Ok(None)
+            },
+            || recorridos += 1,
+        )
+        .unwrap_err();
+
+        assert_eq!(rutas_identificadas.len(), 2);
+        assert_eq!(rutas_identificadas[0], rutas_identificadas[1]);
+        assert_eq!(recorridos, 1);
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Estructura);
+        assert_eq!(errores[0].path, None);
+        assert_eq!(
+            errores[0].detalle,
+            "layout.directorios contiene rutas que resuelven al mismo directorio"
+        );
     }
 
     #[cfg(windows)]
