@@ -256,8 +256,8 @@ pub(crate) fn capturar_snapshot_con_cas_bajo_lock(
     policy_id: &str,
     esperado: SnapshotToken,
 ) -> Result<Snapshot, ErrorSnapshot> {
-    let raiz =
-        DirectorioAnclado::desde_ubicacion(lock.ubicacion()).map_err(|_| ErrorSnapshot::Io)?;
+    let raiz = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
+        .map_err(super::inventario::mapear_error_anclado)?;
     capturar_snapshot_con_cas_anclado(&raiz, configuracion, version_motor, policy_id, esperado)
 }
 
@@ -1531,6 +1531,43 @@ ignorados = ["ignored.md"]
             ErrorLockEscritura::Busy,
             "el helper debe dejar el guard retenido por quien lo recibió"
         );
+    }
+
+    #[test]
+    fn cas_bajo_lock_redacta_y_preserva_error_si_root_no_es_directorio() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir(&root).unwrap();
+        let configuracion =
+            ConfigRawCapturada::nueva(MANIFIESTO.as_bytes(), b"\n".as_slice(), None, None);
+        let mut lock = LockEscritura::adquirir(&root).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
+        let esperado =
+            capturar_snapshot_raw_anclado(&ancla, configuracion.clone(), "engine/1", "policy/1")
+                .unwrap()
+                .token;
+        drop(ancla);
+        fs::remove_dir(&root).unwrap();
+        fs::write(&root, b"PRIVATE-ROOT-CANARY").unwrap();
+
+        let error = capturar_snapshot_con_cas_bajo_lock(
+            &mut lock,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::TipoNoAdmitido);
+        assert_eq!(error.codigo(), "snapshot_entry_type_not_allowed");
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for secreto in ["PRIVATE-ROOT-CANARY", root.to_string_lossy().as_ref()] {
+            assert!(!debug.contains(secreto), "Debug leaked {secreto}");
+            assert!(!display.contains(secreto), "Display leaked {secreto}");
+        }
+        assert_eq!(fs::read(&root).unwrap(), b"PRIVATE-ROOT-CANARY");
     }
 
     #[test]

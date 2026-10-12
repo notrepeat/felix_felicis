@@ -546,7 +546,7 @@ where
     }
 }
 
-fn mapear_error_anclado(error: super::anclado::ErrorDirectorioAnclado) -> ErrorSnapshot {
+pub(super) fn mapear_error_anclado(error: super::anclado::ErrorDirectorioAnclado) -> ErrorSnapshot {
     match error {
         super::anclado::ErrorDirectorioAnclado::EnlaceNoPermitido => {
             ErrorSnapshot::EnlaceNoPermitido
