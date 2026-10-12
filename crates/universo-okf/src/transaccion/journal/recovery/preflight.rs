@@ -5,8 +5,8 @@ use crate::transaccion::journal::{Journal, JournalState};
 use crate::transaccion::lock::LockEscritura;
 
 use super::{
-    ArtifactState, ErrorObservadorRecovery, RecoveryDecision, RecoveryInventory, RecoveryStep,
-    decide_recovery, observar_inventario_recovery,
+    decide_recovery, observar_inventario_recovery, ArtifactState, ErrorObservadorRecovery,
+    RecoveryDecision, RecoveryInventory, RecoveryStep,
 };
 
 /// One of the only recovery rows currently implemented by a runner.
@@ -40,6 +40,16 @@ pub(crate) enum ErrorPreflightRecovery {
 pub(crate) fn preflight_recovery(
     lock: &mut LockEscritura,
 ) -> Result<ResultadoPreflightRecovery, ErrorPreflightRecovery> {
+    preflight_recovery_con_observador(lock, observar_inventario_recovery)
+}
+
+pub(super) fn preflight_recovery_con_observador(
+    lock: &mut LockEscritura,
+    observar: impl FnOnce(
+        &LockEscritura,
+        &Journal,
+    ) -> Result<RecoveryInventory, ErrorObservadorRecovery>,
+) -> Result<ResultadoPreflightRecovery, ErrorPreflightRecovery> {
     let journal_canonico = {
         let temporal = lock
             .journal_temporal_anclado()
@@ -49,9 +59,7 @@ pub(crate) fn preflight_recovery(
             .map_err(ErrorPreflightRecovery::Journal)?
     };
 
-    preflight_desde_journal_canonico(journal_canonico, |journal| {
-        observar_inventario_recovery(lock, journal)
-    })
+    preflight_desde_journal_canonico(journal_canonico, |journal| observar(lock, journal))
 }
 
 fn preflight_desde_journal_canonico(

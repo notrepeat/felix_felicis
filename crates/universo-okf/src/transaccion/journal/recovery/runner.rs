@@ -11,9 +11,9 @@ use crate::transaccion::journal::JournalState;
 use crate::transaccion::lock::LockEscritura;
 
 use super::{
-    ArtifactState, ErrorObservadorRecovery, FilaRecoverySoportada, RecoveryInventory,
-    ResultadoPreflightRecovery, clasificar_fila_recovery, observar_inventario_recovery,
-    preflight_recovery,
+    clasificar_fila_recovery, observar_inventario_recovery, preflight_recovery, ArtifactState,
+    ContextoPreflightRecovery, ErrorObservadorRecovery, FilaRecoverySoportada, RecoveryInventory,
+    ResultadoPreflightRecovery,
 };
 
 /// Resultado explícito de ejecutar o no la fila acotada.
@@ -144,6 +144,14 @@ fn ejecutar_fila_journal_old_con(
         return Err(ErrorFilaJournalOld::FilaNoAutorizada);
     }
 
+    ejecutar_fila_journal_old_desde_contexto(lock, *contexto, antes_de_eliminar)
+}
+
+pub(super) fn ejecutar_fila_journal_old_desde_contexto(
+    lock: &mut LockEscritura,
+    contexto: ContextoPreflightRecovery,
+    antes_de_eliminar: impl FnOnce(&LockEscritura),
+) -> Result<ResultadoFilaJournalOld, ErrorFilaJournalOld> {
     antes_de_eliminar(lock);
 
     let temporal = lock
@@ -190,6 +198,20 @@ fn ejecutar_fila_journal_restore_old_con(
         return Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada);
     }
 
+    ejecutar_fila_journal_restore_old_desde_contexto(
+        lock,
+        *contexto,
+        antes_de_renombrar,
+        antes_de_eliminar,
+    )
+}
+
+pub(super) fn ejecutar_fila_journal_restore_old_desde_contexto(
+    lock: &mut LockEscritura,
+    contexto: ContextoPreflightRecovery,
+    antes_de_renombrar: impl FnOnce(&LockEscritura),
+    antes_de_eliminar: impl FnOnce(&LockEscritura),
+) -> Result<ResultadoFilaJournalRestoreOld, ErrorFilaJournalRestoreOld> {
     antes_de_renombrar(lock);
 
     let destino = lock
