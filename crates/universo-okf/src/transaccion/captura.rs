@@ -735,6 +735,7 @@ fn contiene_nombre_ordenado(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transaccion::lock::{ErrorLockEscritura, LockEscritura};
     use crate::transaccion::raiz::UbicacionRaiz;
     use std::collections::HashMap;
     use std::fs;
@@ -1476,6 +1477,125 @@ ignorados = ["ignored.md"]
             assert!(!format!("{error:?}").contains(canary));
             assert!(!error.to_string().contains(canary));
         }
+    }
+
+    #[test]
+    fn cas_bajo_lock_materializa_snapshot_con_token_esperado() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        );
+
+        let mut lock = LockEscritura::adquirir(root.path()).unwrap();
+        let _: fn(
+            &mut LockEscritura,
+            ConfigRawCapturada,
+            &str,
+            &str,
+            SnapshotToken,
+        ) -> Result<Snapshot, ErrorSnapshot> = capturar_snapshot_con_cas_bajo_lock;
+        let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
+        let esperado =
+            capturar_snapshot_raw_anclado(&ancla, configuracion.clone(), "engine/1", "policy/1")
+                .unwrap()
+                .token;
+
+        let snapshot = capturar_snapshot_con_cas_bajo_lock(
+            &mut lock,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), esperado);
+        assert!(snapshot.identidad_root().is_some());
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+        assert!(snapshot.fuentes_invariantes().is_empty());
+        assert_eq!(
+            LockEscritura::adquirir(root.path()).unwrap_err(),
+            ErrorLockEscritura::Busy,
+            "el helper debe dejar el guard retenido por quien lo recibió"
+        );
+    }
+
+    #[test]
+    fn cas_bajo_lock_rechaza_snapshot_stale_tras_otra_epoca_de_escritura() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        let documento = root.path().join("knowledge/a.md");
+        fs::write(&documento, "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        );
+
+        let esperado = {
+            let lock = LockEscritura::adquirir(root.path()).unwrap();
+            let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
+            capturar_snapshot_raw_anclado(&ancla, configuracion.clone(), "engine/1", "policy/1")
+                .unwrap()
+                .token
+        };
+
+        {
+            let _epoca_mutadora = LockEscritura::adquirir(root.path()).unwrap();
+            fs::write(&documento, b"\xffPRIVATE-CANARY invalid markdown").unwrap();
+        }
+
+        let contenido_antes = fs::read(&documento).unwrap();
+        let mut nombres_antes = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entrada| entrada.unwrap().file_name())
+            .collect::<Vec<_>>();
+        nombres_antes.sort();
+        let mut lock = LockEscritura::adquirir(root.path()).unwrap();
+        let error = capturar_snapshot_con_cas_bajo_lock(
+            &mut lock,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(error.codigo(), "stale");
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for secreto in [
+            "PRIVATE-CANARY",
+            "knowledge/a.md",
+            root.path().to_string_lossy().as_ref(),
+        ] {
+            assert!(!debug.contains(secreto), "Debug leaked {secreto}");
+            assert!(!display.contains(secreto), "Display leaked {secreto}");
+        }
+        assert_eq!(fs::read(&documento).unwrap(), contenido_antes);
+        let mut nombres_despues = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entrada| entrada.unwrap().file_name())
+            .collect::<Vec<_>>();
+        nombres_despues.sort();
+        assert_eq!(nombres_despues, nombres_antes);
     }
 
     #[test]
