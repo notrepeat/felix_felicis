@@ -82,7 +82,8 @@ pub struct DeclPredicado {
 /// Layout de disco del bundle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
-    /// Directorios del bundle que el motor recorre.
+    /// Directorios del bundle que el motor recorre. Deben ser únicos y no
+    /// pueden contenerse unos a otros por componentes.
     pub directorios: Vec<String>,
     /// Subconjunto de `directorios` (o subrutas suyas) sin nodo $\iota$
     /// implícito.
@@ -136,6 +137,10 @@ pub enum ErrorManifiesto {
     ClaveDuplicada(String),
     /// Una entrada de `sin_iota` no está contenida en `directorios`.
     SinIotaFueraDeLayout(String),
+    /// `directorios` contiene la misma ruta más de una vez.
+    DirectoriosDuplicados,
+    /// Una ruta de `directorios` está contenida en otra ruta declarada.
+    DirectoriosSolapados,
     /// `directorios` está vacío.
     DirectoriosVacio,
     /// `layout.parent_key` se declaró vacío.
@@ -209,6 +214,12 @@ impl std::fmt::Display for ErrorManifiesto {
             ErrorManifiesto::SinIotaFueraDeLayout(p) => {
                 write!(f, "{p:?} en sin_iota no está contenido en directorios")
             }
+            ErrorManifiesto::DirectoriosDuplicados => {
+                write!(f, "layout.directorios contiene rutas duplicadas")
+            }
+            ErrorManifiesto::DirectoriosSolapados => {
+                write!(f, "layout.directorios contiene rutas solapadas")
+            }
             ErrorManifiesto::DirectoriosVacio => write!(f, "layout.directorios está vacío"),
             ErrorManifiesto::ParentKeyVacia => write!(f, "layout.parent_key está vacío"),
             ErrorManifiesto::ParentKeyInvalida => {
@@ -249,11 +260,76 @@ fn nombre_invalido(nombre: &str) -> bool {
         })
 }
 
-fn contiene_prefijo_de_ruta(ruta: &str, mut contiene: impl FnMut(&str) -> bool) -> bool {
-    contiene(ruta)
-        || ruta
-            .match_indices('/')
-            .any(|(indice, _)| contiene(&ruta[..indice]))
+#[derive(Default)]
+struct NodoPrefijosRuta {
+    hijos: BTreeMap<u8, usize>,
+    terminal: bool,
+}
+
+/// Índice de rutas que conserva la semántica de prefijo por componente de
+/// `layout.sin_iota`, sin materializar ni volver a comparar cada prefijo.
+/// El alfabeto de transiciones son bytes, así que cada paso compara claves de
+/// un byte y el trabajo total es lineal en los bytes insertados y consultados.
+struct PrefijosRuta {
+    nodos: Vec<NodoPrefijosRuta>,
+}
+
+#[derive(Default)]
+struct ConflictosDirectorios {
+    duplicados: bool,
+    solapados: bool,
+}
+
+impl PrefijosRuta {
+    fn insertar(&mut self, ruta: &str, mut observar_byte: impl FnMut()) -> ConflictosDirectorios {
+        let bytes = ruta.as_bytes();
+        let mut actual = 0;
+        let mut conflictos = ConflictosDirectorios::default();
+
+        for byte in bytes {
+            observar_byte();
+            if *byte == b'/' && self.nodos[actual].terminal {
+                conflictos.solapados = true;
+            }
+            actual = match self.nodos[actual].hijos.get(byte).copied() {
+                Some(siguiente) => siguiente,
+                None => {
+                    let siguiente = self.nodos.len();
+                    self.nodos.push(NodoPrefijosRuta::default());
+                    self.nodos[actual].hijos.insert(*byte, siguiente);
+                    siguiente
+                }
+            };
+        }
+
+        conflictos.duplicados = self.nodos[actual].terminal;
+        conflictos.solapados |= self.nodos[actual].hijos.contains_key(&b'/');
+        self.nodos[actual].terminal = true;
+        conflictos
+    }
+
+    fn contiene_prefijo_de(&self, ruta: &str, mut observar_byte: impl FnMut()) -> bool {
+        let mut actual = 0;
+        for byte in ruta.as_bytes() {
+            observar_byte();
+            if *byte == b'/' && self.nodos[actual].terminal {
+                return true;
+            }
+            let Some(&siguiente) = self.nodos[actual].hijos.get(byte) else {
+                return false;
+            };
+            actual = siguiente;
+        }
+        self.nodos[actual].terminal
+    }
+}
+
+impl Default for PrefijosRuta {
+    fn default() -> Self {
+        Self {
+            nodos: vec![NodoPrefijosRuta::default()],
+        }
+    }
 }
 
 impl Manifiesto {
@@ -375,23 +451,26 @@ impl Manifiesto {
             }
         }
 
-        let mut directorios_layout: Vec<&str> = if self.layout.sin_iota.is_empty() {
-            Vec::new()
-        } else {
-            self.layout.directorios.iter().map(String::as_str).collect()
-        };
-        if !self.layout.sin_iota.is_empty() {
-            directorios_layout.sort_unstable();
+        let mut prefijos_directorio = PrefijosRuta::default();
+        let mut hay_directorios_duplicados = false;
+        let mut hay_directorios_solapados = false;
+        for directorio in &self.layout.directorios {
+            let conflictos = prefijos_directorio.insertar(directorio, || {});
+            hay_directorios_duplicados |= conflictos.duplicados;
+            hay_directorios_solapados |= conflictos.solapados;
         }
         for entrada in &self.layout.sin_iota {
-            let contenido = contiene_prefijo_de_ruta(entrada, |directorio| {
-                directorios_layout
-                    .binary_search_by(|candidato| candidato.cmp(&directorio))
-                    .is_ok()
-            });
+            let contenido = prefijos_directorio.contiene_prefijo_de(entrada, || {});
             if !contenido {
                 errores.push(ErrorManifiesto::SinIotaFueraDeLayout(entrada.clone()));
             }
+        }
+
+        if hay_directorios_duplicados {
+            errores.push(ErrorManifiesto::DirectoriosDuplicados);
+        }
+        if hay_directorios_solapados {
+            errores.push(ErrorManifiesto::DirectoriosSolapados);
         }
 
         if self.layout.directorios.is_empty() {
@@ -686,40 +765,90 @@ pub(crate) mod tests {
     }
     #[test]
     fn validar_sin_iota_consulta_prefijos_segun_componentes_de_ruta() {
-        let mut directorios: Vec<String> = (0..8192)
-            .map(|indice| format!("externo/{indice:04}"))
-            .collect();
-        directorios.extend(["root".into(), "root/".into()]);
-        let mut directorios_ordenados: Vec<&str> = directorios.iter().map(String::as_str).collect();
-        directorios_ordenados.sort_unstable();
+        let mut prefijos = PrefijosRuta::default();
+        for indice in 0..8192 {
+            prefijos.insertar(&format!("externo/{indice:04}"), || {});
+        }
+        prefijos.insertar("root", || {});
+        prefijos.insertar("root/", || {});
 
-        let ruta = "raiz/sub/hoja";
-        let mut consultas = 0;
-        let contenido = contiene_prefijo_de_ruta(ruta, |prefijo| {
-            consultas += 1;
-            directorios_ordenados
-                .binary_search_by(|directorio| directorio.cmp(&prefijo))
-                .is_ok()
-        });
-        assert!(!contenido);
-        assert_eq!(consultas, 1 + ruta.matches('/').count());
+        assert!(!prefijos.contiene_prefijo_de("raiz/sub/hoja", || {}));
+        assert!(prefijos.contiene_prefijo_de("root/sub", || {}));
+        assert!(prefijos.contiene_prefijo_de("root//sub", || {}));
+        assert!(!prefijos.contiene_prefijo_de("rooted/sub", || {}));
+    }
 
-        assert!(contiene_prefijo_de_ruta("root/sub", |prefijo| {
-            directorios_ordenados
-                .binary_search_by(|directorio| directorio.cmp(&prefijo))
-                .is_ok()
-        }));
-        let directorio_con_barra_final = ["root/"];
-        assert!(contiene_prefijo_de_ruta("root//sub", |prefijo| {
-            directorio_con_barra_final
-                .binary_search_by(|directorio| directorio.cmp(&prefijo))
-                .is_ok()
-        }));
-        assert!(!contiene_prefijo_de_ruta("rooted/sub", |prefijo| {
-            directorios_ordenados
-                .binary_search_by(|directorio| directorio.cmp(&prefijo))
-                .is_ok()
-        }));
+    #[test]
+    fn consulta_ruta_adversarial_visita_cada_byte_una_vez() {
+        let componentes = 2048;
+        let prefijo = std::iter::repeat_n("a", componentes)
+            .collect::<Vec<_>>()
+            .join("/");
+        let directorio = format!("{prefijo}/x");
+        let ruta = format!("{prefijo}/y");
+        let mut prefijos = PrefijosRuta::default();
+        let mut bytes_insertados = 0;
+        prefijos.insertar(&directorio, || bytes_insertados += 1);
+        assert_eq!(bytes_insertados, directorio.len());
+
+        let mut bytes_consultados = 0;
+        assert!(!prefijos.contiene_prefijo_de(&ruta, || bytes_consultados += 1));
+        assert_eq!(bytes_consultados, ruta.len());
+    }
+
+    #[test]
+    fn rechaza_directorios_duplicados_y_solapados_con_errores_redactados() {
+        let mut duplicados = base();
+        duplicados.layout.directorios = vec!["secreto/ruta".into(), "secreto/ruta".into()];
+        let error = duplicados
+            .validar()
+            .unwrap_err()
+            .into_iter()
+            .find(|error| *error == ErrorManifiesto::DirectoriosDuplicados)
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "layout.directorios contiene rutas duplicadas"
+        );
+        assert!(!error.to_string().contains("secreto"));
+
+        let mut solapados = base();
+        solapados.layout.directorios = vec!["secreto".into(), "secreto/sub".into()];
+        let error = solapados
+            .validar()
+            .unwrap_err()
+            .into_iter()
+            .find(|error| *error == ErrorManifiesto::DirectoriosSolapados)
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "layout.directorios contiene rutas solapadas"
+        );
+        assert!(!error.to_string().contains("secreto"));
+    }
+
+    #[test]
+    fn acepta_directorios_disjuntos_con_prefijos_de_nombre_compartidos() {
+        let mut m = base();
+        m.layout.directorios = vec!["n".into(), "notes".into()];
+        m.layout.sin_iota = vec!["n/sub".into()];
+        m.validar().unwrap();
+    }
+
+    #[test]
+    fn diez_mil_directorios_repetidos_producen_un_error_estable() {
+        let mut m = base();
+        m.layout.directorios = vec!["ruta".into(); 10_000];
+        let errores = m.validar().unwrap_err();
+        assert_eq!(
+            errores
+                .iter()
+                .filter(|error| **error == ErrorManifiesto::DirectoriosDuplicados)
+                .count(),
+            1
+        );
+        assert!(errores.contains(&ErrorManifiesto::DirectoriosDuplicados));
+        assert!(!errores.contains(&ErrorManifiesto::DirectoriosSolapados));
     }
     #[test]
     fn rechaza_duplicados_y_directorios_vacio() {
