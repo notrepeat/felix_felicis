@@ -262,3 +262,7 @@ fn eliminar_entrada_plataforma(
 ) -> Result<(), ErrorJournalAnclado> {
     Err(ErrorJournalAnclado::Io)
 }
+
+#[cfg(test)]
+#[path = "eliminar_tests.rs"]
+mod tests;
