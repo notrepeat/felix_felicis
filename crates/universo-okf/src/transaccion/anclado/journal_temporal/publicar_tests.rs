@@ -1,5 +1,6 @@
 use super::super::{ErrorJournalAnclado, IdentidadArchivoJournal};
 use super::super::{JournalTemporalAnclado, ResultadoPublicacionJournal};
+use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::{anclado::journal_temporal::identidad_archivo, raiz::UbicacionRaiz};
 use std::fs::{self, File};
@@ -32,6 +33,42 @@ fn confirmado(resultado: ResultadoPublicacionJournal) -> bool {
     matches!(resultado, ResultadoPublicacionJournal::Confirmado { .. })
 }
 
+fn journal_prueba(capability: &JournalTemporalAnclado<'_>, transaction_id: &str) -> Journal {
+    let parent = capability.identidad_parent.journal_identity().unwrap();
+    let directory = |id: u64| {
+        #[cfg(unix)]
+        {
+            DirectoryIdentity::unix(7, id)
+        }
+        #[cfg(windows)]
+        {
+            DirectoryIdentity::windows(7, format!("{id:032x}"))
+        }
+    };
+    let fingerprint = |id: u64, byte: char| {
+        ArtifactFingerprint::new(
+            directory(id),
+            RawTreeDigest::from_hex(byte.to_string().repeat(64)).unwrap(),
+        )
+    };
+    Journal::new(
+        transaction_id,
+        parent,
+        fingerprint(2, 'a'),
+        fingerprint(3, 'b'),
+    )
+    .unwrap()
+}
+
+fn preparar_temporal(
+    capability: &JournalTemporalAnclado<'_>,
+) -> (Journal, Vec<u8>, IdentidadArchivoJournal) {
+    let journal = journal_prueba(capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    let identidad = capability.crear_nuevo(&bytes).unwrap();
+    (journal, bytes, identidad)
+}
+
 #[cfg(unix)]
 #[test]
 fn mapper_unix_acepta_eisdir_y_enotdir_como_alternativas() {
@@ -49,11 +86,10 @@ fn publicar_preserva_bytes_e_identidad_y_quita_temporal() {
     let root = crear_root(temp.path());
     let mut lock = LockEscritura::adquirir(&root).unwrap();
     let capability: JournalTemporalAnclado<'_> = lock.journal_temporal_anclado().unwrap();
-    let bytes = b"published journal bytes";
-    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
     let journal = nombre_journal(&root);
 
-    assert!(confirmado(capability.publicar(esperada)));
+    assert!(confirmado(capability.publicar(esperada, &journal_esperado)));
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(journal).unwrap(), bytes);
     assert!(!nombre_temporal(temp.path()).exists());
@@ -67,14 +103,13 @@ fn identidad_incorrecta_conserva_temporal_y_no_crea_canonico() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes = b"expected source";
-    capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, _) = preparar_temporal(&capability);
     let otro = temp.path().join("other");
     fs::write(&otro, b"other identity").unwrap();
 
     let mut syscall_invocado = false;
     assert_eq!(
-        capability.publicar_con(identidad(&otro), |_, _| {
+        capability.publicar_con(identidad(&otro), &journal_esperado, |_, _| {
             syscall_invocado = true;
             Err(ErrorJournalAnclado::Io)
         }),
@@ -93,13 +128,12 @@ fn archivo_canonico_en_conflicto_conserva_ambos_canaries() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes_temporal = b"temporary canary";
+    let (journal_esperado, bytes_temporal, esperada) = preparar_temporal(&capability);
     let bytes_canonicos = b"canonical canary";
-    let esperada = capability.crear_nuevo(bytes_temporal).unwrap();
     fs::write(&journal, bytes_canonicos).unwrap();
 
     assert_eq!(
-        capability.publicar(esperada),
+        capability.publicar(esperada, &journal_esperado),
         ResultadoPublicacionJournal::NoAplicado(ErrorJournalAnclado::CanonicalConflict)
     );
     assert_eq!(fs::read(temporal).unwrap(), bytes_temporal);
@@ -114,13 +148,12 @@ fn directorio_canonico_en_conflicto_conserva_canaries() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes_temporal = b"temporary canary";
-    let esperada = capability.crear_nuevo(bytes_temporal).unwrap();
+    let (journal_esperado, bytes_temporal, esperada) = preparar_temporal(&capability);
     fs::create_dir(&journal).unwrap();
     fs::write(journal.join("canary"), b"directory canary").unwrap();
 
     assert_eq!(
-        capability.publicar(esperada),
+        capability.publicar(esperada, &journal_esperado),
         ResultadoPublicacionJournal::NoAplicado(ErrorJournalAnclado::RegularFileRequired)
     );
     assert_eq!(fs::read(temporal).unwrap(), bytes_temporal);
@@ -138,9 +171,10 @@ fn fuente_ausente_falla_con_codigo_estable() {
     fs::write(&otro, b"identity source").unwrap();
     let mut lock = LockEscritura::adquirir(&root).unwrap();
     let capability = lock.journal_temporal_anclado().unwrap();
+    let journal_esperado = journal_prueba(&capability, "0123456789abcdef0123456789abcdef");
 
     assert_eq!(
-        capability.publicar(identidad(&otro)),
+        capability.publicar(identidad(&otro), &journal_esperado),
         ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::SourceMissing)
     );
     assert!(!nombre_journal(&root).exists());
@@ -166,15 +200,14 @@ fn raiz_unc_rechaza_publicacion_sin_tocar_temporal_ni_canonico() {
     let mut capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes_temporales = b"temporary canary";
+    let (journal_esperado, bytes_temporales, esperada) = preparar_temporal(&capability);
     let bytes_canonicos = b"canonical canary";
-    let esperada = capability.crear_nuevo(bytes_temporales).unwrap();
     fs::write(&journal, bytes_canonicos).unwrap();
     let identidad_canonica = identidad(&journal);
     capability.raiz_remota = super::raiz_es_remota(unc);
 
     assert_eq!(
-        capability.publicar(esperada),
+        capability.publicar(esperada, &journal_esperado),
         ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::RemoteUnsupported)
     );
     assert_eq!(identidad(&temporal), esperada);
@@ -192,14 +225,70 @@ fn reintento_despues_de_linkat_ve_el_mismo_inode_y_limpia_temporal() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes = b"committed before crash";
-    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
     fs::hard_link(&temporal, &journal).unwrap();
 
-    assert!(confirmado(capability.publicar(esperada)));
+    assert!(confirmado(capability.publicar(esperada, &journal_esperado)));
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(journal).unwrap(), bytes);
     assert!(!temporal.exists());
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn reintento_con_misma_identidad_y_journal_distinto_preserva_el_canary() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal_path = nombre_journal(&root);
+    let (journal_esperado, _, esperada) = preparar_temporal(&capability);
+    fs::rename(&temporal, &journal_path).unwrap();
+
+    let journal_conflictivo = journal_prueba(&capability, "1123456789abcdef0123456789abcdef");
+    let bytes_conflictivos = journal_conflictivo.encode().unwrap();
+    fs::write(&journal_path, &bytes_conflictivos).unwrap();
+    assert_eq!(identidad(&journal_path), esperada);
+
+    assert_eq!(
+        capability.publicar(esperada, &journal_esperado),
+        ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::JournalMismatch)
+    );
+    assert_eq!(identidad(&journal_path), esperada);
+    assert_eq!(fs::read(&journal_path).unwrap(), bytes_conflictivos);
+    assert!(!temporal.exists());
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn reconciliacion_con_misma_identidad_y_journal_distinto_no_confirma_ni_limpia() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal_path = nombre_journal(&root);
+    let (journal_esperado, _, esperada) = preparar_temporal(&capability);
+    fs::hard_link(&temporal, &journal_path).unwrap();
+
+    let journal_conflictivo = journal_prueba(&capability, "1123456789abcdef0123456789abcdef");
+    let bytes_conflictivos = journal_conflictivo.encode().unwrap();
+    fs::write(&journal_path, &bytes_conflictivos).unwrap();
+    assert_eq!(identidad(&journal_path), esperada);
+    assert_eq!(identidad(&temporal), esperada);
+
+    let resultado =
+        capability.resolver_error_publicacion(esperada, &journal_esperado, ErrorJournalAnclado::Io);
+
+    assert!(matches!(
+        resultado,
+        ResultadoPublicacionJournal::Indeterminado { .. }
+    ));
+    assert_eq!(identidad(&journal_path), esperada);
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(fs::read(&journal_path).unwrap(), bytes_conflictivos);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes_conflictivos);
 }
 
 #[cfg(unix)]
@@ -211,8 +300,7 @@ fn fallo_de_cleanup_despues_de_linkat_devuelve_publicado_pendiente() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes = b"committed with uncertain cleanup";
-    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
     let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
 
     super::publicar_plataforma(
@@ -223,7 +311,7 @@ fn fallo_de_cleanup_despues_de_linkat_devuelve_publicado_pendiente() {
     )
     .unwrap();
     let mut cleanup_llamado = false;
-    let resultado = capability.resultado_despues_de_commit(esperada, |_, _| {
+    let resultado = capability.resultado_despues_de_commit(esperada, &journal_esperado, |_, _| {
         cleanup_llamado = true;
         super::EstadoLimpiezaPublicacion::Pendiente
     });
@@ -246,8 +334,7 @@ fn linkat_exitoso_con_verificacion_ausente_o_incierta_es_indeterminado() {
         let capability = lock.journal_temporal_anclado().unwrap();
         let temporal = nombre_temporal(temp.path());
         let journal = nombre_journal(&root);
-        let bytes = b"keep evidence when verification is uncertain";
-        let esperada = capability.crear_nuevo(bytes).unwrap();
+        let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
         let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
 
         super::publicar_plataforma(
@@ -260,7 +347,11 @@ fn linkat_exitoso_con_verificacion_ausente_o_incierta_es_indeterminado() {
         let mut cleanup_llamado = false;
         let resultado = capability.resultado_despues_de_commit_observando(
             esperada,
-            |_, _| observacion,
+            &journal_esperado,
+            |_, _, observado| {
+                assert_eq!(observado, &journal_esperado);
+                observacion
+            },
             |_, _| {
                 cleanup_llamado = true;
                 super::EstadoLimpiezaPublicacion::Pendiente
@@ -288,8 +379,7 @@ fn efecto_de_publicacion_seguido_de_error_se_confirma_como_ya_publicado() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes = b"effect completed before platform error";
-    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
     let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
 
     super::publicar_plataforma(
@@ -299,7 +389,8 @@ fn efecto_de_publicacion_seguido_de_error_se_confirma_como_ya_publicado() {
         &fuente,
     )
     .unwrap();
-    let resultado = capability.resolver_error_publicacion(esperada, ErrorJournalAnclado::Io);
+    let resultado =
+        capability.resolver_error_publicacion(esperada, &journal_esperado, ErrorJournalAnclado::Io);
 
     assert!(confirmado(resultado));
     assert_eq!(identidad(&journal), esperada);
@@ -315,20 +406,22 @@ fn error_de_publicacion_con_observaciones_inciertas_preserva_evidencia() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes = b"preserve evidence after uncertain observations";
-    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
     let mut canonico_observado = false;
     let mut temporal_observado = false;
     let mut limpieza_llamada = false;
 
     let resultado = capability.resolver_error_publicacion_observando(
         esperada,
+        &journal_esperado,
         ErrorJournalAnclado::Io,
-        |_, _| {
+        |_, _, observado| {
+            assert_eq!(observado, &journal_esperado);
             canonico_observado = true;
             Err(ErrorJournalAnclado::Io)
         },
-        |_, _| {
+        |_, _, observado| {
+            assert_eq!(observado, &journal_esperado);
             temporal_observado = true;
             Err(ErrorJournalAnclado::Io)
         },
@@ -371,8 +464,7 @@ fn cleanup_clasifica_conflictos_de_apertura_y_preserva_canaries() {
         let temporal = nombre_temporal(temp.path());
         let journal = nombre_journal(&root);
         let outside = temp.path().join("outside-canary");
-        let bytes = b"canonical remains committed";
-        let esperada = capability.crear_nuevo(bytes).unwrap();
+        let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
         let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
         super::publicar_plataforma(
             &capability.parent,
@@ -420,10 +512,11 @@ fn cleanup_clasifica_conflictos_de_apertura_y_preserva_canaries() {
             fs::write(temporal.join("canary"), b"directory canary").unwrap();
         }
 
-        let resultado = capability
-            .resultado_despues_de_commit(esperada, |capability, identidad| {
-                capability.limpiar_temporal_si_coincide(identidad)
-            });
+        let resultado = capability.resultado_despues_de_commit(
+            esperada,
+            &journal_esperado,
+            |capability, identidad| capability.limpiar_temporal_si_coincide(identidad),
+        );
         assert_eq!(
             resultado,
             ResultadoPublicacionJournal::Confirmado {
@@ -522,10 +615,9 @@ fn resolver_error_distingue_no_aplicado_de_commit_confirmado() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes = b"expected source before commit";
-    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
     assert_eq!(
-        capability.resolver_error_publicacion(esperada, error),
+        capability.resolver_error_publicacion(esperada, &journal_esperado, error),
         ResultadoPublicacionJournal::NoAplicado(error)
     );
     assert_eq!(fs::read(&temporal).unwrap(), bytes);
@@ -538,8 +630,7 @@ fn resolver_error_distingue_no_aplicado_de_commit_confirmado() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes = b"canonical commit is already confirmed";
-    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
     let fuente = super::abrir_temporal(&capability.parent, &capability.nombre).unwrap();
     super::publicar_plataforma(
         &capability.parent,
@@ -553,7 +644,7 @@ fn resolver_error_distingue_no_aplicado_de_commit_confirmado() {
     }
     fs::write(&temporal, b"replacement temp").unwrap();
 
-    let outcome = capability.resolver_error_publicacion(esperada, error);
+    let outcome = capability.resolver_error_publicacion(esperada, &journal_esperado, error);
     assert_eq!(
         outcome,
         ResultadoPublicacionJournal::Confirmado {
@@ -577,11 +668,10 @@ fn reintento_despues_de_rename_ve_canonico_esperado() {
     let capability = lock.journal_temporal_anclado().unwrap();
     let temporal = nombre_temporal(temp.path());
     let journal = nombre_journal(&root);
-    let bytes = b"committed before crash";
-    let esperada = capability.crear_nuevo(bytes).unwrap();
+    let (journal_esperado, bytes, esperada) = preparar_temporal(&capability);
     fs::rename(&temporal, &journal).unwrap();
 
-    assert!(confirmado(capability.publicar(esperada)));
+    assert!(confirmado(capability.publicar(esperada, &journal_esperado)));
     assert_eq!(identidad(&journal), esperada);
     assert_eq!(fs::read(journal).unwrap(), bytes);
     assert!(!temporal.exists());
@@ -599,8 +689,7 @@ fn junction_canonica_en_conflicto_conserva_temporal_y_canary() {
     fs::write(outside.join("canary"), b"outside canary").unwrap();
     let mut lock = LockEscritura::adquirir(&root).unwrap();
     let capability = lock.journal_temporal_anclado().unwrap();
-    let bytes_temporal = b"temporary canary";
-    let esperada = capability.crear_nuevo(bytes_temporal).unwrap();
+    let (journal_esperado, bytes_temporal, esperada) = preparar_temporal(&capability);
     let output = std::process::Command::new("cmd")
         .args(["/c", "mklink", "/J"])
         .arg(&journal)
@@ -621,7 +710,7 @@ fn junction_canonica_en_conflicto_conserva_temporal_y_canary() {
     }
 
     assert_eq!(
-        capability.publicar(esperada),
+        capability.publicar(esperada, &journal_esperado),
         ResultadoPublicacionJournal::NoAplicado(ErrorJournalAnclado::ReparseNotAllowed)
     );
     assert_eq!(fs::read(temporal).unwrap(), bytes_temporal);

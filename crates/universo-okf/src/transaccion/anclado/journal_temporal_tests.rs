@@ -501,6 +501,10 @@ fn codigos_de_error_journal_son_estables_y_redactados() {
             "journal_identity_mismatch",
         ),
         (
+            ErrorJournalAnclado::JournalMismatch,
+            "journal_record_mismatch",
+        ),
+        (
             ErrorJournalAnclado::CanonicalConflict,
             "journal_canonical_conflict",
         ),
