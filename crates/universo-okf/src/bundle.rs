@@ -153,6 +153,7 @@ const LIMITES_BUNDLE: LimitesInventario = LimitesInventario::CONTRATO;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecursoBundle {
+    BytesRaw,
     Entradas,
     Profundidad,
     BytesRutas,
@@ -163,6 +164,7 @@ enum RecursoBundle {
 #[derive(Debug)]
 struct PresupuestoBundle {
     limites: LimitesInventario,
+    bytes_raw: usize,
     entradas: usize,
     bytes_rutas: usize,
 }
@@ -171,6 +173,7 @@ impl PresupuestoBundle {
     fn nuevo(limites: LimitesInventario) -> Self {
         Self {
             limites,
+            bytes_raw: 0,
             entradas: 0,
             bytes_rutas: 0,
         }
@@ -198,6 +201,20 @@ impl PresupuestoBundle {
         self.bytes_rutas = bytes_rutas;
         Ok(())
     }
+
+    fn bytes_raw_restantes(&self) -> usize {
+        self.limites.bytes_raw - self.bytes_raw
+    }
+
+    fn registrar_bytes_raw(&mut self, bytes: usize) -> Result<(), RecursoBundle> {
+        let bytes_raw = self
+            .bytes_raw
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limites.bytes_raw)
+            .ok_or(RecursoBundle::BytesRaw)?;
+        self.bytes_raw = bytes_raw;
+        Ok(())
+    }
 }
 
 fn error_limite_bundle(
@@ -206,6 +223,7 @@ fn error_limite_bundle(
     limites: LimitesInventario,
 ) -> ErrorBundle {
     let (nombre, limite) = match recurso {
+        RecursoBundle::BytesRaw => ("bytes de contenido", limites.bytes_raw),
         RecursoBundle::Entradas => ("entradas", limites.entradas),
         RecursoBundle::Profundidad => ("profundidad", limites.profundidad),
         RecursoBundle::BytesRutas => ("bytes de rutas", limites.bytes_rutas),
@@ -1069,21 +1087,43 @@ fn cargar_bundle_con_limites(
                 continue;
             }
             antes_de_abrir_archivo(&ruta_canonica);
-            match leer_archivo_regular_bundle(&raiz_anclada, &raiz_canonica, &ruta_canonica) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(texto) => archivos.push((relativa, texto)),
-                    Err(_) => {
-                        let path_reportado = BundlePath::desde_archivo(&relativa)
-                            .map(|p| p.como_str().to_string())
-                            .unwrap_or_else(|_| relativa.clone());
-                        errores.push(error(
-                            Some(&path_reportado),
-                            None,
-                            Regla::NoUtf8,
-                            "el archivo no es UTF-8 válido",
+            let restante = presupuesto.bytes_raw_restantes();
+            match leer_archivo_regular_bundle(
+                &raiz_anclada,
+                &raiz_canonica,
+                &ruta_canonica,
+                restante,
+            ) {
+                Ok(bytes) => {
+                    if bytes.len() > restante {
+                        errores.push(error_limite_bundle(
+                            Some(&relativa),
+                            RecursoBundle::BytesRaw,
+                            limites,
                         ));
+                        ordenar_errores(&mut errores);
+                        return Err(errores);
                     }
-                },
+                    if let Err(recurso) = presupuesto.registrar_bytes_raw(bytes.len()) {
+                        errores.push(error_limite_bundle(Some(&relativa), recurso, limites));
+                        ordenar_errores(&mut errores);
+                        return Err(errores);
+                    }
+                    match String::from_utf8(bytes) {
+                        Ok(texto) => archivos.push((relativa, texto)),
+                        Err(_) => {
+                            let path_reportado = BundlePath::desde_archivo(&relativa)
+                                .map(|p| p.como_str().to_string())
+                                .unwrap_or_else(|_| relativa.clone());
+                            errores.push(error(
+                                Some(&path_reportado),
+                                None,
+                                Regla::NoUtf8,
+                                "el archivo no es UTF-8 válido",
+                            ));
+                        }
+                    }
+                }
                 Err(err) => errores.push(error(Some(&relativa), None, Regla::Io, err.to_string())),
             }
         }
@@ -1114,15 +1154,20 @@ fn leer_archivo_regular_bundle(
     raiz: &DirectorioLecturaAnclado,
     raiz_canonica: &Path,
     ruta_canonica: &Path,
+    maximo_bytes: usize,
 ) -> io::Result<Vec<u8>> {
     let relativa = ruta_canonica.strip_prefix(raiz_canonica).map_err(|_| {
         io::Error::new(io::ErrorKind::InvalidInput, "ruta fuera de la raíz anclada")
     })?;
-    let mut archivo = raiz
+    let archivo = raiz
         .abrir_archivo_regular_relativo(relativa)
         .map_err(error_lectura_anclada)?;
+    let maximo_lectura = maximo_bytes
+        .checked_add(1)
+        .and_then(|maximo| u64::try_from(maximo).ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "límite de lectura inválido"))?;
     let mut bytes = Vec::new();
-    archivo.read_to_end(&mut bytes)?;
+    archivo.take(maximo_lectura).read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 
@@ -1600,25 +1645,34 @@ mod tests {
             presupuesto.reservar_entrada(1, 1),
             Err(RecursoBundle::BytesRutas)
         );
+
+        let limites = LimitesInventario {
+            bytes_raw: 4,
+            ..limites
+        };
+        let mut presupuesto = PresupuestoBundle::nuevo(limites);
+        assert_eq!(presupuesto.bytes_raw_restantes(), 4);
+        assert_eq!(presupuesto.registrar_bytes_raw(4), Ok(()));
+        assert_eq!(presupuesto.bytes_raw_restantes(), 0);
+        assert_eq!(
+            presupuesto.registrar_bytes_raw(1),
+            Err(RecursoBundle::BytesRaw)
+        );
     }
 
     #[test]
     fn limites_de_recorrido_son_globales_y_aceptan_el_valor_exacto() {
         let dir = tempfile::tempdir().unwrap();
-        for (root, name) in [("n", "X"), ("m", "Y")] {
-            std::fs::create_dir_all(dir.path().join(root)).unwrap();
-            std::fs::write(
-                dir.path()
-                    .join(root)
-                    .join(if root == "n" { "x.md" } else { "y.md" }),
-                doc("a", name, ""),
-            )
-            .unwrap();
-        }
+        let contenido_n = doc("a", "X", "");
+        let contenido_m = doc("a", "Y", "");
+        std::fs::create_dir_all(dir.path().join("n")).unwrap();
+        std::fs::create_dir_all(dir.path().join("m")).unwrap();
+        std::fs::write(dir.path().join("n/x.md"), &contenido_n).unwrap();
+        std::fs::write(dir.path().join("m/y.md"), &contenido_m).unwrap();
         let mut manifiesto = manifiesto_minimo();
         manifiesto.layout.directorios.push("m".to_string());
         let exactos = LimitesInventario {
-            bytes_raw: usize::MAX,
+            bytes_raw: contenido_n.len() + contenido_m.len(),
             entradas: 4,
             profundidad: 2,
             bytes_rutas: 14,
@@ -1652,6 +1706,13 @@ mod tests {
                 },
                 "bytes de rutas",
             ),
+            (
+                LimitesInventario {
+                    bytes_raw: exactos.bytes_raw - 1,
+                    ..exactos
+                },
+                "bytes de contenido",
+            ),
         ] {
             let errores =
                 cargar_bundle_con_presupuesto_test(dir.path(), manifiesto.clone(), limites)
@@ -1663,6 +1724,38 @@ mod tests {
                 "se esperaba límite de {esperado}: {errores:?}"
             );
         }
+    }
+
+    #[test]
+    fn lectura_del_bundle_detecta_crecimiento_despues_de_validar_el_archivo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("n")).unwrap();
+        let contenido = doc("a", "X", "");
+        std::fs::write(dir.path().join("n/x.md"), &contenido).unwrap();
+        let errores = cargar_bundle_con_limites(
+            dir.path(),
+            manifiesto_minimo(),
+            LimitesInventario {
+                bytes_raw: contenido.len(),
+                entradas: 2,
+                profundidad: 2,
+                bytes_rutas: 7,
+            },
+            identidad_directorio_para_recorrido,
+            || {},
+            |ruta| {
+                std::fs::write(ruta, format!("{contenido}x")).unwrap();
+            },
+        )
+        .unwrap_err();
+        assert!(
+            errores.iter().any(|error| {
+                error.regla == Regla::LimiteBundleExcedido
+                    && error.path.as_deref() == Some("n/x.md")
+                    && error.detalle.contains("bytes de contenido")
+            }),
+            "el crecimiento concurrente debe quedar acotado y tipado: {errores:?}"
+        );
     }
 
     #[test]
