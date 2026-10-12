@@ -162,7 +162,7 @@ impl DirectorioAnclado {
         let parent_path = ruta
             .parent()
             .ok_or(ErrorDirectorioAnclado::TipoNoAdmitido)?;
-        let parent = abrir_directorio_absoluto(parent_path)?;
+        let parent = abrir_directorio_absoluto(parent_path, true)?;
         let identidad_parent = metadata_directorio(&parent)?;
         let raiz = match abrir_directorio_hijo(&parent, basename) {
             Ok(directorio) => Some(directorio),
@@ -179,6 +179,34 @@ impl DirectorioAnclado {
             identidad_raiz,
             permite_escritura: false,
             puede_crear_stage_sibling: true,
+        })
+    }
+
+    /// Abre solo el parent de la ubicación con una capability estrictamente
+    /// de lectura. No abre ni inspecciona la raíz; el observador de recovery
+    /// resuelve cada artefacto desde este handle después de validar el journal.
+    pub(crate) fn parent_solo_lectura_desde_ubicacion(
+        ubicacion: &UbicacionRaiz,
+    ) -> Result<Self, ErrorDirectorioAnclado> {
+        let ruta = ubicacion.ruta();
+        let basename = ruta
+            .file_name()
+            .ok_or(ErrorDirectorioAnclado::ComponenteInvalido)?;
+        validar_componente(basename)?;
+        let parent_path = ruta
+            .parent()
+            .ok_or(ErrorDirectorioAnclado::TipoNoAdmitido)?;
+        let parent = abrir_directorio_absoluto(parent_path, false)?;
+        let identidad_parent = metadata_directorio(&parent)?;
+
+        Ok(Self {
+            parent,
+            basename: basename.to_os_string(),
+            raiz: None,
+            identidad_parent,
+            identidad_raiz: None,
+            permite_escritura: false,
+            puede_crear_stage_sibling: false,
         })
     }
 
@@ -504,7 +532,10 @@ fn derechos_parent_transaccional() -> u32 {
         | FILE_ADD_SUBDIRECTORY
 }
 
-fn abrir_directorio_absoluto(ruta: &Path) -> Result<File, ErrorDirectorioAnclado> {
+fn abrir_directorio_absoluto(
+    ruta: &Path,
+    parent_transaccional: bool,
+) -> Result<File, ErrorDirectorioAnclado> {
     #[cfg(windows)]
     // Si el parent es raíz de volumen/share y su ACL niega estos derechos, se
     // propaga el error; no se reintenta con una ruta sin anclar.
@@ -521,17 +552,15 @@ fn abrir_directorio_absoluto(ruta: &Path) -> Result<File, ErrorDirectorioAnclado
     }
 
     #[cfg(unix)]
-    let mut actual = abrir_directorio_por_ruta(Path::new("/"), nombres.is_empty())?;
+    let mut actual = abrir_directorio_por_ruta(Path::new("/"), parent_transaccional)?;
     #[cfg(windows)]
-    let mut actual = abrir_directorio_por_ruta(&volumen, nombres.is_empty())?;
+    let mut actual = abrir_directorio_por_ruta(&volumen, parent_transaccional)?;
 
     for (indice, nombre) in nombres.iter().enumerate() {
-        let opciones = if indice + 1 == nombres.len() {
+        let opciones = if parent_transaccional && indice + 1 == nombres.len() {
             opciones_parent_stage()
         } else {
-            let mut opciones = OpenOptionsAt::default();
-            opciones.read(true).follow(false);
-            opciones
+            opciones_directorio()
         };
         actual = abrir_directorio_hijo_con_opciones(&actual, nombre, &opciones)?;
     }
