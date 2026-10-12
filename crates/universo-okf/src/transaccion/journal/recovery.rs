@@ -2,6 +2,11 @@
 
 use super::{ArtifactFingerprint, JournalState};
 
+#[path = "recovery/observer.rs"]
+mod observer;
+#[allow(unused_imports)]
+pub(crate) use observer::{ErrorObservadorRecovery, observar_inventario_recovery};
+
 /// Resultado abstracto de clasificar root, backup o stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ArtifactState {
