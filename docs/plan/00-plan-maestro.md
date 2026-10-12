@@ -12,7 +12,7 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5 y U7 conservan avance parcial. Matriz local Windows+WSL y CI `38232932504` son históricas para `a082467`; CI `38240021138` pasó solo para `701de13` y `38246129604` solo para `a4d01e5`; no hay CI verde del dispatcher final. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5 y U7 conservan avance parcial. Matriz local Windows+WSL y CI `38232932504` son históricas para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; no hay CI verde del dispatcher final. |
 | Foco actual | Fase 04, Unidad 7: journal, commit y recovery. U7 incluye `KeepOld` y `RestoreOld` acotadas. El preflight compartido se ejecuta una vez; el dispatcher crate-private solo enruta esas dos filas, sin caller desde apply/producción. No limpia stage ni ejecuta `DiscardNewRestoreOld`, validación de `New`, `Committed` o recovery completo. |
 | Última actualización | 2026-10-12 |
 

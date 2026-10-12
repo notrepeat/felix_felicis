@@ -463,9 +463,10 @@ Chain strategy: feature-branch-chain
   `KeepOld`/`RestoreOld`; ningún caller desde apply/producción existe todavía.
 
   No hay cleanup de stage, executor `DiscardNewRestoreOld`, validación de
-  `New`, fila `Committed` ni recovery completo. El CI run `38240021138` pasó
-  solo para la base `701de13` y el `38246129604` solo para `a4d01e5`; no se
-  afirma CI verde para el dispatcher final.
+  `New`, fila `Committed` ni recovery completo. CI run `38240021138` pasó solo
+  para `701de13`; `38242930608` pasó para SHA `db71e3c` con el runner
+  `RestoreOld` previo al dispatcher; `38246129604` aplica solo a `a4d01e5`.
+  El dispatcher final aún no tiene CI verde.
   `a082467` conserva el estado histórico anterior. El lock coordina
   escritores Felix cooperantes; en POSIX
   `unlinkat` opera por nombre y conserva una carrera residual ante mutaciones
@@ -716,6 +717,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-12 | `6cf6cfc`, `603ae4d`, `d1b42ec`, `a082467` | Estado histórico en `a082467`: `eliminar.rs` verifica identidad y registro canónico; `recovery/runner.rs` solo ejecuta `Prepared`/`BackupReady` + root `Old` + backup/stage ausentes → `RemoveJournal`. Matriz local Windows+WSL aprobada; GitHub Actions run `38232932504` completado con éxito. | Avance parcial U7 en ese commit; `Installed`/`Committed` con root `Old` se rechazaban. |
 | 2026-10-12 | `c5a09cc` | `recovery/runner.rs` admite también `Installed` únicamente para root `Old`, backup/stage `Absent` y `root_new_validated=false` → `KeepOld` + `RemoveJournal`; `root=New` no validado, `root=Unknown` y `Committed` fallan cerrado. `runner_tests.rs`: `installed_root_old_sin_vecinos_elimina_journal_y_conserva_root` y `committed_root_old_sin_vecinos_falla_y_conserva_estado`. | Avance parcial U7; las demás filas, integración a apply, cleanup/restart completo y harness runtime siguen pendientes. |
 | 2026-10-12 | `9fa50f5`, `76b898a`, `701de13`, `7bdbc07`, `57a46f0`, `2138c1e`, `d1b0ef6`, `23e7718` | Reapertura verificada del backup sibling anclado y pruebas de parent/reparse; executor crate-private `RestoreOld` para `Prepared`/`BackupReady`/`Installed` con root `Absent`, backup `Old`, stage `Absent`, `root_new_validated=false`, renombrado reconciliado y journal retirado. Reexport interno en `recovery.rs`; cobertura de conflictos, stage y matriz pura. CI run `38240021138` pasó solo en la base `701de13`. | Estado en `23e7718`: avance parcial U7; dispatcher y caller de apply aún no existían. Cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed` y recovery completo seguían pendientes. |
+| 2026-10-12 | CI `38242930608`, SHA `db71e3c` | Run completado con éxito para el estado con runner `RestoreOld` previo al dispatcher. | Evidencia histórica del runner anterior; no valida el dispatcher final. |
 | 2026-10-12 | `1dddce1`, `a4d01e5`, `85f7e89`, `7656d15`, `0e8f0d4` | Preflight compartido una sola vez y dispatcher crate-private que enruta solo `KeepOld`/`RestoreOld`; no hay caller desde apply/producción. CI run `38246129604` pasó para la base `a4d01e5` únicamente; no acredita el dispatcher final. | U7 parcial; cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, recovery completo y conexión desde apply siguen pendientes. |
 
 | Unidad | Evidencia requerida | Resultado |
