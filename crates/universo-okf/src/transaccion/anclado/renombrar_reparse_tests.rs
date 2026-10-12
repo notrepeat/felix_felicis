@@ -99,6 +99,9 @@ fn reabrir_backup_rechaza_reparse_y_preserva_canary_externo() {
         .map(|_| ())
         .unwrap_err();
 
+    #[cfg(unix)]
+    assert_eq!(error, ErrorRenombrarAnclado::TipoNoAdmitido);
+    #[cfg(windows)]
     assert_eq!(error, ErrorRenombrarAnclado::EnlaceNoPermitido);
     assert_eq!(
         std::fs::read(outside.join("canary.txt")).unwrap(),
