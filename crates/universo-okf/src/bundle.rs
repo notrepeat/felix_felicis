@@ -2708,29 +2708,20 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
-    fn cargar_bundle_rechaza_alias_case_de_directorio_en_filesystem_insensible() {
+    fn cargar_bundle_rechaza_layout_case_insensitive_antes_de_acceder_a_la_raiz() {
         let temp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(temp.path().join("docs")).unwrap();
-        std::fs::write(temp.path().join("docs").join("doc.md"), doc("a", "Doc", "")).unwrap();
-        let alias = temp.path().join("DOCS");
-        if !alias.is_dir() {
-            eprintln!("SKIP explícito: el filesystem de prueba distingue mayúsculas");
-            return;
-        }
-
         let mut manifiesto = manifiesto_minimo();
-        manifiesto.layout.directorios = vec!["docs".into(), "DOCS".into()];
+        manifiesto.layout.directorios = vec!["Docs".into(), "docs".into()];
         manifiesto.layout.sin_iota.clear();
-        let errores = cargar_bundle(temp.path(), manifiesto).unwrap_err();
+        let errores = cargar_bundle(&temp.path().join("raiz-inexistente"), manifiesto).unwrap_err();
 
         assert_eq!(errores.len(), 1, "{errores:?}");
         assert_eq!(errores[0].regla, Regla::Estructura);
         assert_eq!(errores[0].path, None);
         assert_eq!(
             errores[0].detalle,
-            "layout.directorios contiene rutas que resuelven al mismo directorio"
+            "layout.directorios contiene rutas duplicadas"
         );
         assert!(
             !errores[0]
