@@ -53,6 +53,7 @@ pub struct Estructura {
     aristas: SlotMap<AristaId, Arista>,
     salientes: SecondaryMap<NodoId, Vec<AristaId>>,
     entrantes: SecondaryMap<NodoId, Vec<AristaId>>,
+    conteos_arista: HashMap<(NodoId, Sorte, NodoId), usize>,
     padre: SecondaryMap<NodoId, NodoId>,
     hijos: SecondaryMap<NodoId, Vec<NodoId>>,
     indice: HashMap<BundlePath, NodoId>,
@@ -170,6 +171,7 @@ impl Estructura {
             aristas: SlotMap::with_key(),
             salientes: SecondaryMap::new(),
             entrantes: SecondaryMap::new(),
+            conteos_arista: HashMap::new(),
             padre: SecondaryMap::new(),
             hijos: SecondaryMap::new(),
             indice: HashMap::new(),
@@ -191,6 +193,7 @@ impl Estructura {
             aristas: self.aristas.clone(),
             salientes: self.salientes.clone(),
             entrantes: self.entrantes.clone(),
+            conteos_arista: self.conteos_arista.clone(),
             padre: self.padre.clone(),
             hijos: self.hijos.clone(),
             indice: self.indice.clone(),
@@ -281,22 +284,18 @@ impl Estructura {
                 etiqueta.como_str().to_string(),
             ));
         }
-        let ordinal = self.salientes[origen]
-            .iter()
-            .filter(|id| {
-                let a = &self.aristas[**id];
-                a.tipo == tipo && a.destino == destino
-            })
-            .count() as u32;
+        let grupo = (origen, tipo.clone(), destino);
+        let ordinal = self.conteos_arista.get(&grupo).copied().unwrap_or(0);
         let id = self.aristas.insert(Arista {
             origen,
             destino,
             tipo,
             etiqueta,
-            ordinal,
+            ordinal: ordinal as u32,
         });
         self.salientes[origen].push(id);
         self.entrantes[destino].push(id);
+        self.conteos_arista.insert(grupo, ordinal + 1);
         Ok(id)
     }
 
@@ -467,6 +466,14 @@ impl Estructura {
 
     fn quitar_arista_interna(&mut self, id: AristaId) -> Option<Arista> {
         let arista = self.aristas.remove(id)?;
+        let grupo = (arista.origen, arista.tipo.clone(), arista.destino);
+        match self.conteos_arista.get_mut(&grupo) {
+            Some(conteo) if *conteo > 1 => *conteo -= 1,
+            Some(_) => {
+                self.conteos_arista.remove(&grupo);
+            }
+            None => {}
+        }
         if let Some(vec) = self.salientes.get_mut(arista.origen) {
             vec.retain(|&a| a != id);
         }
@@ -541,6 +548,12 @@ impl Estructura {
                     arista.tipo == tipo && arista.destino == destino
                 })
                 .collect();
+            if supervivientes.is_empty() {
+                self.conteos_arista.remove(&(origen, tipo.clone(), destino));
+            } else {
+                self.conteos_arista
+                    .insert((origen, tipo.clone(), destino), supervivientes.len());
+            }
             for (ordinal, id) in supervivientes.into_iter().enumerate() {
                 self.aristas[id].ordinal = ordinal as u32;
             }
@@ -884,6 +897,16 @@ impl Estructura {
                 .or_default()
                 .push(a.ordinal);
         }
+        let conteos_reconstruidos: HashMap<_, _> = grupos
+            .iter()
+            .map(|(grupo, ordinales)| (grupo.clone(), ordinales.len()))
+            .collect();
+        if conteos_reconstruidos != self.conteos_arista {
+            errores.push(format!(
+                "conteos_arista no coincide con los grupos de aristas: reconstruido {conteos_reconstruidos:?}, índice {:?}",
+                self.conteos_arista
+            ));
+        }
         for ((origen, tipo, destino), mut ordinales) in grupos {
             ordinales.sort_unstable();
             let esperado: Vec<u32> = (0..ordinales.len() as u32).collect();
@@ -935,6 +958,7 @@ impl Estructura {
 mod tests {
     use super::*;
     use crate::{BundlePath, Etiqueta, Sorte};
+    use slotmap::Key;
 
     fn e() -> Estructura {
         Estructura::nueva(crate::manifiesto::tests::base()).unwrap()
@@ -1191,6 +1215,78 @@ mod tests {
         assert_eq!(
             u.quitar_arista(e1).unwrap_err(),
             ErrorEstructura::AristaInexistente
+        );
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn conteos_de_ordinales_se_mantienen_en_bajas_unitarias_lote_y_nodo() {
+        let mut u = e();
+        let origen = u.insertar_nodo(p("n/origen"), s("a"), l("origen")).unwrap();
+        let destino = u
+            .insertar_nodo(p("n/destino"), s("a"), l("destino"))
+            .unwrap();
+        let grupo = (origen, s("rel"), destino);
+        let aristas: Vec<_> = (0..2048)
+            .map(|ordinal| {
+                let id = u.insertar_arista(origen, destino, s("rel"), l("")).unwrap();
+                assert_eq!(u.arista(id).unwrap().ordinal, ordinal);
+                assert_eq!(
+                    u.conteos_arista.get(&grupo),
+                    Some(&((ordinal + 1) as usize))
+                );
+                id
+            })
+            .collect();
+        assert_eq!(u.conteos_arista.get(&grupo), Some(&2048));
+
+        assert_eq!(
+            u.insertar_arista(NodoId::null(), destino, s("rel"), l(""))
+                .unwrap_err(),
+            ErrorEstructura::NodoInexistente
+        );
+        assert_eq!(
+            u.insertar_arista(origen, destino, s("desconocida"), l(""))
+                .unwrap_err(),
+            ErrorEstructura::SorteAristaDesconocido("desconocida".into())
+        );
+        assert_eq!(
+            u.insertar_arista(origen, destino, s("rel"), l("línea\ninválida"))
+                .unwrap_err(),
+            ErrorEstructura::EtiquetaInvalida("línea\ninválida".into())
+        );
+        assert_eq!(u.conteos_arista.get(&grupo), Some(&2048));
+
+        u.quitar_arista(aristas[1024]).unwrap();
+        assert_eq!(u.conteos_arista.get(&grupo), Some(&2047));
+        assert_eq!(u.arista(aristas[1025]).unwrap().ordinal, 1024);
+        let agregada = u
+            .insertar_arista(origen, destino, s("rel"), l("nueva"))
+            .unwrap();
+        assert_eq!(u.arista(agregada).unwrap().ordinal, 2047);
+
+        u.quitar_aristas_en_lote(&[aristas[0], aristas[17], agregada])
+            .unwrap();
+        assert_eq!(u.conteos_arista.get(&grupo), Some(&2045));
+        assert_eq!(u.arista(aristas[18]).unwrap().ordinal, 16);
+        let siguiente = u
+            .insertar_arista(origen, destino, s("rel"), l("siguiente"))
+            .unwrap();
+        assert_eq!(u.arista(siguiente).unwrap().ordinal, 2045);
+        u.verificar_representacion().unwrap();
+
+        u.quitar_nodo(destino).unwrap();
+        assert!(!u.conteos_arista.contains_key(&grupo));
+        let destino_nuevo = u
+            .insertar_nodo(p("n/destino"), s("a"), l("destino nuevo"))
+            .unwrap();
+        let reinsercion = u
+            .insertar_arista(origen, destino_nuevo, s("rel"), l("reinserción"))
+            .unwrap();
+        assert_eq!(u.arista(reinsercion).unwrap().ordinal, 0);
+        assert_eq!(
+            u.conteos_arista.get(&(origen, s("rel"), destino_nuevo)),
+            Some(&1)
         );
         u.verificar_representacion().unwrap();
     }
