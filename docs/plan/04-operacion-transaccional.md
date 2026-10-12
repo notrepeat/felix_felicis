@@ -26,10 +26,11 @@ implementados.
 
 Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; U5 y
 U7 conservan avance parcial, y U6 está cerrada para root anclado y staging. U7
-verifica la eliminación canónica del journal y ejecuta una sola fila segura de
-recovery; las demás filas y la integración a apply siguen pendientes. Fase 04
-sigue en curso: lock, captura y staging aún no están conectados a apply ni
-publican candidatos.
+verifica la eliminación canónica del journal y ejecuta una sola fila exacta de
+recovery para `Prepared`/`BackupReady`/`Installed` con root `Old`, vecinos
+ausentes y `root_new_validated=false`; las demás filas y la integración a apply
+siguen pendientes. Fase 04 sigue en curso: lock, captura y staging aún no están
+conectados a apply ni publican candidatos.
 
 ## Decisiones de contrato v1
 
@@ -444,13 +445,17 @@ Chain strategy: feature-branch-chain
   `crates/universo-okf/src/transaccion/anclado/journal_temporal/eliminar_tests.rs`
   (`603ae4d`). El runner en
   `crates/universo-okf/src/transaccion/journal/recovery/runner.rs` (`d1b42ec`)
-  ejecuta solo `Prepared`/`BackupReady` + root `Old` + backup/stage ausentes →
-  `RemoveJournal`; sus pruebas están en
+  ejecuta solo `Prepared`/`BackupReady`/`Installed` con root `Old`, backup/stage
+  `Absent` y `root_new_validated=false` → `KeepOld` + `RemoveJournal`; sus
+  pruebas están en
   `crates/universo-okf/src/transaccion/journal/recovery/runner_tests.rs`. En
-  `a082467`, `Installed`/`Committed` con root `Old` se rechazan y conservan el
-  estado. Las demás filas recuperables, integración a apply, cleanup/restart
-  completo y harness runtime siguen pendientes. La matriz local Windows+WSL y
-  GitHub Actions run `38232932504` está verde para `a082467`. El lock coordina
+  `Installed` sin backup, esa fila es segura únicamente si root clasifica
+  exactamente `Old` y stage está ausente. `root=New` no validado, `root=Unknown`
+  y `Committed` siguen fallando cerrado. `a082467` registra el estado histórico:
+  `Installed` y `Committed` con root `Old` aún se rechazaban. Las demás filas
+  recuperables, integración a apply, cleanup/restart completo y harness runtime
+  siguen pendientes. La matriz local Windows+WSL y GitHub Actions run
+  `38232932504` están verdes para `a082467`. El lock coordina
   escritores Felix cooperantes; en POSIX
   `unlinkat` opera por nombre y conserva una carrera residual ante mutaciones
   externas del namespace. No se promete durabilidad ante pérdida de energía ni
@@ -626,7 +631,8 @@ cargo test --locked -p universo-okf --lib transaccion::stage::stage_bundle_trans
 cargo test --locked -p universo-okf --test writer_lock_transaccional junction_root_se_rechaza_sin_seguirla
 cargo test --locked -p universo-okf --lib elimina_coincidencia_y_confirma_ausencia_idempotente
 cargo test --locked -p universo-okf --lib prepared_y_backup_ready_eliminan_solo_el_journal_y_conservan_root
-cargo test --locked -p universo-okf --lib installed_y_committed_root_old_sin_vecinos_fallan_y_conservan_estado
+cargo test --locked -p universo-okf --lib installed_root_old_sin_vecinos_elimina_journal_y_conserva_root
+cargo test --locked -p universo-okf --lib committed_root_old_sin_vecinos_falla_y_conserva_estado
 cargo test -p universo-cli --test propose_transaccional
 cargo test -p universo-cli --test apply_transaccional
 cargo test -p universo-cli --test docs_transaccional
@@ -695,7 +701,8 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | Harness U5 en HEAD `2475dc3` | 2 writers: total 103,390 ms, espera 55,635/27,817/54,842 ms, 5 busy de 7 (71,4%); 8 writers: total 413,403 ms, espera 1.423,391/177,924/363,207 ms, 92 busy de 100 (92,0%). Máximo de intervalos marcados: 1 en ambos escenarios. | Una muestra release orientativa; los marcadores no cubren toda la vida del lock. |
 | 2026-10-11 | `43c4f98`, `cddc3e3`; verificación en HEAD `cddc3e3` | Harness privado `stage_bundle_transaccional`: 10.000 auxiliares, 104.857.600 bytes, 51.158,840 ms, 2,050 MB/s y 1,955 MiB/s. El test Windows confirma root junction/reparse y canary intacto al rechazar el lock, antes del staging; el test focal, workspace, clippy, fmt y frontera pública pasan. | U6 cerrada para root anclado/staging; no conecta a apply. Runtime orientativo, sin SLA. |
 | 2026-10-11 | `46877ed`, `a5d9371`, `5f66ad1`, `6f72af2`, `67e8908` | Observer crate-private read-only de root/backup/stage bajo lock y parent anclado; usa identidad y digest raw, representa `root_new_validated=false` y no decide ni muta artefactos. `recovery::observer` 7/7 y `sibling_read_only_tests` 5/5 en Windows, incluidos parent mismatch, mismo basename bajo otro parent, identidad/digest mismatch, ausencia, tipo y junction con canary. Clippy workspace `-D warnings` compila todos los targets en Windows y Linux; incluye regresión FIFO Unix. Workspace: 227 OKF passed/2 ignored. | Avance parcial U7; conserva Journal v1 y no integra apply/recovery ni restart. |
-| 2026-10-12 | `6cf6cfc`, `603ae4d`, `d1b42ec`, `a082467` | `eliminar.rs` verifica identidad y registro canónico antes de retirar el journal; `eliminar_tests.rs` cubre coincidencia, reemplazos, formato malformado y entradas no regulares. `recovery/runner.rs` ejecuta únicamente `Prepared`/`BackupReady` + root `Old` + backup/stage ausentes → `RemoveJournal`; `runner_tests.rs` rechaza `Installed`/`Committed` con root `Old` y conserva estado. Matriz local Windows+WSL aprobada; GitHub Actions run `38232932504` completado con éxito para `a082467`. | Avance parcial U7; otras filas, integración a apply, cleanup/restart completo y harness runtime pendientes. Sin promesa de durabilidad energética ni concurrencia hostil; en POSIX persiste la carrera residual de `unlinkat` por nombre. |
+| 2026-10-12 | `6cf6cfc`, `603ae4d`, `d1b42ec`, `a082467` | Estado histórico en `a082467`: `eliminar.rs` verifica identidad y registro canónico; `recovery/runner.rs` solo ejecuta `Prepared`/`BackupReady` + root `Old` + backup/stage ausentes → `RemoveJournal`. Matriz local Windows+WSL aprobada; GitHub Actions run `38232932504` completado con éxito. | Avance parcial U7 en ese commit; `Installed`/`Committed` con root `Old` se rechazaban. |
+| 2026-10-12 | `c5a09cc` | `recovery/runner.rs` admite también `Installed` únicamente para root `Old`, backup/stage `Absent` y `root_new_validated=false` → `KeepOld` + `RemoveJournal`; `root=New` no validado, `root=Unknown` y `Committed` fallan cerrado. `runner_tests.rs`: `installed_root_old_sin_vecinos_elimina_journal_y_conserva_root` y `committed_root_old_sin_vecinos_falla_y_conserva_estado`. | Avance parcial U7; las demás filas, integración a apply, cleanup/restart completo y harness runtime siguen pendientes. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
@@ -706,7 +713,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. La captura por ruta conserva TOCTOU; el root anclado de U6 está probado por separado |
 | 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
 | 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
-| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: eliminación canónica verificada y ejecución de `Prepared`/`BackupReady` + root `Old` + backup/stage ausentes → `RemoveJournal`; las ramas recuperables `Installed`/`Committed`, demás filas, integración a apply, cleanup/restart completo y harness runtime siguen pendientes. |
+| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: eliminación canónica verificada y ejecución de `Prepared`/`BackupReady`/`Installed` solo con root `Old`, backup/stage `Absent`, `root_new_validated=false` → `KeepOld` + `RemoveJournal`. `Installed` sin backup solo admite root `Old` y stage ausente; `root=New` no validado, `root=Unknown`, `Committed`, demás filas, integración a apply, cleanup/restart completo y harness runtime siguen pendientes. |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 
 ## Siguiente fase
