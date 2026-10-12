@@ -5,9 +5,9 @@ use fs_at::{OpenOptions as OpenOptionsAt, OpenOptionsWriteMode};
 
 use super::abrir::abrir_entrada_relativa;
 use super::{
-    DirectorioAnclado, EntradaLecturaAnclada, ErrorDirectorioAnclado, TipoEntradaAnclada,
-    clasificar_entrada_sin_seguir, clonar_handle, mapear_error_creacion, mapear_io,
-    metadata_directorio, metadata_es_reparse, validar_componente,
+    DirectorioAnclado, EntradaLecturaAnclada, ErrorDirectorioAnclado, ErrorLecturaNombres,
+    TipoEntradaAnclada, clasificar_entrada_sin_seguir, clonar_handle, mapear_error_creacion,
+    mapear_io, metadata_directorio, metadata_es_reparse, validar_componente,
 };
 use crate::transaccion::raiz::UbicacionRaiz;
 
@@ -61,23 +61,31 @@ impl DirectorioAnclado {
         }))
     }
 
-    pub(crate) fn read_dir(&mut self) -> Result<Vec<std::ffi::OsString>, ErrorDirectorioAnclado> {
-        let raiz = self
-            .raiz
-            .as_mut()
-            .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
-        metadata_directorio(raiz)?;
-        let mut entradas = fs_at::read_dir(raiz).map_err(mapear_io)?;
-        let mut nombres = Vec::new();
+    pub(crate) fn read_dir_con<E, F>(
+        &mut self,
+        mut visitar: F,
+    ) -> Result<(), ErrorLecturaNombres<E>>
+    where
+        F: FnMut(std::ffi::OsString) -> Result<(), E>,
+    {
+        let raiz = self.raiz.as_mut().ok_or(ErrorLecturaNombres::Directorio(
+            ErrorDirectorioAnclado::RaizAusente,
+        ))?;
+        metadata_directorio(raiz).map_err(ErrorLecturaNombres::Directorio)?;
+        let mut entradas = fs_at::read_dir(raiz)
+            .map_err(mapear_io)
+            .map_err(ErrorLecturaNombres::Directorio)?;
         for entrada in &mut entradas {
-            let entrada = entrada.map_err(mapear_io)?;
+            let entrada = entrada
+                .map_err(mapear_io)
+                .map_err(ErrorLecturaNombres::Directorio)?;
             let nombre = entrada.name();
             if nombre == OsStr::new(".") || nombre == OsStr::new("..") {
                 continue;
             }
-            nombres.push(nombre.to_os_string());
+            visitar(nombre.to_os_string()).map_err(ErrorLecturaNombres::Visitante)?;
         }
-        Ok(nombres)
+        Ok(())
     }
 
     /// Abre y clasifica una sola entrada relativa al handle del directorio.

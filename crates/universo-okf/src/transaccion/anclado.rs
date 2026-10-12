@@ -37,6 +37,12 @@ pub(crate) enum ErrorDirectorioAnclado {
     EntradaExistente,
 }
 
+#[derive(Debug)]
+pub(crate) enum ErrorLecturaNombres<E> {
+    Directorio(ErrorDirectorioAnclado),
+    Visitante(E),
+}
+
 /// Conserva la capability del sibling si falla un paso posterior a mkdir.
 pub(crate) struct ErrorCrearStageSibling {
     codigo: ErrorDirectorioAnclado,

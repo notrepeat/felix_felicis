@@ -20,10 +20,13 @@ trait BackendInventario {
     type Directorio;
     type Archivo;
 
-    fn nombres(
+    fn nombres_con<F>(
         &mut self,
         directorio: &mut Self::Directorio,
-    ) -> Result<Vec<std::ffi::OsString>, ErrorSnapshot>;
+        visitar: &mut F,
+    ) -> Result<(), ErrorSnapshot>
+    where
+        F: FnMut(&mut Self, &mut Self::Directorio, std::ffi::OsString) -> Result<(), ErrorSnapshot>;
 
     fn abrir(
         &mut self,
@@ -55,37 +58,49 @@ fn caminar_inventario<B: BackendInventario>(
     backend: &mut B,
     raiz: B::Directorio,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
-    let mut pendientes = vec![(raiz, String::new())];
     let mut entradas = Vec::new();
-
-    while let Some((mut directorio, prefijo)) = pendientes.pop() {
-        // El backend hace una sola enumeración y devuelve solo nombres. La
-        // validación de nombre y la ruta lógica son compartidas por ambos.
-        for nombre in backend.nombres(&mut directorio)? {
-            let nombre = nombre
-                .into_string()
-                .map_err(|_| ErrorSnapshot::RutaNoUtf8)?;
-            validar_nombre_inventario(&nombre)?;
-            let ruta = if prefijo.is_empty() {
-                nombre.clone()
-            } else {
-                format!("{prefijo}/{nombre}")
-            };
-
-            match backend.abrir(&directorio, &nombre)? {
-                EntradaAbierta::Directorio(hijo) => {
-                    entradas.push(EntradaSnapshot::directorio(ruta.clone()));
-                    pendientes.push((hijo, ruta));
-                }
-                EntradaAbierta::Archivo(archivo) => {
-                    entradas.push(EntradaSnapshot::archivo(ruta, backend.leer(archivo)?));
-                }
-            }
-        }
-    }
-
+    caminar_directorio(backend, raiz, "", 0, &mut entradas)?;
     entradas.sort_by(|a, b| a.ruta().as_bytes().cmp(b.ruta().as_bytes()));
     Ok(entradas)
+}
+
+fn caminar_directorio<B: BackendInventario>(
+    backend: &mut B,
+    mut directorio: B::Directorio,
+    prefijo: &str,
+    profundidad: usize,
+    entradas: &mut Vec<EntradaSnapshot>,
+) -> Result<(), ErrorSnapshot> {
+    // Procesa cada hijo antes de pedir el siguiente nombre al backend: no se
+    // acumulan nombres ni handles de directorios hermanos.
+    backend.nombres_con(&mut directorio, &mut |backend, directorio, nombre| {
+        let nombre = nombre
+            .into_string()
+            .map_err(|_| ErrorSnapshot::RutaNoUtf8)?;
+        validar_nombre_inventario(&nombre)?;
+        let profundidad_entrada = profundidad
+            .checked_add(1)
+            .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
+        if profundidad_entrada > 128 {
+            return Err(ErrorSnapshot::LimiteInventarioExcedido);
+        }
+        let ruta = if prefijo.is_empty() {
+            nombre.clone()
+        } else {
+            format!("{prefijo}/{nombre}")
+        };
+
+        match backend.abrir(directorio, &nombre)? {
+            EntradaAbierta::Directorio(hijo) => {
+                caminar_directorio(backend, hijo, &ruta, profundidad_entrada, entradas)?;
+                entradas.push(EntradaSnapshot::directorio(ruta));
+            }
+            EntradaAbierta::Archivo(archivo) => {
+                entradas.push(EntradaSnapshot::archivo(ruta, backend.leer(archivo)?));
+            }
+        }
+        Ok(())
+    })
 }
 
 fn validar_nombre_inventario(nombre: &str) -> Result<(), ErrorSnapshot> {
@@ -112,19 +127,20 @@ where
     type Directorio = PathBuf;
     type Archivo = PathBuf;
 
-    fn nombres(
+    fn nombres_con<V>(
         &mut self,
         directorio: &mut Self::Directorio,
-    ) -> Result<Vec<std::ffi::OsString>, ErrorSnapshot> {
+        visitar: &mut V,
+    ) -> Result<(), ErrorSnapshot>
+    where
+        V: FnMut(&mut Self, &mut Self::Directorio, std::ffi::OsString) -> Result<(), ErrorSnapshot>,
+    {
         validar_directorio_sin_enlaces(directorio)?;
-        fs::read_dir(directorio)
-            .map_err(|_| ErrorSnapshot::Io)?
-            .map(|entrada| {
-                entrada
-                    .map(|entrada| entrada.file_name())
-                    .map_err(|_| ErrorSnapshot::Io)
-            })
-            .collect()
+        for entrada in fs::read_dir(&*directorio).map_err(|_| ErrorSnapshot::Io)? {
+            let entrada = entrada.map_err(|_| ErrorSnapshot::Io)?;
+            visitar(self, directorio, entrada.file_name())?;
+        }
+        Ok(())
     }
 
     fn abrir(
@@ -288,11 +304,23 @@ where
     type Directorio = super::anclado::DirectorioAnclado;
     type Archivo = File;
 
-    fn nombres(
+    fn nombres_con<V>(
         &mut self,
         directorio: &mut Self::Directorio,
-    ) -> Result<Vec<std::ffi::OsString>, ErrorSnapshot> {
-        directorio.read_dir().map_err(mapear_error_anclado)
+        visitar: &mut V,
+    ) -> Result<(), ErrorSnapshot>
+    where
+        V: FnMut(&mut Self, &mut Self::Directorio, std::ffi::OsString) -> Result<(), ErrorSnapshot>,
+    {
+        let mut enumeracion = directorio.clonar().map_err(mapear_error_anclado)?;
+        let resultado = enumeracion.read_dir_con(|nombre| visitar(self, directorio, nombre));
+        match resultado {
+            Ok(()) => Ok(()),
+            Err(super::anclado::ErrorLecturaNombres::Directorio(error)) => {
+                Err(mapear_error_anclado(error))
+            }
+            Err(super::anclado::ErrorLecturaNombres::Visitante(error)) => Err(error),
+        }
     }
 
     fn abrir(
@@ -348,8 +376,10 @@ mod tests {
     use crate::transaccion::anclado::DirectorioAnclado;
     use crate::transaccion::raiz::UbicacionRaiz;
     use crate::transaccion::snapshot::{TipoEntradaSnapshot, calcular_token_snapshot};
+    use std::cell::Cell;
     use std::collections::HashMap;
     use std::io::Read;
+    use std::rc::Rc;
 
     fn anclar(root: &Path) -> DirectorioAnclado {
         DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(root).unwrap()).unwrap()
@@ -553,16 +583,23 @@ mod tests {
         type Directorio = usize;
         type Archivo = ();
 
-        fn nombres(
+        fn nombres_con<V>(
             &mut self,
             directorio: &mut Self::Directorio,
-        ) -> Result<Vec<std::ffi::OsString>, ErrorSnapshot> {
+            visitar: &mut V,
+        ) -> Result<(), ErrorSnapshot>
+        where
+            V: FnMut(
+                &mut Self,
+                &mut Self::Directorio,
+                std::ffi::OsString,
+            ) -> Result<(), ErrorSnapshot>,
+        {
             self.enumeraciones[*directorio] += 1;
-            Ok(if *directorio == 0 {
-                vec!["sub".into()]
-            } else {
-                Vec::new()
-            })
+            if *directorio == 0 {
+                visitar(self, directorio, "sub".into())?;
+            }
+            Ok(())
         }
 
         fn abrir(
@@ -588,6 +625,88 @@ mod tests {
         caminar_inventario(&mut backend, 0).unwrap();
 
         assert_eq!(backend.enumeraciones, [1, 1]);
+    }
+
+    struct DirectorioContado {
+        id: usize,
+        estado: Rc<Cell<(usize, usize)>>,
+    }
+
+    impl DirectorioContado {
+        fn nuevo(id: usize, estado: Rc<Cell<(usize, usize)>>) -> Self {
+            let (activos, maximos) = estado.get();
+            let activos = activos + 1;
+            estado.set((activos, maximos.max(activos)));
+            Self { id, estado }
+        }
+    }
+
+    impl Drop for DirectorioContado {
+        fn drop(&mut self) {
+            let (activos, maximos) = self.estado.get();
+            self.estado.set((activos - 1, maximos));
+        }
+    }
+
+    struct BackendFanout {
+        estado: Rc<Cell<(usize, usize)>>,
+        siblings: usize,
+    }
+
+    impl BackendInventario for BackendFanout {
+        type Directorio = DirectorioContado;
+        type Archivo = ();
+
+        fn nombres_con<V>(
+            &mut self,
+            directorio: &mut Self::Directorio,
+            visitar: &mut V,
+        ) -> Result<(), ErrorSnapshot>
+        where
+            V: FnMut(
+                &mut Self,
+                &mut Self::Directorio,
+                std::ffi::OsString,
+            ) -> Result<(), ErrorSnapshot>,
+        {
+            if directorio.id == 0 {
+                for index in 0..self.siblings {
+                    visitar(self, directorio, format!("d{index:03}").into())?;
+                }
+            }
+            Ok(())
+        }
+
+        fn abrir(
+            &mut self,
+            _directorio: &Self::Directorio,
+            nombre: &str,
+        ) -> Result<EntradaAbierta<Self::Directorio, Self::Archivo>, ErrorSnapshot> {
+            assert!(nombre.starts_with('d'));
+            Ok(EntradaAbierta::Directorio(DirectorioContado::nuevo(
+                1,
+                Rc::clone(&self.estado),
+            )))
+        }
+
+        fn leer(&mut self, (): Self::Archivo) -> Result<Vec<u8>, ErrorSnapshot> {
+            unreachable!("fanout solo contiene directorios")
+        }
+    }
+
+    #[test]
+    fn fanout_dfs_no_retiene_handles_de_directorios_hermanos() {
+        let estado = Rc::new(Cell::new((0, 0)));
+        let backend = &mut BackendFanout {
+            estado: Rc::clone(&estado),
+            siblings: 500,
+        };
+        let root = DirectorioContado::nuevo(0, Rc::clone(&estado));
+
+        let entries = caminar_inventario(backend, root).unwrap();
+
+        assert_eq!(entries.len(), 500);
+        assert_eq!(estado.get(), (0, 2));
     }
 
     #[cfg(unix)]

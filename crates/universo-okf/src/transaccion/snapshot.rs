@@ -104,6 +104,9 @@ impl fmt::Debug for EntradaSnapshot {
 }
 
 /// Error estable y redactado del cálculo/captura de snapshot.
+///
+/// Este enum público es exhaustivo; agregar variantes puede requerir cambios
+/// en `match` exhaustivos de consumidores. El crate sigue en pre-1.0.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ErrorSnapshot {
     /// No se pudo leer o inspeccionar una entrada.
@@ -126,6 +129,8 @@ pub enum ErrorSnapshot {
     InvariantesInvalidas,
     /// Un tamaño no cabe en el framing u64.
     LongitudExcedida,
+    /// El inventario excedió un límite estructural o de contenido.
+    LimiteInventarioExcedido,
     /// La ruta raíz no identifica un directorio.
     RaizInvalida,
 }
@@ -144,6 +149,7 @@ impl ErrorSnapshot {
             Self::BundleInvalido => "snapshot_bundle_invalid",
             Self::InvariantesInvalidas => "snapshot_invariants_invalid",
             Self::LongitudExcedida => "snapshot_length_overflow",
+            Self::LimiteInventarioExcedido => "snapshot_resource_limit",
             Self::RaizInvalida => "snapshot_root_invalid",
         }
     }

@@ -137,7 +137,13 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
     let mut ancla =
         DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
 
-    let nombres = ancla.read_dir().unwrap();
+    let mut nombres = Vec::new();
+    ancla
+        .read_dir_con(|nombre| {
+            nombres.push(nombre);
+            Ok::<_, std::convert::Infallible>(())
+        })
+        .unwrap();
     assert_eq!(nombres, vec![OsString::from("read.txt")]);
     let mut lectura = match ancla.abrir_entrada_inventario("read.txt").unwrap() {
         EntradaLecturaAnclada::Archivo(archivo) => archivo,
