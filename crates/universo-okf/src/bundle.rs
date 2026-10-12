@@ -33,6 +33,44 @@ fn nombre_archivo(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+fn nombres_ignorados_ordenados(ignorados: &[String]) -> Vec<&str> {
+    let mut nombres: Vec<_> = ignorados.iter().map(String::as_str).collect();
+    nombres.sort_unstable();
+    nombres.dedup();
+    nombres
+}
+
+fn contiene_nombre_ordenado(
+    nombres: &[&str],
+    nombre: &str,
+    mut observar_comparacion: impl FnMut(),
+) -> bool {
+    let mut inicio = 0;
+    let mut fin = nombres.len();
+    while inicio < fin {
+        observar_comparacion();
+        let medio = inicio + (fin - inicio) / 2;
+        match nombres[medio].cmp(nombre) {
+            std::cmp::Ordering::Less => inicio = medio + 1,
+            std::cmp::Ordering::Greater => fin = medio,
+            std::cmp::Ordering::Equal => return true,
+        }
+    }
+    false
+}
+
+fn contiene_directorio_ancestro(ruta: &str, directorios: &[String]) -> bool {
+    let contiene = |directorio: &str| {
+        directorios
+            .binary_search_by(|candidato| candidato.as_str().cmp(directorio))
+            .is_ok()
+    };
+    contiene(ruta)
+        || ruta
+            .match_indices('/')
+            .any(|(indice, _)| contiene(&ruta[..indice]))
+}
+
 /// Orden determinista por (path, línea); todo `Err` del cargador sale
 /// ordenado así.
 fn ordenar_errores(errores: &mut [ErrorBundle]) {
@@ -82,11 +120,14 @@ pub fn parsear_bundle(
     // Paso 0: saltar los archivos cuyo nombre (último segmento del path,
     // con extensión) está en `layout.ignorados` — mismo criterio que
     // aplica `cargar_bundle` al recorrer disco.
-    let ignorados = estructura.manifiesto().layout.ignorados.clone();
+    let ignorados = nombres_ignorados_ordenados(&estructura.manifiesto().layout.ignorados);
     let archivos: Vec<&(String, String)> = archivos
         .iter()
-        .filter(|(path_original, _)| !ignorados.iter().any(|i| i == nombre_archivo(path_original)))
+        .filter(|(path_original, _)| {
+            !contiene_nombre_ordenado(&ignorados, nombre_archivo(path_original), || {})
+        })
         .collect();
+    drop(ignorados);
 
     // Paso 1: resolver los paths, detectar colisiones de case y duplicados
     // exactos.
@@ -483,15 +524,9 @@ pub fn parsear_bundle(
 
     // Paso 7: resolver Parent explícito y, solo cuando la clave configurada
     // está ausente, conservar la inferencia legacy por directorio.
-    let sin_iota = estructura.manifiesto().layout.sin_iota.clone();
-    let es_sin_iota = |dir: &str| -> bool {
-        sin_iota.iter().any(|s| {
-            dir == s
-                || dir
-                    .strip_prefix(s.as_str())
-                    .is_some_and(|r| r.starts_with('/'))
-        })
-    };
+    let mut sin_iota = estructura.manifiesto().layout.sin_iota.clone();
+    sin_iota.sort_unstable();
+    sin_iota.dedup();
     for nodo in &cargados {
         match &nodo.padre_frontmatter {
             PadreFrontmatter::RaizExplicita => continue,
@@ -541,7 +576,7 @@ pub fn parsear_bundle(
         let es_index = nodo.path.stem() == "index";
         // El directorio relevante para "sin ι" es siempre el propio
         // directorio del nodo (para `d/sub/index` es `d/sub`).
-        if es_sin_iota(dir) {
+        if contiene_directorio_ancestro(dir, &sin_iota) {
             continue;
         }
         let candidato = if es_index {
@@ -598,6 +633,7 @@ pub fn parsear_bundle(
 pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, Vec<ErrorBundle>> {
     let mut errores: Vec<ErrorBundle> = Vec::new();
     let mut archivos: Vec<(String, String)> = Vec::new();
+    let ignorados = nombres_ignorados_ordenados(&manifiesto.layout.ignorados);
 
     let metadatos_raiz = match std::fs::metadata(raiz) {
         Ok(metadatos) => metadatos,
@@ -698,12 +734,7 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
         encontrados.sort();
         for ruta in encontrados {
             let relativa = relativa_a_raiz(&raiz_canonica, &ruta);
-            if manifiesto
-                .layout
-                .ignorados
-                .iter()
-                .any(|i| i == nombre_archivo(&relativa))
-            {
+            if contiene_nombre_ordenado(&ignorados, nombre_archivo(&relativa), || {}) {
                 continue;
             }
             let ruta_canonica = match std::fs::canonicalize(&ruta) {
@@ -754,6 +785,7 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
     // Los archivos ilegibles no impiden parsear el resto: siempre se
     // reportan todos los errores del bundle a la vez, sin ocultar unos
     // detrás de otros.
+    drop(ignorados);
     match parsear_bundle(&archivos, manifiesto) {
         Ok(estructura) if errores.is_empty() => Ok(estructura),
         Ok(_) => {
@@ -1186,6 +1218,38 @@ mod tests {
         ];
         let u = parsear_bundle(&archivos, manifiesto_minimo()).unwrap();
         assert_eq!(u.len_nodos(), 1);
+    }
+
+    #[test]
+    fn buscar_nombre_ignorado_es_logaritmico_y_conserva_el_nombre_exacto() {
+        fn techo_log2(valor: usize) -> usize {
+            if valor <= 1 {
+                0
+            } else {
+                usize::BITS as usize - (valor - 1).leading_zeros() as usize
+            }
+        }
+
+        let cantidad = 8192;
+        let ignorados: Vec<String> = (0..cantidad)
+            .map(|indice| format!("ignorado_{indice:05}.md"))
+            .collect();
+        let ordenados = nombres_ignorados_ordenados(&ignorados);
+        let mut comparaciones = 0;
+        assert!(contiene_nombre_ordenado(
+            &ordenados,
+            "ignorado_08191.md",
+            || comparaciones += 1,
+        ));
+        assert!(
+            comparaciones <= techo_log2(cantidad + 1),
+            "la búsqueda hizo {comparaciones} comparaciones para {cantidad} nombres"
+        );
+        assert!(!contiene_nombre_ordenado(
+            &ordenados,
+            "sub/ignorado_08191.md",
+            || {},
+        ));
     }
 
     #[test]

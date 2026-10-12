@@ -606,35 +606,102 @@ fn archivos_markdown(
     directorios: &[String],
     ignorados: &[String],
 ) -> Result<Vec<(String, String)>, ErrorSnapshot> {
-    let mut archivos = Vec::new();
+    archivos_markdown_observando(entradas, directorios, ignorados, || {})
+}
+
+fn archivos_markdown_observando(
+    entradas: &[EntradaSnapshot],
+    directorios: &[String],
+    ignorados: &[String],
+    mut observar_trabajo: impl FnMut(),
+) -> Result<Vec<(String, String)>, ErrorSnapshot> {
+    let mut directorios_existentes: Vec<&str> = Vec::new();
+    let mut nombres_ignorados: Vec<&str> = ignorados.iter().map(String::as_str).collect();
+    nombres_ignorados.sort_unstable();
+    nombres_ignorados.dedup();
+
+    for entrada in entradas {
+        observar_trabajo();
+        if entrada.tipo() == TipoEntradaSnapshot::Directorio {
+            directorios_existentes.push(entrada.ruta());
+        }
+    }
+    directorios_existentes.sort_unstable();
     for directorio in directorios {
+        observar_trabajo();
         if !directorio_layout_seguro(directorio)
-            || !entradas.iter().any(|entrada| {
-                entrada.ruta() == directorio && entrada.tipo() == TipoEntradaSnapshot::Directorio
-            })
+            || !contiene_nombre_ordenado(&directorios_existentes, directorio, &mut observar_trabajo)
         {
             return Err(ErrorSnapshot::BundleInvalido);
         }
-        let prefijo = format!("{directorio}/");
-        for entrada in entradas {
-            if entrada.tipo() != TipoEntradaSnapshot::Archivo
-                || !entrada.ruta().starts_with(&prefijo)
-                || Path::new(entrada.ruta())
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    != Some("md")
-                || ignorados
-                    .iter()
-                    .any(|nombre| entrada.ruta().rsplit('/').next() == Some(nombre.as_str()))
-            {
-                continue;
+    }
+
+    // Las claves toman prestadas las rutas del layout y los valores guardan
+    // solo índices del inventario capturado. Cada archivo se indexa bajo cada
+    // ancestro declarado, conservando la inclusión recursiva del layout.
+    let mut indices_por_directorio: HashMap<&str, Vec<usize>> = HashMap::new();
+    for directorio in directorios {
+        indices_por_directorio
+            .entry(directorio.as_str())
+            .or_default();
+    }
+    for (indice, entrada) in entradas.iter().enumerate() {
+        observar_trabajo();
+        if entrada.tipo() != TipoEntradaSnapshot::Archivo
+            || Path::new(entrada.ruta())
+                .extension()
+                .and_then(|ext| ext.to_str())
+                != Some("md")
+        {
+            continue;
+        }
+        let nombre = entrada.ruta().rsplit('/').next().unwrap_or(entrada.ruta());
+        if contiene_nombre_ordenado(&nombres_ignorados, nombre, &mut observar_trabajo) {
+            continue;
+        }
+        for (fin_ancestro, _) in entrada.ruta().match_indices('/') {
+            observar_trabajo();
+            let ancestro = &entrada.ruta()[..fin_ancestro];
+            if let Some(indices) = indices_por_directorio.get_mut(ancestro) {
+                indices.push(indice);
             }
-            let bytes = entrada.bytes().ok_or(ErrorSnapshot::BundleInvalido)?;
-            let texto = std::str::from_utf8(bytes).map_err(|_| ErrorSnapshot::BundleInvalido)?;
-            archivos.push((entrada.ruta().to_owned(), texto.to_owned()));
+        }
+    }
+
+    let mut archivos = Vec::new();
+    for directorio in directorios {
+        observar_trabajo();
+        if let Some(indices) = indices_por_directorio.get(directorio.as_str()) {
+            for &indice in indices {
+                observar_trabajo();
+                let entrada = &entradas[indice];
+                let bytes = entrada.bytes().ok_or(ErrorSnapshot::BundleInvalido)?;
+                let texto =
+                    std::str::from_utf8(bytes).map_err(|_| ErrorSnapshot::BundleInvalido)?;
+                archivos.push((entrada.ruta().to_owned(), texto.to_owned()));
+            }
         }
     }
     Ok(archivos)
+}
+
+fn contiene_nombre_ordenado(
+    nombres: &[&str],
+    nombre: &str,
+    mut observar_comparacion: impl FnMut(),
+) -> bool {
+    let mut inicio = 0;
+    let mut fin = nombres.len();
+    while inicio < fin {
+        observar_comparacion();
+        let medio = inicio + (fin - inicio) / 2;
+        match nombres[medio].cmp(nombre) {
+            std::cmp::Ordering::Less => inicio = medio + 1,
+            std::cmp::Ordering::Greater => fin = medio,
+            std::cmp::Ordering::Equal => return true,
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -658,6 +725,75 @@ directorios = ["knowledge"]
 sin_iota = []
 ignorados = ["ignored.md"]
 "#;
+
+    #[test]
+    fn archivos_markdown_distribuye_por_ancestros_con_crecimiento_acotado() {
+        fn techo_log2(valor: usize) -> usize {
+            if valor <= 1 {
+                0
+            } else {
+                usize::BITS as usize - (valor - 1).leading_zeros() as usize
+            }
+        }
+
+        const DIRECTORIOS: usize = 64;
+        const IGNORADOS: usize = 4096;
+        let nombre_ignorado = format!("ignorado_{:04}.md", IGNORADOS - 1);
+        let ignorados: Vec<String> = (0..IGNORADOS)
+            .map(|indice| format!("ignorado_{indice:04}.md"))
+            .collect();
+        let mut entradas = Vec::new();
+        for indice in (0..DIRECTORIOS).rev() {
+            let directorio = format!("d{indice:03}");
+            entradas.push(EntradaSnapshot::archivo(
+                format!("{directorio}/z.md"),
+                b"z".as_slice(),
+            ));
+            entradas.push(EntradaSnapshot::archivo(
+                format!("{directorio}/a.md"),
+                b"a".as_slice(),
+            ));
+            entradas.push(EntradaSnapshot::archivo(
+                format!("{directorio}/{nombre_ignorado}"),
+                b"skip".as_slice(),
+            ));
+            entradas.push(EntradaSnapshot::directorio(directorio));
+        }
+        let directorios: Vec<String> = (0..DIRECTORIOS)
+            .rev()
+            .map(|indice| format!("d{indice:03}"))
+            .collect();
+        assert!(directorios.iter().all(|directorio| {
+            directorio_layout_seguro(directorio)
+                && entradas.iter().any(|entrada| {
+                    entrada.ruta() == directorio
+                        && entrada.tipo() == TipoEntradaSnapshot::Directorio
+                })
+        }));
+        let mut operaciones = 0;
+        let archivos =
+            archivos_markdown_observando(&entradas, &directorios, &ignorados, || operaciones += 1)
+                .unwrap();
+
+        let esperados: Vec<String> = directorios
+            .iter()
+            .flat_map(|directorio| [format!("{directorio}/z.md"), format!("{directorio}/a.md")])
+            .collect();
+        assert_eq!(
+            archivos.iter().map(|(ruta, _)| ruta).collect::<Vec<_>>(),
+            esperados.iter().collect::<Vec<_>>()
+        );
+
+        let limite = directorios.len()
+            + 2 * entradas.len()
+            + directorios.len() * techo_log2(DIRECTORIOS + 1)
+            + 3 * DIRECTORIOS * techo_log2(IGNORADOS + 1)
+            + 6 * DIRECTORIOS;
+        assert!(
+            operaciones <= limite,
+            "{operaciones} comparaciones/visitas exceden la cota {limite}"
+        );
+    }
 
     #[test]
     fn captura_reutiliza_buffers_del_root_para_configuracion_y_parsing() {

@@ -249,6 +249,13 @@ fn nombre_invalido(nombre: &str) -> bool {
         })
 }
 
+fn contiene_prefijo_de_ruta(ruta: &str, mut contiene: impl FnMut(&str) -> bool) -> bool {
+    contiene(ruta)
+        || ruta
+            .match_indices('/')
+            .any(|(indice, _)| contiene(&ruta[..indice]))
+}
+
 impl Manifiesto {
     /// Valida el manifiesto, acumulando todos los errores encontrados en
     /// vez de detenerse en el primero.
@@ -368,12 +375,19 @@ impl Manifiesto {
             }
         }
 
+        let mut directorios_layout: Vec<&str> = if self.layout.sin_iota.is_empty() {
+            Vec::new()
+        } else {
+            self.layout.directorios.iter().map(String::as_str).collect()
+        };
+        if !self.layout.sin_iota.is_empty() {
+            directorios_layout.sort_unstable();
+        }
         for entrada in &self.layout.sin_iota {
-            let contenido = self.layout.directorios.iter().any(|dir| {
-                entrada == dir
-                    || entrada
-                        .strip_prefix(dir)
-                        .is_some_and(|resto| resto.starts_with('/'))
+            let contenido = contiene_prefijo_de_ruta(entrada, |directorio| {
+                directorios_layout
+                    .binary_search_by(|candidato| candidato.cmp(&directorio))
+                    .is_ok()
             });
             if !contenido {
                 errores.push(ErrorManifiesto::SinIotaFueraDeLayout(entrada.clone()));
@@ -669,6 +683,43 @@ pub(crate) mod tests {
                 .unwrap_err()
                 .contains(&ErrorManifiesto::SinIotaFueraDeLayout("otro".into()))
         );
+    }
+    #[test]
+    fn validar_sin_iota_consulta_prefijos_segun_componentes_de_ruta() {
+        let mut directorios: Vec<String> = (0..8192)
+            .map(|indice| format!("externo/{indice:04}"))
+            .collect();
+        directorios.extend(["root".into(), "root/".into()]);
+        let mut directorios_ordenados: Vec<&str> = directorios.iter().map(String::as_str).collect();
+        directorios_ordenados.sort_unstable();
+
+        let ruta = "raiz/sub/hoja";
+        let mut consultas = 0;
+        let contenido = contiene_prefijo_de_ruta(ruta, |prefijo| {
+            consultas += 1;
+            directorios_ordenados
+                .binary_search_by(|directorio| directorio.cmp(&prefijo))
+                .is_ok()
+        });
+        assert!(!contenido);
+        assert_eq!(consultas, 1 + ruta.matches('/').count());
+
+        assert!(contiene_prefijo_de_ruta("root/sub", |prefijo| {
+            directorios_ordenados
+                .binary_search_by(|directorio| directorio.cmp(&prefijo))
+                .is_ok()
+        }));
+        let directorio_con_barra_final = ["root/"];
+        assert!(contiene_prefijo_de_ruta("root//sub", |prefijo| {
+            directorio_con_barra_final
+                .binary_search_by(|directorio| directorio.cmp(&prefijo))
+                .is_ok()
+        }));
+        assert!(!contiene_prefijo_de_ruta("rooted/sub", |prefijo| {
+            directorios_ordenados
+                .binary_search_by(|directorio| directorio.cmp(&prefijo))
+                .is_ok()
+        }));
     }
     #[test]
     fn rechaza_duplicados_y_directorios_vacio() {
