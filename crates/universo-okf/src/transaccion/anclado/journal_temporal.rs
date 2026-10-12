@@ -58,6 +58,8 @@ impl ErrorJournalAnclado {
     }
 }
 
+#[path = "journal_temporal/eliminar.rs"]
+mod eliminar;
 #[path = "journal_temporal/publicar.rs"]
 mod publicar;
 #[path = "journal_temporal/reemplazar.rs"]
@@ -74,6 +76,15 @@ pub(crate) enum ResultadoPublicacionJournal {
     Indeterminado {
         causa: CausaIndeterminacionPublicacionJournal,
     },
+}
+
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResultadoEliminacionJournal {
+    Ausente,
+    Eliminado,
+    Conflicto(ErrorJournalAnclado),
+    Indeterminado(ErrorJournalAnclado),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
