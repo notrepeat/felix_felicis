@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn topologia_consulta_altas_con_un_scan_y_busquedas_constantes() {
+    fn topologia_cuenta_escaneo_inicial_del_indice_y_busquedas_observadas() {
         let mut snapshot = Estructura::nueva(base()).unwrap();
         let origen = snapshot
             .insertar_nodo(path("n/origen"), Sorte::nuevo("a"), Etiqueta::nuevo("o"))
@@ -590,17 +590,19 @@ mod tests {
         altas.push(edge_atom(nueva.clone()));
         let delta = Delta::nuevo(altas, std::iter::empty()).unwrap();
 
-        let mut aristas_visitadas = 0;
+        // Este contador cubre las visitas instrumentadas al construir el
+        // índice inicial; no pretende medir todos los recorridos del algoritmo.
+        let mut visitas_escaneo_inicial = 0;
         let mut busquedas = 0;
         let candidato = construir_topologia_aristas_observando(
             &snapshot,
             &delta,
-            || aristas_visitadas += 1,
+            || visitas_escaneo_inicial += 1,
             || busquedas += 1,
         )
         .unwrap();
 
-        assert_eq!(aristas_visitadas, cantidad as usize);
+        assert_eq!(visitas_escaneo_inicial, cantidad as usize);
         assert_eq!(busquedas, cantidad as usize + 2);
         assert_eq!(candidato.estructura().len_aristas(), cantidad as usize + 1);
         assert!(aristas::resolver(candidato.estructura(), &nueva).is_some());
