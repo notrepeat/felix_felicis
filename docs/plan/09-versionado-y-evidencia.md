@@ -34,6 +34,7 @@ que termine la matriz completa de release.
 |--------|-----------------------|
 | `Regla::LimiteBundleExcedido`, `ErrorEstructura::HijoDuplicadoEnLote`, `ErrorManifiesto::{DirectoriosDuplicados, DirectoriosSolapados}` y `ErrorSnapshot::LimiteInventarioExcedido` agregan variantes a enums exhaustivos. | Añadir ramas para las cinco variantes antes de actualizar. |
 | `cargar_bundle` limita la carga desde disco a 128 MiB de Markdown leído, 100.000 entradas, profundidad 128 y 16 MiB de rutas lógicas acumuladas. | Reducir o dividir bundles que excedan una cuota. Los límites son inclusivos y se comparten entre todas las raíces del layout. |
+| La cuota de inventario de snapshots (`ErrorSnapshot::LimiteInventarioExcedido`) cuenta los bytes crudos de todos los archivos regulares, no solo Markdown; véase [operación transaccional](04-operacion-transaccional.md). | Ajustar el inventario completo al límite documentado, no únicamente sus documentos Markdown. |
 | Las raíces `layout.directorios` deben ser disjuntas; una ruta no puede ser igual ni ancestro/descendiente de otra, incluso si la relación aparece al resolver symlinks/junctions. | Separar las raíces solapadas en directorios disjuntos. |
 | Errores de lectura exponen `regla` y `path` para clasificación/localización. | No analizar `detalle`: es texto humano de diagnóstico, puede variar por plataforma y no es un contrato estable. Si se exceden varias cuotas, tampoco es estable cuál se reporta primero. |
 
