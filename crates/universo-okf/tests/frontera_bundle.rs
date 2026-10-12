@@ -31,6 +31,7 @@ fn documento_externo_ilegal(dir: &Path) {
 fn manifiesto_con_directorios(directorios: Vec<String>) -> universo_core::Manifiesto {
     let mut manifiesto = manifiesto_minimo();
     manifiesto.layout.directorios = directorios;
+    manifiesto.layout.sin_iota.clear();
     manifiesto
 }
 

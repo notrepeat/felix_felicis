@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use universo_core::{
-    Anexo, BundlePath, Entrada, ErrorEstructura, Estructura, Etiqueta, Manifiesto, NodoId, Sorte,
+    Anexo, BundlePath, Entrada, ErrorEstructura, ErrorManifiesto, Estructura, Etiqueta, Manifiesto,
+    NodoId, Sorte,
 };
 
 use crate::documento::{EntradaCruda, parsear_documento};
@@ -77,6 +78,55 @@ fn ordenar_errores(errores: &mut [ErrorBundle]) {
     errores.sort_by(|a, b| (a.path.clone(), a.linea).cmp(&(b.path.clone(), b.linea)));
 }
 
+fn errores_validacion_manifiesto(errores_manifiesto: Vec<ErrorManifiesto>) -> Vec<ErrorBundle> {
+    let mut errores: Vec<ErrorBundle> = errores_manifiesto
+        .into_iter()
+        .map(|detalle| error(None, None, Regla::Estructura, detalle.to_string()))
+        .collect();
+    ordenar_errores(&mut errores);
+    errores
+}
+
+fn errores_colisiones_case(resueltos: &[ArchivoBundle]) -> Vec<ErrorBundle> {
+    let mut por_case: HashMap<String, Vec<usize>> = HashMap::new();
+    for (indice, archivo) in resueltos.iter().enumerate() {
+        por_case
+            .entry(archivo.path.clave_case())
+            .or_default()
+            .push(indice);
+    }
+
+    let mut errores = Vec::new();
+    for indices in por_case.values_mut() {
+        if indices.len() < 2 {
+            continue;
+        }
+        // Un testigo basta para identificar cada colisión. El más corto
+        // mantiene el total de bytes diagnósticos acotado por el tamaño de
+        // las rutas de entrada, incluso si un grupo contiene miles de rutas.
+        indices.sort_unstable_by_key(|&indice| {
+            let ruta = resueltos[indice].path.como_str();
+            (ruta.len(), ruta)
+        });
+        let primero = indices[0];
+        let segundo = indices[1];
+        for (posicion, &indice) in indices.iter().enumerate() {
+            let testigo = if posicion == 0 { segundo } else { primero };
+            errores.push(error(
+                Some(resueltos[indice].path.como_str()),
+                None,
+                Regla::ColisionDeCase,
+                format!("colisiona con: {}", resueltos[testigo].path.como_str()),
+            ));
+        }
+    }
+    errores
+}
+
+fn detalle_stem_ambiguo(slug: &str, clave: &str, cantidad: usize) -> String {
+    format!("[[{slug}]] desde clave {clave} tiene {cantidad} candidatos")
+}
+
 fn error(
     path: Option<&str>,
     linea: Option<usize>,
@@ -108,12 +158,7 @@ pub fn parsear_bundle(
                 universo_core::ErrorEstructura::Manifiesto(errs) => errs,
                 _ => unreachable!("Estructura::nueva solo falla por manifiesto inválido"),
             };
-            let mut errores: Vec<ErrorBundle> = detalles
-                .into_iter()
-                .map(|e| error(None, None, Regla::Estructura, e.to_string()))
-                .collect();
-            ordenar_errores(&mut errores);
-            return Err(errores);
+            return Err(errores_validacion_manifiesto(detalles));
         }
     };
 
@@ -154,33 +199,9 @@ pub fn parsear_bundle(
         }
     }
 
-    // Detectar colisiones de case (incluye duplicados exactos) entre todos
-    // los pares de archivos resueltos.
-    let mut por_case: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, archivo) in resueltos.iter().enumerate() {
-        por_case
-            .entry(archivo.path.clave_case())
-            .or_default()
-            .push(i);
-    }
-    for indices in por_case.values() {
-        if indices.len() < 2 {
-            continue;
-        }
-        for &i in indices {
-            let otros: Vec<&str> = indices
-                .iter()
-                .filter(|&&j| j != i)
-                .map(|&j| resueltos[j].path.como_str())
-                .collect();
-            errores.push(error(
-                Some(resueltos[i].path.como_str()),
-                None,
-                Regla::ColisionDeCase,
-                format!("colisiona con: {}", otros.join(", ")),
-            ));
-        }
-    }
+    // Detectar colisiones de case (incluye duplicados exactos) sin enumerar
+    // todos los pares del grupo en cada diagnóstico.
+    errores.extend(errores_colisiones_case(&resueltos));
 
     struct NodoCargado {
         id: NodoId,
@@ -484,8 +505,7 @@ pub fn parsear_bundle(
             };
 
             for (slug, etiqueta) in objetivos {
-                let candidatos = stems.get(&slug).cloned().unwrap_or_default();
-                if candidatos.is_empty() {
+                let Some(candidatos) = stems.get(&slug) else {
                     errores.push(error(
                         Some(&path_str),
                         Some(entrada.linea),
@@ -493,17 +513,13 @@ pub fn parsear_bundle(
                         format!("[[{slug}]] desde clave {clave}"),
                     ));
                     continue;
-                }
+                };
                 if candidatos.len() > 1 {
-                    let lista: Vec<&str> = candidatos.iter().map(BundlePath::como_str).collect();
                     errores.push(error(
                         Some(&path_str),
                         Some(entrada.linea),
                         Regla::StemAmbiguo,
-                        format!(
-                            "[[{slug}]] desde clave {clave} candidatos: {}",
-                            lista.join(", ")
-                        ),
+                        detalle_stem_ambiguo(&slug, clave, candidatos.len()),
                     ));
                     continue;
                 }
@@ -633,6 +649,10 @@ pub fn parsear_bundle(
 pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, Vec<ErrorBundle>> {
     let mut errores: Vec<ErrorBundle> = Vec::new();
     let mut archivos: Vec<(String, String)> = Vec::new();
+
+    if let Err(detalles) = manifiesto.validar() {
+        return Err(errores_validacion_manifiesto(detalles));
+    }
     let ignorados = nombres_ignorados_ordenados(&manifiesto.layout.ignorados);
 
     let metadatos_raiz = match std::fs::metadata(raiz) {
@@ -1109,6 +1129,54 @@ mod tests {
             errores, ordenado,
             "los errores salen ordenados por (path, linea)"
         );
+        let ambiguo = errores
+            .iter()
+            .find(|error| error.regla == Regla::StemAmbiguo)
+            .unwrap();
+        assert!(ambiguo.detalle.contains("tiene 2 candidatos"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_layout_repetido_antes_de_acceder_a_la_raiz() {
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["ruta-privada".into(); 2];
+        manifiesto.layout.sin_iota.clear();
+
+        let errores = cargar_bundle(Path::new("raiz-que-no-existe"), manifiesto).unwrap_err();
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Estructura);
+        assert_eq!(errores[0].path, None);
+        assert_eq!(
+            errores[0].detalle,
+            "layout.directorios contiene rutas duplicadas"
+        );
+        assert!(!errores[0].to_string().contains("ruta-privada"));
+    }
+
+    #[test]
+    fn diez_mil_paths_colisionantes_reciben_un_testigo_por_error() {
+        let path = BundlePath::nuevo("n/repetido").unwrap();
+        let resueltos: Vec<ArchivoBundle> = (0..10_000)
+            .map(|_| ArchivoBundle {
+                path: path.clone(),
+                contenido: String::new(),
+            })
+            .collect();
+
+        let errores = errores_colisiones_case(&resueltos);
+        assert_eq!(errores.len(), resueltos.len());
+        assert!(errores.iter().all(|error| {
+            error.regla == Regla::ColisionDeCase && error.detalle == "colisiona con: n/repetido"
+        }));
+        let bytes_diagnosticos: usize = errores.iter().map(|error| error.detalle.len()).sum();
+        assert!(bytes_diagnosticos <= resueltos.len() * 32);
+    }
+
+    #[test]
+    fn detalle_de_stem_ambiguo_reporta_cantidad_sin_enumerar_paths() {
+        let detalle = detalle_stem_ambiguo("doc", "rel", 10_000);
+        assert_eq!(detalle, "[[doc]] desde clave rel tiene 10000 candidatos");
+        assert!(detalle.len() < 64);
     }
 
     #[test]
@@ -1334,6 +1402,7 @@ mod tests {
         for directorio in [absoluta, "../fuera".into(), "n/../fuera".into()] {
             let mut manifiesto = manifiesto_minimo();
             manifiesto.layout.directorios = vec![directorio.clone()];
+            manifiesto.layout.sin_iota.clear();
 
             let errores = cargar_bundle(dir.path(), manifiesto).unwrap_err();
 
