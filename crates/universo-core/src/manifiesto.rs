@@ -385,16 +385,21 @@ impl Manifiesto {
 
         let mut vistas_arista: BTreeSet<&str> = BTreeSet::new();
         let mut reportadas_arista: BTreeSet<&str> = BTreeSet::new();
+        let mut primera_arista_por_clave: BTreeMap<&str, &DeclArista> = BTreeMap::new();
         for a in &self.aristas {
             if !vistas_arista.insert(&a.clave) && reportadas_arista.insert(&a.clave) {
                 errores.push(ErrorManifiesto::AristaDuplicada(a.clave.clone()));
             }
+            primera_arista_por_clave
+                .entry(a.clave.as_str())
+                .or_insert(a);
         }
 
-        let claves_arista: BTreeSet<&str> = self.aristas.iter().map(|a| a.clave.as_str()).collect();
         let mut reportados_ambos: BTreeSet<&str> = BTreeSet::new();
         for s in &self.sortes_nodo {
-            if claves_arista.contains(s.como_str()) && reportados_ambos.insert(s.como_str()) {
+            if primera_arista_por_clave.contains_key(s.como_str())
+                && reportados_ambos.insert(s.como_str())
+            {
                 errores.push(ErrorManifiesto::SorteEnAmbosAlfabetos(
                     s.como_str().to_string(),
                 ));
@@ -408,7 +413,7 @@ impl Manifiesto {
             if let Some(inversa) = &a.inversa {
                 if inversa == &a.clave {
                     errores.push(ErrorManifiesto::InversaASiMisma(a.clave.clone()));
-                } else if let Some(destino) = self.aristas.iter().find(|b| &b.clave == inversa) {
+                } else if let Some(destino) = primera_arista_por_clave.get(inversa.as_str()) {
                     if destino.inversa.as_deref() != Some(a.clave.as_str()) {
                         errores.push(ErrorManifiesto::InversaNoReciproca(a.clave.clone()));
                     }
@@ -502,15 +507,12 @@ impl Manifiesto {
 
         let mut reportados_alias_colision: BTreeSet<&str> = BTreeSet::new();
         for (sorte, valor) in &self.sortes_nodo_disco {
-            if !self.sortes_nodo.contains(sorte) {
+            if !vistos_nodo.contains(sorte.como_str()) {
                 errores.push(ErrorManifiesto::AliasDeSorteDesconocida(
                     sorte.como_str().to_string(),
                 ));
             }
-            let colisiona = self
-                .sortes_nodo
-                .iter()
-                .any(|s| s != sorte && s.como_str() == valor.as_str());
+            let colisiona = valor != sorte.como_str() && vistos_nodo.contains(valor.as_str());
             if colisiona && reportados_alias_colision.insert(valor.as_str()) {
                 errores.push(ErrorManifiesto::AliasDeDiscoColisiona(valor.clone()));
             }
@@ -928,6 +930,58 @@ pub(crate) mod tests {
                 .contains(&ErrorManifiesto::InversaDesconocida("nope".into()))
         );
     }
+
+    #[test]
+    fn indice_de_inversas_preserva_la_primera_declaracion_duplicada() {
+        let mut m = base();
+        m.aristas[2].inversa = None;
+        m.aristas.push(DeclArista {
+            clave: "sup".into(),
+            simetrica: false,
+            inversa: Some("sub".into()),
+            destino: None,
+            etiqueta: None,
+        });
+
+        let errores = m.validar().unwrap_err();
+        assert!(errores.contains(&ErrorManifiesto::AristaDuplicada("sup".into())));
+        assert!(errores.contains(&ErrorManifiesto::InversaNoReciproca("sub".into())));
+    }
+
+    #[test]
+    fn valida_muchas_inversas_y_aliases_con_indice() {
+        const PARES: usize = 1024;
+        let mut m = base();
+        for indice in 0..PARES {
+            let ida = format!("edge-{indice:04}");
+            let vuelta = format!("edge-inverse-{indice:04}");
+            m.aristas.push(DeclArista {
+                clave: ida.clone(),
+                simetrica: false,
+                inversa: Some(vuelta.clone()),
+                destino: None,
+                etiqueta: None,
+            });
+            m.aristas.push(DeclArista {
+                clave: vuelta,
+                simetrica: false,
+                inversa: Some(ida),
+                destino: None,
+                etiqueta: None,
+            });
+
+            let nombre = format!("tipo-{indice:04}");
+            let sorte = Sorte::nuevo(&nombre);
+            m.sortes_nodo.push(sorte.clone());
+            m.sortes_nodo_disco
+                .insert(sorte, format!("disk-{indice:04}"));
+        }
+
+        assert_eq!(m.aristas.len(), 3 + PARES * 2);
+        assert_eq!(m.sortes_nodo_disco.len(), PARES);
+        m.validar().unwrap();
+    }
+
     #[test]
     fn rechaza_alias_de_disco_colisionante() {
         let mut m = base();
