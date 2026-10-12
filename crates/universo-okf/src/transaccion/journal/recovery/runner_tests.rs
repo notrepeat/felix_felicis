@@ -108,6 +108,152 @@ fn restore_old_restaura_backup_en_las_tres_fases_y_conserva_identidad_y_bytes() 
 }
 
 #[test]
+fn restore_old_rechaza_committed_y_conserva_backup_y_journal() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
+    let mut journal = escribir_installed(&canonical, journal);
+    journal.advance(JournalState::Committed).unwrap();
+    let bytes = journal.encode().unwrap();
+    fs::write(&canonical, &bytes).unwrap();
+    let backup = backup_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+
+    assert_eq!(
+        ejecutar_fila_journal_restore_old(&mut lock),
+        Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    assert!(fingerprint(&backup) == *journal.old());
+    assert!(!root.exists());
+}
+
+#[test]
+fn restore_old_sin_journal_no_autoriza_mover_el_backup() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    crear_arbol(&root, b"old-tree");
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let backup = backup_path(&lock);
+    let canonical = lock.ubicacion().journal().as_path().to_path_buf();
+    fs::rename(&root, &backup).unwrap();
+
+    assert_eq!(
+        ejecutar_fila_journal_restore_old(&mut lock),
+        Ok(ResultadoFilaJournalRestoreOld::NoAplicableJournalAusente)
+    );
+    assert!(!root.exists());
+    assert_eq!(fs::read(backup.join("data.bin")).unwrap(), b"old-tree");
+    assert!(!canonical.exists());
+}
+
+#[test]
+fn restore_old_no_reemplaza_un_root_que_aparece_antes_del_rename() {
+    let (_temp, root, mut lock, canonical, _journal) = preparar_fila(JournalState::Prepared);
+    let backup = backup_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+    let journal_bytes = fs::read(&canonical).unwrap();
+
+    let result = ejecutar_fila_journal_restore_old_con(
+        &mut lock,
+        |_| crear_arbol(&root, b"destination-canary"),
+        |_| {},
+    );
+
+    assert_eq!(result, Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada));
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert_eq!(
+        fs::read(root.join("data.bin")).unwrap(),
+        b"destination-canary"
+    );
+    assert_eq!(fs::read(backup.join("data.bin")).unwrap(), b"old-tree");
+}
+
+#[test]
+fn restore_old_rechaza_backup_con_identidad_ajena_aunque_sus_bytes_coincidan() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
+    let backup = backup_path(&lock);
+    let old_moved = root.with_file_name("saved-old");
+    fs::rename(&root, &old_moved).unwrap();
+    crear_arbol(&backup, b"old-tree");
+    let journal_bytes = fs::read(&canonical).unwrap();
+
+    assert!(!(fingerprint(&backup) == *journal.old()));
+    assert_eq!(
+        ejecutar_fila_journal_restore_old(&mut lock),
+        Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert_root_intact(&old_moved);
+    assert_root_intact(&backup);
+    assert!(!root.exists());
+}
+
+#[test]
+fn restore_old_rechaza_backup_con_digest_distinto_y_conserva_canarios() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
+    let backup = backup_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+    fs::write(backup.join("data.bin"), b"tampered-tree").unwrap();
+    let journal_bytes = fs::read(&canonical).unwrap();
+
+    assert!(fingerprint(&backup).identity() == journal.old().identity());
+    assert!(!(fingerprint(&backup) == *journal.old()));
+    assert_eq!(
+        ejecutar_fila_journal_restore_old(&mut lock),
+        Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert_eq!(fs::read(backup.join("data.bin")).unwrap(), b"tampered-tree");
+    assert!(!root.exists());
+}
+
+#[test]
+fn reinicio_despues_de_restore_old_converge_con_la_fila_keep_old_existente() {
+    let (_temp, root, lock, canonical, journal) = preparar_fila(JournalState::Installed);
+    let backup = backup_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+    fs::rename(&backup, &root).unwrap();
+    drop(lock);
+
+    let mut restarted = LockEscritura::adquirir(&root).unwrap();
+    assert_eq!(
+        ejecutar_fila_journal_old(&mut restarted),
+        Ok(ResultadoFilaJournalOld::Eliminado)
+    );
+    assert!(!canonical.exists());
+    assert_root_intact(&root);
+    assert!(fingerprint(&root) == *journal.old());
+}
+
+#[test]
+fn restore_old_preserva_reemplazo_de_journal_detectado_al_eliminar() {
+    let (_temp, root, mut lock, canonical, _journal) = preparar_fila(JournalState::Prepared);
+    let backup = backup_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+    let replacement = canonical.with_extension("replacement");
+    fs::copy(&canonical, &replacement).unwrap();
+    let replacement_bytes = fs::read(&replacement).unwrap();
+
+    let result = ejecutar_fila_journal_restore_old_con(
+        &mut lock,
+        |_| {},
+        |_| {
+            fs::remove_file(&canonical).unwrap();
+            fs::rename(&replacement, &canonical).unwrap();
+        },
+    );
+
+    assert_eq!(
+        result,
+        Err(ErrorFilaJournalRestoreOld::ConflictoAlEliminar(
+            ErrorJournalAnclado::IdentityMismatch
+        ))
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), replacement_bytes);
+    assert_root_intact(&root);
+    assert!(!backup.exists());
+}
+
+#[test]
 fn prepared_y_backup_ready_eliminan_solo_el_journal_y_conservan_root() {
     for state in [JournalState::Prepared, JournalState::BackupReady] {
         let (_temp, root, mut lock, canonical, _journal) = preparar_fila(state);

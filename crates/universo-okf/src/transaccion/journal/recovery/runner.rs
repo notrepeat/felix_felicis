@@ -186,11 +186,12 @@ fn ejecutar_fila_journal_old_con(
 pub(crate) fn ejecutar_fila_journal_restore_old(
     lock: &mut LockEscritura,
 ) -> Result<ResultadoFilaJournalRestoreOld, ErrorFilaJournalRestoreOld> {
-    ejecutar_fila_journal_restore_old_con(lock, |_| {})
+    ejecutar_fila_journal_restore_old_con(lock, |_| {}, |_| {})
 }
 
 fn ejecutar_fila_journal_restore_old_con(
     lock: &mut LockEscritura,
+    antes_de_renombrar: impl FnOnce(&LockEscritura),
     antes_de_eliminar: impl FnOnce(&LockEscritura),
 ) -> Result<ResultadoFilaJournalRestoreOld, ErrorFilaJournalRestoreOld> {
     let (identidad_esperada, journal) = {
@@ -232,6 +233,8 @@ fn ejecutar_fila_journal_restore_old_con(
     {
         return Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada);
     }
+
+    antes_de_renombrar(lock);
 
     let destino = lock
         .ubicacion()
