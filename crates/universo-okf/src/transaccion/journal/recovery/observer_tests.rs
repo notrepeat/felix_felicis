@@ -236,3 +236,105 @@ fn same_bytes_with_a_different_directory_identity_are_unknown() {
 
     assert_eq!(inventory.root, ArtifactState::Unknown);
 }
+
+#[test]
+fn parent_identity_mismatch_fails_closed_before_observing_artifacts() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    crear_arbol(&root, b"old-tree");
+    let lock = LockEscritura::adquirir(&root).unwrap();
+    let old = fingerprint(&root);
+    let fixture_new = temp.path().join("new-fixture");
+    crear_arbol(&fixture_new, b"new-tree");
+
+    let other_parent = temp.path().join("other-parent");
+    fs::create_dir(&other_parent).unwrap();
+    let other_location = UbicacionRaiz::nueva(&other_parent.join("bundle")).unwrap();
+    let other_identity = DirectorioAnclado::parent_solo_lectura_desde_ubicacion(&other_location)
+        .unwrap()
+        .identidad_parent()
+        .journal_identity()
+        .unwrap();
+    let record = Journal::new(TXN, other_identity, old, fingerprint(&fixture_new)).unwrap();
+
+    let error = observar_inventario_recovery(&lock, &record).unwrap_err();
+
+    assert_eq!(error, ErrorObservadorRecovery::ParentIdentityMismatch);
+    assert_eq!(error.to_string(), "recovery_parent_identity_mismatch");
+}
+
+#[test]
+fn regular_file_at_artifact_name_is_error_and_preserves_canary() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    crear_arbol(&root, b"old-tree");
+    let lock = LockEscritura::adquirir(&root).unwrap();
+    let old = fingerprint(&root);
+    let fixture_new = temp.path().join("new-fixture");
+    crear_arbol(&fixture_new, b"new-tree");
+    let record = journal(&lock, old, fingerprint(&fixture_new));
+    let canary = b"regular-file-canary";
+    fs::write(backup_path(&lock), canary).unwrap();
+
+    let error = observar_inventario_recovery(&lock, &record).unwrap_err();
+
+    assert_eq!(error, ErrorObservadorRecovery::Io);
+    assert_eq!(fs::read(backup_path(&lock)).unwrap(), canary);
+    assert_eq!(fs::read(root.join("data.bin")).unwrap(), b"old-tree");
+}
+
+#[cfg(unix)]
+#[test]
+fn sibling_symlink_is_error_and_preserves_external_canary() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    crear_arbol(&root, b"old-tree");
+    let lock = LockEscritura::adquirir(&root).unwrap();
+    let old = fingerprint(&root);
+    let fixture_new = temp.path().join("new-fixture");
+    crear_arbol(&fixture_new, b"new-tree");
+    let record = journal(&lock, old, fingerprint(&fixture_new));
+    let target = temp.path().join("outside");
+    crear_arbol(&target, b"external-tree");
+    let canary = target.join("data.bin");
+    std::os::unix::fs::symlink(&target, backup_path(&lock)).unwrap();
+
+    let error = observar_inventario_recovery(&lock, &record).unwrap_err();
+
+    assert_eq!(error, ErrorObservadorRecovery::Io);
+    assert_eq!(fs::read(canary).unwrap(), b"external-tree");
+    assert_eq!(fs::read(root.join("data.bin")).unwrap(), b"old-tree");
+}
+
+#[cfg(windows)]
+#[test]
+fn sibling_junction_is_error_and_preserves_external_canary() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    crear_arbol(&root, b"old-tree");
+    let lock = LockEscritura::adquirir(&root).unwrap();
+    let old = fingerprint(&root);
+    let fixture_new = temp.path().join("new-fixture");
+    crear_arbol(&fixture_new, b"new-tree");
+    let record = journal(&lock, old, fingerprint(&fixture_new));
+    let target = temp.path().join("outside");
+    crear_arbol(&target, b"external-tree");
+    let canary = target.join("data.bin");
+    let output = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(backup_path(&lock))
+        .arg(&target)
+        .output()
+        .expect("cmd crea junctions");
+    assert!(
+        output.status.success(),
+        "no se pudo crear junction: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let error = observar_inventario_recovery(&lock, &record).unwrap_err();
+
+    assert_eq!(error, ErrorObservadorRecovery::Io);
+    assert_eq!(fs::read(canary).unwrap(), b"external-tree");
+    assert_eq!(fs::read(root.join("data.bin")).unwrap(), b"old-tree");
+}
