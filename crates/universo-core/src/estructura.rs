@@ -766,33 +766,54 @@ impl Estructura {
     /// atributos y su anexo. Un `NodoId` stale nunca vuelve a resolver
     /// (garantía de generación de `slotmap`), aunque el slot se reocupe.
     pub fn quitar_nodo(&mut self, id: NodoId) -> Result<Nodo, ErrorEstructura> {
-        let nodo = self
-            .nodos
-            .remove(id)
-            .ok_or(ErrorEstructura::NodoInexistente)?;
+        self.quitar_nodo_observando(id, || {})
+    }
 
-        let mut incidentes: Vec<AristaId> = Vec::new();
-        if let Some(vec) = self.salientes.get(id) {
-            incidentes.extend(vec.iter().copied());
+    fn quitar_nodo_observando(
+        &mut self,
+        id: NodoId,
+        mut observar_operacion: impl FnMut(),
+    ) -> Result<Nodo, ErrorEstructura> {
+        if !self.nodos.contains_key(id) {
+            return Err(ErrorEstructura::NodoInexistente);
         }
-        if let Some(vec) = self.entrantes.get(id) {
-            for a in vec.iter().copied() {
-                if !incidentes.contains(&a) {
-                    incidentes.push(a);
+
+        let mut incidentes = Vec::new();
+        let mut vistos = HashSet::new();
+        if let Some(vec) = self.salientes.get(id) {
+            for &arista in vec {
+                observar_operacion();
+                if self.aristas.contains_key(arista) && vistos.insert(arista) {
+                    incidentes.push(arista);
                 }
             }
         }
-        for aid in incidentes {
-            self.quitar_arista_interna(aid);
+        if let Some(vec) = self.entrantes.get(id) {
+            for &arista in vec {
+                observar_operacion();
+                if self.aristas.contains_key(arista) && vistos.insert(arista) {
+                    incidentes.push(arista);
+                }
+            }
         }
+        self.quitar_aristas_en_lote_observando(&incidentes, &mut observar_operacion)?;
+
+        let nodo = self
+            .nodos
+            .remove(id)
+            .expect("el nodo se validó antes de quitar las aristas incidentes");
 
         if let Some(padre_id) = self.padre.remove(id) {
             if let Some(vec) = self.hijos.get_mut(padre_id) {
-                vec.retain(|&h| h != id);
+                vec.retain(|&h| {
+                    observar_operacion();
+                    h != id
+                });
             }
         }
         if let Some(hijos_de) = self.hijos.remove(id) {
             for h in hijos_de {
+                observar_operacion();
                 self.padre.remove(h);
             }
         }
@@ -1648,6 +1669,58 @@ mod tests {
             u.asignar_padre(h, x).unwrap_err(),
             ErrorEstructura::NodoInexistente
         );
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn quitar_nodo_deduplica_incidentes_y_reutiliza_baja_batch() {
+        let mut u = e();
+        let objetivo = u
+            .insertar_nodo(p("n/objetivo"), s("a"), l("objetivo"))
+            .unwrap();
+        let mut incidentes = Vec::new();
+        for indice in 0..512 {
+            let destino = u
+                .insertar_nodo(p(&format!("n/salida-{indice:04}")), s("a"), l("salida"))
+                .unwrap();
+            incidentes.push(
+                u.insertar_arista(objetivo, destino, s("rel"), l("saliente"))
+                    .unwrap(),
+            );
+            let origen = u
+                .insertar_nodo(p(&format!("n/entrada-{indice:04}")), s("a"), l("entrada"))
+                .unwrap();
+            incidentes.push(
+                u.insertar_arista(origen, objetivo, s("rel"), l("entrante"))
+                    .unwrap(),
+            );
+        }
+        for _ in 0..32 {
+            incidentes.push(
+                u.insertar_arista(objetivo, objetivo, s("rel"), l("loop"))
+                    .unwrap(),
+            );
+        }
+        let nodos_antes = u.len_nodos();
+        let aristas_antes = u.len_aristas();
+        let mut operaciones = 0;
+
+        let nodo = u
+            .quitar_nodo_observando(objetivo, || operaciones += 1)
+            .unwrap();
+
+        assert_eq!(nodo.path, p("n/objetivo"));
+        assert_eq!(incidentes.len(), aristas_antes);
+        assert!(incidentes.iter().all(|id| u.arista(*id).is_none()));
+        assert!(
+            operaciones > 4 * aristas_antes,
+            "el contador debe incluir la baja batch, no solo recolectar incidentes: {operaciones}"
+        );
+        assert!(
+            operaciones <= 8 * (nodos_antes + aristas_antes),
+            "se observaron {operaciones} operaciones para {nodos_antes} nodos y {aristas_antes} aristas"
+        );
+        assert_eq!(u.len_aristas(), 0);
         u.verificar_representacion().unwrap();
     }
 
