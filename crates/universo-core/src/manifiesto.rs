@@ -261,74 +261,94 @@ fn nombre_invalido(nombre: &str) -> bool {
 }
 
 #[derive(Default)]
-struct NodoPrefijosRuta {
-    hijos: BTreeMap<u8, usize>,
-    terminal: bool,
-}
-
-/// Índice de rutas que conserva la semántica de prefijo por componente de
-/// `layout.sin_iota`, sin materializar ni volver a comparar cada prefijo.
-/// El alfabeto de transiciones son bytes, así que cada paso compara claves de
-/// un byte y el trabajo total es lineal en los bytes insertados y consultados.
-struct PrefijosRuta {
-    nodos: Vec<NodoPrefijosRuta>,
-}
-
-#[derive(Default)]
 struct ConflictosDirectorios {
     duplicados: bool,
     solapados: bool,
 }
 
-impl PrefijosRuta {
-    fn insertar(&mut self, ruta: &str, mut observar_byte: impl FnMut()) -> ConflictosDirectorios {
-        let bytes = ruta.as_bytes();
-        let mut actual = 0;
-        let mut conflictos = ConflictosDirectorios::default();
-
-        for byte in bytes {
-            observar_byte();
-            if *byte == b'/' && self.nodos[actual].terminal {
-                conflictos.solapados = true;
-            }
-            actual = match self.nodos[actual].hijos.get(byte).copied() {
-                Some(siguiente) => siguiente,
-                None => {
-                    let siguiente = self.nodos.len();
-                    self.nodos.push(NodoPrefijosRuta::default());
-                    self.nodos[actual].hijos.insert(*byte, siguiente);
-                    siguiente
-                }
-            };
-        }
-
-        conflictos.duplicados = self.nodos[actual].terminal;
-        conflictos.solapados |= self.nodos[actual].hijos.contains_key(&b'/');
-        self.nodos[actual].terminal = true;
-        conflictos
-    }
-
-    fn contiene_prefijo_de(&self, ruta: &str, mut observar_byte: impl FnMut()) -> bool {
-        let mut actual = 0;
-        for byte in ruta.as_bytes() {
-            observar_byte();
-            if *byte == b'/' && self.nodos[actual].terminal {
-                return true;
-            }
-            let Some(&siguiente) = self.nodos[actual].hijos.get(byte) else {
-                return false;
-            };
-            actual = siguiente;
-        }
-        self.nodos[actual].terminal
-    }
+/// El separador ordena antes que cualquier otro byte: así, una ruta seguida
+/// por `/` queda antes que sus hermanos (`a/x` antes que `a-`) y el primer
+/// descendiente de cualquier ruta es su vecino inmediato en el índice.
+fn clave_byte_ruta(byte: u8) -> u16 {
+    if byte == b'/' { 0 } else { u16::from(byte) + 1 }
 }
 
-impl Default for PrefijosRuta {
-    fn default() -> Self {
-        Self {
-            nodos: vec![NodoPrefijosRuta::default()],
+fn comparar_rutas(a: &str, b: &str) -> std::cmp::Ordering {
+    a.bytes()
+        .map(clave_byte_ruta)
+        .cmp(b.bytes().map(clave_byte_ruta))
+}
+
+fn rutas_solapadas(a: &str, b: &str) -> bool {
+    let es_ancestro = |posible_ancestro: &str, posible_descendiente: &str| {
+        posible_descendiente
+            .strip_prefix(posible_ancestro)
+            .is_some_and(|resto| resto.starts_with('/'))
+    };
+    es_ancestro(a, b) || es_ancestro(b, a)
+}
+
+/// Índice compacto de rutas declaradas. Retiene solo una referencia prestada
+/// por ruta; las búsquedas estrechan un intervalo ordenado por byte, sin nodos
+/// por byte ni materializar prefijos.
+struct IndiceRutas<'a> {
+    rutas: Vec<&'a str>,
+    conflictos: ConflictosDirectorios,
+}
+
+impl<'a> IndiceRutas<'a> {
+    fn nuevo(directorios: &'a [String], mut observar_comparacion: impl FnMut()) -> Self {
+        let mut rutas: Vec<&str> = directorios.iter().map(String::as_str).collect();
+        rutas.sort_unstable_by(|a, b| {
+            observar_comparacion();
+            comparar_rutas(a, b)
+        });
+
+        let mut conflictos = ConflictosDirectorios::default();
+        for par in rutas.windows(2) {
+            conflictos.duplicados |= par[0] == par[1];
+            conflictos.solapados |= rutas_solapadas(par[0], par[1]);
         }
+
+        Self { rutas, conflictos }
+    }
+
+    fn contiene_prefijo_de(&self, ruta: &str, mut observar_comparacion: impl FnMut()) -> bool {
+        let bytes = ruta.as_bytes();
+        let mut inicio = 0;
+        let mut fin = self.rutas.len();
+
+        for (indice, &byte) in bytes.iter().enumerate() {
+            // En el intervalo actual todas las rutas comparten los bytes ya
+            // recorridos; la más corta termina aquí si la ruta está declarada.
+            if byte == b'/' && inicio < fin && self.rutas[inicio].len() == indice {
+                return true;
+            }
+
+            let intervalo = &self.rutas[inicio..fin];
+            let desplazamiento = intervalo.partition_point(|candidato| {
+                observar_comparacion();
+                candidato
+                    .as_bytes()
+                    .get(indice)
+                    .copied()
+                    .map(clave_byte_ruta)
+                    < Some(clave_byte_ruta(byte))
+            });
+            inicio += desplazamiento;
+            let intervalo = &self.rutas[inicio..fin];
+            let cantidad_iguales = intervalo.partition_point(|candidato| {
+                observar_comparacion();
+                candidato.as_bytes().get(indice).copied() == Some(byte)
+            });
+            fin = inicio + cantidad_iguales;
+
+            if inicio == fin {
+                return false;
+            }
+        }
+
+        inicio < fin && self.rutas[inicio].len() == bytes.len()
     }
 }
 
@@ -451,25 +471,18 @@ impl Manifiesto {
             }
         }
 
-        let mut prefijos_directorio = PrefijosRuta::default();
-        let mut hay_directorios_duplicados = false;
-        let mut hay_directorios_solapados = false;
-        for directorio in &self.layout.directorios {
-            let conflictos = prefijos_directorio.insertar(directorio, || {});
-            hay_directorios_duplicados |= conflictos.duplicados;
-            hay_directorios_solapados |= conflictos.solapados;
-        }
+        let indice_directorios = IndiceRutas::nuevo(&self.layout.directorios, || {});
         for entrada in &self.layout.sin_iota {
-            let contenido = prefijos_directorio.contiene_prefijo_de(entrada, || {});
+            let contenido = indice_directorios.contiene_prefijo_de(entrada, || {});
             if !contenido {
                 errores.push(ErrorManifiesto::SinIotaFueraDeLayout(entrada.clone()));
             }
         }
 
-        if hay_directorios_duplicados {
+        if indice_directorios.conflictos.duplicados {
             errores.push(ErrorManifiesto::DirectoriosDuplicados);
         }
-        if hay_directorios_solapados {
+        if indice_directorios.conflictos.solapados {
             errores.push(ErrorManifiesto::DirectoriosSolapados);
         }
 
@@ -765,35 +778,50 @@ pub(crate) mod tests {
     }
     #[test]
     fn validar_sin_iota_consulta_prefijos_segun_componentes_de_ruta() {
-        let mut prefijos = PrefijosRuta::default();
+        let mut directorios = Vec::new();
         for indice in 0..8192 {
-            prefijos.insertar(&format!("externo/{indice:04}"), || {});
+            directorios.push(format!("externo/{indice:04}"));
         }
-        prefijos.insertar("root", || {});
-        prefijos.insertar("root/", || {});
+        directorios.push("root".into());
+        directorios.push("root/".into());
+        let indice = IndiceRutas::nuevo(&directorios, || {});
 
-        assert!(!prefijos.contiene_prefijo_de("raiz/sub/hoja", || {}));
-        assert!(prefijos.contiene_prefijo_de("root/sub", || {}));
-        assert!(prefijos.contiene_prefijo_de("root//sub", || {}));
-        assert!(!prefijos.contiene_prefijo_de("rooted/sub", || {}));
+        assert!(!indice.contiene_prefijo_de("raiz/sub/hoja", || {}));
+        assert!(indice.contiene_prefijo_de("root/sub", || {}));
+        assert!(indice.contiene_prefijo_de("root//sub", || {}));
+        assert!(!indice.contiene_prefijo_de("rooted/sub", || {}));
     }
 
     #[test]
-    fn consulta_ruta_adversarial_visita_cada_byte_una_vez() {
-        let componentes = 2048;
-        let prefijo = std::iter::repeat_n("a", componentes)
+    fn consulta_sin_iota_halla_ancestro_aunque_no_sea_el_predecessor() {
+        let directorios = ["a".into(), "a/b".into()];
+        let indice = IndiceRutas::nuevo(&directorios, || {});
+        assert!(indice.contiene_prefijo_de("a/c", || {}));
+
+        let solo_a = ["a".into()];
+        let indice = IndiceRutas::nuevo(&solo_a, || {});
+        assert!(!indice.contiene_prefijo_de("ab/c", || {}));
+        assert!(indice.contiene_prefijo_de("a/bc", || {}));
+    }
+
+    #[test]
+    fn muchas_rutas_largas_disjuntas_usan_busquedas_logaritmicas() {
+        const DIRECTORIOS: usize = 1024;
+        let prefijo = std::iter::repeat_n("segmento", 64)
             .collect::<Vec<_>>()
             .join("/");
-        let directorio = format!("{prefijo}/x");
-        let ruta = format!("{prefijo}/y");
-        let mut prefijos = PrefijosRuta::default();
-        let mut bytes_insertados = 0;
-        prefijos.insertar(&directorio, || bytes_insertados += 1);
-        assert_eq!(bytes_insertados, directorio.len());
+        let rutas: Vec<String> = (0..DIRECTORIOS)
+            .map(|indice| format!("{prefijo}/ruta-{indice:04}"))
+            .collect();
+        let mut comparaciones_ordenamiento = 0;
+        let indice = IndiceRutas::nuevo(&rutas, || comparaciones_ordenamiento += 1);
+        assert_eq!(indice.rutas.len(), DIRECTORIOS);
+        assert!(comparaciones_ordenamiento < 4 * DIRECTORIOS * 11);
 
-        let mut bytes_consultados = 0;
-        assert!(!prefijos.contiene_prefijo_de(&ruta, || bytes_consultados += 1));
-        assert_eq!(bytes_consultados, ruta.len());
+        let consulta = format!("{prefijo}/ruta-z");
+        let mut comparaciones_busqueda = 0;
+        assert!(!indice.contiene_prefijo_de(&consulta, || comparaciones_busqueda += 1));
+        assert!(comparaciones_busqueda <= 2 * consulta.len() * 11);
     }
 
     #[test]
@@ -833,6 +861,18 @@ pub(crate) mod tests {
         m.layout.directorios = vec!["n".into(), "notes".into()];
         m.layout.sin_iota = vec!["n/sub".into()];
         m.validar().unwrap();
+    }
+
+    #[test]
+    fn detecta_solapamiento_aunque_haya_un_hermano_lexico_entre_ambos() {
+        let mut m = base();
+        m.layout.directorios = vec!["a".into(), "a-".into(), "a/x".into()];
+        m.layout.sin_iota.clear();
+        assert!(
+            m.validar()
+                .unwrap_err()
+                .contains(&ErrorManifiesto::DirectoriosSolapados)
+        );
     }
 
     #[test]
