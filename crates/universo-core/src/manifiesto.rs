@@ -96,6 +96,9 @@ pub struct Layout {
 }
 
 /// Motivo de rechazo de un `Manifiesto` por `validar`.
+///
+/// Este enum público es exhaustivo; agregar variantes puede requerir cambios
+/// en `match` exhaustivos de consumidores. El crate sigue en pre-1.0.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ErrorManifiesto {
     /// `version` está vacía.
