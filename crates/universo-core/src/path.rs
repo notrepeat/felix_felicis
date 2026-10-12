@@ -112,7 +112,12 @@ fn caracter_no_portable(c: char) -> bool {
 }
 
 pub(crate) fn clave_case_ruta(ruta: &str) -> String {
-    ruta.to_lowercase()
+    // El upcase completo también colapsa pares como `Σ`/`ς`, que el
+    // lowercase de Rust deja distintos aunque Windows los resuelva igual.
+    // Algunas expansiones (por ejemplo `ß` → `SS`) pueden sobre-rechazar
+    // aliases que un filesystem distinguiría; es una clave conservadora de
+    // portabilidad, nunca una normalización de identidad.
+    ruta.chars().flat_map(char::to_uppercase).collect()
 }
 
 pub(crate) fn validar_segmento_portable_windows(segmento: &str) -> Result<(), ErrorPath> {
@@ -188,8 +193,9 @@ impl BundlePath {
         self.0.rsplit('/').next().unwrap_or(&self.0)
     }
 
-    /// Forma en minúsculas de la ruta, solo para detectar colisiones;
-    /// nunca para resolver identidad.
+    /// Forma conservadora en mayúsculas de la ruta, solo para detectar
+    /// colisiones portables; puede sobre-rechazar expansiones Unicode y nunca
+    /// se usa para resolver identidad.
     pub fn clave_case(&self) -> String {
         clave_case_ruta(&self.0)
     }
@@ -224,8 +230,19 @@ mod tests {
         );
         assert_eq!(
             BundlePath::nuevo("Rules/X").unwrap().clave_case(),
-            "rules/x"
+            "RULES/X"
         );
+    }
+
+    #[test]
+    fn clave_case_detecta_sigma_final_sin_colapsar_i_con_punto() {
+        let sigma = BundlePath::nuevo("Σ").unwrap();
+        let sigma_final = BundlePath::nuevo("ς").unwrap();
+        assert_eq!(sigma.clave_case(), sigma_final.clave_case());
+
+        let i_mayuscula_punto = BundlePath::nuevo("İ").unwrap();
+        let i_mas_punto = BundlePath::nuevo("i\u{307}").unwrap();
+        assert_ne!(i_mayuscula_punto.clave_case(), i_mas_punto.clave_case());
     }
     #[test]
     fn nuevo_exige_normalizado() {

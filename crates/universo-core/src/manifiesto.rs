@@ -957,6 +957,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn claves_portables_detectan_sigma_final_y_preservan_el_caso_i_con_punto() {
+        let mut sigma = base();
+        sigma.layout.directorios = vec!["Σ".into(), "ς".into()];
+        sigma.layout.sin_iota.clear();
+        assert!(
+            sigma
+                .validar()
+                .unwrap_err()
+                .contains(&ErrorManifiesto::DirectoriosDuplicados)
+        );
+
+        let mut i_con_punto = base();
+        i_con_punto.layout.directorios = vec!["İ".into(), "i\u{307}".into()];
+        i_con_punto.layout.sin_iota.clear();
+        i_con_punto
+            .validar()
+            .expect("la clave conservadora mantiene este near-miss");
+    }
+
+    #[test]
     fn valida_portabilidad_de_cada_campo_de_ruta_del_layout() {
         let mut directorios = base();
         directorios.layout.directorios = vec!["docs/CON.txt".into()];

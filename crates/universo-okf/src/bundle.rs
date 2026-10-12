@@ -2733,7 +2733,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn cargar_bundle_conserva_directorios_distintos_por_case_en_unix() {
+    fn cargar_bundle_rechaza_directorios_distintos_por_case_en_unix_por_portabilidad() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir(temp.path().join("docs")).unwrap();
         std::fs::create_dir(temp.path().join("DOCS")).unwrap();
@@ -2743,9 +2743,14 @@ mod tests {
         let mut manifiesto = manifiesto_minimo();
         manifiesto.layout.directorios = vec!["docs".into(), "DOCS".into()];
         manifiesto.layout.sin_iota.clear();
-        let estructura = cargar_bundle(temp.path(), manifiesto).unwrap();
+        let errores = cargar_bundle(temp.path(), manifiesto).unwrap_err();
 
-        assert_eq!(estructura.len_nodos(), 2);
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Estructura);
+        assert_eq!(
+            errores[0].detalle,
+            "layout.directorios contiene rutas duplicadas"
+        );
     }
 
     #[test]
