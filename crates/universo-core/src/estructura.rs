@@ -1068,32 +1068,7 @@ impl Estructura {
         }
 
         // 6. Ordinales por `(origen, tipo, destino)` son `0..n` sin huecos.
-        let mut grupos: HashMap<(NodoId, Sorte, NodoId), Vec<u32>> = HashMap::new();
-        for (_, a) in self.aristas.iter() {
-            grupos
-                .entry((a.origen, a.tipo.clone(), a.destino))
-                .or_default()
-                .push(a.ordinal);
-        }
-        let conteos_reconstruidos: HashMap<_, _> = grupos
-            .iter()
-            .map(|(grupo, ordinales)| (grupo.clone(), ordinales.len()))
-            .collect();
-        if conteos_reconstruidos != self.conteos_arista {
-            errores.push(format!(
-                "conteos_arista no coincide con los grupos de aristas: reconstruido {conteos_reconstruidos:?}, índice {:?}",
-                self.conteos_arista
-            ));
-        }
-        for ((origen, tipo, destino), mut ordinales) in grupos {
-            ordinales.sort_unstable();
-            let esperado: Vec<u32> = (0..ordinales.len() as u32).collect();
-            if ordinales != esperado {
-                errores.push(format!(
-                    "el grupo ({origen:?}, {tipo}, {destino:?}) tiene ordinales con huecos o duplicados: {ordinales:?}"
-                ));
-            }
-        }
+        errores.extend(self.verificar_ordinales_observando(|| {}));
 
         // 7. Atributos solo para nodos vivos, con predicado declarado y
         //    constante en dominio.
@@ -1128,6 +1103,75 @@ impl Estructura {
             Ok(())
         } else {
             Err(errores)
+        }
+    }
+
+    fn verificar_ordinales_observando(&self, mut observar_operacion: impl FnMut()) -> Vec<String> {
+        let mut errores = Vec::new();
+        let mut grupos: HashMap<(NodoId, Sorte, NodoId), Vec<u32>> = HashMap::new();
+        for (_, arista) in self.aristas.iter() {
+            observar_operacion();
+            grupos
+                .entry((arista.origen, arista.tipo.clone(), arista.destino))
+                .or_default()
+                .push(arista.ordinal);
+        }
+        let mut conteos_reconstruidos = HashMap::with_capacity(grupos.len());
+        for (grupo, ordinales) in &grupos {
+            observar_operacion();
+            conteos_reconstruidos.insert(grupo.clone(), ordinales.len());
+        }
+        if conteos_reconstruidos != self.conteos_arista {
+            errores.push(format!(
+                "conteos_arista no coincide con los grupos de aristas: reconstruido {conteos_reconstruidos:?}, índice {:?}",
+                self.conteos_arista
+            ));
+        }
+        for ((origen, tipo, destino), mut ordinales) in grupos {
+            observar_operacion();
+            let mut presentes = vec![false; ordinales.len()];
+            let mut invalido = false;
+            for &ordinal in &ordinales {
+                observar_operacion();
+                match presentes.get_mut(ordinal as usize) {
+                    Some(presente) if !*presente => *presente = true,
+                    _ => invalido = true,
+                }
+            }
+            if invalido {
+                ordenar_ordinales_linealmente(&mut ordinales, &mut observar_operacion);
+                errores.push(format!(
+                    "el grupo ({origen:?}, {tipo}, {destino:?}) tiene ordinales con huecos o duplicados: {ordinales:?}"
+                ));
+            }
+        }
+        errores
+    }
+}
+
+fn ordenar_ordinales_linealmente(ordinales: &mut [u32], observar_operacion: &mut impl FnMut()) {
+    let mut salida = vec![0; ordinales.len()];
+    for desplazamiento in [0, 8, 16, 24] {
+        let mut offsets = [0usize; 256];
+        for &ordinal in ordinales.iter() {
+            observar_operacion();
+            offsets[((ordinal >> desplazamiento) & 0xff) as usize] += 1;
+        }
+        let mut offset = 0;
+        for cantidad in &mut offsets {
+            let actual = *cantidad;
+            *cantidad = offset;
+            offset += actual;
+        }
+        for &ordinal in ordinales.iter() {
+            observar_operacion();
+            let bucket = ((ordinal >> desplazamiento) & 0xff) as usize;
+            salida[offsets[bucket]] = ordinal;
+            offsets[bucket] += 1;
+        }
+        for (ordinal, ordenado) in ordinales.iter_mut().zip(&salida) {
+            observar_operacion();
+            *ordinal = *ordenado;
         }
     }
 }
@@ -1467,6 +1511,48 @@ mod tests {
         );
         u.verificar_representacion().unwrap();
     }
+
+    #[test]
+    fn verificar_ordinales_visita_aristas_y_ordinales_linealmente() {
+        let mut u = e();
+        let origen = u.insertar_nodo(p("n/origen"), s("a"), l("O")).unwrap();
+        let destino = u.insertar_nodo(p("n/destino"), s("a"), l("D")).unwrap();
+        let cantidad = 4_096;
+        for _ in 0..cantidad {
+            u.insertar_arista(origen, destino, s("rel"), l("")).unwrap();
+        }
+
+        let mut operaciones = 0;
+        assert!(
+            u.verificar_ordinales_observando(|| operaciones += 1)
+                .is_empty()
+        );
+        assert!(
+            operaciones <= 3 * cantidad + 10,
+            "se observaron {operaciones} operaciones para {cantidad} aristas"
+        );
+    }
+
+    #[test]
+    fn verificar_ordinales_conserva_diagnostico_ordenado_de_grupo_invalido() {
+        let mut u = e();
+        let origen = u.insertar_nodo(p("n/origen"), s("a"), l("O")).unwrap();
+        let destino = u.insertar_nodo(p("n/destino"), s("a"), l("D")).unwrap();
+        let aristas: Vec<_> = (0..3)
+            .map(|_| u.insertar_arista(origen, destino, s("rel"), l("")).unwrap())
+            .collect();
+        u.aristas[aristas[1]].ordinal = 3;
+        u.aristas[aristas[2]].ordinal = 0;
+
+        let errores = u.verificar_representacion().unwrap_err();
+        assert!(
+            errores
+                .iter()
+                .any(|error| { error.contains("ordinales con huecos o duplicados: [0, 0, 3]") }),
+            "diagnóstico inesperado: {errores:?}"
+        );
+    }
+
     #[test]
     fn quitar_arista_reordena_ordinales() {
         let mut u = e();
