@@ -167,6 +167,7 @@ struct PresupuestoBundle {
     bytes_raw: usize,
     entradas: usize,
     bytes_rutas: usize,
+    bytes_rutas_fisicas: usize,
 }
 
 impl PresupuestoBundle {
@@ -176,6 +177,7 @@ impl PresupuestoBundle {
             bytes_raw: 0,
             entradas: 0,
             bytes_rutas: 0,
+            bytes_rutas_fisicas: 0,
         }
     }
 
@@ -199,6 +201,16 @@ impl PresupuestoBundle {
             .ok_or(RecursoBundle::BytesRutas)?;
         self.entradas = entradas;
         self.bytes_rutas = bytes_rutas;
+        Ok(())
+    }
+
+    fn reservar_ruta_fisica(&mut self, bytes: usize) -> Result<(), RecursoBundle> {
+        let bytes_rutas_fisicas = self
+            .bytes_rutas_fisicas
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limites.bytes_rutas)
+            .ok_or(RecursoBundle::BytesRutas)?;
+        self.bytes_rutas_fisicas = bytes_rutas_fisicas;
         Ok(())
     }
 
@@ -995,9 +1007,21 @@ fn cargar_bundle_con_limites(
             ));
             continue;
         }
+        let base_canonica_relativa = match base_canonica.strip_prefix(&raiz_canonica) {
+            Ok(relativa) => relativa,
+            Err(_) => {
+                errores.push(error(
+                    Some(directorio),
+                    None,
+                    Regla::Io,
+                    "el directorio declarado no se puede expresar relativo a la raíz",
+                ));
+                continue;
+            }
+        };
         let identidad_base = match obtener_identidad(&base_canonica) {
             Ok(Some(identidad)) => IdentidadBaseLayout::Fisica(identidad),
-            Ok(None) => IdentidadBaseLayout::Canonica(base_canonica.clone()),
+            Ok(None) => IdentidadBaseLayout::Canonica(base_canonica_relativa.to_path_buf()),
             Err(_) => {
                 errores.push(error(
                     Some(directorio),
@@ -1017,7 +1041,7 @@ fn cargar_bundle_con_limites(
             ));
             continue;
         }
-        if bases_canonicas_procesadas.se_solapa(&base_canonica) {
+        if bases_canonicas_procesadas.se_solapa(base_canonica_relativa) {
             errores.push(error(
                 None,
                 None,
@@ -1033,7 +1057,16 @@ fn cargar_bundle_con_limites(
             ordenar_errores(&mut errores);
             return Err(errores);
         }
-        bases_canonicas_procesadas.insertar(&base_canonica);
+        // El índice y el fallback de identidad solo retienen esta ruta
+        // relativa, con un presupuesto físico independiente del lógico.
+        if let Err(recurso) =
+            presupuesto.reservar_ruta_fisica(base_canonica_relativa.as_os_str().len())
+        {
+            errores.push(error_limite_bundle(Some(directorio), recurso, limites));
+            ordenar_errores(&mut errores);
+            return Err(errores);
+        }
+        bases_canonicas_procesadas.insertar(base_canonica_relativa);
         let mut encontrados: Vec<std::path::PathBuf> = Vec::new();
         let mut camino: Vec<PathBuf> = Vec::new();
         let mut procesados: HashSet<PathBuf> = HashSet::new();
@@ -1754,6 +1787,19 @@ mod tests {
             presupuesto.registrar_bytes_raw(1),
             Err(RecursoBundle::BytesRaw)
         );
+
+        let limites = LimitesInventario {
+            bytes_rutas: 5,
+            ..LimitesInventario::CONTRATO
+        };
+        let mut presupuesto = PresupuestoBundle::nuevo(limites);
+        assert_eq!(presupuesto.reservar_ruta_fisica(5), Ok(()));
+        assert_eq!(presupuesto.bytes_rutas_fisicas, 5);
+        assert_eq!(
+            presupuesto.reservar_ruta_fisica(1),
+            Err(RecursoBundle::BytesRutas)
+        );
+        assert_eq!(presupuesto.bytes_rutas_fisicas, 5);
     }
 
     #[test]
@@ -2407,7 +2453,75 @@ mod tests {
     }
 
     #[test]
-    fn indice_de_roots_canonicos_compara_en_o_r_log_r() {
+    fn indice_y_presupuesto_no_retenen_prefijo_absoluto_largo() {
+        #[cfg(unix)]
+        let raiz = PathBuf::from("/");
+        #[cfg(windows)]
+        let raiz = PathBuf::from(r"C:\");
+
+        let raiz = raiz.join("p".repeat(64 * 1024));
+        let base_absoluta = raiz.join("target");
+        let base_relativa = base_absoluta.strip_prefix(&raiz).unwrap();
+        assert_eq!(base_relativa, Path::new("target"));
+
+        let mut indice = IndiceRutasCanonicas::default();
+        indice.insertar(base_relativa);
+        let almacenada = &indice.rutas.first().unwrap().0;
+        assert_eq!(almacenada, Path::new("target"));
+        assert_eq!(almacenada.as_os_str().len(), "target".len());
+
+        let mut presupuesto = PresupuestoBundle::nuevo(LimitesInventario {
+            bytes_rutas: "target".len(),
+            ..LimitesInventario::CONTRATO
+        });
+        assert_eq!(
+            presupuesto.reservar_ruta_fisica(base_relativa.as_os_str().len()),
+            Ok(())
+        );
+        assert_eq!(
+            presupuesto.reservar_ruta_fisica(1),
+            Err(RecursoBundle::BytesRutas)
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn cargar_bundle_presupuesta_ruta_fisica_canonica_exacta_y_exceso() {
+        let nombre_fisico = format!("target-{}", "p".repeat(64));
+        let bytes_fisicos = nombre_fisico.len();
+        let contenido = doc("a", "Doc", "");
+
+        for (bytes_rutas, esperado) in [(bytes_fisicos, true), (bytes_fisicos - 1, false)] {
+            let raiz = tempfile::tempdir().unwrap();
+            let destino = raiz.path().join(&nombre_fisico);
+            std::fs::create_dir(&destino).unwrap();
+            std::fs::write(destino.join("doc.md"), &contenido).unwrap();
+            enlazar_directorio(&raiz.path().join("alias"), &destino);
+
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = vec!["alias".into()];
+            manifiesto.layout.sin_iota.clear();
+            let limites = LimitesInventario {
+                bytes_raw: contenido.len(),
+                entradas: 2,
+                profundidad: 2,
+                bytes_rutas,
+            };
+            let resultado = cargar_bundle_con_presupuesto_test(raiz.path(), manifiesto, limites);
+
+            if esperado {
+                assert_eq!(resultado.unwrap().len_nodos(), 1);
+            } else {
+                let errores = resultado.unwrap_err();
+                assert_eq!(errores.len(), 1, "{errores:?}");
+                assert_eq!(errores[0].regla, Regla::LimiteBundleExcedido);
+                assert_eq!(errores[0].path.as_deref(), Some("alias"));
+            }
+        }
+    }
+
+    #[test]
+    fn indice_de_roots_canonicos_limita_comparaciones_de_orden() {
         const CANTIDAD: usize = 10_000;
         let mut indice = IndiceRutasCanonicas::default();
         COMPARACIONES_RUTAS_CANONICAS.with(|comparaciones| comparaciones.set(0));
@@ -2423,7 +2537,7 @@ mod tests {
         let techo = CANTIDAD * (8 * logaritmo + 16);
         assert!(
             comparaciones <= techo,
-            "{comparaciones} comparaciones para {CANTIDAD} raíces (techo {techo})"
+            "{comparaciones} comparaciones BTree para {CANTIDAD} raíces (techo {techo}); el costo por comparación depende de la longitud de ruta"
         );
         assert_eq!(indice.rutas.len(), CANTIDAD);
     }
