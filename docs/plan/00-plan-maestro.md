@@ -259,8 +259,9 @@ No limpia stage ni ejecuta `DiscardNewRestoreOld`; `New`, `Committed` y el resto
 de recovery siguen pendientes. U8 añade un helper crate-private que abre root
 desde `lock.ubicacion()` y delega al CAS anclado (`aa5d496`); las pruebas
 `8250f0d` cubren match/stale/lock/no mutación y `08e4659` mapea y redacta el
-error de root inválido. No hay caller apply/CLI, parser de `SnapshotToken` de
-entrada ni semántica de recaptura de configuración raw externa. Apply/publicador
-filesystem y cleanup/restart completos, U9–U10, CLI y soporte transaccional de
-`Type` siguen pendientes. El presupuesto agregado de evaluación aún no tiene
-cota global.
+caso en que root dejó de ser directorio: `TipoNoAdmitido` /
+`snapshot_entry_type_not_allowed`. Aún no hay caller desde apply/CLI ni parser
+de entrada de `SnapshotToken`; la recaptura de configuración raw externa sigue
+pendiente. Apply/publicador filesystem y cleanup/restart completos, U9–U10,
+CLI y soporte transaccional de `Type` también siguen pendientes. El presupuesto
+agregado de evaluación aún no tiene cota global.
