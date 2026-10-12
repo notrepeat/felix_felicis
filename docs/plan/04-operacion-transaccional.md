@@ -456,6 +456,9 @@ Chain strategy: feature-branch-chain
   entradas, profundidad máxima 128 y 16 MiB acumulados de rutas lógicas. Los
   límites son inclusivos. El inventario cuenta bytes raw de todos los archivos
   regulares; `cargar_bundle` solo suma documentos Markdown efectivamente leídos.
+  `cargar_bundle` aplica además un presupuesto físico independiente de 16 MiB
+  para las rutas canónicas relativas de las raíces declaradas que retiene en su
+  índice; ese costo no sustituye ni se suma al presupuesto de rutas lógicas.
   En inventarios, el root tiene profundidad 0; en un bundle, la profundidad
   cuenta componentes desde la raíz del bundle y cada directorio declarado se
   cuenta como entrada. Las entradas incluyen directorios y archivos bajo las

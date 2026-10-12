@@ -956,7 +956,7 @@ fn cargar_bundle_con_limites(
     };
     let raiz_canonica = ubicacion_raiz.ruta().to_path_buf();
 
-    let mut bases_procesadas: HashSet<IdentidadBaseLayout> = HashSet::new();
+    let mut bases_procesadas: HashSet<IdentidadDirectorio> = HashSet::new();
     let mut bases_canonicas_procesadas = IndiceRutasCanonicas::default();
     let mut presupuesto = PresupuestoBundle::nuevo(limites);
     for directorio in &manifiesto.layout.directorios {
@@ -1020,8 +1020,7 @@ fn cargar_bundle_con_limites(
             }
         };
         let identidad_base = match obtener_identidad(&base_canonica) {
-            Ok(Some(identidad)) => IdentidadBaseLayout::Fisica(identidad),
-            Ok(None) => IdentidadBaseLayout::Canonica(base_canonica_relativa.to_path_buf()),
+            Ok(identidad) => identidad,
             Err(_) => {
                 errores.push(error(
                     Some(directorio),
@@ -1032,7 +1031,16 @@ fn cargar_bundle_con_limites(
                 continue;
             }
         };
-        if !registrar_directorio_procesado(&mut bases_procesadas, identidad_base) {
+        if identidad_base.is_some_and(|identidad| bases_procesadas.contains(&identidad)) {
+            errores.push(error(
+                None,
+                None,
+                Regla::Estructura,
+                "layout.directorios contiene rutas que resuelven al mismo directorio",
+            ));
+            continue;
+        }
+        if bases_canonicas_procesadas.contiene_exacta(base_canonica_relativa) {
             errores.push(error(
                 None,
                 None,
@@ -1065,6 +1073,9 @@ fn cargar_bundle_con_limites(
             errores.push(error_limite_bundle(Some(directorio), recurso, limites));
             ordenar_errores(&mut errores);
             return Err(errores);
+        }
+        if let Some(identidad) = identidad_base {
+            bases_procesadas.insert(identidad);
         }
         bases_canonicas_procesadas.insertar(base_canonica_relativa);
         let mut encontrados: Vec<std::path::PathBuf> = Vec::new();
@@ -1226,19 +1237,6 @@ fn error_lectura_anclada(error: ErrorDirectorioAnclado) -> io::Error {
     io::Error::new(kind, "no se pudo abrir el archivo bajo la raíz anclada")
 }
 
-#[derive(PartialEq, Eq, Hash)]
-enum IdentidadBaseLayout {
-    Fisica(IdentidadDirectorio),
-    Canonica(PathBuf),
-}
-
-fn registrar_directorio_procesado<I: std::hash::Hash + Eq>(
-    procesados_globales: &mut HashSet<I>,
-    identidad: I,
-) -> bool {
-    procesados_globales.insert(identidad)
-}
-
 #[cfg(test)]
 std::thread_local! {
     static COMPARACIONES_RUTAS_CANONICAS: std::cell::Cell<usize> = const {
@@ -1279,6 +1277,10 @@ struct IndiceRutasCanonicas {
 }
 
 impl IndiceRutasCanonicas {
+    fn contiene_exacta(&self, ruta: &Path) -> bool {
+        self.rutas.contains(&RutaCanonicaIndice(ruta.to_path_buf()))
+    }
+
     fn se_solapa(&self, ruta: &Path) -> bool {
         let consulta = RutaCanonicaIndice(ruta.to_path_buf());
         let anterior = self.rutas.range(..consulta.clone()).next_back();
@@ -1403,9 +1405,9 @@ struct EstadoRecorrido<'a, O> {
 ///   mismo directorio físico (p. ej. dos symlinks al mismo destino). No es
 ///   un ciclo ni un error. Para no cargar los mismos archivos dos veces
 ///   bajo paths distintos —lo que produciría nodos duplicados o colisiones
-///   de case—, `procesados` guarda el canonicalizado de cada directorio ya
-///   procesado por completo; la segunda vía que llega a él se salta en
-///   silencio, sin recursar ni reportar nada.
+///   de case—, `procesados` guarda el canonicalizado relativo a la raíz de
+///   cada directorio ya procesado por completo; la segunda vía que llega a
+///   él se salta en silencio, sin recursar ni reportar nada.
 /// - Fuga: un enlace que sale del directorio declarado (`base_canonica`),
 ///   p. ej. hacia la raíz del bundle o hacia un ancestro. El recorrido solo
 ///   puede ingerir archivos bajo los directorios del layout; un enlace así
@@ -1480,15 +1482,14 @@ fn recorrer_canonico<O: FnMut()>(
         ));
         return Ok(());
     }
-    if !estado.procesados.insert(canonico.clone()) {
-        // Diamante: mismo directorio físico ya procesado por otra ruta.
-        return Ok(());
-    }
-
     let relativa = match canonico.strip_prefix(ctx.raiz_canonica) {
         Ok(relativa) => relativa,
         Err(_) => return Ok(()),
     };
+    if !estado.procesados.insert(relativa.to_path_buf()) {
+        // Diamante: mismo directorio físico ya procesado por otra ruta.
+        return Ok(());
+    }
     // Seam determinista: permite sustituir la ruta tras su validación y
     // antes de abrirla para enumerar; la apertura relativa debe fallar sin
     // seguir symlinks ni reparse points.
@@ -2398,7 +2399,7 @@ mod tests {
     }
 
     #[test]
-    fn identidad_global_evitar_releer_alias_y_preserva_paths_case_sensitive() {
+    fn identidad_global_evitar_releer_alias() {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         struct IdentidadFs(u8);
 
@@ -2413,21 +2414,11 @@ mod tests {
         let mut procesadas = HashSet::new();
         let mut arboles_leidos = 0;
         for (_declarada, identidad) in raices {
-            if registrar_directorio_procesado(&mut procesadas, identidad) {
+            if procesadas.insert(identidad) {
                 arboles_leidos += 1;
             }
         }
         assert_eq!(arboles_leidos, 2);
-
-        let mut paths_case_sensitive = HashSet::new();
-        assert!(registrar_directorio_procesado(
-            &mut paths_case_sensitive,
-            PathBuf::from("docs")
-        ));
-        assert!(registrar_directorio_procesado(
-            &mut paths_case_sensitive,
-            PathBuf::from("DOCS")
-        ));
     }
 
     #[test]
@@ -2436,6 +2427,8 @@ mod tests {
         indice.insertar(Path::new("raiz/docs/sub"));
         indice.insertar(Path::new("raiz/docs-extra"));
 
+        assert!(indice.contiene_exacta(Path::new("raiz/docs/sub")));
+        assert!(!indice.contiene_exacta(Path::new("raiz/docs")));
         assert!(indice.se_solapa(Path::new("raiz/docs")));
         assert!(indice.se_solapa(Path::new("raiz/docs/sub/mas")));
         assert!(!indice.se_solapa(Path::new("raiz/docs-extra")));
@@ -2578,6 +2571,38 @@ mod tests {
             errores[0].detalle,
             "layout.directorios contiene rutas que resuelven al mismo directorio"
         );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn roots_anidadas_fallback_no_retiene_aliases_rechazadas() {
+        let temp = tempfile::tempdir().unwrap();
+        let docs = temp.path().join("docs");
+        let sub = docs.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("doc.md"), doc("a", "Doc", "")).unwrap();
+        enlazar_directorio(&temp.path().join("alias"), &sub);
+        enlazar_directorio(&temp.path().join("alias-2"), &sub);
+
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["docs".into(), "alias".into(), "alias-2".into()];
+        manifiesto.layout.sin_iota.clear();
+        let mut recorridos = 0;
+        let errores =
+            cargar_bundle_observando(temp.path(), manifiesto, |_| Ok(None), || recorridos += 1)
+                .unwrap_err();
+
+        assert_eq!(
+            recorridos, 2,
+            "solo se recorre la raíz docs y su subdirectorio"
+        );
+        assert_eq!(errores.len(), 2, "{errores:?}");
+        assert!(errores.iter().all(|error| {
+            error.regla == Regla::Estructura
+                && error.path.is_none()
+                && error.detalle
+                    == "layout.directorios contiene rutas que resuelven a directorios solapados"
+        }));
     }
 
     #[cfg(any(unix, windows))]
