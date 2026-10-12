@@ -18,6 +18,7 @@ enum EntradaAbierta<D, A> {
 /// Presupuesto estructural común a los inventarios por ruta y por handle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LimitesInventario {
+    pub(crate) bytes_raw: usize,
     pub(crate) entradas: usize,
     pub(crate) profundidad: usize,
     pub(crate) bytes_rutas: usize,
@@ -25,6 +26,7 @@ pub(crate) struct LimitesInventario {
 
 impl LimitesInventario {
     pub(crate) const CONTRATO: Self = Self {
+        bytes_raw: 128 * 1024 * 1024,
         entradas: 100_000,
         profundidad: 128,
         bytes_rutas: 16 * 1024 * 1024,
@@ -34,6 +36,7 @@ impl LimitesInventario {
 #[derive(Debug)]
 struct PresupuestoInventario {
     limites: LimitesInventario,
+    bytes_raw: usize,
     entradas: usize,
     bytes_rutas: usize,
 }
@@ -42,6 +45,7 @@ impl PresupuestoInventario {
     fn nuevo(limites: LimitesInventario) -> Self {
         Self {
             limites,
+            bytes_raw: 0,
             entradas: 0,
             bytes_rutas: 0,
         }
@@ -58,6 +62,20 @@ impl PresupuestoInventario {
             .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
         self.entradas += 1;
         self.bytes_rutas = total;
+        Ok(())
+    }
+
+    fn bytes_raw_restantes(&self) -> usize {
+        self.limites.bytes_raw - self.bytes_raw
+    }
+
+    fn registrar_bytes_archivo(&mut self, bytes: usize) -> Result<(), ErrorSnapshot> {
+        let total = self
+            .bytes_raw
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limites.bytes_raw)
+            .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
+        self.bytes_raw = total;
         Ok(())
     }
 }
@@ -81,12 +99,16 @@ trait BackendInventario {
         nombre: &str,
     ) -> Result<EntradaAbierta<Self::Directorio, Self::Archivo>, ErrorSnapshot>;
 
-    fn leer(&mut self, archivo: Self::Archivo) -> Result<Vec<u8>, ErrorSnapshot>;
+    fn leer(
+        &mut self,
+        archivo: Self::Archivo,
+        maximo_lectura: usize,
+    ) -> Result<Vec<u8>, ErrorSnapshot>;
 }
 
 /// Lee una vez cada archivo y devuelve el inventario ordenado por bytes UTF-8.
 pub(crate) fn inventariar_root(raiz: &Path) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
-    inventariar_root_con_lector(raiz, leer_archivo_regular)
+    inventariar_root_con_lector_limitado(raiz, leer_archivo_regular_limitado)
 }
 
 pub(crate) fn inventariar_root_con_lector<F>(
@@ -95,6 +117,21 @@ pub(crate) fn inventariar_root_con_lector<F>(
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>
 where
     F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let mut leer = leer;
+    inventariar_root_con_lector_y_limites(
+        raiz,
+        move |ruta, _maximo_lectura| leer(ruta),
+        LimitesInventario::CONTRATO,
+    )
+}
+
+pub(crate) fn inventariar_root_con_lector_limitado<F>(
+    raiz: &Path,
+    leer: F,
+) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>
+where
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     inventariar_root_con_lector_y_limites(raiz, leer, LimitesInventario::CONTRATO)
 }
@@ -105,7 +142,7 @@ fn inventariar_root_con_lector_y_limites<F>(
     limites: LimitesInventario,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>
 where
-    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     let raiz = ruta_absoluta_lexica(raiz)?;
     validar_directorio_sin_enlaces(&raiz)?;
@@ -179,10 +216,18 @@ fn caminar_directorio<B: BackendInventario>(
                     presupuesto,
                     entradas,
                 )?;
+                entradas.try_reserve(1).map_err(|_| ErrorSnapshot::Io)?;
                 entradas.push(EntradaSnapshot::directorio(ruta));
             }
             EntradaAbierta::Archivo(archivo) => {
-                entradas.push(EntradaSnapshot::archivo(ruta, backend.leer(archivo)?));
+                let maximo_lectura = presupuesto
+                    .bytes_raw_restantes()
+                    .checked_add(1)
+                    .ok_or(ErrorSnapshot::LongitudExcedida)?;
+                let bytes = backend.leer(archivo, maximo_lectura)?;
+                presupuesto.registrar_bytes_archivo(bytes.len())?;
+                entradas.try_reserve(1).map_err(|_| ErrorSnapshot::Io)?;
+                entradas.push(EntradaSnapshot::archivo(ruta, bytes));
             }
         }
         Ok(())
@@ -208,7 +253,7 @@ struct BackendRuta<F> {
 
 impl<F> BackendInventario for BackendRuta<F>
 where
-    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     type Directorio = PathBuf;
     type Archivo = PathBuf;
@@ -248,8 +293,12 @@ where
         }
     }
 
-    fn leer(&mut self, archivo: Self::Archivo) -> Result<Vec<u8>, ErrorSnapshot> {
-        (self.leer)(&archivo)
+    fn leer(
+        &mut self,
+        archivo: Self::Archivo,
+        maximo_lectura: usize,
+    ) -> Result<Vec<u8>, ErrorSnapshot> {
+        (self.leer)(&archivo, maximo_lectura)
     }
 }
 
@@ -330,6 +379,17 @@ fn es_enlace_o_reparse(metadata: &Metadata) -> bool {
 }
 
 pub(crate) fn leer_archivo_regular(ruta: &Path) -> Result<Vec<u8>, ErrorSnapshot> {
+    let maximo_lectura = LimitesInventario::CONTRATO
+        .bytes_raw
+        .checked_add(1)
+        .ok_or(ErrorSnapshot::LongitudExcedida)?;
+    leer_archivo_regular_limitado(ruta, maximo_lectura)
+}
+
+pub(crate) fn leer_archivo_regular_limitado(
+    ruta: &Path,
+    maximo_lectura: usize,
+) -> Result<Vec<u8>, ErrorSnapshot> {
     let mut opciones = OpenOptions::new();
     opciones.read(true);
     #[cfg(unix)]
@@ -343,7 +403,7 @@ pub(crate) fn leer_archivo_regular(ruta: &Path) -> Result<Vec<u8>, ErrorSnapshot
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         opciones.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    let mut archivo: File = opciones.open(ruta).map_err(|_| ErrorSnapshot::Io)?;
+    let archivo: File = opciones.open(ruta).map_err(|_| ErrorSnapshot::Io)?;
     let metadata = archivo.metadata().map_err(|_| ErrorSnapshot::Io)?;
     if es_enlace_o_reparse(&metadata) {
         return Err(ErrorSnapshot::EnlaceNoPermitido);
@@ -351,10 +411,35 @@ pub(crate) fn leer_archivo_regular(ruta: &Path) -> Result<Vec<u8>, ErrorSnapshot
     if !metadata.is_file() {
         return Err(ErrorSnapshot::TipoNoAdmitido);
     }
+    let bytes_disponibles = maximo_lectura
+        .checked_sub(1)
+        .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
+    leer_hasta_presupuesto(archivo, metadata.len(), bytes_disponibles)
+}
+
+fn leer_hasta_presupuesto<R: Read>(
+    lector: R,
+    tamano_preflight: u64,
+    bytes_disponibles: usize,
+) -> Result<Vec<u8>, ErrorSnapshot> {
+    if tamano_preflight
+        > u64::try_from(bytes_disponibles).map_err(|_| ErrorSnapshot::LongitudExcedida)?
+    {
+        return Err(ErrorSnapshot::LimiteInventarioExcedido);
+    }
+    let maximo_lectura = bytes_disponibles
+        .checked_add(1)
+        .ok_or(ErrorSnapshot::LongitudExcedida)?;
+    let maximo_lectura =
+        u64::try_from(maximo_lectura).map_err(|_| ErrorSnapshot::LongitudExcedida)?;
     let mut bytes = Vec::new();
-    archivo
+    lector
+        .take(maximo_lectura)
         .read_to_end(&mut bytes)
         .map_err(|_| ErrorSnapshot::Io)?;
+    if bytes.len() > bytes_disponibles {
+        return Err(ErrorSnapshot::LimiteInventarioExcedido);
+    }
     Ok(bytes)
 }
 
@@ -366,14 +451,20 @@ pub(crate) fn leer_archivo_regular(ruta: &Path) -> Result<Vec<u8>, ErrorSnapshot
 pub(crate) fn inventariar_root_anclado(
     raiz: super::anclado::DirectorioAnclado,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
-    inventariar_root_anclado_con_lector(raiz, leer_handle)
+    inventariar_root_anclado_con_limites(raiz, LimitesInventario::CONTRATO)
 }
 
 pub(crate) fn inventariar_root_anclado_con_limites(
     raiz: super::anclado::DirectorioAnclado,
     limites: LimitesInventario,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
-    caminar_inventario_con_limites(&mut BackendAnclado { leer: leer_handle }, raiz, limites)
+    caminar_inventario_con_limites(
+        &mut BackendAnclado {
+            leer: leer_handle_limitado,
+        },
+        raiz,
+        limites,
+    )
 }
 
 pub(crate) fn inventariar_root_anclado_con_lector<F>(
@@ -383,8 +474,11 @@ pub(crate) fn inventariar_root_anclado_con_lector<F>(
 where
     F: FnMut(&mut File) -> Result<Vec<u8>, ErrorSnapshot>,
 {
+    let mut leer = leer;
     caminar_inventario_con_limites(
-        &mut BackendAnclado { leer },
+        &mut BackendAnclado {
+            leer: |archivo: &mut File, _maximo_lectura| leer(archivo),
+        },
         raiz,
         LimitesInventario::CONTRATO,
     )
@@ -396,7 +490,7 @@ struct BackendAnclado<F> {
 
 impl<F> BackendInventario for BackendAnclado<F>
 where
-    F: FnMut(&mut File) -> Result<Vec<u8>, ErrorSnapshot>,
+    F: FnMut(&mut File, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     type Directorio = super::anclado::DirectorioAnclado;
     type Archivo = File;
@@ -438,8 +532,12 @@ where
         }
     }
 
-    fn leer(&mut self, mut archivo: Self::Archivo) -> Result<Vec<u8>, ErrorSnapshot> {
-        (self.leer)(&mut archivo)
+    fn leer(
+        &mut self,
+        mut archivo: Self::Archivo,
+        maximo_lectura: usize,
+    ) -> Result<Vec<u8>, ErrorSnapshot> {
+        (self.leer)(&mut archivo, maximo_lectura)
     }
 }
 
@@ -459,12 +557,15 @@ fn mapear_error_anclado(error: super::anclado::ErrorDirectorioAnclado) -> ErrorS
     }
 }
 
-fn leer_handle(archivo: &mut File) -> Result<Vec<u8>, ErrorSnapshot> {
-    let mut bytes = Vec::new();
-    archivo
-        .read_to_end(&mut bytes)
-        .map_err(|_| ErrorSnapshot::Io)?;
-    Ok(bytes)
+fn leer_handle_limitado(
+    archivo: &mut File,
+    maximo_lectura: usize,
+) -> Result<Vec<u8>, ErrorSnapshot> {
+    let tamano_preflight = archivo.metadata().map_err(|_| ErrorSnapshot::Io)?.len();
+    let bytes_disponibles = maximo_lectura
+        .checked_sub(1)
+        .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
+    leer_hasta_presupuesto(archivo, tamano_preflight, bytes_disponibles)
 }
 
 #[cfg(test)]
@@ -475,7 +576,7 @@ mod tests {
     use crate::transaccion::snapshot::{TipoEntradaSnapshot, calcular_token_snapshot};
     use std::cell::Cell;
     use std::collections::HashMap;
-    use std::io::Read;
+    use std::io::{Cursor, Read};
     use std::rc::Rc;
 
     fn anclar(root: &Path) -> DirectorioAnclado {
@@ -503,11 +604,13 @@ mod tests {
     }
 
     fn limites_prueba(
+        bytes_raw: usize,
         entradas: usize,
         profundidad: usize,
         bytes_rutas: usize,
     ) -> LimitesInventario {
         LimitesInventario {
+            bytes_raw,
             entradas,
             profundidad,
             bytes_rutas,
@@ -518,7 +621,7 @@ mod tests {
         root: &Path,
         limites: LimitesInventario,
     ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
-        inventariar_root_con_lector_y_limites(root, leer_archivo_regular, limites)
+        inventariar_root_con_lector_y_limites(root, leer_archivo_regular_limitado, limites)
     }
 
     fn inventariar_handle_con_limites(
@@ -744,7 +847,11 @@ mod tests {
             Ok(EntradaAbierta::Directorio(1))
         }
 
-        fn leer(&mut self, (): Self::Archivo) -> Result<Vec<u8>, ErrorSnapshot> {
+        fn leer(
+            &mut self,
+            (): Self::Archivo,
+            _maximo_lectura: usize,
+        ) -> Result<Vec<u8>, ErrorSnapshot> {
             unreachable!("el backend solo enumera directorios")
         }
     }
@@ -766,13 +873,13 @@ mod tests {
         fs::write(root.path().join("a"), []).unwrap();
         fs::write(root.path().join("b"), []).unwrap();
 
-        let exacto = limites_prueba(2, 1, 2);
+        let exacto = limites_prueba(0, 2, 1, 2);
         for resultado in inventariar_ambos(root.path(), exacto) {
             assert_eq!(resultado.unwrap().len(), 2);
         }
 
         fs::write(root.path().join("secret-canary-name"), []).unwrap();
-        let limite_entradas = limites_prueba(2, 1, 32);
+        let limite_entradas = limites_prueba(0, 2, 1, 32);
         for resultado in inventariar_ambos(root.path(), limite_entradas) {
             let error = resultado.unwrap_err();
             assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
@@ -784,11 +891,11 @@ mod tests {
 
         fs::remove_file(root.path().join("secret-canary-name")).unwrap();
         fs::write(root.path().join("é"), []).unwrap();
-        let limite_ruta_utf8 = limites_prueba(3, 1, 4);
+        let limite_ruta_utf8 = limites_prueba(0, 3, 1, 4);
         for resultado in inventariar_ambos(root.path(), limite_ruta_utf8) {
             assert_eq!(resultado.unwrap().len(), 3);
         }
-        let ruta_utf8_mas_uno = limites_prueba(3, 1, 3);
+        let ruta_utf8_mas_uno = limites_prueba(0, 3, 1, 3);
         for resultado in inventariar_ambos(root.path(), ruta_utf8_mas_uno) {
             assert_eq!(
                 resultado.unwrap_err(),
@@ -798,12 +905,88 @@ mod tests {
     }
 
     #[test]
+    fn ambos_backends_aceptan_limite_raw_exact_y_rechazan_mas_uno() {
+        let root = tempfile::tempdir().unwrap();
+        let archivo = root.path().join("data.bin");
+        fs::write(&archivo, b"1234").unwrap();
+        let limites = limites_prueba(4, 10, 10, 128);
+
+        for inventariar in [inventariar_path_con_limites, inventariar_handle_con_limites] {
+            let entries = inventariar(root.path(), limites).unwrap();
+            assert_eq!(entries[0].bytes(), Some(b"1234".as_slice()));
+
+            fs::write(&archivo, b"12345").unwrap();
+            let error = inventariar(root.path(), limites).unwrap_err();
+            assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+            assert_eq!(error.codigo(), "snapshot_resource_limit");
+            assert_eq!(error.to_string(), "snapshot_resource_limit");
+            assert!(!format!("{error:?}").contains("data.bin"));
+            fs::write(&archivo, b"1234").unwrap();
+        }
+    }
+
+    struct LectorContado<'a> {
+        cursor: Cursor<Vec<u8>>,
+        bytes_leidos: &'a Cell<usize>,
+    }
+
+    impl Read for LectorContado<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let leidos = self.cursor.read(buffer)?;
+            self.bytes_leidos.set(self.bytes_leidos.get() + leidos);
+            Ok(leidos)
+        }
+    }
+
+    #[test]
+    fn lectura_raw_preflight_y_remaining_mas_uno_cubren_crecimiento_concurrente() {
+        let leidos = Cell::new(0);
+        let exacto = leer_hasta_presupuesto(
+            LectorContado {
+                cursor: Cursor::new(b"1234".to_vec()),
+                bytes_leidos: &leidos,
+            },
+            4,
+            4,
+        )
+        .unwrap();
+        assert_eq!(exacto, b"1234");
+        assert_eq!(leidos.get(), 4);
+
+        leidos.set(0);
+        let error = leer_hasta_presupuesto(
+            LectorContado {
+                cursor: Cursor::new(b"12345".to_vec()),
+                bytes_leidos: &leidos,
+            },
+            4,
+            4,
+        )
+        .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(leidos.get(), 5, "solo se permite leer el byte centinela");
+
+        leidos.set(0);
+        let error = leer_hasta_presupuesto(
+            LectorContado {
+                cursor: Cursor::new(b"12345".to_vec()),
+                bytes_leidos: &leidos,
+            },
+            5,
+            4,
+        )
+        .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(leidos.get(), 0, "preflight rechaza antes de leer");
+    }
+
+    #[test]
     fn limites_de_profundidad_inclusivos_comparten_semantica_en_ambos_backends() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("a/b")).unwrap();
         fs::write(root.path().join("a/file"), []).unwrap();
 
-        let profundidad_exacta = limites_prueba(10, 2, 64);
+        let profundidad_exacta = limites_prueba(0, 10, 2, 64);
         for resultado in inventariar_ambos(root.path(), profundidad_exacta) {
             assert_eq!(resultado.unwrap().len(), 3);
         }
@@ -879,7 +1062,11 @@ mod tests {
             )))
         }
 
-        fn leer(&mut self, (): Self::Archivo) -> Result<Vec<u8>, ErrorSnapshot> {
+        fn leer(
+            &mut self,
+            (): Self::Archivo,
+            _maximo_lectura: usize,
+        ) -> Result<Vec<u8>, ErrorSnapshot> {
             unreachable!("fanout solo contiene directorios")
         }
     }
