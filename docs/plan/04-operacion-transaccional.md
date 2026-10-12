@@ -451,19 +451,26 @@ Chain strategy: feature-branch-chain
   prepared/backup_ready, new validado en
   installed/committed. Objetivo por slice: <400 líneas authored.
 
-  Contrato propuesto e implementado para cada inventario de snapshot, stage o
-  recovery (path y anchored): 128 MiB de bytes raw acumulados, 100.000 entradas
-  incluyendo directorios, profundidad máxima 128 (el root tiene profundidad 0)
-  y 16 MiB de rutas UTF-8 acumuladas. Los límites son inclusivos; el primer
-  byte o elemento adicional devuelve `snapshot_resource_limit`. Los lectores
-  preflight-ean el tamaño y leen como máximo el remanente más un byte, también
-  si el archivo crece concurrentemente. El recorrido procesa hermanos uno a
-  uno y mantiene handles en proporción a la profundidad, no al fanout. El error
-  público `ErrorSnapshot::LimiteInventarioExcedido` amplía en 0.1 el enum
-  exhaustivo: los consumidores con `match` exhaustivo deben manejar esta nueva
-  variante. Este contrato no promete RSS exacto ni timeout duro, y no cubre el
-  recorrido público independiente de `bundle::cargar_bundle`; limita solo los
-  inventarios de snapshot/stage/recovery de este slice.
+  Contrato de recursos compartido por los inventarios de snapshot/stage/recovery
+  y por la carga desde disco con `bundle::cargar_bundle`: 128 MiB de contenido
+  Markdown leído, 100.000 entradas, profundidad máxima 128 y 16 MiB acumulados
+  de rutas lógicas. Los límites son inclusivos. En inventarios, el root tiene
+  profundidad 0; en un bundle, la profundidad cuenta componentes desde la raíz
+  del bundle y cada directorio declarado se cuenta como entrada. Las entradas
+  incluyen directorios y archivos bajo las raíces declaradas, con presupuesto
+  global para todas ellas. El primer byte o elemento adicional devuelve
+  `ErrorSnapshot::LimiteInventarioExcedido` o `Regla::LimiteBundleExcedido`,
+  respectivamente.
+
+  Ambos lectores de contenido leen como máximo el remanente más un byte, también
+  si un archivo crece después de validarse. En bundles, el presupuesto raw solo
+  suma documentos Markdown efectivamente leídos; los nombres ignorados no
+  consumen bytes. `parsear_bundle`, que recibe documentos ya materializados en
+  memoria, queda fuera de este límite. Los nombres por directorio se pueden
+  retener para preservar el orden lexical: los límites restringen el input
+  lógico, no garantizan un RSS exacto ni un timeout duro. `LimiteBundleExcedido`
+  amplía el enum público y exhaustivo `Regla`; los consumidores con `match`
+  exhaustivo deben manejarlo.
 - [ ] 8 — CLI simulate: `crates/universo-cli/src/propose.rs`.
   Test `crates/universo-cli/tests/propose_transaccional.rs`
   (`cargo test -p universo-cli --test propose_transaccional`) ejecuta el binario,

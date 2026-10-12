@@ -23,6 +23,24 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 Mientras la API sea `0.x`, los parches corrigen comportamiento compatible y
 los incrementos menores pueden cambiar contratos con migración documentada.
 
+## Migración prevista para 0.2.0 (propuesta, no publicada)
+
+La siguiente versión menor es el destino recomendado para acumular estos
+cambios de contrato pre-1.0. El gate sigue pendiente: no se suben versiones de
+los cinco crates, no se crea un tag y no se presenta `0.2.0` como release hasta
+que termine la matriz completa de release.
+
+| Cambio | Acción del consumidor |
+|--------|-----------------------|
+| `Regla::LimiteBundleExcedido` y `ErrorEstructura::HijoDuplicadoEnLote` agregan variantes a enums exhaustivos. | Añadir ramas para ambas variantes antes de actualizar. |
+| `cargar_bundle` limita la carga desde disco a 128 MiB de Markdown leído, 100.000 entradas, profundidad 128 y 16 MiB de rutas lógicas acumuladas. | Reducir o dividir bundles que excedan una cuota. Los límites son inclusivos y se comparten entre todas las raíces del layout. |
+| Las raíces `layout.directorios` deben ser disjuntas; una ruta no puede ser igual ni ancestro/descendiente de otra. | Separar las raíces solapadas en directorios disjuntos. |
+| Errores de lectura exponen `regla` y `path` para clasificación/localización. | No analizar `detalle`: es texto humano de diagnóstico, puede variar por plataforma y no es un contrato estable. |
+
+Las cuotas se aplican a `cargar_bundle` sobre disco, no a `parsear_bundle`, que
+recibe el conjunto de documentos ya materializado en memoria. Son límites de
+input lógico y no una garantía de RSS exacto o tiempo máximo.
+
 ## Checklist de release
 
 - [ ] Todas las fases exigidas por el gate figuran como `completo`.
