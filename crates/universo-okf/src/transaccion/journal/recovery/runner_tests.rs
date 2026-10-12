@@ -101,6 +101,15 @@ fn inventario_restore_old_restaurado() -> RecoveryInventory {
     }
 }
 
+fn inventario_restore_old_inesperado() -> RecoveryInventory {
+    RecoveryInventory {
+        root: ArtifactState::Unknown,
+        backup: ArtifactState::Absent,
+        stage: ArtifactState::Absent,
+        root_new_validated: false,
+    }
+}
+
 #[test]
 fn rename_con_error_y_postestado_restaurado_converge() {
     assert_eq!(
@@ -129,16 +138,34 @@ fn rename_con_error_y_estado_inicial_propaga_el_error() {
 
 #[test]
 fn rename_con_estado_posterior_inesperado_falla_cerrado() {
-    let inesperado = RecoveryInventory {
-        root: ArtifactState::Unknown,
-        backup: ArtifactState::Absent,
-        stage: ArtifactState::Absent,
-        root_new_validated: false,
-    };
     assert_eq!(
         reconciliar_intento_renombrado_restore_old(
             Err(ErrorRenombrarAnclado::Io),
-            inesperado,
+            inventario_restore_old_inesperado(),
+            inventario_restore_old_inicial(),
+        ),
+        Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
+    );
+}
+
+#[test]
+fn rename_ok_con_estado_inicial_falla_cerrado() {
+    assert_eq!(
+        reconciliar_intento_renombrado_restore_old(
+            Ok(()),
+            inventario_restore_old_inicial(),
+            inventario_restore_old_inicial(),
+        ),
+        Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
+    );
+}
+
+#[test]
+fn rename_ok_con_estado_inesperado_falla_cerrado() {
+    assert_eq!(
+        reconciliar_intento_renombrado_restore_old(
+            Ok(()),
+            inventario_restore_old_inesperado(),
             inventario_restore_old_inicial(),
         ),
         Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
