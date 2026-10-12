@@ -242,6 +242,8 @@ fn parent_identity_mismatch_fails_closed_before_observing_artifacts() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("bundle");
     crear_arbol(&root, b"old-tree");
+    let primary_canary = root.join("parent-mismatch-canary.bin");
+    fs::write(&primary_canary, b"primary-parent-canary").unwrap();
     let lock = LockEscritura::adquirir(&root).unwrap();
     let old = fingerprint(&root);
     let fixture_new = temp.path().join("new-fixture");
@@ -249,18 +251,28 @@ fn parent_identity_mismatch_fails_closed_before_observing_artifacts() {
 
     let other_parent = temp.path().join("other-parent");
     fs::create_dir(&other_parent).unwrap();
-    let other_location = UbicacionRaiz::nueva(&other_parent.join("bundle")).unwrap();
+    let other_root = other_parent.join("bundle");
+    crear_arbol(&other_root, b"other-parent-tree");
+    let other_canary = other_root.join("parent-mismatch-canary.bin");
+    fs::write(&other_canary, b"other-parent-canary").unwrap();
+    let other_location = UbicacionRaiz::nueva(&other_root).unwrap();
     let other_identity = DirectorioAnclado::parent_solo_lectura_desde_ubicacion(&other_location)
         .unwrap()
         .identidad_parent()
         .journal_identity()
         .unwrap();
     let record = Journal::new(TXN, other_identity, old, fingerprint(&fixture_new)).unwrap();
+    let before = filesystem_snapshot(&lock);
+    let primary_canary_before = fs::read(&primary_canary).unwrap();
+    let other_canary_before = fs::read(&other_canary).unwrap();
 
     let error = observar_inventario_recovery(&lock, &record).unwrap_err();
 
     assert_eq!(error, ErrorObservadorRecovery::ParentIdentityMismatch);
     assert_eq!(error.to_string(), "recovery_parent_identity_mismatch");
+    assert_eq!(filesystem_snapshot(&lock), before);
+    assert_eq!(fs::read(primary_canary).unwrap(), primary_canary_before);
+    assert_eq!(fs::read(other_canary).unwrap(), other_canary_before);
 }
 
 #[cfg(unix)]
