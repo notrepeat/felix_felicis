@@ -638,52 +638,76 @@ impl Estructura {
         &mut self,
         handles: &[AristaId],
     ) -> Result<(), ErrorEstructura> {
-        if handles.iter().any(|id| !self.aristas.contains_key(*id)) {
-            return Err(ErrorEstructura::AristaInexistente);
-        }
-        let seleccionadas: HashSet<_> = handles.iter().copied().collect();
-        let mut grupos = Vec::<((NodoId, Sorte, NodoId), Vec<AristaId>)>::new();
-        let mut indice_grupo = HashMap::new();
-        for (id, arista) in self.aristas.iter() {
-            if !seleccionadas.contains(&id) {
+        self.quitar_aristas_en_lote_observando(handles, || {})
+    }
+
+    fn quitar_aristas_en_lote_observando(
+        &mut self,
+        handles: &[AristaId],
+        mut observar_operacion: impl FnMut(),
+    ) -> Result<(), ErrorEstructura> {
+        let mut seleccionadas = HashSet::with_capacity(handles.len());
+        let mut ordinales_por_grupo = HashMap::<(NodoId, Sorte, NodoId), usize>::new();
+        let mut origenes = HashSet::new();
+        let mut destinos = HashSet::new();
+        for &id in handles {
+            observar_operacion();
+            let Some(arista) = self.aristas.get(id) else {
+                return Err(ErrorEstructura::AristaInexistente);
+            };
+            if !seleccionadas.insert(id) {
                 continue;
             }
-            let clave = (arista.origen, arista.tipo.clone(), arista.destino);
-            let indice = *indice_grupo.entry(clave.clone()).or_insert_with(|| {
-                grupos.push((clave, Vec::new()));
-                grupos.len() - 1
-            });
-            grupos[indice].1.push(id);
+            observar_operacion();
+            origenes.insert(arista.origen);
+            destinos.insert(arista.destino);
+            ordinales_por_grupo
+                .entry((arista.origen, arista.tipo.clone(), arista.destino))
+                .or_insert(0);
         }
 
-        for ((origen, tipo, destino), retiradas) in grupos {
-            let retiradas_set: HashSet<_> = retiradas.iter().copied().collect();
-            for id in retiradas {
-                self.aristas.remove(id);
-            }
+        for &id in &seleccionadas {
+            observar_operacion();
+            self.aristas
+                .remove(id)
+                .expect("cada handle fue validado antes de mutar");
+        }
+        for &origen in &origenes {
             if let Some(salientes) = self.salientes.get_mut(origen) {
-                salientes.retain(|id| !retiradas_set.contains(id));
+                salientes.retain(|id| {
+                    observar_operacion();
+                    !seleccionadas.contains(id)
+                });
             }
+        }
+        for &destino in &destinos {
             if let Some(entrantes) = self.entrantes.get_mut(destino) {
-                entrantes.retain(|id| !retiradas_set.contains(id));
+                entrantes.retain(|id| {
+                    observar_operacion();
+                    !seleccionadas.contains(id)
+                });
             }
-            let supervivientes: Vec<_> = self
-                .salientes(origen)
-                .iter()
-                .copied()
-                .filter(|id| {
-                    let arista = &self.aristas[*id];
-                    arista.tipo == tipo && arista.destino == destino
-                })
-                .collect();
-            if supervivientes.is_empty() {
-                self.conteos_arista.remove(&(origen, tipo.clone(), destino));
+        }
+
+        for &origen in &origenes {
+            if let Some(salientes) = self.salientes.get(origen) {
+                for &id in salientes {
+                    observar_operacion();
+                    let arista = &self.aristas[id];
+                    let clave = (arista.origen, arista.tipo.clone(), arista.destino);
+                    if let Some(ordinal) = ordinales_por_grupo.get_mut(&clave) {
+                        self.aristas[id].ordinal = *ordinal as u32;
+                        *ordinal += 1;
+                    }
+                }
+            }
+        }
+
+        for (grupo, cantidad) in ordinales_por_grupo {
+            if cantidad == 0 {
+                self.conteos_arista.remove(&grupo);
             } else {
-                self.conteos_arista
-                    .insert((origen, tipo.clone(), destino), supervivientes.len());
-            }
-            for (ordinal, id) in supervivientes.into_iter().enumerate() {
-                self.aristas[id].ordinal = ordinal as u32;
+                self.conteos_arista.insert(grupo, cantidad);
             }
         }
         Ok(())
@@ -1672,6 +1696,52 @@ mod tests {
         );
         u.verificar_representacion().unwrap();
     }
+
+    #[test]
+    fn baja_multigrupo_filtra_adyacencias_y_renumera_linealmente() {
+        let mut u = e();
+        let origen = u.insertar_nodo(p("n/origen"), s("a"), l("origen")).unwrap();
+        let grupos = 512;
+        let mut bajas = Vec::with_capacity(grupos + 1);
+        for indice in 0..grupos {
+            let destino = u
+                .insertar_nodo(p(&format!("n/destino-{indice}")), s("a"), l("destino"))
+                .unwrap();
+            bajas.push(
+                u.insertar_arista(origen, destino, s("rel"), l("retirar"))
+                    .unwrap(),
+            );
+            u.insertar_arista(origen, destino, s("rel"), l("conservar"))
+                .unwrap();
+        }
+        bajas.push(bajas[0]);
+        let aristas_antes = u.len_aristas();
+        let mut operaciones = 0;
+
+        u.quitar_aristas_en_lote_observando(&bajas, || operaciones += 1)
+            .unwrap();
+
+        assert!(
+            operaciones <= 4 * (aristas_antes + bajas.len()),
+            "se observaron {operaciones} operaciones para {aristas_antes} aristas y {} retiros",
+            bajas.len()
+        );
+        assert_eq!(u.len_aristas(), grupos);
+        for (indice, destino) in (0..grupos).map(|indice| {
+            (
+                indice,
+                u.por_path(&p(&format!("n/destino-{indice}"))).unwrap(),
+            )
+        }) {
+            assert_eq!(u.salientes(origen).len(), grupos);
+            let arista = u.salientes(origen)[indice];
+            assert_eq!(u.arista(arista).unwrap().destino, destino);
+            assert_eq!(u.arista(arista).unwrap().ordinal, 0);
+            assert_eq!(u.conteos_arista.get(&(origen, s("rel"), destino)), Some(&1));
+        }
+        u.verificar_representacion().unwrap();
+    }
+
     #[test]
     fn atomos_de_estructura_enumera_todo_en_orden_total() {
         let mut u = e();
