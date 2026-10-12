@@ -1,6 +1,6 @@
 //! `BundlePath`: identidad de nodo. Normalización relativa a la raíz del
 //! bundle, separador `/`, sin extensión `.md`, bytes conservados (spec
-//! §3.2).
+//! §3.2). Los segmentos también deben ser representables en Windows.
 
 /// Identidad de nodo: ruta relativa a la raíz del bundle, normalizada con
 /// separador `/`, sin extensión `.md`, con los bytes del nombre
@@ -27,6 +27,14 @@ pub enum ErrorPath {
     /// La ruta contiene un carácter prohibido: blanco, de control, o uno
     /// de `# → ( ) , " : [ ]`.
     CaracterProhibido(char),
+    /// Un segmento termina en punto, que Windows elimina al resolver rutas.
+    SegmentoTerminaEnPunto,
+    /// Un segmento termina en espacio, que Windows elimina al resolver rutas.
+    SegmentoTerminaEnEspacio,
+    /// Un segmento es un nombre de dispositivo reservado por DOS/Windows.
+    DispositivoReservado,
+    /// Un segmento contiene un carácter que Windows no admite en nombres.
+    CaracterNoPortable(char),
 }
 
 impl std::fmt::Display for ErrorPath {
@@ -41,6 +49,27 @@ impl std::fmt::Display for ErrorPath {
             ErrorPath::CaracterProhibido(c) => {
                 write!(f, "la ruta contiene el carácter prohibido {c:?}")
             }
+            ErrorPath::SegmentoTerminaEnPunto => {
+                write!(f, "un segmento termina en punto y no es portable a Windows")
+            }
+            ErrorPath::SegmentoTerminaEnEspacio => {
+                write!(
+                    f,
+                    "un segmento termina en espacio y no es portable a Windows"
+                )
+            }
+            ErrorPath::DispositivoReservado => {
+                write!(
+                    f,
+                    "un segmento usa un nombre de dispositivo reservado por Windows"
+                )
+            }
+            ErrorPath::CaracterNoPortable(c) => {
+                write!(
+                    f,
+                    "la ruta contiene el carácter no portable a Windows {c:?}"
+                )
+            }
         }
     }
 }
@@ -54,6 +83,32 @@ fn caracter_prohibido(c: char) -> bool {
             c,
             '#' | '→' | '(' | ')' | ',' | '"' | '\\' | ':' | '[' | ']'
         )
+}
+
+fn segmento_es_dispositivo_reservado(segmento: &str) -> bool {
+    let base = segmento.split('.').next().unwrap_or(segmento);
+    if ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|reservado| base.eq_ignore_ascii_case(reservado))
+    {
+        return true;
+    }
+
+    let puerto_numerado = |prefijo: &str| {
+        base.len() == 4
+            && base
+                .get(..3)
+                .is_some_and(|parte| parte.eq_ignore_ascii_case(prefijo))
+            && base
+                .as_bytes()
+                .get(3)
+                .is_some_and(|digito| (b'1'..=b'9').contains(digito))
+    };
+    puerto_numerado("COM") || puerto_numerado("LPT")
+}
+
+fn caracter_no_portable(c: char) -> bool {
+    matches!(c, '<' | '>' | '|' | '?' | '*')
 }
 
 impl BundlePath {
@@ -78,6 +133,18 @@ impl BundlePath {
             }
             if segmento == "." || segmento == ".." {
                 return Err(ErrorPath::SegmentoRelativo);
+            }
+            if segmento.ends_with('.') {
+                return Err(ErrorPath::SegmentoTerminaEnPunto);
+            }
+            if segmento.ends_with(' ') {
+                return Err(ErrorPath::SegmentoTerminaEnEspacio);
+            }
+            if let Some(c) = segmento.chars().find(|c| caracter_no_portable(*c)) {
+                return Err(ErrorPath::CaracterNoPortable(c));
+            }
+            if segmento_es_dispositivo_reservado(segmento) {
+                return Err(ErrorPath::DispositivoReservado);
             }
         }
         if let Some(c) = ruta.chars().find(|c| caracter_prohibido(*c)) {
@@ -181,6 +248,57 @@ mod tests {
                 "caso {caso:?}"
             );
         }
+    }
+
+    #[test]
+    fn rechaza_segmentos_no_portables_a_windows() {
+        for (caso, esperado) in [
+            ("a/b<c", ErrorPath::CaracterNoPortable('<')),
+            ("a/b>c", ErrorPath::CaracterNoPortable('>')),
+            ("a/b|c", ErrorPath::CaracterNoPortable('|')),
+            ("a/b?c", ErrorPath::CaracterNoPortable('?')),
+            ("a/b*c", ErrorPath::CaracterNoPortable('*')),
+            ("a/b.", ErrorPath::SegmentoTerminaEnPunto),
+            ("a/b ", ErrorPath::SegmentoTerminaEnEspacio),
+            ("CON", ErrorPath::DispositivoReservado),
+            ("a/prn.txt", ErrorPath::DispositivoReservado),
+            ("AUX.log", ErrorPath::DispositivoReservado),
+            ("n/NuL.data", ErrorPath::DispositivoReservado),
+            ("COM1", ErrorPath::DispositivoReservado),
+            ("com9.log", ErrorPath::DispositivoReservado),
+            ("LPT1", ErrorPath::DispositivoReservado),
+            ("lpt9.data", ErrorPath::DispositivoReservado),
+        ] {
+            assert_eq!(BundlePath::nuevo(caso).unwrap_err(), esperado, "{caso:?}");
+        }
+        assert_eq!(
+            BundlePath::desde_archivo("n\\NUL.md").unwrap_err(),
+            ErrorPath::DispositivoReservado
+        );
+        assert_eq!(
+            BundlePath::desde_archivo("n\\COM1.guide.md").unwrap_err(),
+            ErrorPath::DispositivoReservado
+        );
+    }
+
+    #[test]
+    fn acepta_segmentos_cercanos_no_reservados() {
+        for caso in [
+            "docs/report.v1",
+            "docs/COM0",
+            "docs/COM10",
+            "docs/LPT0",
+            "docs/conifer",
+            "docs/auxiliary",
+        ] {
+            assert_eq!(BundlePath::nuevo(caso).unwrap().como_str(), caso);
+        }
+        assert_eq!(
+            BundlePath::desde_archivo("docs\\report.v1.md")
+                .unwrap()
+                .como_str(),
+            "docs/report.v1"
+        );
     }
     #[test]
     fn directorio_y_display() {
