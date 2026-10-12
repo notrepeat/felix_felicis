@@ -945,6 +945,7 @@ fn cargar_bundle_con_limites(
     let raiz_canonica = ubicacion_raiz.ruta().to_path_buf();
 
     let mut bases_procesadas: HashSet<IdentidadBaseLayout> = HashSet::new();
+    let mut bases_canonicas_procesadas: Vec<PathBuf> = Vec::new();
     let mut presupuesto = PresupuestoBundle::nuevo(limites);
     for directorio in &manifiesto.layout.directorios {
         if !directorio_layout_seguro(directorio) {
@@ -1016,6 +1017,16 @@ fn cargar_bundle_con_limites(
             ));
             continue;
         }
+        if rutas_canonicas_solapadas(&base_canonica, &bases_canonicas_procesadas) {
+            errores.push(error(
+                None,
+                None,
+                Regla::Estructura,
+                "layout.directorios contiene rutas que resuelven a directorios solapados",
+            ));
+            continue;
+        }
+        bases_canonicas_procesadas.push(base_canonica.clone());
         if let Err(recurso) =
             presupuesto.reservar_entrada(directorio.len(), directorio.split('/').count())
         {
@@ -1193,6 +1204,12 @@ fn registrar_directorio_procesado<I: std::hash::Hash + Eq>(
     identidad: I,
 ) -> bool {
     procesados_globales.insert(identidad)
+}
+
+fn rutas_canonicas_solapadas(ruta: &Path, anteriores: &[PathBuf]) -> bool {
+    anteriores.iter().any(|anterior| {
+        ruta != anterior && (ruta.starts_with(anterior) || anterior.starts_with(ruta))
+    })
 }
 
 /// Path relativo a `raiz`, con separador `/`, tal como se reporta en los
@@ -2312,6 +2329,27 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn rutas_canonicas_solapadas_exige_prefijo_de_componente() {
+        let anteriores = vec![PathBuf::from("raiz/docs/sub")];
+        assert!(rutas_canonicas_solapadas(
+            Path::new("raiz/docs"),
+            &anteriores
+        ));
+        assert!(rutas_canonicas_solapadas(
+            Path::new("raiz/docs/sub/mas"),
+            &anteriores
+        ));
+        assert!(!rutas_canonicas_solapadas(
+            Path::new("raiz/docs-extra"),
+            &anteriores
+        ));
+        assert!(!rutas_canonicas_solapadas(
+            Path::new("raiz/docs/sub"),
+            &anteriores
+        ));
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn identidad_no_soportada_deduplica_por_ruta_canonica_antes_del_recorrido() {
@@ -2348,6 +2386,42 @@ mod tests {
             errores[0].detalle,
             "layout.directorios contiene rutas que resuelven al mismo directorio"
         );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn cargar_bundle_rechaza_raices_que_resuelven_a_ancestro_fisico() {
+        for (directorios, recorridos_esperados) in
+            [(vec!["docs", "alias"], 2), (vec!["alias", "docs"], 1)]
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let docs = temp.path().join("docs");
+            let sub = docs.join("sub");
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join("doc.md"), doc("a", "Doc", "")).unwrap();
+            enlazar_directorio(&temp.path().join("alias"), &sub);
+
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = directorios.into_iter().map(str::to_string).collect();
+            manifiesto.layout.sin_iota.clear();
+            let mut recorridos = 0;
+            let errores = cargar_bundle_observando(
+                temp.path(),
+                manifiesto,
+                identidad_directorio_para_recorrido,
+                || recorridos += 1,
+            )
+            .unwrap_err();
+
+            assert_eq!(errores.len(), 1, "{errores:?}");
+            assert_eq!(errores[0].regla, Regla::Estructura);
+            assert_eq!(errores[0].path, None);
+            assert_eq!(
+                errores[0].detalle,
+                "layout.directorios contiene rutas que resuelven a directorios solapados"
+            );
+            assert_eq!(recorridos, recorridos_esperados);
+        }
     }
 
     #[cfg(windows)]
