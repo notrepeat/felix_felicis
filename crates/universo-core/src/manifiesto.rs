@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::path::validar_segmento_portable_windows;
 use crate::tipos::Sorte;
 
 /// Sortes de nodo reservados por el motor (plan 07: `Retirado`, lápida con
@@ -146,6 +147,12 @@ pub enum ErrorManifiesto {
     DirectoriosSolapados,
     /// `directorios` está vacío.
     DirectoriosVacio,
+    /// Alguna ruta de `layout.directorios` no es relativa o portable.
+    DirectoriosRutaInvalida,
+    /// Alguna ruta de `layout.sin_iota` no es relativa o portable.
+    SinIotaRutaInvalida,
+    /// Algún nombre de `layout.ignorados` no es portable o contiene separadores.
+    IgnoradosRutaInvalida,
     /// `layout.parent_key` se declaró vacío.
     ParentKeyVacia,
     /// `layout.parent_key` no coincide con la gramática de claves frontmatter.
@@ -224,6 +231,15 @@ impl std::fmt::Display for ErrorManifiesto {
                 write!(f, "layout.directorios contiene rutas solapadas")
             }
             ErrorManifiesto::DirectoriosVacio => write!(f, "layout.directorios está vacío"),
+            ErrorManifiesto::DirectoriosRutaInvalida => {
+                write!(f, "layout.directorios contiene una ruta no portable")
+            }
+            ErrorManifiesto::SinIotaRutaInvalida => {
+                write!(f, "layout.sin_iota contiene una ruta no portable")
+            }
+            ErrorManifiesto::IgnoradosRutaInvalida => {
+                write!(f, "layout.ignorados contiene un nombre no portable")
+            }
             ErrorManifiesto::ParentKeyVacia => write!(f, "layout.parent_key está vacío"),
             ErrorManifiesto::ParentKeyInvalida => {
                 write!(f, "layout.parent_key no es una clave frontmatter válida")
@@ -246,6 +262,21 @@ impl std::fmt::Display for ErrorManifiesto {
 }
 
 impl std::error::Error for ErrorManifiesto {}
+
+fn ruta_layout_portable(ruta: &str, permite_directorios: bool) -> bool {
+    if ruta.is_empty() || ruta.starts_with('/') || ruta.contains('\\') {
+        return false;
+    }
+    if !permite_directorios && ruta.contains('/') {
+        return false;
+    }
+    ruta.split('/').all(|segmento| {
+        !segmento.is_empty()
+            && segmento != "."
+            && segmento != ".."
+            && validar_segmento_portable_windows(segmento).is_ok()
+    })
+}
 
 /// `true` si `nombre` está vacío o contiene un blanco, un carácter de
 /// control, o uno de `, ( ) " \ # → : [ ]`: cualquiera de esos caracteres
@@ -480,11 +511,35 @@ impl Manifiesto {
         }
 
         let indice_directorios = IndiceRutas::nuevo(&self.layout.directorios, || {});
+        if self
+            .layout
+            .directorios
+            .iter()
+            .any(|ruta| !ruta_layout_portable(ruta, true))
+        {
+            errores.push(ErrorManifiesto::DirectoriosRutaInvalida);
+        }
+        if self
+            .layout
+            .ignorados
+            .iter()
+            .any(|nombre| !ruta_layout_portable(nombre, false))
+        {
+            errores.push(ErrorManifiesto::IgnoradosRutaInvalida);
+        }
+        let mut sin_iota_ruta_invalida = false;
         for entrada in &self.layout.sin_iota {
+            if !ruta_layout_portable(entrada, true) {
+                sin_iota_ruta_invalida = true;
+                continue;
+            }
             let contenido = indice_directorios.contiene_prefijo_de(entrada, || {});
             if !contenido {
                 errores.push(ErrorManifiesto::SinIotaFueraDeLayout(entrada.clone()));
             }
+        }
+        if sin_iota_ruta_invalida {
+            errores.push(ErrorManifiesto::SinIotaRutaInvalida);
         }
 
         if indice_directorios.conflictos.duplicados {
@@ -866,6 +921,31 @@ pub(crate) mod tests {
         m.layout.directorios = vec!["n".into(), "notes".into()];
         m.layout.sin_iota = vec!["n/sub".into()];
         m.validar().unwrap();
+    }
+
+    #[test]
+    fn valida_portabilidad_de_cada_campo_de_ruta_del_layout() {
+        let mut directorios = base();
+        directorios.layout.directorios = vec!["docs/CON.txt".into()];
+        let error = directorios.validar().unwrap_err();
+        assert!(error.contains(&ErrorManifiesto::DirectoriosRutaInvalida));
+
+        let mut sin_iota = base();
+        sin_iota.layout.sin_iota = vec!["n/com1".into()];
+        let error = sin_iota.validar().unwrap_err();
+        assert!(error.contains(&ErrorManifiesto::SinIotaRutaInvalida));
+        assert!(!error.contains(&ErrorManifiesto::SinIotaFueraDeLayout("n/com1".into())));
+
+        let mut ignorados = base();
+        ignorados.layout.ignorados = vec!["bad?/name.md".into()];
+        let error = ignorados.validar().unwrap_err();
+        assert!(error.contains(&ErrorManifiesto::IgnoradosRutaInvalida));
+
+        let mut validos = base();
+        validos.layout.directorios = vec!["docs/COM0".into()];
+        validos.layout.sin_iota = vec!["docs/COM0/sub".into()];
+        validos.layout.ignorados = vec!["read me.md".into()];
+        validos.validar().unwrap();
     }
 
     #[test]

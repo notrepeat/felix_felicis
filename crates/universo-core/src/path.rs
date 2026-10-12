@@ -111,6 +111,28 @@ fn caracter_no_portable(c: char) -> bool {
     matches!(c, '<' | '>' | '|' | '?' | '*')
 }
 
+pub(crate) fn validar_segmento_portable_windows(segmento: &str) -> Result<(), ErrorPath> {
+    if segmento.ends_with('.') {
+        return Err(ErrorPath::SegmentoTerminaEnPunto);
+    }
+    if segmento.ends_with(' ') {
+        return Err(ErrorPath::SegmentoTerminaEnEspacio);
+    }
+    if let Some(c) = segmento.chars().find(|c| caracter_no_portable(*c)) {
+        return Err(ErrorPath::CaracterNoPortable(c));
+    }
+    if let Some(c) = segmento
+        .chars()
+        .find(|c| c.is_control() || matches!(c, '"' | ':'))
+    {
+        return Err(ErrorPath::CaracterProhibido(c));
+    }
+    if segmento_es_dispositivo_reservado(segmento) {
+        return Err(ErrorPath::DispositivoReservado);
+    }
+    Ok(())
+}
+
 impl BundlePath {
     /// Construye un `BundlePath` a partir de una ruta ya normalizada
     /// (separador `/`, sin `.md`). Ver reglas de rechazo en `ErrorPath`.
@@ -134,18 +156,7 @@ impl BundlePath {
             if segmento == "." || segmento == ".." {
                 return Err(ErrorPath::SegmentoRelativo);
             }
-            if segmento.ends_with('.') {
-                return Err(ErrorPath::SegmentoTerminaEnPunto);
-            }
-            if segmento.ends_with(' ') {
-                return Err(ErrorPath::SegmentoTerminaEnEspacio);
-            }
-            if let Some(c) = segmento.chars().find(|c| caracter_no_portable(*c)) {
-                return Err(ErrorPath::CaracterNoPortable(c));
-            }
-            if segmento_es_dispositivo_reservado(segmento) {
-                return Err(ErrorPath::DispositivoReservado);
-            }
+            validar_segmento_portable_windows(segmento)?;
         }
         if let Some(c) = ruta.chars().find(|c| caracter_prohibido(*c)) {
             return Err(ErrorPath::CaracterProhibido(c));

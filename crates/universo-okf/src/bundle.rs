@@ -89,7 +89,15 @@ fn ordenar_errores(errores: &mut [ErrorBundle]) {
 fn errores_validacion_manifiesto(errores_manifiesto: Vec<ErrorManifiesto>) -> Vec<ErrorBundle> {
     let mut errores: Vec<ErrorBundle> = errores_manifiesto
         .into_iter()
-        .map(|detalle| error(None, None, Regla::Estructura, detalle.to_string()))
+        .map(|detalle| {
+            let regla = match &detalle {
+                ErrorManifiesto::DirectoriosRutaInvalida
+                | ErrorManifiesto::SinIotaRutaInvalida
+                | ErrorManifiesto::IgnoradosRutaInvalida => Regla::PathInvalido,
+                _ => Regla::Estructura,
+            };
+            error(None, None, regla, detalle.to_string())
+        })
         .collect();
     ordenar_errores(&mut errores);
     errores
@@ -2754,13 +2762,47 @@ mod tests {
 
             let errores = cargar_bundle(dir.path(), manifiesto).unwrap_err();
 
-            let error_ruta = errores
-                .iter()
-                .find(|error| error.regla == Regla::Io)
-                .unwrap_or_else(|| panic!("{directorio}: {errores:?}"));
-            assert_eq!(error_ruta.path.as_deref(), Some(directorio.as_str()));
-            assert!(error_ruta.detalle.contains("ruta relativa segura"));
+            assert_eq!(errores.len(), 1, "{directorio}: {errores:?}");
+            assert_eq!(errores[0].regla, Regla::PathInvalido);
+            assert_eq!(errores[0].path, None);
+            assert_eq!(
+                errores[0].detalle,
+                "layout.directorios contiene una ruta no portable"
+            );
         }
+    }
+
+    #[test]
+    fn parsear_bundle_mapea_rutas_layout_no_portables_a_path_invalido() {
+        for campo in [0, 1, 2] {
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.sin_iota.clear();
+            match campo {
+                0 => manifiesto.layout.directorios = vec!["docs/CON".into()],
+                1 => manifiesto.layout.sin_iota = vec!["n/LPT9.txt".into()],
+                _ => manifiesto.layout.ignorados = vec!["COM1.md".into()],
+            }
+            let errores = parsear_bundle(&[], manifiesto).unwrap_err();
+            assert_eq!(errores.len(), 1, "{errores:?}");
+            assert_eq!(errores[0].regla, Regla::PathInvalido);
+            assert_eq!(errores[0].path, None);
+            assert!(errores[0].detalle.contains("layout."));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_mapea_nombre_windows_no_portable_a_path_invalido() {
+        let temp = tempfile::tempdir().unwrap();
+        let directorio = temp.path().join("n");
+        std::fs::create_dir(&directorio).unwrap();
+        std::fs::write(directorio.join("x?.md"), doc("a", "X", "")).unwrap();
+
+        let errores = cargar_bundle(temp.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::PathInvalido);
+        assert_eq!(errores[0].path.as_deref(), Some("n/x?"));
     }
 
     #[test]

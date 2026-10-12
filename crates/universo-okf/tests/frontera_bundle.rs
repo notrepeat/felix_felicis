@@ -40,8 +40,10 @@ fn exigir_rechazo_sin_leer_archivo_externo(
 ) {
     let errores = resultado.expect_err("una ruta fuera del bundle no debe cargarse");
     assert!(
-        errores.iter().any(|error| error.regla == Regla::Io),
-        "se esperaba un error de frontera: {errores:?}"
+        errores
+            .iter()
+            .any(|error| matches!(error.regla, Regla::Io | Regla::PathInvalido)),
+        "se esperaba un error de ruta o frontera: {errores:?}"
     );
     assert!(
         !errores.iter().any(|error| error.regla == Regla::NoUtf8),
