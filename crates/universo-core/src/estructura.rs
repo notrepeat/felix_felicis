@@ -799,21 +799,31 @@ impl Estructura {
 
         // 3. Toda arista aparece exactamente una vez en salientes[origen] y
         //    en entrantes[destino], y nada más aparece ahí.
+        let mut apariciones_salientes = HashMap::new();
+        for (origen, ids) in self.salientes.iter() {
+            for &id in ids {
+                *apariciones_salientes.entry((origen, id)).or_insert(0usize) += 1;
+            }
+        }
+        let mut apariciones_entrantes = HashMap::new();
+        for (destino, ids) in self.entrantes.iter() {
+            for &id in ids {
+                *apariciones_entrantes.entry((destino, id)).or_insert(0usize) += 1;
+            }
+        }
         for (id, arista) in self.aristas.iter() {
-            let en_salientes = self
-                .salientes
-                .get(arista.origen)
-                .map(|v| v.iter().filter(|&&a| a == id).count())
+            let en_salientes = apariciones_salientes
+                .get(&(arista.origen, id))
+                .copied()
                 .unwrap_or(0);
             if en_salientes != 1 {
                 errores.push(format!(
                     "la arista {id:?} aparece {en_salientes} veces en salientes de su origen"
                 ));
             }
-            let en_entrantes = self
-                .entrantes
-                .get(arista.destino)
-                .map(|v| v.iter().filter(|&&a| a == id).count())
+            let en_entrantes = apariciones_entrantes
+                .get(&(arista.destino, id))
+                .copied()
                 .unwrap_or(0);
             if en_entrantes != 1 {
                 errores.push(format!(
@@ -849,15 +859,20 @@ impl Estructura {
         }
 
         // 4. `padre`/`hijos` mutuamente coherentes.
+        let mut apariciones_hijos = HashMap::new();
+        for (padre_id, hijos) in self.hijos.iter() {
+            for &hijo in hijos {
+                *apariciones_hijos.entry((padre_id, hijo)).or_insert(0usize) += 1;
+            }
+        }
         for (hijo, &padre_id) in self.padre.iter() {
             if !self.nodos.contains_key(hijo) || !self.nodos.contains_key(padre_id) {
                 errores.push(format!("padre[{hijo:?}] referencia un nodo inexistente"));
                 continue;
             }
-            let veces = self
-                .hijos
-                .get(padre_id)
-                .map(|v| v.iter().filter(|&&h| h == hijo).count())
+            let veces = apariciones_hijos
+                .get(&(padre_id, hijo))
+                .copied()
                 .unwrap_or(0);
             if veces != 1 {
                 errores.push(format!(
@@ -876,16 +891,52 @@ impl Estructura {
             }
         }
 
-        // 5. $\iota$ es un bosque: sin ciclos.
+        // 5. $\iota$ es un bosque: sin ciclos. Resolver cada cadena una vez
+        //    y propagar el nodo repetido conserva los diagnósticos por nodo.
+        let mut estado = HashMap::<NodoId, u8>::with_capacity(self.nodos.len());
+        let mut ciclo_por_nodo = HashMap::<NodoId, NodoId>::new();
         for (id, _) in self.nodos.iter() {
-            let mut visto = HashSet::new();
+            if estado.get(&id) == Some(&2) {
+                continue;
+            }
+            let mut camino = Vec::new();
             let mut actual = Some(id);
             while let Some(n) = actual {
-                if !visto.insert(n) {
-                    errores.push(format!("iota contiene un ciclo que pasa por {n:?}"));
-                    break;
+                match estado.get(&n).copied() {
+                    Some(1) => {
+                        let inicio = camino
+                            .iter()
+                            .position(|&visitado| visitado == n)
+                            .expect("un nodo en estado visitando pertenece al camino actual");
+                        let entrada = camino[inicio];
+                        for (indice, visitado) in camino.iter().copied().enumerate() {
+                            ciclo_por_nodo
+                                .insert(visitado, if indice < inicio { entrada } else { visitado });
+                        }
+                        break;
+                    }
+                    Some(2) => {
+                        if let Some(&entrada) = ciclo_por_nodo.get(&n) {
+                            for visitado in camino.iter().copied() {
+                                ciclo_por_nodo.insert(visitado, entrada);
+                            }
+                        }
+                        break;
+                    }
+                    _ => {
+                        estado.insert(n, 1);
+                        camino.push(n);
+                        actual = self.padre.get(n).copied();
+                    }
                 }
-                actual = self.padre.get(n).copied();
+            }
+            for visitado in camino {
+                estado.insert(visitado, 2);
+            }
+        }
+        for (id, _) in self.nodos.iter() {
+            if let Some(ciclo) = ciclo_por_nodo.get(&id) {
+                errores.push(format!("iota contiene un ciclo que pasa por {ciclo:?}"));
             }
         }
 
@@ -1091,6 +1142,34 @@ mod tests {
         assert_eq!(u.padre(c), None);
         assert_eq!(u.hijos(a), &[b]);
         u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn verificar_representacion_conserva_testigo_de_ciclos_por_nodo() {
+        let mut u = e();
+        let a = u.insertar_nodo(p("n/a"), s("a"), l("A")).unwrap();
+        let b = u.insertar_nodo(p("n/b"), s("a"), l("B")).unwrap();
+        let c = u.insertar_nodo(p("n/c"), s("a"), l("C")).unwrap();
+        let d = u.insertar_nodo(p("n/d"), s("a"), l("D")).unwrap();
+        for (hijo, padre) in [(a, b), (b, c), (c, a), (d, b)] {
+            u.padre.insert(hijo, padre);
+            u.hijos[padre].push(hijo);
+        }
+
+        let errores = u.verificar_representacion().unwrap_err();
+        let errores_ciclo: Vec<_> = errores
+            .into_iter()
+            .filter(|error| error.starts_with("iota contiene un ciclo"))
+            .collect();
+        assert_eq!(
+            errores_ciclo,
+            [
+                format!("iota contiene un ciclo que pasa por {a:?}"),
+                format!("iota contiene un ciclo que pasa por {b:?}"),
+                format!("iota contiene un ciclo que pasa por {c:?}"),
+                format!("iota contiene un ciclo que pasa por {b:?}"),
+            ]
+        );
     }
     #[test]
     fn atributos_con_dominio_cerrado() {
