@@ -757,9 +757,10 @@ fn identidad_windows(handle: &File) -> io::Result<IdentidadDirectorio> {
 
 #[cfg(any(windows, test))]
 fn filesystem_sin_file_id(error: &io::Error) -> bool {
-    // These Win32 errors explicitly indicate that this filesystem/driver does
-    // not implement the FileIdInfo query. Other failures must remain visible.
-    matches!(error.raw_os_error(), Some(1 | 50))
+    // These Win32 errors indicate that this filesystem/driver does not
+    // implement FileIdInfo; ERROR_INVALID_PARAMETER also occurs on FAT/SMB.
+    // Other failures must remain visible.
+    matches!(error.raw_os_error(), Some(1 | 50 | 87))
 }
 
 #[cfg(any(windows, test))]

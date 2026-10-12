@@ -50,7 +50,7 @@ fn file_id_hex_conserva_el_orden_literal_de_bytes_en_minusculas() {
 
 #[test]
 fn file_id_no_soportado_usa_fallback_y_otros_errores_fallan_cerrado() {
-    for codigo in [1, 50] {
+    for codigo in [1, 50, 87] {
         assert_eq!(
             identidad_opcional::<()>(
                 Err(std::io::Error::from_raw_os_error(codigo)),
