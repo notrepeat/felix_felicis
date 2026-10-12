@@ -24,7 +24,9 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
 - `layout.directorios` exige rutas disjuntas: no se admiten declaraciones
   iguales ni rutas que sean ancestro/descendiente entre sí.
 - Para errores, `regla` y `path` sirven para clasificar y localizar. El campo
-  `detalle` es texto humano no estable y no debe analizarse programáticamente.
+  `detalle` es texto humano no estable y no debe analizarse programáticamente;
+  si se exceden varias cuotas a la vez, cuál se reporta primero tampoco es un
+  contrato estable.
 
 Las versiones de los crates permanecen en `0.1.0` hasta cerrar el gate de
 release y publicar la migración a `0.2.0`.
