@@ -26,11 +26,10 @@ implementados.
 
 Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; U5 y
 U7 conservan avance parcial, y U6 está cerrada para root anclado y staging. U7
-verifica la eliminación canónica del journal y ejecuta una sola fila exacta de
-recovery para `Prepared`/`BackupReady`/`Installed` con root `Old`, vecinos
-ausentes y `root_new_validated=false`; las demás filas y la integración a apply
-siguen pendientes. Fase 04 sigue en curso: lock, captura y staging aún no están
-conectados a apply ni publican candidatos.
+incluye las filas exactas `KeepOld` y `RestoreOld`; esta última tiene un
+executor crate-private reexportado dentro de OKF, sin dispatcher ni caller de
+apply. No hay limpieza de stage ni recovery completo. Fase 04 sigue en curso:
+lock, captura y staging aún no están conectados a apply ni publican candidatos.
 
 ## Decisiones de contrato v1
 
@@ -445,17 +444,25 @@ Chain strategy: feature-branch-chain
   `crates/universo-okf/src/transaccion/anclado/journal_temporal/eliminar_tests.rs`
   (`603ae4d`). El runner en
   `crates/universo-okf/src/transaccion/journal/recovery/runner.rs` (`d1b42ec`)
-  ejecuta solo `Prepared`/`BackupReady`/`Installed` con root `Old`, backup/stage
-  `Absent` y `root_new_validated=false` → `KeepOld` + `RemoveJournal`; sus
-  pruebas están en
-  `crates/universo-okf/src/transaccion/journal/recovery/runner_tests.rs`. En
-  `Installed` sin backup, esa fila es segura únicamente si root clasifica
-  exactamente `Old` y stage está ausente. `root=New` no validado, `root=Unknown`
-  y `Committed` siguen fallando cerrado. `a082467` registra el estado histórico:
-  `Installed` y `Committed` con root `Old` aún se rechazaban. Las demás filas
-  recuperables, integración a apply, cleanup/restart completo y harness runtime
-  siguen pendientes. La matriz local Windows+WSL y GitHub Actions run
-  `38232932504` están verdes para `a082467`. El lock coordina
+  ejecuta la fila `KeepOld` para `Prepared`/`BackupReady`/`Installed` con root
+  `Old`, backup/stage `Absent` y `root_new_validated=false`, y `RemoveJournal`.
+  La preparación del backup verificado reabre el sibling anclado en
+  `anclado/renombrar.rs` (`9fa50f5`), con pruebas `76b898a` y ajustes de
+  portabilidad `701de13`.
+
+  El executor `ejecutar_fila_journal_restore_old` (`7bdbc07`, cobertura de
+  conflictos `57a46f0`) restaura solo la fila `root=Absent`, `backup=Old`,
+  `stage=Absent`, `root_new_validated=false` → `RestoreOld`; aplica en
+  `Prepared`/`BackupReady`/`Installed` y reconcilia el renombrado antes de
+  retirar el journal. `2138c1e` lo reexporta como API crate-private desde
+  `recovery.rs`: es accesible dentro de OKF, pero aún no tiene dispatcher ni
+  caller desde apply. `d1b0ef6` añade cobertura de reconciliación/stage y
+  `23e7718` completa la matriz pura.
+
+  No hay cleanup de stage, executor `DiscardNewRestoreOld`, validación de
+  `New`, fila `Committed` ni recovery completo. El CI run `38240021138` pasó
+  solo para la base `701de13`; no se afirma CI verde para el runner final.
+  `a082467` conserva el estado histórico anterior. El lock coordina
   escritores Felix cooperantes; en POSIX
   `unlinkat` opera por nombre y conserva una carrera residual ante mutaciones
   externas del namespace. No se promete durabilidad ante pérdida de energía ni
@@ -633,6 +640,7 @@ cargo test --locked -p universo-okf --lib elimina_coincidencia_y_confirma_ausenc
 cargo test --locked -p universo-okf --lib prepared_y_backup_ready_eliminan_solo_el_journal_y_conservan_root
 cargo test --locked -p universo-okf --lib installed_root_old_sin_vecinos_elimina_journal_y_conserva_root
 cargo test --locked -p universo-okf --lib committed_root_old_sin_vecinos_falla_y_conserva_estado
+cargo test --locked -p universo-okf --lib restore_old_restaura_backup_en_las_tres_fases_y_conserva_identidad_y_bytes
 cargo test -p universo-cli --test propose_transaccional
 cargo test -p universo-cli --test apply_transaccional
 cargo test -p universo-cli --test docs_transaccional
@@ -703,6 +711,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | `46877ed`, `a5d9371`, `5f66ad1`, `6f72af2`, `67e8908` | Observer crate-private read-only de root/backup/stage bajo lock y parent anclado; usa identidad y digest raw, representa `root_new_validated=false` y no decide ni muta artefactos. `recovery::observer` 7/7 y `sibling_read_only_tests` 5/5 en Windows, incluidos parent mismatch, mismo basename bajo otro parent, identidad/digest mismatch, ausencia, tipo y junction con canary. Clippy workspace `-D warnings` compila todos los targets en Windows y Linux; incluye regresión FIFO Unix. Workspace: 227 OKF passed/2 ignored. | Avance parcial U7; conserva Journal v1 y no integra apply/recovery ni restart. |
 | 2026-10-12 | `6cf6cfc`, `603ae4d`, `d1b42ec`, `a082467` | Estado histórico en `a082467`: `eliminar.rs` verifica identidad y registro canónico; `recovery/runner.rs` solo ejecuta `Prepared`/`BackupReady` + root `Old` + backup/stage ausentes → `RemoveJournal`. Matriz local Windows+WSL aprobada; GitHub Actions run `38232932504` completado con éxito. | Avance parcial U7 en ese commit; `Installed`/`Committed` con root `Old` se rechazaban. |
 | 2026-10-12 | `c5a09cc` | `recovery/runner.rs` admite también `Installed` únicamente para root `Old`, backup/stage `Absent` y `root_new_validated=false` → `KeepOld` + `RemoveJournal`; `root=New` no validado, `root=Unknown` y `Committed` fallan cerrado. `runner_tests.rs`: `installed_root_old_sin_vecinos_elimina_journal_y_conserva_root` y `committed_root_old_sin_vecinos_falla_y_conserva_estado`. | Avance parcial U7; las demás filas, integración a apply, cleanup/restart completo y harness runtime siguen pendientes. |
+| 2026-10-12 | `9fa50f5`, `76b898a`, `701de13`, `7bdbc07`, `57a46f0`, `2138c1e`, `d1b0ef6`, `23e7718` | Reapertura verificada del backup sibling anclado y pruebas de parent/reparse; executor crate-private `RestoreOld` para `Prepared`/`BackupReady`/`Installed` con root `Absent`, backup `Old`, stage `Absent`, `root_new_validated=false`, renombrado reconciliado y journal retirado. Reexport interno en `recovery.rs`; cobertura de conflictos, stage y matriz pura. CI run `38240021138` pasó solo en la base `701de13`, no es CI del runner final. | Avance parcial U7; no hay dispatcher/caller de apply, cleanup de stage, executor `DiscardNewRestoreOld`, validación de `New`, `Committed` ni recovery completo. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
@@ -713,7 +722,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. La captura por ruta conserva TOCTOU; el root anclado de U6 está probado por separado |
 | 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
 | 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
-| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: eliminación canónica verificada y ejecución de `Prepared`/`BackupReady`/`Installed` solo con root `Old`, backup/stage `Absent`, `root_new_validated=false` → `KeepOld` + `RemoveJournal`. `Installed` sin backup solo admite root `Old` y stage ausente; `root=New` no validado, `root=Unknown`, `Committed`, demás filas, integración a apply, cleanup/restart completo y harness runtime siguen pendientes. |
+| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: filas exactas `KeepOld` y `RestoreOld` ejecutables en las fases soportadas. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false`, restaura el backup verificado y retira el journal. Executor crate-private reexportado dentro de OKF, sin dispatcher/caller de apply. Cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, demás filas y recovery completo siguen pendientes. |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 
 ## Siguiente fase

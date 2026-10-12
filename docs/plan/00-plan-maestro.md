@@ -12,8 +12,8 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5 y U7 conservan avance parcial. Matriz local Windows+WSL y CI verde de `a082467` son evidencia histórica; `c5a09cc` amplía la fila segura de U7 a `Installed` con root `Old`. |
-| Foco actual | Fase 04, Unidad 7: journal, commit y recovery. U7 ejecuta `Prepared`/`BackupReady`/`Installed` solo para root `Old`, backup/stage `Absent`, `root_new_validated=false` → `KeepOld` + `RemoveJournal`. `Installed` sin backup solo es seguro con root `Old` y stage ausente; `root=New` no validado, `root=Unknown`, `Committed` y las demás filas siguen fail-closed/pendientes. U5 sigue parcial; U6 entrega root anclado y staging, sin conexión a apply. `Type`, apply/publicación filesystem y hardening del presupuesto agregado siguen pendientes. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5 y U7 conservan avance parcial. Matriz local Windows+WSL y CI `38232932504` son históricas para `a082467`; CI `38240021138` pasó solo para la base `701de13`, no para el runner final. |
+| Foco actual | Fase 04, Unidad 7: journal, commit y recovery. U7 incluye la fila `KeepOld` ya registrada y un executor `RestoreOld` solo para root `Absent`, backup `Old`, stage `Absent`, `root_new_validated=false` → restaurar backup y retirar journal, en `Prepared`/`BackupReady`/`Installed`. El executor es crate-private y reexportado dentro de OKF; aún no tiene dispatcher ni caller desde apply. No limpia stage ni ejecuta `DiscardNewRestoreOld`, validación de `New`, `Committed` o recovery completo. |
 | Última actualización | 2026-10-12 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | U0–U4 y U6 cerradas en sus límites; U5 y U7 conservan avance parcial. U7 verifica la eliminación canónica y ejecuta solo la fila `KeepOld`/`RemoveJournal` exacta para `Prepared`/`BackupReady`/`Installed` con root `Old`; no conecta recovery a apply. U8–U10, `Type`, publicación filesystem y CLI siguen pendientes. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | U0–U4 y U6 cerradas en sus límites; U5 y U7 conservan avance parcial. U7 ejecuta dos filas exactas (`KeepOld` y `RestoreOld`); esta última restaura solo backup `Old` cuando root/stage están ausentes. El executor no tiene dispatcher ni caller de apply. No hay limpieza de stage ni recovery completo. U8–U10, `Type`, publicación filesystem y CLI siguen pendientes. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. El runner acepta `Prepared`/`BackupReady`/`Installed` solo con root `Old`, backup/stage ausentes y `root_new_validated=false`, y decide `KeepOld` + `RemoveJournal`. `root=New` no validado, `root=Unknown`, `Committed` y demás filas siguen fail-closed o pendientes; apply y cleanup/restart completo también. U5 permanece parcial. U6 aporta root anclado y staging, pero lock, captura y staging aún no están conectados a apply. Escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
+Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. El runner tiene filas acotadas `KeepOld` y `RestoreOld`; esta última solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false` en `Prepared`/`BackupReady`/`Installed`. Es crate-private y aún no tiene dispatcher ni caller desde apply. No limpia stage, ejecuta `DiscardNewRestoreOld`, valida `New`, maneja `Committed` ni completa recovery. U5 permanece parcial. U6 aporta root anclado y staging, pero lock, captura y staging aún no están conectados a apply. Escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -250,9 +250,12 @@ ausencia observada de un sibling es una guarda de efectos laterales, no prueba
 de que se haya llamado al materializador. El test focal, workspace, clippy,
 fmt y frontera pública pasan en HEAD `cddc3e3`.
 
-U6 no conecta lock, captura ni staging a apply. U7 conserva avance parcial: la
-eliminación canónica verificada y la fila exacta `KeepOld` + `RemoveJournal` en
-`Prepared`/`BackupReady`/`Installed` con root `Old` están implementadas. Otras
-filas, apply/publicador filesystem, cleanup/restart completos, U8–U10, CLI y
-soporte transaccional de `Type` siguen pendientes. El presupuesto agregado de
-evaluación tampoco tiene aún una cota global.
+U6 no conecta lock, captura ni staging a apply. U7 conserva avance parcial: a
+`KeepOld` se suma un executor crate-private para la fila exacta `RestoreOld`
+(root `Absent`, backup `Old`, stage `Absent`, sin validación `New`) en
+`Prepared`/`BackupReady`/`Installed`. Es accesible dentro de OKF, pero aún no
+tiene dispatcher ni caller desde apply. No limpia stage ni ejecuta
+`DiscardNewRestoreOld`; `New`, `Committed` y el resto de recovery siguen
+pendientes. Apply/publicador filesystem, cleanup/restart completos, U8–U10,
+CLI y soporte transaccional de `Type` también siguen pendientes. El presupuesto
+agregado de evaluación aún no tiene cota global.
