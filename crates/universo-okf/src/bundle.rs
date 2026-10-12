@@ -1198,10 +1198,16 @@ fn registrar_directorio_procesado<I: std::hash::Hash + Eq>(
 /// Path relativo a `raiz`, con separador `/`, tal como se reporta en los
 /// `ErrorBundle` de esta función.
 fn relativa_a_raiz(raiz: &Path, dir: &Path) -> String {
-    dir.strip_prefix(raiz)
-        .unwrap_or(dir)
-        .to_string_lossy()
-        .replace('\\', "/")
+    let relativa = dir.strip_prefix(raiz).unwrap_or(dir);
+    match relativa.to_str() {
+        Some(ruta) => ruta.replace(std::path::MAIN_SEPARATOR, "/"),
+        None => "<ruta-no-utf8>".to_string(),
+    }
+}
+
+fn nombre_componente_logico(nombre: &std::ffi::OsStr) -> Option<&str> {
+    let nombre = nombre.to_str()?;
+    (!nombre.contains('/') && !nombre.contains('\\')).then_some(nombre)
 }
 
 fn es_markdown(ruta: &Path) -> bool {
@@ -1404,6 +1410,14 @@ fn recorrer_canonico<O: FnMut()>(
     let nombres =
         ctx.raiz_anclada
             .nombres_directorio_abierto_con(&mut directorio_abierto, |nombre| {
+                let nombre_logico = nombre_componente_logico(&nombre).ok_or_else(|| {
+                    error(
+                        Some(&relativa_directorio),
+                        None,
+                        Regla::PathInvalido,
+                        "nombre de entrada no es un componente lógico UTF-8 válido",
+                    )
+                })?;
                 let profundidad_hijo = profundidad.checked_add(1).ok_or_else(|| {
                     error_limite_bundle(
                         Some(&relativa_directorio),
@@ -1411,7 +1425,7 @@ fn recorrer_canonico<O: FnMut()>(
                         estado.presupuesto.limites,
                     )
                 })?;
-                let bytes_nombre = nombre.to_string_lossy().len();
+                let bytes_nombre = nombre_logico.len();
                 let bytes_ruta_hijo = bytes_ruta
                     .checked_add(usize::from(bytes_ruta > 0))
                     .and_then(|bytes| bytes.checked_add(bytes_nombre))
@@ -1609,6 +1623,16 @@ mod tests {
             false
         ));
         assert!(!puede_ignorar_error_directorio(Path::new("n/doc.md"), true));
+    }
+
+    #[test]
+    fn componentes_logicos_rechazan_separadores() {
+        assert_eq!(
+            nombre_componente_logico(std::ffi::OsStr::new("x")),
+            Some("x")
+        );
+        assert_eq!(nombre_componente_logico(std::ffi::OsStr::new("x\\y")), None);
+        assert_eq!(nombre_componente_logico(std::ffi::OsStr::new("x/y")), None);
     }
 
     #[test]
@@ -2460,6 +2484,42 @@ mod tests {
         let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
         assert_eq!(errores[0].regla, Regla::NoUtf8);
         assert_eq!(errores[0].path.as_deref(), Some("n/x"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_rechaza_nombre_fisico_con_backslash() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let directorio = dir.path().join("n");
+        std::fs::create_dir(&directorio).unwrap();
+        let nombre = std::ffi::OsStr::from_bytes(b"x\\y.md");
+        std::fs::write(directorio.join(nombre), doc("a", "X", "")).unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::PathInvalido);
+        assert_eq!(errores[0].path.as_deref(), Some("n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_rechaza_nombre_fisico_no_utf8() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let directorio = dir.path().join("n");
+        std::fs::create_dir(&directorio).unwrap();
+        let nombre = std::ffi::OsString::from_vec(b"x\xff.md".to_vec());
+        std::fs::write(directorio.join(nombre), doc("a", "X", "")).unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::PathInvalido);
+        assert_eq!(errores[0].path.as_deref(), Some("n"));
     }
 
     /// Crea `enlace` → `destino` como symlink de directorio o, si Windows
