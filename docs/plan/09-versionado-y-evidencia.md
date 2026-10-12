@@ -32,9 +32,9 @@ que termine la matriz completa de release.
 
 | Cambio | Acción del consumidor |
 |--------|-----------------------|
-| `Regla::LimiteBundleExcedido` y `ErrorEstructura::HijoDuplicadoEnLote` agregan variantes a enums exhaustivos. | Añadir ramas para ambas variantes antes de actualizar. |
+| `Regla::LimiteBundleExcedido`, `ErrorEstructura::HijoDuplicadoEnLote`, `ErrorManifiesto::{DirectoriosDuplicados, DirectoriosSolapados}` y `ErrorSnapshot::LimiteInventarioExcedido` agregan variantes a enums exhaustivos. | Añadir ramas para las cinco variantes antes de actualizar. |
 | `cargar_bundle` limita la carga desde disco a 128 MiB de Markdown leído, 100.000 entradas, profundidad 128 y 16 MiB de rutas lógicas acumuladas. | Reducir o dividir bundles que excedan una cuota. Los límites son inclusivos y se comparten entre todas las raíces del layout. |
-| Las raíces `layout.directorios` deben ser disjuntas; una ruta no puede ser igual ni ancestro/descendiente de otra. | Separar las raíces solapadas en directorios disjuntos. |
+| Las raíces `layout.directorios` deben ser disjuntas; una ruta no puede ser igual ni ancestro/descendiente de otra, incluso si la relación aparece al resolver symlinks/junctions. | Separar las raíces solapadas en directorios disjuntos. |
 | Errores de lectura exponen `regla` y `path` para clasificación/localización. | No analizar `detalle`: es texto humano de diagnóstico, puede variar por plataforma y no es un contrato estable. Si se exceden varias cuotas, tampoco es estable cuál se reporta primero. |
 
 Las cuotas se aplican a `cargar_bundle` sobre disco, no a `parsear_bundle`, que

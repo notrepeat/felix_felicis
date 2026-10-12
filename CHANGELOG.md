@@ -17,12 +17,15 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
 
 ### Compatibilidad pre-1.0
 
-- Se agrega `Regla::LimiteBundleExcedido` y se expone
-  `ErrorEstructura::HijoDuplicadoEnLote` para diagnosticar asignaciones `Parent`
-  duplicadas en una operación por lote. Los consumidores con `match`
-  exhaustivos deben contemplar ambas variantes.
+- Se agregan variantes públicas a enums exhaustivos: `Regla::LimiteBundleExcedido`,
+  `ErrorEstructura::HijoDuplicadoEnLote`,
+  `ErrorManifiesto::{DirectoriosDuplicados, DirectoriosSolapados}` y
+  `ErrorSnapshot::LimiteInventarioExcedido`. Los consumidores con `match`
+  exhaustivos deben contemplar estas variantes.
 - `layout.directorios` exige rutas disjuntas: no se admiten declaraciones
-  iguales ni rutas que sean ancestro/descendiente entre sí.
+  iguales ni rutas que sean ancestro/descendiente entre sí; también se rechazan
+  raíces que resuelvan por symlink/junction al mismo directorio o a directorios
+  físicamente solapados.
 - Para errores, `regla` y `path` sirven para clasificar y localizar. El campo
   `detalle` es texto humano no estable y no debe analizarse programáticamente;
   si se exceden varias cuotas a la vez, cuál se reporta primero tampoco es un

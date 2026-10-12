@@ -452,13 +452,15 @@ Chain strategy: feature-branch-chain
   installed/committed. Objetivo por slice: <400 líneas authored.
 
   Contrato de recursos compartido por los inventarios de snapshot/stage/recovery
-  y por la carga desde disco con `bundle::cargar_bundle`: 128 MiB de contenido
-  Markdown leído, 100.000 entradas, profundidad máxima 128 y 16 MiB acumulados
-  de rutas lógicas. Los límites son inclusivos. En inventarios, el root tiene
-  profundidad 0; en un bundle, la profundidad cuenta componentes desde la raíz
-  del bundle y cada directorio declarado se cuenta como entrada. Las entradas
-  incluyen directorios y archivos bajo las raíces declaradas, con presupuesto
-  global para todas ellas. El primer byte o elemento adicional devuelve
+  y por la carga desde disco con `bundle::cargar_bundle`: 128 MiB raw, 100.000
+  entradas, profundidad máxima 128 y 16 MiB acumulados de rutas lógicas. Los
+  límites son inclusivos. El inventario cuenta bytes raw de todos los archivos
+  regulares; `cargar_bundle` solo suma documentos Markdown efectivamente leídos.
+  En inventarios, el root tiene profundidad 0; en un bundle, la profundidad
+  cuenta componentes desde la raíz del bundle y cada directorio declarado se
+  cuenta como entrada. Las entradas incluyen directorios y archivos bajo las
+  raíces declaradas, con presupuesto global para todas ellas. El primer byte o
+  elemento adicional devuelve
   `ErrorSnapshot::LimiteInventarioExcedido` o `Regla::LimiteBundleExcedido`,
   respectivamente.
 
