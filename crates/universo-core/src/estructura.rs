@@ -81,6 +81,8 @@ pub enum ErrorEstructura {
     AristaInexistente,
     /// Se intentó asignar un nodo como padre de sí mismo.
     PadreDeSiMismo,
+    /// Un hijo aparece más de una vez en una asignación de padres por lote.
+    HijoDuplicadoEnLote,
     /// Asignar ese padre crearía un ciclo en $\iota$.
     CicloEnIota,
     /// El predicado no está declarado en el manifiesto.
@@ -122,6 +124,12 @@ impl std::fmt::Display for ErrorEstructura {
             ErrorEstructura::AristaInexistente => write!(f, "la arista no existe"),
             ErrorEstructura::PadreDeSiMismo => {
                 write!(f, "un nodo no puede ser padre de sí mismo")
+            }
+            ErrorEstructura::HijoDuplicadoEnLote => {
+                write!(
+                    f,
+                    "un hijo aparece más de una vez en el lote de relaciones Parent"
+                )
             }
             ErrorEstructura::CicloEnIota => {
                 write!(f, "esa asignación crearía un ciclo en ι")
@@ -322,6 +330,125 @@ impl Estructura {
         }
         self.padre.insert(hijo, padre);
         self.hijos[padre].push(hijo);
+        Ok(())
+    }
+
+    /// Asigna relaciones Parent distintas por hijo y conserva el orden del
+    /// lote en `hijos`. La operación es atómica: si alguna referencia es
+    /// inválida, un hijo se repite o el resultado contiene ciclos, no muta la
+    /// estructura. Los índices de error apuntan a la asignación que falla.
+    pub fn asignar_padres_en_lote(
+        &mut self,
+        asignaciones: &[(NodoId, NodoId)],
+    ) -> Result<(), Vec<(usize, ErrorEstructura)>> {
+        self.asignar_padres_en_lote_observando(asignaciones, || {})
+    }
+
+    fn asignar_padres_en_lote_observando(
+        &mut self,
+        asignaciones: &[(NodoId, NodoId)],
+        mut observar_operacion: impl FnMut(),
+    ) -> Result<(), Vec<(usize, ErrorEstructura)>> {
+        let mut errores = vec![None; asignaciones.len()];
+        let mut propuestas = HashMap::<NodoId, (usize, NodoId)>::new();
+        for (indice, &(hijo, padre)) in asignaciones.iter().enumerate() {
+            observar_operacion();
+            if !self.nodos.contains_key(hijo) || !self.nodos.contains_key(padre) {
+                errores[indice] = Some(ErrorEstructura::NodoInexistente);
+                continue;
+            }
+            if hijo == padre {
+                errores[indice] = Some(ErrorEstructura::PadreDeSiMismo);
+                continue;
+            }
+            if propuestas.contains_key(&hijo) {
+                errores[indice] = Some(ErrorEstructura::HijoDuplicadoEnLote);
+                continue;
+            }
+            propuestas.insert(hijo, (indice, padre));
+        }
+
+        // Cada nodo tiene como máximo un padre. Marcar nodos en curso o
+        // terminados procesa el bosque candidato una sola vez, sin recursión.
+        let mut estado = HashMap::<NodoId, u8>::with_capacity(self.nodos.len());
+        let mut posiciones_en_camino = HashMap::<NodoId, usize>::new();
+        let mut ciclos = vec![false; asignaciones.len()];
+        for (inicio, _) in self.nodos.iter() {
+            observar_operacion();
+            if estado.get(&inicio) == Some(&2) {
+                continue;
+            }
+            let mut camino = Vec::new();
+            let mut actual = Some(inicio);
+            while let Some(nodo) = actual {
+                observar_operacion();
+                match estado.get(&nodo).copied() {
+                    Some(1) => {
+                        let indice_inicio = posiciones_en_camino
+                            .get(&nodo)
+                            .copied()
+                            .expect("un nodo en curso pertenece al camino actual");
+                        let cierre = camino[indice_inicio..]
+                            .iter()
+                            .filter_map(|visitado| propuestas.get(visitado).map(|p| p.0))
+                            .max();
+                        if let Some(indice) = cierre {
+                            ciclos[indice] = true;
+                        }
+                        break;
+                    }
+                    Some(2) => break,
+                    _ => {
+                        estado.insert(nodo, 1);
+                        posiciones_en_camino.insert(nodo, camino.len());
+                        camino.push(nodo);
+                        actual = propuestas
+                            .get(&nodo)
+                            .map(|(_, padre)| *padre)
+                            .or_else(|| self.padre.get(nodo).copied());
+                    }
+                }
+            }
+            for nodo in camino {
+                posiciones_en_camino.remove(&nodo);
+                estado.insert(nodo, 2);
+            }
+        }
+        for (indice, ciclo) in ciclos.into_iter().enumerate() {
+            if ciclo {
+                errores[indice].get_or_insert(ErrorEstructura::CicloEnIota);
+            }
+        }
+        let errores: Vec<_> = errores
+            .into_iter()
+            .enumerate()
+            .filter_map(|(indice, error)| error.map(|error| (indice, error)))
+            .collect();
+        if !errores.is_empty() {
+            return Err(errores);
+        }
+
+        let mut padres_afectados = HashSet::new();
+        for &(hijo, padre) in asignaciones {
+            observar_operacion();
+            if let Some(anterior) = self.padre.get(hijo).copied() {
+                padres_afectados.insert(anterior);
+            }
+            padres_afectados.insert(padre);
+            self.padre.insert(hijo, padre);
+        }
+        for padre in padres_afectados {
+            let mut hijos = self.hijos.get(padre).cloned().unwrap_or_default();
+            hijos.retain(|hijo| {
+                observar_operacion();
+                !propuestas.contains_key(hijo)
+            });
+            self.hijos.insert(padre, hijos);
+        }
+        for &(hijo, padre) in asignaciones {
+            observar_operacion();
+            self.hijos[padre].push(hijo);
+        }
         Ok(())
     }
 
@@ -1142,6 +1269,73 @@ mod tests {
         assert_eq!(u.padre(c), None);
         assert_eq!(u.hijos(a), &[b]);
         u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn asignar_padres_en_lote_detecta_ciclos_en_orden_y_es_atomico() {
+        let mut u = e();
+        let a = u.insertar_nodo(p("n/a"), s("a"), l("A")).unwrap();
+        let b = u.insertar_nodo(p("n/b"), s("a"), l("B")).unwrap();
+        let c = u.insertar_nodo(p("n/c"), s("a"), l("C")).unwrap();
+        let d = u.insertar_nodo(p("n/d"), s("a"), l("D")).unwrap();
+        let antes = u.clonar_para_candidato();
+
+        assert_eq!(
+            u.asignar_padres_en_lote(&[(a, b), (b, a), (c, d), (d, c)]),
+            Err(vec![
+                (1, ErrorEstructura::CicloEnIota),
+                (3, ErrorEstructura::CicloEnIota),
+            ])
+        );
+        assert_eq!(u.atomos(), antes.atomos());
+        u.verificar_representacion().unwrap();
+
+        let ausente = NodoId::null();
+        assert_eq!(
+            u.asignar_padres_en_lote(&[(ausente, a), (a, a), (b, c), (b, d)]),
+            Err(vec![
+                (0, ErrorEstructura::NodoInexistente),
+                (1, ErrorEstructura::PadreDeSiMismo),
+                (3, ErrorEstructura::HijoDuplicadoEnLote),
+            ])
+        );
+        assert_eq!(u.atomos(), antes.atomos());
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn asignar_padres_en_lote_visita_cadena_de_cuatro_mil_nodos_linealmente() {
+        let mut u = e();
+        let ids: Vec<_> = (0..4_000)
+            .map(|indice| {
+                u.insertar_nodo(p(&format!("n/{indice:04}")), s("a"), l("nodo"))
+                    .unwrap()
+            })
+            .collect();
+        let sin_padres = u.clonar_para_candidato();
+        let asignaciones: Vec<_> = ids.windows(2).map(|par| (par[1], par[0])).collect();
+        let nodos_y_aristas = ids.len() + asignaciones.len();
+        let mut operaciones = 0;
+
+        u.asignar_padres_en_lote_observando(&asignaciones, || operaciones += 1)
+            .unwrap();
+
+        assert!(
+            operaciones <= 8 * nodos_y_aristas,
+            "se observaron {operaciones} operaciones para {nodos_y_aristas} nodos+aristas"
+        );
+        assert_eq!(u.padre(*ids.last().unwrap()), Some(ids[ids.len() - 2]));
+        u.verificar_representacion().unwrap();
+
+        let relaciones_ciclicas: Vec<_> = (0..ids.len())
+            .map(|indice| (ids[indice], ids[(indice + 1) % ids.len()]))
+            .collect();
+        let mut ciclo = sin_padres.clonar_para_candidato();
+        assert_eq!(
+            ciclo.asignar_padres_en_lote(&relaciones_ciclicas),
+            Err(vec![(ids.len() - 1, ErrorEstructura::CicloEnIota)])
+        );
+        assert_eq!(ciclo.atomos(), sin_padres.atomos());
     }
 
     #[test]

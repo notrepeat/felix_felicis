@@ -630,12 +630,14 @@ pub(crate) fn parsear_bundle_desde_estructura(
     let mut sin_iota = estructura.manifiesto().layout.sin_iota.clone();
     sin_iota.sort_unstable();
     sin_iota.dedup();
-    for nodo in &cargados {
+    let mut errores_parent: Vec<Option<ErrorBundle>> = (0..cargados.len()).map(|_| None).collect();
+    let mut asignaciones_parent = Vec::new();
+    for (indice_nodo, nodo) in cargados.iter().enumerate() {
         match &nodo.padre_frontmatter {
             PadreFrontmatter::RaizExplicita => continue,
             PadreFrontmatter::Referencia(parent_path) => {
                 let Some(&parent_id) = indice_por_path.get(parent_path) else {
-                    errores.push(error(
+                    errores_parent[indice_nodo] = Some(error(
                         None,
                         None,
                         Regla::ParentNoEncontrado,
@@ -644,7 +646,7 @@ pub(crate) fn parsear_bundle_desde_estructura(
                     continue;
                 };
                 if parent_path == &nodo.path {
-                    errores.push(error(
+                    errores_parent[indice_nodo] = Some(error(
                         None,
                         None,
                         Regla::ParentDeSiMismo,
@@ -652,22 +654,13 @@ pub(crate) fn parsear_bundle_desde_estructura(
                     ));
                     continue;
                 }
-                if let Err(err) = estructura.asignar_padre(nodo.id, parent_id) {
-                    let (regla, detalle) = match err {
-                        ErrorEstructura::CicloEnIota => {
-                            (Regla::ParentCiclo, "la relación Parent formaría un ciclo")
-                        }
-                        ErrorEstructura::PadreDeSiMismo => (
-                            Regla::ParentDeSiMismo,
-                            "un nodo no puede ser su propio padre",
-                        ),
-                        _ => (
-                            Regla::ParentInvalido,
-                            "no se pudo resolver la relación Parent",
-                        ),
-                    };
-                    errores.push(error(None, None, regla, detalle));
-                }
+                asignaciones_parent.push((
+                    nodo.id,
+                    parent_id,
+                    true,
+                    nodo.path.clone(),
+                    indice_nodo,
+                ));
                 continue;
             }
             PadreFrontmatter::InferenciaLegacy => {}
@@ -697,30 +690,55 @@ pub(crate) fn parsear_bundle_desde_estructura(
             continue;
         }
         if let Some(&padre_id) = indice_por_path.get(&candidato_path) {
-            if let Err(err) = estructura.asignar_padre(nodo.id, padre_id) {
-                if parent_key.is_some() {
-                    let regla = if err == ErrorEstructura::CicloEnIota {
-                        Regla::ParentCiclo
-                    } else {
-                        Regla::ParentInvalido
-                    };
-                    errores.push(error(
-                        None,
-                        None,
-                        regla,
+            asignaciones_parent.push((nodo.id, padre_id, false, nodo.path.clone(), indice_nodo));
+        }
+    }
+
+    let relaciones_parent: Vec<_> = asignaciones_parent
+        .iter()
+        .map(|&(hijo, padre, _, _, _)| (hijo, padre))
+        .collect();
+    if let Err(fallos) = estructura.asignar_padres_en_lote(&relaciones_parent) {
+        for (indice, err) in fallos {
+            let (_, _, explicito, path, indice_nodo) = &asignaciones_parent[indice];
+            if *explicito {
+                let (regla, detalle) = match err {
+                    ErrorEstructura::CicloEnIota => {
+                        (Regla::ParentCiclo, "la relación Parent formaría un ciclo")
+                    }
+                    ErrorEstructura::PadreDeSiMismo => (
+                        Regla::ParentDeSiMismo,
+                        "un nodo no puede ser su propio padre",
+                    ),
+                    _ => (
+                        Regla::ParentInvalido,
                         "no se pudo resolver la relación Parent",
-                    ));
+                    ),
+                };
+                errores_parent[*indice_nodo] = Some(error(None, None, regla, detalle));
+            } else if parent_key.is_some() {
+                let regla = if err == ErrorEstructura::CicloEnIota {
+                    Regla::ParentCiclo
                 } else {
-                    errores.push(error(
-                        Some(nodo.path.como_str()),
-                        None,
-                        Regla::Estructura,
-                        err.to_string(),
-                    ));
-                }
+                    Regla::ParentInvalido
+                };
+                errores_parent[*indice_nodo] = Some(error(
+                    None,
+                    None,
+                    regla,
+                    "no se pudo resolver la relación Parent",
+                ));
+            } else {
+                errores_parent[*indice_nodo] = Some(error(
+                    Some(path.como_str()),
+                    None,
+                    Regla::Estructura,
+                    err.to_string(),
+                ));
             }
         }
     }
+    errores.extend(errores_parent.into_iter().flatten());
 
     if errores.is_empty() {
         Ok(estructura)

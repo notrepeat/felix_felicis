@@ -156,6 +156,63 @@ fn parent_self_y_ciclo_se_rechazan_sin_exponer_paths() {
 }
 
 #[test]
+fn parent_batch_mantiene_orden_de_errores_para_referencias_ciclos_y_self() {
+    let archivos = vec![
+        (
+            "n/00_missing.md".into(),
+            doc("Missing", "parent: n/no-cargado\n"),
+        ),
+        ("n/01_a.md".into(), doc("A", "parent: n/02_b\n")),
+        ("n/02_b.md".into(), doc("B", "parent: n/01_a\n")),
+        ("n/03_self.md".into(), doc("Self", "parent: n/03_self\n")),
+        ("n/04_c.md".into(), doc("C", "parent: n/05_d\n")),
+        ("n/05_d.md".into(), doc("D", "parent: n/04_c\n")),
+    ];
+
+    let errores = parsear_bundle(&archivos, manifiesto_con_parent_key()).unwrap_err();
+    assert_eq!(
+        errores
+            .iter()
+            .map(|error| error.regla.clone())
+            .collect::<Vec<_>>(),
+        [
+            Regla::ParentNoEncontrado,
+            Regla::ParentCiclo,
+            Regla::ParentDeSiMismo,
+            Regla::ParentCiclo,
+        ]
+    );
+    assert!(errores.iter().all(|error| error.path.is_none()));
+}
+
+#[test]
+fn parent_batch_carga_una_cadena_de_cuatro_mil_nodos() {
+    let cantidad = 4_000;
+    let archivos: Vec<_> = (0..cantidad)
+        .map(|indice| {
+            let parent = if indice == 0 {
+                "parent: \"\"\n".to_string()
+            } else {
+                format!("parent: n/{:04}\n", indice - 1)
+            };
+            (
+                format!("n/{indice:04}.md"),
+                doc(&format!("Nodo {indice}"), &parent),
+            )
+        })
+        .collect();
+
+    let estructura = parsear_bundle(&archivos, manifiesto_con_parent_key()).unwrap();
+    assert_eq!(estructura.len_nodos(), cantidad);
+    assert!(contiene_parent(
+        &estructura,
+        &format!("n/{:04}", cantidad - 1),
+        &format!("n/{:04}", cantidad - 2)
+    ));
+    estructura.verificar_representacion().unwrap();
+}
+
+#[test]
 fn parent_invalido_o_duplicado_se_rechaza_sin_exponer_el_valor() {
     for (extra, regla, secreto) in [
         ("parent: ../PRIVATE\n", Regla::ParentInvalido, "PRIVATE"),
