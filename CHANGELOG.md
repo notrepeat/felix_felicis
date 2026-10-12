@@ -30,7 +30,8 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
 - `BundlePath` y las rutas de `layout.directorios`/`layout.sin_iota` exigen
   segmentos portables a Windows; `layout.ignorados` exige un nombre de un solo
   segmento portable. Se rechazan caracteres Windows no admitidos, puntos o
-  espacios finales y dispositivos DOS reservados.
+  espacios finales y dispositivos DOS reservados (incluidos `COM¹`–`COM³` y
+  `LPT¹`–`LPT³`).
 - Renombra los archivos y directorios que incumplan esas reglas y actualiza
   `layout.directorios`, `layout.sin_iota`, `layout.ignorados`, los wikilinks y
   cualquier referencia `Parent` explícita que apunte a las rutas renombradas.

@@ -95,14 +95,14 @@ fn segmento_es_dispositivo_reservado(segmento: &str) -> bool {
     }
 
     let puerto_numerado = |prefijo: &str| {
-        base.len() == 4
-            && base
-                .get(..3)
-                .is_some_and(|parte| parte.eq_ignore_ascii_case(prefijo))
-            && base
-                .as_bytes()
-                .get(3)
-                .is_some_and(|digito| (b'1'..=b'9').contains(digito))
+        base.get(..prefijo.len())
+            .is_some_and(|parte| parte.eq_ignore_ascii_case(prefijo))
+            && base.get(prefijo.len()..).is_some_and(|sufijo| {
+                matches!(
+                    sufijo,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
     };
     puerto_numerado("COM") || puerto_numerado("LPT")
 }
@@ -277,8 +277,11 @@ mod tests {
             ("n/NuL.data", ErrorPath::DispositivoReservado),
             ("COM1", ErrorPath::DispositivoReservado),
             ("com9.log", ErrorPath::DispositivoReservado),
+            ("com¹", ErrorPath::DispositivoReservado),
+            ("COM².txt", ErrorPath::DispositivoReservado),
             ("LPT1", ErrorPath::DispositivoReservado),
             ("lpt9.data", ErrorPath::DispositivoReservado),
+            ("LPT³.log", ErrorPath::DispositivoReservado),
         ] {
             assert_eq!(BundlePath::nuevo(caso).unwrap_err(), esperado, "{caso:?}");
         }
@@ -290,6 +293,10 @@ mod tests {
             BundlePath::desde_archivo("n\\COM1.guide.md").unwrap_err(),
             ErrorPath::DispositivoReservado
         );
+        assert_eq!(
+            BundlePath::desde_archivo("n\\COM¹.guide.md").unwrap_err(),
+            ErrorPath::DispositivoReservado
+        );
     }
 
     #[test]
@@ -298,6 +305,8 @@ mod tests {
             "docs/report.v1",
             "docs/COM0",
             "docs/COM10",
+            "docs/COM⁴",
+            "docs/LPT²extra",
             "docs/LPT0",
             "docs/conifer",
             "docs/auxiliary",

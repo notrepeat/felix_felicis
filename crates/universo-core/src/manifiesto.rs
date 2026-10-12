@@ -930,6 +930,11 @@ pub(crate) mod tests {
         let error = directorios.validar().unwrap_err();
         assert!(error.contains(&ErrorManifiesto::DirectoriosRutaInvalida));
 
+        let mut dispositivo_superscript = base();
+        dispositivo_superscript.layout.directorios = vec!["docs/LPT³".into()];
+        let error = dispositivo_superscript.validar().unwrap_err();
+        assert!(error.contains(&ErrorManifiesto::DirectoriosRutaInvalida));
+
         let mut sin_iota = base();
         sin_iota.layout.sin_iota = vec!["n/com1".into()];
         let error = sin_iota.validar().unwrap_err();

@@ -2837,7 +2837,7 @@ mod tests {
             let mut manifiesto = manifiesto_minimo();
             manifiesto.layout.sin_iota.clear();
             match campo {
-                0 => manifiesto.layout.directorios = vec!["docs/CON".into()],
+                0 => manifiesto.layout.directorios = vec!["docs/COM²".into()],
                 1 => manifiesto.layout.sin_iota = vec!["n/LPT9.txt".into()],
                 _ => manifiesto.layout.ignorados = vec!["COM1.md".into()],
             }
