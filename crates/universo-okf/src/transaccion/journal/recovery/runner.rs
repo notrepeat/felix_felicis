@@ -63,8 +63,8 @@ impl fmt::Display for ErrorFilaJournalOld {
 
 impl std::error::Error for ErrorFilaJournalOld {}
 
-/// Ejecuta únicamente la fila Prepared/BackupReady + root=old + backup/stage
-/// ausentes. El lock cubre la carga canónica, la observación y la eliminación.
+/// Ejecuta únicamente la fila root=old + backup/stage ausentes en Prepared,
+/// BackupReady o Installed. El lock cubre carga, observación y eliminación.
 pub(crate) fn ejecutar_fila_journal_old(
     lock: &mut LockEscritura,
 ) -> Result<ResultadoFilaJournalOld, ErrorFilaJournalOld> {
@@ -90,7 +90,7 @@ fn ejecutar_fila_journal_old_con(
 
     if !matches!(
         journal.state(),
-        JournalState::Prepared | JournalState::BackupReady
+        JournalState::Prepared | JournalState::BackupReady | JournalState::Installed
     ) {
         return Err(ErrorFilaJournalOld::FilaNoAutorizada);
     }

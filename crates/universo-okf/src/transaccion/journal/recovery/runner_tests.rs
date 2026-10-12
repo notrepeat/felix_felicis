@@ -60,6 +60,13 @@ fn preparar_fila(state: JournalState) -> (TempDir, PathBuf, LockEscritura, PathB
     (temp, root, lock, canonical, journal)
 }
 
+fn escribir_installed(canonical: &Path, mut journal: Journal) -> Journal {
+    journal.advance(JournalState::BackupReady).unwrap();
+    journal.advance(JournalState::Installed).unwrap();
+    fs::write(canonical, journal.encode().unwrap()).unwrap();
+    journal
+}
+
 fn backup_path(lock: &LockEscritura) -> PathBuf {
     lock.ubicacion().backup().as_path().to_path_buf()
 }
@@ -90,30 +97,38 @@ fn prepared_y_backup_ready_eliminan_solo_el_journal_y_conservan_root() {
 }
 
 #[test]
-fn installed_y_committed_root_old_sin_vecinos_fallan_y_conservan_estado() {
-    for state in [JournalState::Installed, JournalState::Committed] {
-        let (_temp, root, mut lock, canonical, mut journal) = preparar_fila(JournalState::Prepared);
-        journal.advance(JournalState::BackupReady).unwrap();
-        journal.advance(JournalState::Installed).unwrap();
-        if state == JournalState::Committed {
-            journal.advance(JournalState::Committed).unwrap();
-        }
-        let bytes = journal.encode().unwrap();
-        fs::write(&canonical, &bytes).unwrap();
+fn installed_root_old_sin_vecinos_elimina_journal_y_conserva_root() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
+    escribir_installed(&canonical, journal);
 
-        assert_eq!(
-            ejecutar_fila_journal_old(&mut lock),
-            Err(ErrorFilaJournalOld::FilaNoAutorizada),
-            "fase {state:?}"
-        );
-        assert_eq!(fs::read(&canonical).unwrap(), bytes);
-        assert_root_intact(&root);
-    }
+    assert_eq!(
+        ejecutar_fila_journal_old(&mut lock),
+        Ok(ResultadoFilaJournalOld::Eliminado)
+    );
+    assert!(!canonical.exists());
+    assert_root_intact(&root);
+}
+
+#[test]
+fn committed_root_old_sin_vecinos_falla_y_conserva_estado() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
+    let mut journal = escribir_installed(&canonical, journal);
+    journal.advance(JournalState::Committed).unwrap();
+    let bytes = journal.encode().unwrap();
+    fs::write(&canonical, &bytes).unwrap();
+
+    assert_eq!(
+        ejecutar_fila_journal_old(&mut lock),
+        Err(ErrorFilaJournalOld::FilaNoAutorizada)
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    assert_root_intact(&root);
 }
 
 #[test]
 fn repeticion_tras_reinicio_sin_journal_es_no_aplicable_y_no_toca_root() {
-    let (_temp, root, mut lock, canonical, _journal) = preparar_fila(JournalState::Prepared);
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
+    escribir_installed(&canonical, journal);
     assert_eq!(
         ejecutar_fila_journal_old(&mut lock),
         Ok(ResultadoFilaJournalOld::Eliminado)
@@ -131,7 +146,8 @@ fn repeticion_tras_reinicio_sin_journal_es_no_aplicable_y_no_toca_root() {
 
 #[test]
 fn ausencia_despues_de_establecer_contexto_no_afirma_eliminacion() {
-    let (_temp, root, mut lock, canonical, _journal) = preparar_fila(JournalState::Prepared);
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
+    escribir_installed(&canonical, journal);
 
     let result = ejecutar_fila_journal_old_con(&mut lock, |_| {
         fs::remove_file(&canonical).unwrap();
