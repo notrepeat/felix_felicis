@@ -34,7 +34,8 @@ pub(crate) enum ErrorRecoverySoportado {
     RestoreOld(ErrorFilaJournalRestoreOld),
 }
 
-/// Loads and observes once, then runs only the exact supported row selected by that snapshot.
+/// Performs one initial preflight load/observation, then runs only the exact supported row
+/// selected by that snapshot.
 #[allow(dead_code)]
 pub(crate) fn ejecutar_recovery_soportado(
     lock: &mut LockEscritura,
