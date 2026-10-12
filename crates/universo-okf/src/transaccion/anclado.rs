@@ -156,6 +156,55 @@ pub(crate) enum EntradaLecturaAnclada {
     Archivo(File),
 }
 
+/// A read-only root capability that does not depend on filesystem file IDs.
+/// Bundle loading only needs safe relative opens, not transaction identities.
+pub(crate) struct DirectorioLecturaAnclado {
+    raiz: File,
+}
+
+impl DirectorioLecturaAnclado {
+    pub(crate) fn desde_ubicacion(
+        ubicacion: &UbicacionRaiz,
+    ) -> Result<Self, ErrorDirectorioAnclado> {
+        let ruta = ubicacion.ruta();
+        let basename = ruta
+            .file_name()
+            .ok_or(ErrorDirectorioAnclado::ComponenteInvalido)?;
+        validar_componente(basename)?;
+        let parent_path = ruta
+            .parent()
+            .ok_or(ErrorDirectorioAnclado::TipoNoAdmitido)?;
+        let parent = abrir_directorio_absoluto_lectura(parent_path)?;
+        let raiz =
+            abrir::abrir_entrada_relativa(&parent, basename, TipoEntradaAnclada::Directorio)?;
+        Ok(Self { raiz })
+    }
+
+    /// Opens a file by resolving each component from the held root handle.
+    /// Neither a symlink nor a reparse point can replace an ancestor during
+    /// the walk, and file opens remain nonblocking for special files.
+    pub(crate) fn abrir_archivo_regular_relativo(
+        &self,
+        relativa: &Path,
+    ) -> Result<File, ErrorDirectorioAnclado> {
+        let mut componentes = relativa.components().peekable();
+        let mut directorio = clonar_handle(&self.raiz)?;
+        while let Some(Component::Normal(componente)) = componentes.next() {
+            let tipo = if componentes.peek().is_none() {
+                TipoEntradaAnclada::Archivo
+            } else {
+                TipoEntradaAnclada::Directorio
+            };
+            let entrada = abrir::abrir_entrada_relativa(&directorio, componente, tipo)?;
+            if tipo == TipoEntradaAnclada::Archivo {
+                return Ok(entrada);
+            }
+            directorio = entrada;
+        }
+        Err(ErrorDirectorioAnclado::ComponenteInvalido)
+    }
+}
+
 impl DirectorioAnclado {
     pub(crate) fn desde_ubicacion(
         ubicacion: &UbicacionRaiz,
@@ -587,6 +636,30 @@ fn abrir_directorio_absoluto(
             // which opens reparse points themselves for rejection by the
             // metadata check and never follows a substituted junction.
             actual = abrir_directorio_hijo_con_opciones(&actual, nombre, &opciones)?;
+        }
+    }
+    Ok(actual)
+}
+
+fn abrir_directorio_absoluto_lectura(ruta: &Path) -> Result<File, ErrorDirectorioAnclado> {
+    #[cfg(windows)]
+    let volumen = raiz_parent_windows(ruta)?;
+
+    #[cfg(unix)]
+    let mut actual = abrir_directorio_por_ruta(Path::new("/"), false)?;
+    #[cfg(windows)]
+    let mut actual = abrir_directorio_por_ruta(&volumen, false)?;
+
+    for componente in ruta.components() {
+        match componente {
+            Component::Prefix(_) | Component::RootDir => continue,
+            Component::Normal(nombre) => {
+                actual =
+                    abrir::abrir_entrada_relativa(&actual, nombre, TipoEntradaAnclada::Directorio)?;
+            }
+            Component::CurDir | Component::ParentDir => {
+                return Err(ErrorDirectorioAnclado::TipoNoAdmitido);
+            }
         }
     }
     Ok(actual)

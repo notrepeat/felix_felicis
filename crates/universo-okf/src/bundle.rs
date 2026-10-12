@@ -1,7 +1,6 @@
 //! Carga de un bundle OKF a una `Estructura` (spec §3.3, §3.4, §4.2).
 
 use std::collections::{HashMap, HashSet};
-use std::fs::OpenOptions;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -13,8 +12,10 @@ use universo_core::{
 use crate::documento::{EntradaCruda, parsear_documento};
 use crate::errores::{ErrorBundle, ErrorDocumento, ErrorEntrada, Regla};
 use crate::transaccion::anclado::{
-    ErrorDirectorioAnclado, IdentidadDirectorio, identidad_directorio_para_recorrido,
+    DirectorioLecturaAnclado, ErrorDirectorioAnclado, IdentidadDirectorio,
+    identidad_directorio_para_recorrido,
 };
+use crate::transaccion::raiz::UbicacionRaiz;
 
 /// Un archivo ya localizado como `BundlePath`, con su contenido crudo.
 struct ArchivoBundle {
@@ -766,6 +767,25 @@ fn cargar_bundle_observando(
         -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado>,
     mut observar_recorrido: impl FnMut(),
 ) -> Result<Estructura, Vec<ErrorBundle>> {
+    cargar_bundle_con_observadores(
+        raiz,
+        manifiesto,
+        &mut obtener_identidad,
+        &mut observar_recorrido,
+        |_| {},
+    )
+}
+
+fn cargar_bundle_con_observadores(
+    raiz: &Path,
+    manifiesto: Manifiesto,
+    mut obtener_identidad: impl FnMut(
+        &Path,
+    )
+        -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado>,
+    mut observar_recorrido: impl FnMut(),
+    mut antes_de_abrir_archivo: impl FnMut(&Path),
+) -> Result<Estructura, Vec<ErrorBundle>> {
     let mut errores: Vec<ErrorBundle> = Vec::new();
     let mut archivos: Vec<(String, String)> = Vec::new();
 
@@ -793,17 +813,29 @@ fn cargar_bundle_observando(
             "la raíz del bundle no es un directorio",
         )]);
     }
-    let raiz_canonica = match std::fs::canonicalize(raiz) {
+    let ubicacion_raiz = match UbicacionRaiz::nueva(raiz) {
+        Ok(ubicacion) => ubicacion,
+        Err(err) => {
+            return Err(vec![error(
+                None,
+                None,
+                Regla::Io,
+                format!("no se puede acceder a la raíz del bundle: {err:?}"),
+            )]);
+        }
+    };
+    let raiz_anclada = match DirectorioLecturaAnclado::desde_ubicacion(&ubicacion_raiz) {
         Ok(raiz) => raiz,
         Err(err) => {
             return Err(vec![error(
                 None,
                 None,
                 Regla::Io,
-                format!("no se puede resolver la raíz del bundle: {err}"),
+                format!("no se puede acceder a la raíz del bundle: {err:?}"),
             )]);
         }
     };
+    let raiz_canonica = ubicacion_raiz.ruta().to_path_buf();
 
     let mut bases_procesadas: HashSet<IdentidadBaseLayout> = HashSet::new();
     for directorio in &manifiesto.layout.directorios {
@@ -925,7 +957,8 @@ fn cargar_bundle_observando(
                 ));
                 continue;
             }
-            match leer_archivo_regular_bundle(&ruta_canonica) {
+            antes_de_abrir_archivo(&ruta_canonica);
+            match leer_archivo_regular_bundle(&raiz_anclada, &raiz_canonica, &ruta_canonica) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(texto) => archivos.push((relativa, texto)),
                     Err(_) => {
@@ -963,57 +996,34 @@ fn cargar_bundle_observando(
     }
 }
 
-/// Rechaza especiales en el preflight y valida de nuevo el handle abierto.
+/// Lee solo archivos regulares con cada ancestro abierto desde la raíz.
 /// Unix añade O_NONBLOCK para que una sustitución concurrente por FIFO no
-/// bloquee el recorrido; Windows abre el leaf sin seguir reparse points.
-fn leer_archivo_regular_bundle(ruta: &Path) -> io::Result<Vec<u8>> {
-    let metadata_previa = std::fs::symlink_metadata(ruta)?;
-    if !metadata_previa.is_file() || metadata_es_reparse(&metadata_previa) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "la entrada no es un archivo regular",
-        ));
-    }
-
-    let mut opciones = OpenOptions::new();
-    opciones.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opciones
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        opciones.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let mut archivo = opciones.open(ruta)?;
-    let metadata_abierta = archivo.metadata()?;
-    if !metadata_abierta.is_file() || metadata_es_reparse(&metadata_abierta) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "la entrada abierta no es un archivo regular",
-        ));
-    }
+/// bloquee; Windows abre cada componente relativo sin seguir reparse points.
+fn leer_archivo_regular_bundle(
+    raiz: &DirectorioLecturaAnclado,
+    raiz_canonica: &Path,
+    ruta_canonica: &Path,
+) -> io::Result<Vec<u8>> {
+    let relativa = ruta_canonica.strip_prefix(raiz_canonica).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "ruta fuera de la raíz anclada")
+    })?;
+    let mut archivo = raiz
+        .abrir_archivo_regular_relativo(relativa)
+        .map_err(error_lectura_anclada)?;
     let mut bytes = Vec::new();
     archivo.read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 
-fn metadata_es_reparse(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = metadata;
-        false
-    }
+fn error_lectura_anclada(error: ErrorDirectorioAnclado) -> io::Error {
+    let kind = match error {
+        ErrorDirectorioAnclado::EntradaAusente => io::ErrorKind::NotFound,
+        ErrorDirectorioAnclado::EnlaceNoPermitido | ErrorDirectorioAnclado::TipoNoAdmitido => {
+            io::ErrorKind::InvalidData
+        }
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, "no se pudo abrir el archivo bajo la raíz anclada")
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -1652,6 +1662,50 @@ mod tests {
         assert_eq!(errores[0].path.as_deref(), Some("n/bloqueo.md"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_no_sigue_ancestro_sustituido_tras_validar_archivo() {
+        let temp = tempfile::tempdir().unwrap();
+        let ancestro = temp.path().join("ancestro");
+        let raiz = ancestro.join("bundle");
+        let reubicado = temp.path().join("reubicado");
+        let externo = temp.path().join("externo");
+        std::fs::create_dir_all(raiz.join("n")).unwrap();
+        std::fs::create_dir_all(externo.join("bundle/n")).unwrap();
+        std::fs::write(raiz.join("n/x.md"), doc("a", "Interior", "")).unwrap();
+        std::fs::write(
+            externo.join("bundle/n/x.md"),
+            doc("a", "CANARY EXTERNO", ""),
+        )
+        .unwrap();
+
+        let mut sustituido = false;
+        let estructura = cargar_bundle_con_observadores(
+            &raiz,
+            manifiesto_minimo(),
+            identidad_directorio_para_recorrido,
+            || {},
+            |_| {
+                if !sustituido {
+                    std::fs::rename(&ancestro, &reubicado).unwrap();
+                    std::os::unix::fs::symlink(&externo, &ancestro).unwrap();
+                    sustituido = true;
+                }
+            },
+        )
+        .unwrap();
+
+        let id = estructura
+            .por_path(&BundlePath::nuevo("n/x").unwrap())
+            .unwrap();
+        assert!(sustituido);
+        assert_eq!(
+            estructura.nodo(id).unwrap().etiqueta.como_str(),
+            "Interior",
+            "la ruta sustituida no debe redirigir la lectura al canary externo"
+        );
+    }
+
     #[test]
     fn identidad_global_evitar_releer_alias_y_preserva_paths_case_sensitive() {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1881,6 +1935,32 @@ mod tests {
     #[cfg(unix)]
     fn enlazar_directorio(enlace: &Path, destino: &Path) {
         std::os::unix::fs::symlink(destino, enlace).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cargar_bundle_rechaza_ancestro_junction_del_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let ancestro = temp.path().join("ancestro");
+        let raiz = ancestro.join("bundle");
+        let reubicado = temp.path().join("reubicado");
+        let externo = temp.path().join("externo");
+        std::fs::create_dir_all(raiz.join("n")).unwrap();
+        std::fs::create_dir_all(externo.join("bundle/n")).unwrap();
+        std::fs::write(raiz.join("n/x.md"), doc("a", "Interior", "")).unwrap();
+        std::fs::write(
+            externo.join("bundle/n/x.md"),
+            doc("a", "CANARY EXTERNO", ""),
+        )
+        .unwrap();
+        std::fs::rename(&ancestro, &reubicado).unwrap();
+        enlazar_directorio(&ancestro, &externo);
+
+        let errores = cargar_bundle(&raiz, manifiesto_minimo()).unwrap_err();
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path, None);
+        assert!(errores[0].detalle.contains("raíz del bundle"));
     }
 
     #[test]
