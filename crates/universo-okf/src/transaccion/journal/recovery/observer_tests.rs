@@ -277,7 +277,7 @@ fn parent_identity_mismatch_fails_closed_before_observing_artifacts() {
 
 #[cfg(unix)]
 #[test]
-fn sibling_fifo_root_backup_stage_se_rechaza_rapido() {
+fn sibling_fifo_root_backup_stage_no_se_bloquea() {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     use std::time::{Duration, Instant};
