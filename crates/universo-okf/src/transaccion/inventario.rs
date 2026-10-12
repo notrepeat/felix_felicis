@@ -15,6 +15,53 @@ enum EntradaAbierta<D, A> {
     Archivo(A),
 }
 
+/// Presupuesto estructural común a los inventarios por ruta y por handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LimitesInventario {
+    pub(crate) entradas: usize,
+    pub(crate) profundidad: usize,
+    pub(crate) bytes_rutas: usize,
+}
+
+impl LimitesInventario {
+    pub(crate) const CONTRATO: Self = Self {
+        entradas: 100_000,
+        profundidad: 128,
+        bytes_rutas: 16 * 1024 * 1024,
+    };
+}
+
+#[derive(Debug)]
+struct PresupuestoInventario {
+    limites: LimitesInventario,
+    entradas: usize,
+    bytes_rutas: usize,
+}
+
+impl PresupuestoInventario {
+    fn nuevo(limites: LimitesInventario) -> Self {
+        Self {
+            limites,
+            entradas: 0,
+            bytes_rutas: 0,
+        }
+    }
+
+    fn reservar_ruta(&mut self, bytes: usize, profundidad: usize) -> Result<(), ErrorSnapshot> {
+        if profundidad > self.limites.profundidad || self.entradas >= self.limites.entradas {
+            return Err(ErrorSnapshot::LimiteInventarioExcedido);
+        }
+        let total = self
+            .bytes_rutas
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limites.bytes_rutas)
+            .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
+        self.entradas += 1;
+        self.bytes_rutas = total;
+        Ok(())
+    }
+}
+
 /// Único recorrido del inventario; los backends solo enumeran, abren y leen.
 trait BackendInventario {
     type Directorio;
@@ -49,17 +96,38 @@ pub(crate) fn inventariar_root_con_lector<F>(
 where
     F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
 {
-    let raiz = ruta_absoluta_lexica(raiz)?;
-    validar_directorio_sin_enlaces(&raiz)?;
-    caminar_inventario(&mut BackendRuta { leer }, raiz)
+    inventariar_root_con_lector_y_limites(raiz, leer, LimitesInventario::CONTRATO)
 }
 
+fn inventariar_root_con_lector_y_limites<F>(
+    raiz: &Path,
+    leer: F,
+    limites: LimitesInventario,
+) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>
+where
+    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let raiz = ruta_absoluta_lexica(raiz)?;
+    validar_directorio_sin_enlaces(&raiz)?;
+    caminar_inventario_con_limites(&mut BackendRuta { leer }, raiz, limites)
+}
+
+#[cfg(test)]
 fn caminar_inventario<B: BackendInventario>(
     backend: &mut B,
     raiz: B::Directorio,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
+    caminar_inventario_con_limites(backend, raiz, LimitesInventario::CONTRATO)
+}
+
+fn caminar_inventario_con_limites<B: BackendInventario>(
+    backend: &mut B,
+    raiz: B::Directorio,
+    limites: LimitesInventario,
+) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
     let mut entradas = Vec::new();
-    caminar_directorio(backend, raiz, "", 0, &mut entradas)?;
+    let mut presupuesto = PresupuestoInventario::nuevo(limites);
+    caminar_directorio(backend, raiz, "", 0, &mut presupuesto, &mut entradas)?;
     entradas.sort_by(|a, b| a.ruta().as_bytes().cmp(b.ruta().as_bytes()));
     Ok(entradas)
 }
@@ -69,6 +137,7 @@ fn caminar_directorio<B: BackendInventario>(
     mut directorio: B::Directorio,
     prefijo: &str,
     profundidad: usize,
+    presupuesto: &mut PresupuestoInventario,
     entradas: &mut Vec<EntradaSnapshot>,
 ) -> Result<(), ErrorSnapshot> {
     // Procesa cada hijo antes de pedir el siguiente nombre al backend: no se
@@ -81,18 +150,35 @@ fn caminar_directorio<B: BackendInventario>(
         let profundidad_entrada = profundidad
             .checked_add(1)
             .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
-        if profundidad_entrada > 128 {
-            return Err(ErrorSnapshot::LimiteInventarioExcedido);
-        }
-        let ruta = if prefijo.is_empty() {
-            nombre.clone()
+        let bytes_separador = usize::from(!prefijo.is_empty());
+        let bytes_ruta = prefijo
+            .len()
+            .checked_add(bytes_separador)
+            .and_then(|bytes| bytes.checked_add(nombre.len()))
+            .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
+        presupuesto.reservar_ruta(bytes_ruta, profundidad_entrada)?;
+        entradas.try_reserve(1).map_err(|_| ErrorSnapshot::Io)?;
+        let mut ruta = String::new();
+        ruta.try_reserve_exact(bytes_ruta)
+            .map_err(|_| ErrorSnapshot::Io)?;
+        if prefijo.is_empty() {
+            ruta.push_str(&nombre);
         } else {
-            format!("{prefijo}/{nombre}")
-        };
+            ruta.push_str(prefijo);
+            ruta.push('/');
+            ruta.push_str(&nombre);
+        }
 
         match backend.abrir(directorio, &nombre)? {
             EntradaAbierta::Directorio(hijo) => {
-                caminar_directorio(backend, hijo, &ruta, profundidad_entrada, entradas)?;
+                caminar_directorio(
+                    backend,
+                    hijo,
+                    &ruta,
+                    profundidad_entrada,
+                    presupuesto,
+                    entradas,
+                )?;
                 entradas.push(EntradaSnapshot::directorio(ruta));
             }
             EntradaAbierta::Archivo(archivo) => {
@@ -283,6 +369,13 @@ pub(crate) fn inventariar_root_anclado(
     inventariar_root_anclado_con_lector(raiz, leer_handle)
 }
 
+pub(crate) fn inventariar_root_anclado_con_limites(
+    raiz: super::anclado::DirectorioAnclado,
+    limites: LimitesInventario,
+) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
+    caminar_inventario_con_limites(&mut BackendAnclado { leer: leer_handle }, raiz, limites)
+}
+
 pub(crate) fn inventariar_root_anclado_con_lector<F>(
     raiz: super::anclado::DirectorioAnclado,
     leer: F,
@@ -290,7 +383,11 @@ pub(crate) fn inventariar_root_anclado_con_lector<F>(
 where
     F: FnMut(&mut File) -> Result<Vec<u8>, ErrorSnapshot>,
 {
-    caminar_inventario(&mut BackendAnclado { leer }, raiz)
+    caminar_inventario_con_limites(
+        &mut BackendAnclado { leer },
+        raiz,
+        LimitesInventario::CONTRATO,
+    )
 }
 
 struct BackendAnclado<F> {
@@ -403,6 +500,42 @@ mod tests {
     fn token(entradas: &[EntradaSnapshot]) -> super::super::snapshot::SnapshotToken {
         calcular_token_snapshot("engine/1", "policy/1", b"manifest", b"invariants", entradas)
             .unwrap()
+    }
+
+    fn limites_prueba(
+        entradas: usize,
+        profundidad: usize,
+        bytes_rutas: usize,
+    ) -> LimitesInventario {
+        LimitesInventario {
+            entradas,
+            profundidad,
+            bytes_rutas,
+        }
+    }
+
+    fn inventariar_path_con_limites(
+        root: &Path,
+        limites: LimitesInventario,
+    ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
+        inventariar_root_con_lector_y_limites(root, leer_archivo_regular, limites)
+    }
+
+    fn inventariar_handle_con_limites(
+        root: &Path,
+        limites: LimitesInventario,
+    ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
+        inventariar_root_anclado_con_limites(anclar(root).abrir_raiz().unwrap(), limites)
+    }
+
+    fn inventariar_ambos(
+        root: &Path,
+        limites: LimitesInventario,
+    ) -> [Result<Vec<EntradaSnapshot>, ErrorSnapshot>; 2] {
+        [
+            inventariar_path_con_limites(root, limites),
+            inventariar_handle_con_limites(root, limites),
+        ]
     }
 
     fn crear_arbol_estable(root: &Path) {
@@ -625,6 +758,63 @@ mod tests {
         caminar_inventario(&mut backend, 0).unwrap();
 
         assert_eq!(backend.enumeraciones, [1, 1]);
+    }
+
+    #[test]
+    fn limites_estructurales_aceptan_exactitud_y_rechazan_mas_uno_en_ambos_backends() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("a"), []).unwrap();
+        fs::write(root.path().join("b"), []).unwrap();
+
+        let exacto = limites_prueba(2, 1, 2);
+        for resultado in inventariar_ambos(root.path(), exacto) {
+            assert_eq!(resultado.unwrap().len(), 2);
+        }
+
+        fs::write(root.path().join("secret-canary-name"), []).unwrap();
+        let limite_entradas = limites_prueba(2, 1, 32);
+        for resultado in inventariar_ambos(root.path(), limite_entradas) {
+            let error = resultado.unwrap_err();
+            assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+            assert_eq!(error.codigo(), "snapshot_resource_limit");
+            assert_eq!(error.to_string(), "snapshot_resource_limit");
+            assert!(!format!("{error:?}").contains("secret-canary-name"));
+            assert!(!error.to_string().contains("secret-canary-name"));
+        }
+
+        fs::remove_file(root.path().join("secret-canary-name")).unwrap();
+        fs::write(root.path().join("é"), []).unwrap();
+        let limite_ruta_utf8 = limites_prueba(3, 1, 4);
+        for resultado in inventariar_ambos(root.path(), limite_ruta_utf8) {
+            assert_eq!(resultado.unwrap().len(), 3);
+        }
+        let ruta_utf8_mas_uno = limites_prueba(3, 1, 3);
+        for resultado in inventariar_ambos(root.path(), ruta_utf8_mas_uno) {
+            assert_eq!(
+                resultado.unwrap_err(),
+                ErrorSnapshot::LimiteInventarioExcedido
+            );
+        }
+    }
+
+    #[test]
+    fn limites_de_profundidad_inclusivos_comparten_semantica_en_ambos_backends() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("a/b")).unwrap();
+        fs::write(root.path().join("a/file"), []).unwrap();
+
+        let profundidad_exacta = limites_prueba(10, 2, 64);
+        for resultado in inventariar_ambos(root.path(), profundidad_exacta) {
+            assert_eq!(resultado.unwrap().len(), 3);
+        }
+
+        fs::write(root.path().join("a/b/file"), []).unwrap();
+        for resultado in inventariar_ambos(root.path(), profundidad_exacta) {
+            assert_eq!(
+                resultado.unwrap_err(),
+                ErrorSnapshot::LimiteInventarioExcedido
+            );
+        }
     }
 
     struct DirectorioContado {
