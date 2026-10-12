@@ -7,6 +7,11 @@ mod observer;
 #[allow(unused_imports)]
 pub(crate) use observer::{ErrorObservadorRecovery, observar_inventario_recovery};
 
+#[path = "recovery/runner.rs"]
+mod runner;
+#[allow(unused_imports)]
+pub(crate) use runner::{ErrorFilaJournalOld, ResultadoFilaJournalOld, ejecutar_fila_journal_old};
+
 /// Resultado abstracto de clasificar root, backup o stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ArtifactState {
