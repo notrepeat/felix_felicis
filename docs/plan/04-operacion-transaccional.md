@@ -26,10 +26,11 @@ implementados.
 
 Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; U5 y
 U7 conservan avance parcial, y U6 está cerrada para root anclado y staging. U7
-incluye las filas exactas `KeepOld` y `RestoreOld`; esta última tiene un
-executor crate-private reexportado dentro de OKF, sin dispatcher ni caller de
-apply. No hay limpieza de stage ni recovery completo. Fase 04 sigue en curso:
-lock, captura y staging aún no están conectados a apply ni publican candidatos.
+incluye las filas exactas `KeepOld` y `RestoreOld`; un preflight compartido
+inicial y un dispatcher crate-private las enrutan, pero no hay caller desde
+apply/producción. No hay limpieza de stage ni recovery completo. Fase 04 sigue
+en curso: lock, captura y staging aún no están conectados a apply ni publican
+candidatos.
 
 ## Decisiones de contrato v1
 
@@ -455,13 +456,16 @@ Chain strategy: feature-branch-chain
   `stage=Absent`, `root_new_validated=false` → `RestoreOld`; aplica en
   `Prepared`/`BackupReady`/`Installed` y reconcilia el renombrado antes de
   retirar el journal. `2138c1e` lo reexporta como API crate-private desde
-  `recovery.rs`: es accesible dentro de OKF, pero aún no tiene dispatcher ni
-  caller desde apply. `d1b0ef6` añade cobertura de reconciliación/stage y
-  `23e7718` completa la matriz pura.
+  `recovery.rs`. `d1b0ef6` añade cobertura de reconciliación/stage y
+  `23e7718` completa la matriz pura. En `1dddce1`/`a4d01e5` se comparte un
+  único preflight inicial; `85f7e89`/`7656d15` añaden el dispatcher
+  crate-private y sus pruebas, con ajuste de estilo en `0e8f0d4`. Solo enruta
+  `KeepOld`/`RestoreOld`; ningún caller desde apply/producción existe todavía.
 
   No hay cleanup de stage, executor `DiscardNewRestoreOld`, validación de
   `New`, fila `Committed` ni recovery completo. El CI run `38240021138` pasó
-  solo para la base `701de13`; no se afirma CI verde para el runner final.
+  solo para la base `701de13` y el `38246129604` solo para `a4d01e5`; no se
+  afirma CI verde para el dispatcher final.
   `a082467` conserva el estado histórico anterior. El lock coordina
   escritores Felix cooperantes; en POSIX
   `unlinkat` opera por nombre y conserva una carrera residual ante mutaciones
@@ -711,7 +715,8 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | `46877ed`, `a5d9371`, `5f66ad1`, `6f72af2`, `67e8908` | Observer crate-private read-only de root/backup/stage bajo lock y parent anclado; usa identidad y digest raw, representa `root_new_validated=false` y no decide ni muta artefactos. `recovery::observer` 7/7 y `sibling_read_only_tests` 5/5 en Windows, incluidos parent mismatch, mismo basename bajo otro parent, identidad/digest mismatch, ausencia, tipo y junction con canary. Clippy workspace `-D warnings` compila todos los targets en Windows y Linux; incluye regresión FIFO Unix. Workspace: 227 OKF passed/2 ignored. | Avance parcial U7; conserva Journal v1 y no integra apply/recovery ni restart. |
 | 2026-10-12 | `6cf6cfc`, `603ae4d`, `d1b42ec`, `a082467` | Estado histórico en `a082467`: `eliminar.rs` verifica identidad y registro canónico; `recovery/runner.rs` solo ejecuta `Prepared`/`BackupReady` + root `Old` + backup/stage ausentes → `RemoveJournal`. Matriz local Windows+WSL aprobada; GitHub Actions run `38232932504` completado con éxito. | Avance parcial U7 en ese commit; `Installed`/`Committed` con root `Old` se rechazaban. |
 | 2026-10-12 | `c5a09cc` | `recovery/runner.rs` admite también `Installed` únicamente para root `Old`, backup/stage `Absent` y `root_new_validated=false` → `KeepOld` + `RemoveJournal`; `root=New` no validado, `root=Unknown` y `Committed` fallan cerrado. `runner_tests.rs`: `installed_root_old_sin_vecinos_elimina_journal_y_conserva_root` y `committed_root_old_sin_vecinos_falla_y_conserva_estado`. | Avance parcial U7; las demás filas, integración a apply, cleanup/restart completo y harness runtime siguen pendientes. |
-| 2026-10-12 | `9fa50f5`, `76b898a`, `701de13`, `7bdbc07`, `57a46f0`, `2138c1e`, `d1b0ef6`, `23e7718` | Reapertura verificada del backup sibling anclado y pruebas de parent/reparse; executor crate-private `RestoreOld` para `Prepared`/`BackupReady`/`Installed` con root `Absent`, backup `Old`, stage `Absent`, `root_new_validated=false`, renombrado reconciliado y journal retirado. Reexport interno en `recovery.rs`; cobertura de conflictos, stage y matriz pura. CI run `38240021138` pasó solo en la base `701de13`, no es CI del runner final. | Avance parcial U7; no hay dispatcher/caller de apply, cleanup de stage, executor `DiscardNewRestoreOld`, validación de `New`, `Committed` ni recovery completo. |
+| 2026-10-12 | `9fa50f5`, `76b898a`, `701de13`, `7bdbc07`, `57a46f0`, `2138c1e`, `d1b0ef6`, `23e7718` | Reapertura verificada del backup sibling anclado y pruebas de parent/reparse; executor crate-private `RestoreOld` para `Prepared`/`BackupReady`/`Installed` con root `Absent`, backup `Old`, stage `Absent`, `root_new_validated=false`, renombrado reconciliado y journal retirado. Reexport interno en `recovery.rs`; cobertura de conflictos, stage y matriz pura. CI run `38240021138` pasó solo en la base `701de13`. | Estado en `23e7718`: avance parcial U7; dispatcher y caller de apply aún no existían. Cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed` y recovery completo seguían pendientes. |
+| 2026-10-12 | `1dddce1`, `a4d01e5`, `85f7e89`, `7656d15`, `0e8f0d4` | Preflight compartido una sola vez y dispatcher crate-private que enruta solo `KeepOld`/`RestoreOld`; no hay caller desde apply/producción. CI run `38246129604` pasó para la base `a4d01e5` únicamente; no acredita el dispatcher final. | U7 parcial; cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, recovery completo y conexión desde apply siguen pendientes. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
@@ -722,7 +727,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. La captura por ruta conserva TOCTOU; el root anclado de U6 está probado por separado |
 | 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
 | 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
-| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: filas exactas `KeepOld` y `RestoreOld` ejecutables en las fases soportadas. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false`, restaura el backup verificado y retira el journal. Executor crate-private reexportado dentro de OKF, sin dispatcher/caller de apply. Cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, demás filas y recovery completo siguen pendientes. |
+| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: preflight compartido inicial y dispatcher crate-private enrutan solo las filas exactas `KeepOld` y `RestoreOld` en las fases soportadas. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false`, restaura el backup verificado y retira el journal. Sin caller desde apply/producción. Cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, demás filas y recovery completo siguen pendientes. |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 
 ## Siguiente fase
