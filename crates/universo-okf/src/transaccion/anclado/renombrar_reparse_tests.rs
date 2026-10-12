@@ -73,3 +73,46 @@ fn rename_sibling_rechaza_reparse_source_sin_seguirlo() {
     );
     assert!(!temp.path().join(&backup_name).exists());
 }
+
+#[test]
+fn reabrir_backup_rechaza_reparse_y_preserva_canary_externo() {
+    use super::renombrar::ErrorRenombrarAnclado;
+    use crate::transaccion::lock::LockEscritura;
+
+    let temp = tempdir().unwrap();
+    if saltar_sin_file_id(temp.path()) {
+        return;
+    }
+    let root = temp.path().join("bundle");
+    let outside = temp.path().join("outside");
+    let backup_name = rename_backup_name(&root);
+    let backup_path = temp.path().join(&backup_name);
+    std::fs::create_dir(&root).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("canary.txt"), b"outside canary").unwrap();
+    crear_rename_junction(&backup_path, &outside);
+
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let espacio = lock.espacio_transaccional_anclado().unwrap();
+    let error = espacio
+        .reabrir_backup_sibling(|_| true, |_| true)
+        .map(|_| ())
+        .unwrap_err();
+
+    assert_eq!(error, ErrorRenombrarAnclado::EnlaceNoPermitido);
+    assert_eq!(
+        std::fs::read(outside.join("canary.txt")).unwrap(),
+        b"outside canary"
+    );
+    let metadata = std::fs::symlink_metadata(&backup_path).unwrap();
+    #[cfg(unix)]
+    assert!(metadata.file_type().is_symlink());
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+        assert_ne!(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT, 0);
+    }
+    assert!(!root.join("canary.txt").exists());
+}

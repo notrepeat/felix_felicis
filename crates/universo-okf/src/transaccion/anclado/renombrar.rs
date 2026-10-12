@@ -138,6 +138,54 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
         })
     }
 
+    /// Reabre el backup derivado de la ubicación del lock y acuña una
+    /// capability solo si las identidades del parent y del backup satisfacen
+    /// los predicados de la transacción que los autorizó.
+    pub(crate) fn reabrir_backup_sibling<P, O>(
+        &self,
+        predicado_parent_esperado: P,
+        predicado_old_esperado: O,
+    ) -> Result<DirectorioSiblingAnclado<'lock>, ErrorRenombrarAnclado>
+    where
+        P: FnOnce(IdentidadDirectorio) -> bool,
+        O: FnOnce(IdentidadDirectorio) -> bool,
+    {
+        let backup = self._lock.ubicacion().backup();
+        let nombre = backup
+            .as_path()
+            .file_name()
+            .ok_or(ErrorRenombrarAnclado::ComponenteInvalido)?;
+        super::validar_componente(nombre).map_err(mapear_error_directorio)?;
+        if !self._lock.ubicacion().permite_rename_sibling(nombre) {
+            return Err(ErrorRenombrarAnclado::FuenteNoHermana);
+        }
+
+        let identidad_parent =
+            metadata_directorio(&self.parent).map_err(mapear_error_directorio)?;
+        if identidad_parent != self.identidad_parent {
+            return Err(ErrorRenombrarAnclado::FuenteNoHermana);
+        }
+        if !predicado_parent_esperado(identidad_parent) {
+            return Err(ErrorRenombrarAnclado::IdentidadNoCoincide);
+        }
+
+        let raiz = super::abrir_directorio_hijo_lectura(&self.parent, nombre)
+            .map_err(mapear_error_directorio)?;
+        let identidad_raiz = metadata_directorio(&raiz).map_err(mapear_error_directorio)?;
+        if !predicado_old_esperado(identidad_raiz) {
+            return Err(ErrorRenombrarAnclado::IdentidadNoCoincide);
+        }
+
+        Ok(DirectorioSiblingAnclado {
+            nombre: nombre.to_os_string(),
+            raiz,
+            identidad_parent,
+            identidad_raiz,
+            autoridad: Arc::clone(&self.autoridad),
+            _lock: PhantomData,
+        })
+    }
+
     fn validar_parent(&self) -> Result<(), ErrorRenombrarAnclado> {
         if metadata_directorio(&self.parent).map_err(mapear_error_directorio)?
             != self.identidad_parent
