@@ -554,7 +554,8 @@ fn abrir_directorio_absoluto(
     #[cfg(unix)]
     let mut actual = abrir_directorio_por_ruta(Path::new("/"), parent_transaccional)?;
     #[cfg(windows)]
-    let mut actual = abrir_directorio_por_ruta(&volumen, parent_transaccional)?;
+    let mut actual =
+        abrir_directorio_por_ruta(&volumen, parent_transaccional && nombres.is_empty())?;
 
     for (indice, nombre) in nombres.iter().enumerate() {
         #[cfg(unix)]
