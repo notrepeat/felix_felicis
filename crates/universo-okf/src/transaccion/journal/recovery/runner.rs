@@ -261,18 +261,11 @@ fn ejecutar_fila_journal_restore_old_con(
     // rename y reportar un fallo al caller.
     let inventario_posterior = observar_inventario_recovery(lock, &journal)
         .map_err(ErrorFilaJournalRestoreOld::Observacion)?;
-    let fila_restaurada = RecoveryInventory {
-        root: ArtifactState::Old,
-        backup: ArtifactState::Absent,
-        stage: ArtifactState::Absent,
-        root_new_validated: false,
-    };
-    if inventario_posterior != fila_restaurada {
-        if let (Err(error), true) = (intento_renombrar, inventario_posterior == fila_inicial) {
-            return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
-        }
-        return Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada);
-    }
+    reconciliar_intento_renombrado_restore_old(
+        intento_renombrar,
+        inventario_posterior,
+        fila_inicial,
+    )?;
 
     antes_de_eliminar(lock);
 
@@ -291,6 +284,28 @@ fn ejecutar_fila_journal_restore_old_con(
             Err(ErrorFilaJournalRestoreOld::EliminacionIndeterminada(error))
         }
     }
+}
+
+fn reconciliar_intento_renombrado_restore_old(
+    intento: Result<(), ErrorRenombrarAnclado>,
+    inventario_posterior: RecoveryInventory,
+    fila_inicial: RecoveryInventory,
+) -> Result<(), ErrorFilaJournalRestoreOld> {
+    let fila_restaurada = RecoveryInventory {
+        root: ArtifactState::Old,
+        backup: ArtifactState::Absent,
+        stage: ArtifactState::Absent,
+        root_new_validated: false,
+    };
+    if inventario_posterior == fila_restaurada {
+        return Ok(());
+    }
+    if inventario_posterior == fila_inicial {
+        if let Err(error) = intento {
+            return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
+        }
+    }
+    Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
 }
 
 #[cfg(test)]
