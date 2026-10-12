@@ -1,6 +1,6 @@
 //! Carga de un bundle OKF a una `Estructura` (spec §3.3, §3.4, §4.2).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
@@ -1017,7 +1017,7 @@ fn cargar_bundle_con_limites(
             ));
             continue;
         }
-        if bases_canonicas_procesadas.se_solapa(&base_canonica, || {}) {
+        if bases_canonicas_procesadas.se_solapa(&base_canonica) {
             errores.push(error(
                 None,
                 None,
@@ -1026,7 +1026,6 @@ fn cargar_bundle_con_limites(
             ));
             continue;
         }
-        bases_canonicas_procesadas.insertar(&base_canonica);
         if let Err(recurso) =
             presupuesto.reservar_entrada(directorio.len(), directorio.split('/').count())
         {
@@ -1034,6 +1033,7 @@ fn cargar_bundle_con_limites(
             ordenar_errores(&mut errores);
             return Err(errores);
         }
+        bases_canonicas_procesadas.insertar(&base_canonica);
         let mut encontrados: Vec<std::path::PathBuf> = Vec::new();
         let mut camino: Vec<PathBuf> = Vec::new();
         let mut procesados: HashSet<PathBuf> = HashSet::new();
@@ -1206,48 +1206,64 @@ fn registrar_directorio_procesado<I: std::hash::Hash + Eq>(
     procesados_globales.insert(identidad)
 }
 
-#[derive(Default)]
-struct NodoIndiceRutaCanonica {
-    hoja: bool,
-    hijos: HashMap<std::ffi::OsString, NodoIndiceRutaCanonica>,
+#[cfg(test)]
+std::thread_local! {
+    static COMPARACIONES_RUTAS_CANONICAS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[derive(Clone, Debug)]
+struct RutaCanonicaIndice(PathBuf);
+
+impl PartialEq for RutaCanonicaIndice {
+    fn eq(&self, otra: &Self) -> bool {
+        self.0.components().eq(otra.0.components())
+    }
+}
+
+impl Eq for RutaCanonicaIndice {}
+
+impl Ord for RutaCanonicaIndice {
+    fn cmp(&self, otra: &Self) -> std::cmp::Ordering {
+        #[cfg(test)]
+        COMPARACIONES_RUTAS_CANONICAS.with(|comparaciones| {
+            comparaciones.set(comparaciones.get().saturating_add(1));
+        });
+        self.0.components().cmp(otra.0.components())
+    }
+}
+
+impl PartialOrd for RutaCanonicaIndice {
+    fn partial_cmp(&self, otra: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(otra))
+    }
 }
 
 #[derive(Default)]
 struct IndiceRutasCanonicas {
-    raiz: NodoIndiceRutaCanonica,
+    rutas: BTreeSet<RutaCanonicaIndice>,
 }
 
 impl IndiceRutasCanonicas {
-    fn se_solapa(&self, ruta: &Path, mut observar_busqueda: impl FnMut()) -> bool {
-        let mut nodo = &self.raiz;
-        let mut componentes = ruta.components().peekable();
-        while let Some(componente) = componentes.next() {
-            observar_busqueda();
-            if nodo.hoja {
-                return true;
-            }
-            let Some(hijo) = nodo.hijos.get(componente.as_os_str()) else {
-                return false;
-            };
-            nodo = hijo;
-            if componentes.peek().is_none() {
-                // Una hoja exacta se comprueba por identidad/ruta en el índice
-                // existente; solo una rama descendiente es solapamiento aquí.
-                return !nodo.hijos.is_empty();
-            }
+    fn se_solapa(&self, ruta: &Path) -> bool {
+        let consulta = RutaCanonicaIndice(ruta.to_path_buf());
+        let anterior = self.rutas.range(..consulta.clone()).next_back();
+        if anterior.is_some_and(|anterior| ruta.starts_with(&anterior.0)) {
+            return true;
         }
-        false
+
+        self.rutas
+            .range((
+                std::ops::Bound::Excluded(consulta),
+                std::ops::Bound::Unbounded,
+            ))
+            .next()
+            .is_some_and(|siguiente| siguiente.0.starts_with(ruta))
     }
 
     fn insertar(&mut self, ruta: &Path) {
-        let mut nodo = &mut self.raiz;
-        for componente in ruta.components() {
-            nodo = nodo
-                .hijos
-                .entry(componente.as_os_str().to_os_string())
-                .or_default();
-        }
-        nodo.hoja = true;
+        self.rutas.insert(RutaCanonicaIndice(ruta.to_path_buf()));
     }
 }
 
@@ -2372,29 +2388,44 @@ mod tests {
     fn indice_de_rutas_canonicas_detecta_solapamiento_por_componentes() {
         let mut indice = IndiceRutasCanonicas::default();
         indice.insertar(Path::new("raiz/docs/sub"));
+        indice.insertar(Path::new("raiz/docs-extra"));
 
-        assert!(indice.se_solapa(Path::new("raiz/docs"), || {}));
-        assert!(indice.se_solapa(Path::new("raiz/docs/sub/mas"), || {}));
-        assert!(!indice.se_solapa(Path::new("raiz/docs-extra"), || {}));
-        assert!(!indice.se_solapa(Path::new("raiz/docs/sub"), || {}));
+        assert!(indice.se_solapa(Path::new("raiz/docs")));
+        assert!(indice.se_solapa(Path::new("raiz/docs/sub/mas")));
+        assert!(!indice.se_solapa(Path::new("raiz/docs-extra")));
+        assert!(!indice.se_solapa(Path::new("raiz/docs-extras")));
+        assert!(!indice.se_solapa(Path::new("raiz/docs/sub")));
+
+        let mut profunda = PathBuf::from("raiz/profunda");
+        for _ in 0..128 {
+            profunda.push("x");
+        }
+        indice.insertar(&profunda);
+        assert!(indice.se_solapa(profunda.parent().unwrap()));
+        assert!(indice.se_solapa(&profunda.join("hijo")));
+        assert!(!indice.se_solapa(Path::new("raiz/profunda-extra")));
     }
 
     #[test]
-    fn indice_de_roots_canonicos_busca_en_trabajo_lineal_en_roots() {
+    fn indice_de_roots_canonicos_compara_en_o_r_log_r() {
         const CANTIDAD: usize = 10_000;
         let mut indice = IndiceRutasCanonicas::default();
-        let mut busquedas = 0;
+        COMPARACIONES_RUTAS_CANONICAS.with(|comparaciones| comparaciones.set(0));
 
         for numero in 0..CANTIDAD {
             let ruta = PathBuf::from("raiz").join(format!("docs-{numero:05}"));
-            assert!(!indice.se_solapa(&ruta, || busquedas += 1));
+            assert!(!indice.se_solapa(&ruta));
             indice.insertar(&ruta);
         }
 
+        let comparaciones = COMPARACIONES_RUTAS_CANONICAS.with(std::cell::Cell::get);
+        let logaritmo = (usize::BITS - (CANTIDAD as usize).leading_zeros()) as usize;
+        let techo = CANTIDAD * (8 * logaritmo + 16);
         assert!(
-            busquedas <= CANTIDAD * 2,
-            "{busquedas} búsquedas para {CANTIDAD} raíces de 2 componentes"
+            comparaciones <= techo,
+            "{comparaciones} comparaciones para {CANTIDAD} raíces (techo {techo})"
         );
+        assert_eq!(indice.rutas.len(), CANTIDAD);
     }
 
     #[cfg(any(unix, windows))]
