@@ -457,14 +457,15 @@ fn opciones_directorio() -> OpenOptionsAt {
 }
 
 fn opciones_directorio_stage() -> OpenOptionsAt {
-    let mut opciones = opciones_directorio();
+    let opciones = opciones_directorio();
     #[cfg(windows)]
-    {
+    let opciones = {
         use fs_at::os::windows::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
             FILE_TRAVERSE,
         };
+        let mut opciones = opciones;
         opciones.desired_access(
             FILE_READ_ATTRIBUTES
                 | FILE_LIST_DIRECTORY
@@ -472,17 +473,20 @@ fn opciones_directorio_stage() -> OpenOptionsAt {
                 | FILE_ADD_FILE
                 | FILE_ADD_SUBDIRECTORY,
         );
-    }
+        opciones
+    };
     opciones
 }
 
 fn opciones_parent_stage() -> OpenOptionsAt {
-    let mut opciones = opciones_directorio();
+    let opciones = opciones_directorio();
     #[cfg(windows)]
-    {
+    let opciones = {
         use fs_at::os::windows::OpenOptionsExt;
+        let mut opciones = opciones;
         opciones.desired_access(derechos_parent_transaccional());
-    }
+        opciones
+    };
     opciones
 }
 
@@ -620,7 +624,7 @@ fn metadata_es_reparse(_metadata: &std::fs::Metadata) -> bool {
 }
 
 fn identidad_desde_metadata(
-    handle: &File,
+    _handle: &File,
     _metadata: &std::fs::Metadata,
 ) -> Result<IdentidadDirectorio, ErrorDirectorioAnclado> {
     #[cfg(unix)]
@@ -633,7 +637,7 @@ fn identidad_desde_metadata(
     }
     #[cfg(windows)]
     {
-        identidad_windows(handle).map_err(mapear_io)
+        identidad_windows(_handle).map_err(mapear_io)
     }
 }
 

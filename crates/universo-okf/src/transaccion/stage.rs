@@ -41,6 +41,7 @@ use windows_sys::Win32::Globalization::{CSTR_GREATER_THAN, CSTR_LESS_THAN};
 pub(crate) enum ErrorPlanStaging {
     RutaInvalida,
     EntradaDuplicada,
+    #[cfg(windows)]
     ColisionCaseInsensitive,
     ConflictoArchivoDirectorio,
     ColisionAuxiliarAdministrado,
@@ -53,6 +54,7 @@ impl ErrorPlanStaging {
         match self {
             Self::RutaInvalida => "stage_path_invalid",
             Self::EntradaDuplicada => "stage_duplicate_entry",
+            #[cfg(windows)]
             Self::ColisionCaseInsensitive => "stage_case_insensitive_collision",
             Self::ConflictoArchivoDirectorio => "stage_file_directory_conflict",
             Self::ColisionAuxiliarAdministrado => "stage_managed_auxiliary_collision",
