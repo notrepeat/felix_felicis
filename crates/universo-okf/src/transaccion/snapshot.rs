@@ -9,6 +9,7 @@ use std::sync::Arc;
 use sha2::{Digest, Sha256};
 
 use super::journal::RawTreeDigest;
+use super::limites::LimitesInventario;
 
 const DOMAIN: &[u8] = b"FELIX-SNAPSHOT-v1";
 const CAPTURE_POLICY: &[u8] =
@@ -266,7 +267,25 @@ pub fn calcular_token_snapshot(
     invariantes_raw: &[u8],
     entradas: &[EntradaSnapshot],
 ) -> Result<SnapshotToken, ErrorSnapshot> {
-    let ordenadas = ordenar_y_validar_rutas(entradas)?;
+    calcular_token_snapshot_con_limites(
+        version_motor,
+        policy_id,
+        manifiesto_raw,
+        invariantes_raw,
+        entradas,
+        LimitesInventario::CONTRATO,
+    )
+}
+
+fn calcular_token_snapshot_con_limites(
+    version_motor: &str,
+    policy_id: &str,
+    manifiesto_raw: &[u8],
+    invariantes_raw: &[u8],
+    entradas: &[EntradaSnapshot],
+    limites: LimitesInventario,
+) -> Result<SnapshotToken, ErrorSnapshot> {
+    let ordenadas = ordenar_y_validar_rutas_con_limites(entradas, limites)?;
 
     let mut hash = Sha256::new();
     hash_field(&mut hash, b"domain", DOMAIN)?;
@@ -299,7 +318,14 @@ pub fn calcular_token_snapshot(
 pub(crate) fn calcular_digest_raw_tree(
     entradas: &[EntradaSnapshot],
 ) -> Result<RawTreeDigest, ErrorSnapshot> {
-    let ordenadas = ordenar_y_validar_rutas(entradas)?;
+    calcular_digest_raw_tree_con_limites(entradas, LimitesInventario::CONTRATO)
+}
+
+fn calcular_digest_raw_tree_con_limites(
+    entradas: &[EntradaSnapshot],
+    limites: LimitesInventario,
+) -> Result<RawTreeDigest, ErrorSnapshot> {
+    let ordenadas = ordenar_y_validar_rutas_con_limites(entradas, limites)?;
 
     let mut hash = Sha256::new();
     hash.update(RAW_TREE_DOMAIN);
@@ -326,20 +352,68 @@ pub(crate) fn calcular_digest_raw_tree(
     Ok(RawTreeDigest::from_digest(hash.finalize().into()))
 }
 
-fn ordenar_y_validar_rutas(
+fn ordenar_y_validar_rutas_con_limites(
     entradas: &[EntradaSnapshot],
+    limites: LimitesInventario,
 ) -> Result<Vec<&EntradaSnapshot>, ErrorSnapshot> {
+    validar_presupuesto_arbol(entradas, limites)?;
+
     let mut ordenadas: Vec<_> = entradas.iter().collect();
     ordenadas.sort_by(|a, b| a.ruta().as_bytes().cmp(b.ruta().as_bytes()));
 
     for (indice, entrada) in ordenadas.iter().enumerate() {
-        validar_ruta_snapshot(entrada.ruta())?;
         if indice > 0 && ordenadas[indice - 1].ruta() == entrada.ruta() {
             return Err(ErrorSnapshot::RutaNoRepresentable);
         }
     }
 
     Ok(ordenadas)
+}
+
+fn validar_presupuesto_arbol(
+    entradas: &[EntradaSnapshot],
+    limites: LimitesInventario,
+) -> Result<(), ErrorSnapshot> {
+    if entradas.len() > limites.entradas {
+        return Err(ErrorSnapshot::LimiteInventarioExcedido);
+    }
+
+    let mut bytes_raw = 0;
+    let mut bytes_rutas = 0;
+    for entrada in entradas {
+        let ruta = entrada.ruta();
+        validar_ruta_snapshot(ruta)?;
+
+        let profundidad = ruta.bytes().try_fold(1usize, |profundidad, byte| {
+            if byte == b'/' {
+                profundidad
+                    .checked_add(1)
+                    .ok_or(ErrorSnapshot::LimiteInventarioExcedido)
+            } else {
+                Ok(profundidad)
+            }
+        })?;
+        if profundidad > limites.profundidad {
+            return Err(ErrorSnapshot::LimiteInventarioExcedido);
+        }
+
+        bytes_rutas = sumar_presupuesto(bytes_rutas, ruta.len(), limites.bytes_rutas)?;
+        let bytes_entrada = entrada.bytes().map_or(0, <[u8]>::len);
+        bytes_raw = sumar_presupuesto(bytes_raw, bytes_entrada, limites.bytes_raw)?;
+    }
+
+    Ok(())
+}
+
+fn sumar_presupuesto(
+    total: usize,
+    incremento: usize,
+    limite: usize,
+) -> Result<usize, ErrorSnapshot> {
+    total
+        .checked_add(incremento)
+        .filter(|total| *total <= limite)
+        .ok_or(ErrorSnapshot::LimiteInventarioExcedido)
 }
 
 fn validar_ruta_snapshot(ruta: &str) -> Result<(), ErrorSnapshot> {
@@ -372,6 +446,59 @@ mod tests {
 
     fn archivo(path: &str, bytes: &[u8]) -> EntradaSnapshot {
         EntradaSnapshot::archivo(path, Arc::<[u8]>::from(bytes))
+    }
+
+    fn limites_prueba(
+        bytes_raw: usize,
+        entradas: usize,
+        profundidad: usize,
+        bytes_rutas: usize,
+    ) -> LimitesInventario {
+        LimitesInventario {
+            bytes_raw,
+            entradas,
+            profundidad,
+            bytes_rutas,
+        }
+    }
+
+    fn assert_error_limite<T>(resultado: Result<T, ErrorSnapshot>) {
+        let error = resultado
+            .err()
+            .expect("el árbol debe exceder el presupuesto");
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(error.codigo(), "snapshot_resource_limit");
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        assert_eq!(
+            format!("{error:?}"),
+            "ErrorSnapshot(\"snapshot_resource_limit\")"
+        );
+        assert!(!error.to_string().contains("CANARY"));
+        assert!(!format!("{error:?}").contains("CANARY"));
+    }
+
+    fn assert_presupuesto_arbol(
+        entradas: &[EntradaSnapshot],
+        limites: LimitesInventario,
+        aceptado: bool,
+    ) {
+        let token = calcular_token_snapshot_con_limites(
+            "CANARY-engine",
+            "CANARY-policy",
+            b"CANARY-manifest",
+            b"CANARY-invariants",
+            entradas,
+            limites,
+        );
+        let digest = calcular_digest_raw_tree_con_limites(entradas, limites);
+
+        if aceptado {
+            assert!(token.is_ok(), "el token debe aceptar el límite inclusivo");
+            assert!(digest.is_ok(), "el digest debe aceptar el límite inclusivo");
+        } else {
+            assert_error_limite(token);
+            assert_error_limite(digest);
+        }
     }
 
     #[test]
@@ -502,6 +629,64 @@ mod tests {
         );
         assert!(!error.to_string().contains("CANARY"));
         assert!(!format!("{error:?}").contains("CANARY"));
+    }
+
+    #[test]
+    fn presupuesto_del_arbol_acepta_limites_inclusivos_y_rechaza_mas_uno() {
+        assert_presupuesto_arbol(
+            &[archivo("CANARY/a", b"")],
+            limites_prueba(0, 1, 10, usize::MAX),
+            true,
+        );
+        assert_presupuesto_arbol(
+            &[archivo("CANARY/a", b""), archivo("CANARY/b", b"")],
+            limites_prueba(0, 1, 10, usize::MAX),
+            false,
+        );
+
+        assert_presupuesto_arbol(
+            &[archivo("é", b""), archivo("x", b"")],
+            limites_prueba(0, 10, 10, 3),
+            true,
+        );
+        assert_presupuesto_arbol(
+            &[archivo("é", b""), archivo("xy", b"")],
+            limites_prueba(0, 10, 10, 3),
+            false,
+        );
+
+        assert_presupuesto_arbol(
+            &[archivo("a/b/c", b"")],
+            limites_prueba(0, 10, 3, usize::MAX),
+            true,
+        );
+        assert_presupuesto_arbol(
+            &[archivo("a/b/c/d", b"")],
+            limites_prueba(0, 10, 3, usize::MAX),
+            false,
+        );
+
+        assert_presupuesto_arbol(
+            &[archivo("a", b"xx"), archivo("b", b"yy")],
+            limites_prueba(4, 10, 10, usize::MAX),
+            true,
+        );
+        assert_presupuesto_arbol(
+            &[archivo("a", b"xx"), archivo("b", b"yyz")],
+            limites_prueba(4, 10, 10, usize::MAX),
+            false,
+        );
+
+        assert_presupuesto_arbol(&[], limites_prueba(0, 0, 0, 0), true);
+    }
+
+    #[test]
+    fn presupuesto_del_arbol_detecta_overflow_sin_wraparound() {
+        assert_eq!(sumar_presupuesto(usize::MAX, 0, usize::MAX), Ok(usize::MAX));
+        assert_eq!(
+            sumar_presupuesto(usize::MAX, 1, usize::MAX),
+            Err(ErrorSnapshot::LimiteInventarioExcedido)
+        );
     }
 
     #[test]

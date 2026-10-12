@@ -9,6 +9,7 @@ pub(crate) mod captura;
 pub(crate) mod inventario;
 #[allow(dead_code)]
 pub(crate) mod journal;
+pub(crate) mod limites;
 pub mod lock;
 pub(crate) mod raiz;
 pub mod snapshot;
