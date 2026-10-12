@@ -429,6 +429,17 @@ mod tests {
         }
 
         #[test]
+        fn parsear_hex_canonico_acepta_64_caracteres(entrada in prop::collection::vec(
+            prop::sample::select(b"0123456789abcdef".to_vec()),
+            64
+        )) {
+            let entrada = String::from_utf8(entrada).expect("el alfabeto es ASCII");
+            let token = SnapshotToken::from_hex(&entrada);
+            prop_assert!(token.is_ok());
+            prop_assert_eq!(token.unwrap().to_hex(), entrada);
+        }
+
+        #[test]
         fn parsear_string_arbitrario_no_panic_y_solo_acepta_canonico(entrada in any::<String>()) {
             if let Ok(token) = SnapshotToken::from_hex(&entrada) {
                 prop_assert_eq!(entrada.len(), 64);
