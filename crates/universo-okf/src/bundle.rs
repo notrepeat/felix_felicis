@@ -1051,6 +1051,32 @@ fn relativa_a_raiz(raiz: &Path, dir: &Path) -> String {
         .replace('\\', "/")
 }
 
+fn es_markdown(ruta: &Path) -> bool {
+    ruta.extension().and_then(|extension| extension.to_str()) == Some("md")
+}
+
+/// Solo se puede ignorar un archivo no Markdown cuando su tipo regular está
+/// determinado sin seguir enlaces (ruta lógica) o desde el destino ya
+/// canonicalizado. Un error de resolución o un symlink no clasificable debe
+/// fallar cerrado para no presentar una carga parcial como completa.
+fn es_archivo_regular_no_markdown(ruta: &Path, canonica: Option<&Path>) -> bool {
+    if es_markdown(ruta) {
+        return false;
+    }
+    let metadatos = canonica
+        .and_then(|ruta| std::fs::metadata(ruta).ok())
+        .or_else(|| std::fs::symlink_metadata(ruta).ok());
+    puede_ignorar_error_directorio(ruta, metadatos.is_some_and(|metadatos| metadatos.is_file()))
+}
+
+fn puede_ignorar_error_directorio(ruta: &Path, tipo_regular_confirmado: bool) -> bool {
+    tipo_regular_confirmado && !es_markdown(ruta)
+}
+
+fn error_recorrido_io(raiz: &Path, ruta: &Path, detalle: impl Into<String>) -> ErrorBundle {
+    error(Some(&relativa_a_raiz(raiz, ruta)), None, Regla::Io, detalle)
+}
+
 /// Acepta solo segmentos normales portables y separados con `/`. Se evita
 /// interpretar rutas absolutas, prefijos de unidad, `.` y `..` de manera
 /// distinta entre plataformas.
@@ -1230,9 +1256,13 @@ fn recorrer_canonico<O: FnMut()>(
     for (ruta, nombre) in hijos {
         let ruta_canonica = match std::fs::canonicalize(&ruta) {
             Ok(canonica) => canonica,
-            Err(_) => {
-                if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
+            Err(err) => {
+                if es_markdown(&ruta) {
                     estado.encontrados.push(ruta);
+                } else if !es_archivo_regular_no_markdown(&ruta, None) {
+                    estado
+                        .errores
+                        .push(error_recorrido_io(ctx.raiz, &ruta, err.to_string()));
                 }
                 continue;
             }
@@ -1250,17 +1280,16 @@ fn recorrer_canonico<O: FnMut()>(
             {
                 Ok(directorio) => Some(directorio),
                 Err(
-                    err @ (ErrorDirectorioAnclado::EnlaceNoPermitido
-                    | ErrorDirectorioAnclado::TipoNoAdmitido),
+                    ErrorDirectorioAnclado::EnlaceNoPermitido
+                    | ErrorDirectorioAnclado::TipoNoAdmitido,
                 ) => {
                     // Algunos sistemas reportan un symlink de directorio como
                     // tipo no admitido al abrirlo con no-follow. La metadata
                     // solo clasifica; nunca se usa para enumerar el destino.
-                    let podria_ser_directorio = err == ErrorDirectorioAnclado::EnlaceNoPermitido
-                        || std::fs::metadata(&ruta)
-                            .map(|metadata| metadata.is_dir())
-                            .unwrap_or(false);
-                    if !podria_ser_directorio {
+                    let destino_es_archivo = std::fs::metadata(&ruta_canonica)
+                        .map(|metadata| metadata.is_file())
+                        .unwrap_or(false);
+                    if destino_es_archivo {
                         None
                     } else {
                         // Symlinks internos conservan la semántica histórica:
@@ -1268,27 +1297,28 @@ fn recorrer_canonico<O: FnMut()>(
                         // comprobar que permanece dentro del layout.
                         match ctx.raiz_anclada.abrir_directorio_relativo(relativa) {
                             Ok(directorio) => Some(directorio),
-                            Err(ErrorDirectorioAnclado::TipoNoAdmitido) => None,
+                            Err(ErrorDirectorioAnclado::TipoNoAdmitido) if destino_es_archivo => {
+                                None
+                            }
                             Err(err) => {
-                                if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
-                                    estado.errores.push(error(
-                                        Some(&relativa_a_raiz(ctx.raiz, &ruta)),
-                                        None,
-                                        Regla::Io,
-                                        error_lectura_anclada(err).to_string(),
-                                    ));
-                                }
+                                estado.errores.push(error_recorrido_io(
+                                    ctx.raiz,
+                                    &ruta,
+                                    error_lectura_anclada(err).to_string(),
+                                ));
                                 continue;
                             }
                         }
                     }
                 }
                 Err(err) => {
-                    if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
-                        estado.errores.push(error(
-                            Some(&relativa_a_raiz(ctx.raiz, &ruta)),
-                            None,
-                            Regla::Io,
+                    let archivo_regular = std::fs::metadata(&ruta_canonica)
+                        .map(|metadata| metadata.is_file())
+                        .unwrap_or(false);
+                    if !puede_ignorar_error_directorio(&ruta, archivo_regular) {
+                        estado.errores.push(error_recorrido_io(
+                            ctx.raiz,
+                            &ruta,
                             error_lectura_anclada(err).to_string(),
                         ));
                     }
@@ -1305,13 +1335,21 @@ fn recorrer_canonico<O: FnMut()>(
         } else {
             // No se enumeran destinos externos. Solo se consulta su tipo para
             // conservar el diagnóstico previo de una fuga de directorio.
-            std::fs::metadata(&ruta_canonica)
-                .map(|metadata| metadata.is_dir())
-                .unwrap_or(false)
+            match std::fs::metadata(&ruta_canonica) {
+                Ok(metadata) if metadata.is_dir() => true,
+                Ok(metadata) if puede_ignorar_error_directorio(&ruta, metadata.is_file()) => false,
+                Ok(_) => false,
+                Err(err) => {
+                    estado
+                        .errores
+                        .push(error_recorrido_io(ctx.raiz, &ruta, err.to_string()));
+                    continue;
+                }
+            }
         };
         if es_directorio {
             recorrer_canonico(ctx, &ruta, ruta_canonica, None, estado);
-        } else if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
+        } else if es_markdown(&ruta) {
             estado.encontrados.push(ruta);
         }
     }
@@ -1329,6 +1367,19 @@ mod tests {
     }
     fn atomos_txt(u: &Estructura) -> Vec<String> {
         u.atomos().iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn errores_de_apertura_solo_omiten_archivos_regulares_no_markdown_confirmados() {
+        assert!(puede_ignorar_error_directorio(
+            Path::new("n/extra.bin"),
+            true
+        ));
+        assert!(!puede_ignorar_error_directorio(
+            Path::new("n/subdir"),
+            false
+        ));
+        assert!(!puede_ignorar_error_directorio(Path::new("n/doc.md"), true));
     }
 
     #[test]
@@ -2197,6 +2248,27 @@ mod tests {
                 .iter()
                 .any(|e| e.regla == Regla::Io && e.detalle.contains("ciclo")),
             "{errores:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_reporta_symlink_no_markdown_con_error_de_resolucion() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("n")).unwrap();
+        std::fs::write(dir.path().join("n/x.md"), doc("a", "X", "")).unwrap();
+        let a = dir.path().join("n/a.bin");
+        let b = dir.path().join("n/b.bin");
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+        assert!(
+            errores.iter().any(|error| {
+                error.regla == Regla::Io
+                    && matches!(error.path.as_deref(), Some("n/a.bin" | "n/b.bin"))
+            }),
+            "un symlink no Markdown que no se puede resolver debe impedir una carga parcial: {errores:?}"
         );
     }
 
