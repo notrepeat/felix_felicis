@@ -156,6 +156,8 @@ pub enum Regla {
     NoUtf8,
     /// Error de E/S al leer el archivo.
     Io,
+    /// El bundle excede uno de los límites deterministas de carga.
+    LimiteBundleExcedido,
     /// Error al construir la `Estructura` (manifiesto inválido u operación
     /// rechazada).
     Estructura,
@@ -188,6 +190,7 @@ impl std::fmt::Display for Regla {
             Regla::ConstanteFueraDeDominio => "ConstanteFueraDeDominio",
             Regla::NoUtf8 => "NoUtf8",
             Regla::Io => "Io",
+            Regla::LimiteBundleExcedido => "LimiteBundleExcedido",
             Regla::Estructura => "Estructura",
         };
         write!(f, "{nombre}")

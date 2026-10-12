@@ -16,6 +16,7 @@ use crate::transaccion::anclado::{
     DirectorioLecturaAnclado, ErrorDirectorioAnclado, IdentidadDirectorio,
     identidad_directorio_para_recorrido,
 };
+use crate::transaccion::inventario::LimitesInventario;
 use crate::transaccion::raiz::UbicacionRaiz;
 
 /// Un archivo ya localizado como `BundlePath`, con su contenido crudo.
@@ -146,6 +147,75 @@ fn error(
         regla,
         detalle: detalle.into(),
     }
+}
+
+const LIMITES_BUNDLE: LimitesInventario = LimitesInventario::CONTRATO;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecursoBundle {
+    Entradas,
+    Profundidad,
+    BytesRutas,
+}
+
+/// Presupuesto único de una llamada a `cargar_bundle`, compartido por todas
+/// las raíces declaradas en el layout.
+#[derive(Debug)]
+struct PresupuestoBundle {
+    limites: LimitesInventario,
+    entradas: usize,
+    bytes_rutas: usize,
+}
+
+impl PresupuestoBundle {
+    fn nuevo(limites: LimitesInventario) -> Self {
+        Self {
+            limites,
+            entradas: 0,
+            bytes_rutas: 0,
+        }
+    }
+
+    fn reservar_entrada(
+        &mut self,
+        bytes_ruta: usize,
+        profundidad: usize,
+    ) -> Result<(), RecursoBundle> {
+        if profundidad > self.limites.profundidad {
+            return Err(RecursoBundle::Profundidad);
+        }
+        let entradas = self
+            .entradas
+            .checked_add(1)
+            .filter(|total| *total <= self.limites.entradas)
+            .ok_or(RecursoBundle::Entradas)?;
+        let bytes_rutas = self
+            .bytes_rutas
+            .checked_add(bytes_ruta)
+            .filter(|total| *total <= self.limites.bytes_rutas)
+            .ok_or(RecursoBundle::BytesRutas)?;
+        self.entradas = entradas;
+        self.bytes_rutas = bytes_rutas;
+        Ok(())
+    }
+}
+
+fn error_limite_bundle(
+    path: Option<&str>,
+    recurso: RecursoBundle,
+    limites: LimitesInventario,
+) -> ErrorBundle {
+    let (nombre, limite) = match recurso {
+        RecursoBundle::Entradas => ("entradas", limites.entradas),
+        RecursoBundle::Profundidad => ("profundidad", limites.profundidad),
+        RecursoBundle::BytesRutas => ("bytes de rutas", limites.bytes_rutas),
+    };
+    error(
+        path,
+        None,
+        Regla::LimiteBundleExcedido,
+        format!("se excedió el límite de {nombre} de carga del bundle ({limite})"),
+    )
 }
 
 /// Índices locales para las consultas repetidas del parser. Almacena claves
@@ -780,6 +850,24 @@ fn cargar_bundle_observando(
 fn cargar_bundle_con_observadores(
     raiz: &Path,
     manifiesto: Manifiesto,
+    obtener_identidad: impl FnMut(&Path) -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado>,
+    observar_recorrido: impl FnMut(),
+    antes_de_abrir_archivo: impl FnMut(&Path),
+) -> Result<Estructura, Vec<ErrorBundle>> {
+    cargar_bundle_con_limites(
+        raiz,
+        manifiesto,
+        LIMITES_BUNDLE,
+        obtener_identidad,
+        observar_recorrido,
+        antes_de_abrir_archivo,
+    )
+}
+
+fn cargar_bundle_con_limites(
+    raiz: &Path,
+    manifiesto: Manifiesto,
+    limites: LimitesInventario,
     mut obtener_identidad: impl FnMut(
         &Path,
     )
@@ -839,6 +927,7 @@ fn cargar_bundle_con_observadores(
     let raiz_canonica = ubicacion_raiz.ruta().to_path_buf();
 
     let mut bases_procesadas: HashSet<IdentidadBaseLayout> = HashSet::new();
+    let mut presupuesto = PresupuestoBundle::nuevo(limites);
     for directorio in &manifiesto.layout.directorios {
         if !directorio_layout_seguro(directorio) {
             errores.push(error(
@@ -908,6 +997,13 @@ fn cargar_bundle_con_observadores(
                 "layout.directorios contiene rutas que resuelven al mismo directorio",
             ));
             continue;
+        }
+        if let Err(recurso) =
+            presupuesto.reservar_entrada(directorio.len(), directorio.split('/').count())
+        {
+            errores.push(error_limite_bundle(Some(directorio), recurso, limites));
+            ordenar_errores(&mut errores);
+            return Err(errores);
         }
         let mut encontrados: Vec<std::path::PathBuf> = Vec::new();
         let mut camino: Vec<PathBuf> = Vec::new();
@@ -1380,6 +1476,42 @@ mod tests {
             false
         ));
         assert!(!puede_ignorar_error_directorio(Path::new("n/doc.md"), true));
+    }
+
+    #[test]
+    fn presupuesto_bundle_acepta_limites_exactos_y_rechaza_el_exceso() {
+        let limites = LimitesInventario {
+            bytes_raw: 0,
+            entradas: 2,
+            profundidad: 2,
+            bytes_rutas: 5,
+        };
+        let mut presupuesto = PresupuestoBundle::nuevo(limites);
+        assert_eq!(presupuesto.reservar_entrada(2, 1), Ok(()));
+        assert_eq!(presupuesto.reservar_entrada(3, 2), Ok(()));
+        assert_eq!(presupuesto.entradas, 2);
+        assert_eq!(presupuesto.bytes_rutas, 5);
+        assert_eq!(
+            presupuesto.reservar_entrada(1, 2),
+            Err(RecursoBundle::Entradas)
+        );
+
+        let limites = LimitesInventario {
+            entradas: 4,
+            profundidad: 1,
+            bytes_rutas: 5,
+            ..limites
+        };
+        let mut presupuesto = PresupuestoBundle::nuevo(limites);
+        assert_eq!(presupuesto.reservar_entrada(5, 1), Ok(()));
+        assert_eq!(
+            presupuesto.reservar_entrada(0, 2),
+            Err(RecursoBundle::Profundidad)
+        );
+        assert_eq!(
+            presupuesto.reservar_entrada(1, 1),
+            Err(RecursoBundle::BytesRutas)
+        );
     }
 
     #[test]
