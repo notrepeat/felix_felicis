@@ -945,7 +945,7 @@ fn cargar_bundle_con_limites(
     let raiz_canonica = ubicacion_raiz.ruta().to_path_buf();
 
     let mut bases_procesadas: HashSet<IdentidadBaseLayout> = HashSet::new();
-    let mut bases_canonicas_procesadas: Vec<PathBuf> = Vec::new();
+    let mut bases_canonicas_procesadas = IndiceRutasCanonicas::default();
     let mut presupuesto = PresupuestoBundle::nuevo(limites);
     for directorio in &manifiesto.layout.directorios {
         if !directorio_layout_seguro(directorio) {
@@ -1017,7 +1017,7 @@ fn cargar_bundle_con_limites(
             ));
             continue;
         }
-        if rutas_canonicas_solapadas(&base_canonica, &bases_canonicas_procesadas) {
+        if bases_canonicas_procesadas.se_solapa(&base_canonica, || {}) {
             errores.push(error(
                 None,
                 None,
@@ -1026,7 +1026,7 @@ fn cargar_bundle_con_limites(
             ));
             continue;
         }
-        bases_canonicas_procesadas.push(base_canonica.clone());
+        bases_canonicas_procesadas.insertar(&base_canonica);
         if let Err(recurso) =
             presupuesto.reservar_entrada(directorio.len(), directorio.split('/').count())
         {
@@ -1206,10 +1206,49 @@ fn registrar_directorio_procesado<I: std::hash::Hash + Eq>(
     procesados_globales.insert(identidad)
 }
 
-fn rutas_canonicas_solapadas(ruta: &Path, anteriores: &[PathBuf]) -> bool {
-    anteriores.iter().any(|anterior| {
-        ruta != anterior && (ruta.starts_with(anterior) || anterior.starts_with(ruta))
-    })
+#[derive(Default)]
+struct NodoIndiceRutaCanonica {
+    hoja: bool,
+    hijos: HashMap<std::ffi::OsString, NodoIndiceRutaCanonica>,
+}
+
+#[derive(Default)]
+struct IndiceRutasCanonicas {
+    raiz: NodoIndiceRutaCanonica,
+}
+
+impl IndiceRutasCanonicas {
+    fn se_solapa(&self, ruta: &Path, mut observar_busqueda: impl FnMut()) -> bool {
+        let mut nodo = &self.raiz;
+        let mut componentes = ruta.components().peekable();
+        while let Some(componente) = componentes.next() {
+            observar_busqueda();
+            if nodo.hoja {
+                return true;
+            }
+            let Some(hijo) = nodo.hijos.get(componente.as_os_str()) else {
+                return false;
+            };
+            nodo = hijo;
+            if componentes.peek().is_none() {
+                // Una hoja exacta se comprueba por identidad/ruta en el índice
+                // existente; solo una rama descendiente es solapamiento aquí.
+                return !nodo.hijos.is_empty();
+            }
+        }
+        false
+    }
+
+    fn insertar(&mut self, ruta: &Path) {
+        let mut nodo = &mut self.raiz;
+        for componente in ruta.components() {
+            nodo = nodo
+                .hijos
+                .entry(componente.as_os_str().to_os_string())
+                .or_default();
+        }
+        nodo.hoja = true;
+    }
 }
 
 /// Path relativo a `raiz`, con separador `/`, tal como se reporta en los
@@ -2330,24 +2369,32 @@ mod tests {
     }
 
     #[test]
-    fn rutas_canonicas_solapadas_exige_prefijo_de_componente() {
-        let anteriores = vec![PathBuf::from("raiz/docs/sub")];
-        assert!(rutas_canonicas_solapadas(
-            Path::new("raiz/docs"),
-            &anteriores
-        ));
-        assert!(rutas_canonicas_solapadas(
-            Path::new("raiz/docs/sub/mas"),
-            &anteriores
-        ));
-        assert!(!rutas_canonicas_solapadas(
-            Path::new("raiz/docs-extra"),
-            &anteriores
-        ));
-        assert!(!rutas_canonicas_solapadas(
-            Path::new("raiz/docs/sub"),
-            &anteriores
-        ));
+    fn indice_de_rutas_canonicas_detecta_solapamiento_por_componentes() {
+        let mut indice = IndiceRutasCanonicas::default();
+        indice.insertar(Path::new("raiz/docs/sub"));
+
+        assert!(indice.se_solapa(Path::new("raiz/docs"), || {}));
+        assert!(indice.se_solapa(Path::new("raiz/docs/sub/mas"), || {}));
+        assert!(!indice.se_solapa(Path::new("raiz/docs-extra"), || {}));
+        assert!(!indice.se_solapa(Path::new("raiz/docs/sub"), || {}));
+    }
+
+    #[test]
+    fn indice_de_roots_canonicos_busca_en_trabajo_lineal_en_roots() {
+        const CANTIDAD: usize = 10_000;
+        let mut indice = IndiceRutasCanonicas::default();
+        let mut busquedas = 0;
+
+        for numero in 0..CANTIDAD {
+            let ruta = PathBuf::from("raiz").join(format!("docs-{numero:05}"));
+            assert!(!indice.se_solapa(&ruta, || busquedas += 1));
+            indice.insertar(&ruta);
+        }
+
+        assert!(
+            busquedas <= CANTIDAD * 2,
+            "{busquedas} búsquedas para {CANTIDAD} raíces de 2 componentes"
+        );
     }
 
     #[cfg(any(unix, windows))]
