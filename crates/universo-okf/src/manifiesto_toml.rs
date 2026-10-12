@@ -120,13 +120,22 @@ impl From<ManifiestoToml> for Manifiesto {
 /// el schema esperado (un campo desconocido es `Sintaxis`, no se ignora en
 /// silencio) y llama a `Manifiesto::validar()`.
 pub fn parsear_manifiesto(texto: &str) -> Result<Manifiesto, ErrorManifiestoArchivo> {
-    let crudo: ManifiestoToml =
-        toml::from_str(texto).map_err(|e| ErrorManifiestoArchivo::Sintaxis(e.to_string()))?;
-    let manifiesto: Manifiesto = crudo.into();
+    let manifiesto = parsear_manifiesto_sin_validar(texto)?;
     manifiesto
         .validar()
         .map_err(ErrorManifiestoArchivo::Validacion)?;
     Ok(manifiesto)
+}
+
+/// Deserializa el esquema TOML sin aplicar todavía las reglas semánticas.
+/// La captura usa este paso para validar una sola vez, antes de expandir
+/// Markdown y conservar la misma `Estructura` ya validada al parsear el bundle.
+pub(crate) fn parsear_manifiesto_sin_validar(
+    texto: &str,
+) -> Result<Manifiesto, ErrorManifiestoArchivo> {
+    let crudo: ManifiestoToml =
+        toml::from_str(texto).map_err(|e| ErrorManifiestoArchivo::Sintaxis(e.to_string()))?;
+    Ok(crudo.into())
 }
 
 /// Lee `ruta` y llama a `parsear_manifiesto` sobre su contenido.

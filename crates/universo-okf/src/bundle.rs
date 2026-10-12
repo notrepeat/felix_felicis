@@ -226,9 +226,7 @@ pub fn parsear_bundle(
     archivos: &[(String, String)],
     manifiesto: Manifiesto,
 ) -> Result<Estructura, Vec<ErrorBundle>> {
-    let mut errores: Vec<ErrorBundle> = Vec::new();
-
-    let mut estructura = match Estructura::nueva(manifiesto) {
+    let estructura = match Estructura::nueva(manifiesto) {
         Ok(e) => e,
         Err(err) => {
             let detalles = match err {
@@ -238,6 +236,15 @@ pub fn parsear_bundle(
             return Err(errores_validacion_manifiesto(detalles));
         }
     };
+
+    parsear_bundle_desde_estructura(archivos, estructura)
+}
+
+pub(crate) fn parsear_bundle_desde_estructura(
+    archivos: &[(String, String)],
+    mut estructura: Estructura,
+) -> Result<Estructura, Vec<ErrorBundle>> {
+    let mut errores: Vec<ErrorBundle> = Vec::new();
     let indices_manifiesto = IndicesManifiesto::nuevo(estructura.manifiesto());
 
     // Paso 0: saltar los archivos cuyo nombre (último segmento del path,

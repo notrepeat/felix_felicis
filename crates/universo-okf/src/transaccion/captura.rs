@@ -15,8 +15,8 @@ use std::fs;
 
 use universo_core::{Estructura, SentenciaFuente, parsear_programa};
 
-use crate::bundle::{directorio_layout_seguro, parsear_bundle};
-use crate::manifiesto_toml::parsear_manifiesto;
+use crate::bundle::{directorio_layout_seguro, parsear_bundle_desde_estructura};
+use crate::manifiesto_toml::parsear_manifiesto_sin_validar;
 
 use super::anclado::{DirectorioAnclado, IdentidadDirectorio};
 use super::inventario::{
@@ -429,6 +429,17 @@ pub(crate) fn materializar_desde_entradas(
 /// consultar el filesystem, así que el modelo y token describen los mismos
 /// bytes incluso si los archivos cambian después de la captura.
 fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
+    materializar_con_expansor(raw, archivos_markdown)
+}
+
+fn materializar_con_expansor(
+    raw: CapturaSnapshotRaw,
+    expandir_archivos: impl FnOnce(
+        &[EntradaSnapshot],
+        &[String],
+        &[String],
+    ) -> Result<Vec<(String, String)>, ErrorSnapshot>,
+) -> Result<Snapshot, ErrorSnapshot> {
     let CapturaSnapshotRaw {
         token,
         raw_tree_digest,
@@ -450,15 +461,17 @@ fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
     )?;
     let manifiesto_texto =
         std::str::from_utf8(&manifiesto_raw).map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
-    let manifiesto =
-        parsear_manifiesto(manifiesto_texto).map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
-    let archivos = archivos_markdown(
-        &entradas,
-        &manifiesto.layout.directorios,
-        &manifiesto.layout.ignorados,
-    )?;
+    let manifiesto = parsear_manifiesto_sin_validar(manifiesto_texto)
+        .map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
     let estructura =
-        parsear_bundle(&archivos, manifiesto).map_err(|_| ErrorSnapshot::BundleInvalido)?;
+        Estructura::nueva(manifiesto).map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
+    let archivos = expandir_archivos(
+        &entradas,
+        &estructura.manifiesto().layout.directorios,
+        &estructura.manifiesto().layout.ignorados,
+    )?;
+    let estructura = parsear_bundle_desde_estructura(&archivos, estructura)
+        .map_err(|_| ErrorSnapshot::BundleInvalido)?;
 
     let invariantes_texto =
         std::str::from_utf8(&invariantes_raw).map_err(|_| ErrorSnapshot::InvariantesInvalidas)?;
@@ -859,6 +872,60 @@ ignorados = ["ignored.md"]
         let snapshot = materializar(raw).unwrap();
         assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
         assert_eq!(snapshot.estructura().nodos().count(), 1);
+    }
+
+    #[test]
+    fn manifiesto_invalido_no_expande_ni_clona_contenido_markdown() {
+        let casos = [
+            (
+                "duplicados",
+                MANIFIESTO.replace(
+                    "directorios = [\"knowledge\"]",
+                    "directorios = [\"knowledge\", \"knowledge\"]",
+                ),
+            ),
+            (
+                "solapados",
+                MANIFIESTO.replace(
+                    "directorios = [\"knowledge\"]",
+                    "directorios = [\"knowledge\", \"knowledge/sub\"]",
+                ),
+            ),
+            (
+                "vacio",
+                MANIFIESTO.replace("directorios = [\"knowledge\"]", "directorios = []"),
+            ),
+        ];
+
+        for (caso, manifiesto) in casos {
+            let root = tempdir().unwrap();
+            fs::create_dir_all(root.path().join("knowledge/sub")).unwrap();
+            fs::write(root.path().join("manifest.toml"), manifiesto).unwrap();
+            fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+            let canary = format!("CANARY-{caso}-no-expand");
+            fs::write(root.path().join("knowledge/canary.md"), &canary).unwrap();
+
+            let raw = capturar_snapshot_raw(
+                root.path(),
+                &root.path().join("manifest.toml"),
+                &root.path().join("invariants.smt2"),
+                "engine/1",
+                "policy/1",
+            )
+            .unwrap();
+            let mut operaciones_expansion = 0;
+            let error = materializar_con_expansor(raw, |entradas, directorios, ignorados| {
+                archivos_markdown_observando(entradas, directorios, ignorados, || {
+                    operaciones_expansion += 1;
+                })
+            })
+            .unwrap_err();
+
+            assert_eq!(error, ErrorSnapshot::ManifiestoInvalido, "caso: {caso}");
+            assert_eq!(operaciones_expansion, 0, "caso: {caso}");
+            assert!(!format!("{error:?}").contains(&canary));
+            assert!(!error.to_string().contains(&canary));
+        }
     }
 
     #[test]
