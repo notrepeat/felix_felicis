@@ -3,7 +3,8 @@
 //! todo lo demás (`salientes`, `entrantes`, `hijos`, `indice`,
 //! `indice_case`) es derivado y se mantiene coherente en cada operación.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use slotmap::{SecondaryMap, SlotMap};
 
@@ -46,6 +47,8 @@ pub struct Arista {
 #[derive(Debug)]
 pub struct Estructura {
     manifiesto: Manifiesto,
+    sortes_nodo_index: Arc<BTreeSet<Sorte>>,
+    claves_arista_index: Arc<BTreeSet<String>>,
     nodos: SlotMap<NodoId, Nodo>,
     aristas: SlotMap<AristaId, Arista>,
     salientes: SecondaryMap<NodoId, Vec<AristaId>>,
@@ -151,8 +154,18 @@ impl Estructura {
     /// validarlo.
     pub fn nueva(manifiesto: Manifiesto) -> Result<Self, ErrorEstructura> {
         manifiesto.validar().map_err(ErrorEstructura::Manifiesto)?;
+        let sortes_nodo_index = Arc::new(manifiesto.sortes_nodo.iter().cloned().collect());
+        let claves_arista_index = Arc::new(
+            manifiesto
+                .aristas
+                .iter()
+                .map(|arista| arista.clave.clone())
+                .collect(),
+        );
         Ok(Self {
             manifiesto,
+            sortes_nodo_index,
+            claves_arista_index,
             nodos: SlotMap::with_key(),
             aristas: SlotMap::with_key(),
             salientes: SecondaryMap::new(),
@@ -172,6 +185,8 @@ impl Estructura {
     pub(crate) fn clonar_para_candidato(&self) -> Self {
         Self {
             manifiesto: self.manifiesto.clone(),
+            sortes_nodo_index: Arc::clone(&self.sortes_nodo_index),
+            claves_arista_index: Arc::clone(&self.claves_arista_index),
             nodos: self.nodos.clone(),
             aristas: self.aristas.clone(),
             salientes: self.salientes.clone(),
@@ -209,7 +224,7 @@ impl Estructura {
         tipo: Sorte,
         etiqueta: Etiqueta,
     ) -> Result<NodoId, ErrorEstructura> {
-        if !self.manifiesto.es_sorte_nodo(&tipo) {
+        if !self.sortes_nodo_index.contains(&tipo) {
             return Err(ErrorEstructura::SorteNodoDesconocido(
                 tipo.como_str().to_string(),
             ));
@@ -256,7 +271,7 @@ impl Estructura {
         if !self.nodos.contains_key(origen) || !self.nodos.contains_key(destino) {
             return Err(ErrorEstructura::NodoInexistente);
         }
-        if !self.manifiesto.es_sorte_arista(tipo.como_str()) {
+        if !self.claves_arista_index.contains(tipo.como_str()) {
             return Err(ErrorEstructura::SorteAristaDesconocido(
                 tipo.como_str().to_string(),
             ));

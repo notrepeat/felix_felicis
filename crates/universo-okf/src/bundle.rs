@@ -141,6 +141,82 @@ fn error(
     }
 }
 
+/// Índices locales para las consultas repetidas del parser. Almacena claves
+/// propias e índices de declaración para no retener préstamos de la estructura
+/// mientras `parsear_bundle` la modifica.
+struct IndicesManifiesto {
+    sorte_por_nombre: HashMap<String, usize>,
+    sorte_por_alias: HashMap<String, usize>,
+    predicado_por_clave: HashMap<String, usize>,
+    arista_por_clave: HashMap<String, usize>,
+}
+
+impl IndicesManifiesto {
+    fn nuevo(manifiesto: &Manifiesto) -> Self {
+        let sorte_por_nombre: HashMap<String, usize> = manifiesto
+            .sortes_nodo
+            .iter()
+            .enumerate()
+            .map(|(indice, sorte)| (sorte.como_str().to_string(), indice))
+            .collect();
+        let mut sorte_por_alias = HashMap::with_capacity(manifiesto.sortes_nodo_disco.len());
+        // La BTreeMap conserva el orden de la búsqueda anterior. Si dos
+        // sortes comparten alias, se mantiene la primera por su clave de sorte.
+        for (sorte, alias) in &manifiesto.sortes_nodo_disco {
+            if let Some(&indice) = sorte_por_nombre.get(sorte.como_str()) {
+                sorte_por_alias.entry(alias.clone()).or_insert(indice);
+            }
+        }
+
+        Self {
+            sorte_por_nombre,
+            sorte_por_alias,
+            predicado_por_clave: manifiesto
+                .predicados
+                .iter()
+                .enumerate()
+                .map(|(indice, predicado)| (predicado.clave.clone(), indice))
+                .collect(),
+            arista_por_clave: manifiesto
+                .aristas
+                .iter()
+                .enumerate()
+                .map(|(indice, arista)| (arista.clave.clone(), indice))
+                .collect(),
+        }
+    }
+
+    fn sorte_desde_disco(&self, manifiesto: &Manifiesto, valor: &str) -> Option<Sorte> {
+        let indice = self
+            .sorte_por_alias
+            .get(valor)
+            .or_else(|| self.sorte_por_nombre.get(valor))?;
+        manifiesto.sortes_nodo.get(*indice).cloned()
+    }
+
+    fn predicado_por_clave<'a>(
+        &self,
+        manifiesto: &'a Manifiesto,
+        clave: &str,
+    ) -> Option<&'a universo_core::DeclPredicado> {
+        manifiesto
+            .predicados
+            .get(*self.predicado_por_clave.get(clave)?)
+    }
+
+    fn arista_por_clave<'a>(
+        &self,
+        manifiesto: &'a Manifiesto,
+        clave: &str,
+    ) -> Option<&'a universo_core::DeclArista> {
+        manifiesto.aristas.get(*self.arista_por_clave.get(clave)?)
+    }
+
+    fn contiene_arista(&self, clave: &str) -> bool {
+        self.arista_por_clave.contains_key(clave)
+    }
+}
+
 /// Carga pura desde memoria: `archivos` = (path relativo del archivo CON
 /// extensión `.md` y separador `/`, contenido). Acumula todos los errores
 /// encontrados; si hay al menos uno, nunca devuelve una `Estructura` a
@@ -161,6 +237,7 @@ pub fn parsear_bundle(
             return Err(errores_validacion_manifiesto(detalles));
         }
     };
+    let indices_manifiesto = IndicesManifiesto::nuevo(estructura.manifiesto());
 
     // Paso 0: saltar los archivos cuyo nombre (último segmento del path,
     // con extensión) está en `layout.ignorados` — mismo criterio que
@@ -263,9 +340,8 @@ pub fn parsear_bundle(
         let tipo = if clave_consumida_retirado.is_some() {
             Sorte::nuevo("Retirado")
         } else {
-            match estructura
-                .manifiesto()
-                .sorte_desde_disco(&entrada_type.valor_escalar())
+            match indices_manifiesto
+                .sorte_desde_disco(estructura.manifiesto(), &entrada_type.valor_escalar())
             {
                 Some(t) if t == Sorte::nuevo("Retirado") => {
                     if let Some((k, v)) = &estructura.manifiesto().retirado_en_disco {
@@ -386,7 +462,9 @@ pub fn parsear_bundle(
                 }
                 continue;
             }
-            if let Some(decl) = estructura.manifiesto().predicado_por_clave(&entrada.clave) {
+            if let Some(decl) =
+                indices_manifiesto.predicado_por_clave(estructura.manifiesto(), &entrada.clave)
+            {
                 let nombre = decl.nombre.clone();
                 let constante = entrada.valor_escalar();
                 if let Err(err) = estructura.asignar_atributo(id, &nombre, &constante) {
@@ -405,7 +483,7 @@ pub fn parsear_bundle(
                 }
                 continue;
             }
-            if estructura.manifiesto().es_sorte_arista(&entrada.clave) {
+            if indices_manifiesto.contiene_arista(&entrada.clave) {
                 aristas_pendientes.push((entrada.clave.clone(), entrada.clone()));
                 continue;
             }
@@ -459,9 +537,8 @@ pub fn parsear_bundle(
     for nodo in &cargados {
         let path_str = nodo.path.como_str().to_string();
         for (clave, entrada) in &nodo.aristas_pendientes {
-            let decl = estructura
-                .manifiesto()
-                .arista(clave)
+            let decl = indices_manifiesto
+                .arista_por_clave(estructura.manifiesto(), clave)
                 .expect("es_sorte_arista lo garantiza")
                 .clone();
 
@@ -980,7 +1057,7 @@ fn recorrer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use universo_core::BundlePath;
+    use universo_core::{BundlePath, DeclArista, DeclPredicado, Sorte};
     use universo_testkit::manifiesto_minimo;
 
     fn doc(tipo: &str, titulo: &str, extra: &str) -> String {
@@ -1040,6 +1117,72 @@ mod tests {
         assert_eq!(u.anexo(y).unwrap().cuerpo, "cuerpo\n");
         assert_eq!(u.len_nodos(), 7);
         assert_eq!(u.len_aristas(), 6);
+    }
+
+    #[test]
+    fn parser_resuelve_claves_con_indices_en_un_manifiesto_grande() {
+        const DECLARACIONES: usize = 256;
+        let mut manifiesto = manifiesto_minimo();
+        for indice in 0..DECLARACIONES {
+            let nombre_sorte = format!("tipo-{indice:03}");
+            let sorte = Sorte::nuevo(&nombre_sorte);
+            manifiesto.sortes_nodo.push(sorte.clone());
+            manifiesto
+                .sortes_nodo_disco
+                .insert(sorte, format!("disk-{indice:03}"));
+            manifiesto.predicados.push(DeclPredicado {
+                nombre: format!("atributo-{indice:03}"),
+                clave: format!("campo-{indice:03}"),
+                dominio: ["si".into()].into_iter().collect(),
+            });
+            manifiesto.aristas.push(DeclArista {
+                clave: format!("edge-{indice:03}"),
+                simetrica: true,
+                inversa: None,
+                destino: None,
+                etiqueta: None,
+            });
+        }
+
+        let ultimo = DECLARACIONES - 1;
+        let alias = format!("disk-{ultimo:03}");
+        let predicado = format!("atributo-{ultimo:03}");
+        let clave_predicado = format!("campo-{ultimo:03}");
+        let clave_arista = format!("edge-{ultimo:03}");
+        let extra = format!("{clave_predicado}: si\n{clave_arista}: []\n");
+        let archivos: Vec<(String, String)> = (0..DECLARACIONES)
+            .map(|indice| {
+                (
+                    format!("n/nodo-{indice:03}.md"),
+                    doc(&alias, &format!("Nodo {indice}"), &extra),
+                )
+            })
+            .collect();
+
+        let estructura = parsear_bundle(&archivos, manifiesto).unwrap();
+        assert_eq!(estructura.len_nodos(), DECLARACIONES);
+        assert_eq!(estructura.len_aristas(), 0);
+        let atomos = atomos_txt(&estructura);
+        assert_eq!(
+            atomos
+                .iter()
+                .filter(|atomo| atomo.starts_with("Type("))
+                .count(),
+            DECLARACIONES
+        );
+        assert_eq!(
+            atomos
+                .iter()
+                .filter(|atomo| atomo.starts_with(&format!("{predicado}(")))
+                .count(),
+            DECLARACIONES
+        );
+        assert!(
+            atomos
+                .iter()
+                .filter(|atomo| atomo.starts_with("Type("))
+                .all(|atomo| atomo.contains(&format!(", tipo-{ultimo:03})")))
+        );
     }
 
     #[test]
