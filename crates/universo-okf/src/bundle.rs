@@ -1494,10 +1494,25 @@ fn recorrer_canonico<O: FnMut()>(
         Ok(relativa) => relativa,
         Err(_) => return Ok(()),
     };
-    if !estado.procesados.insert(relativa.to_path_buf()) {
+    if estado.procesados.contains(relativa) {
         // Diamante: mismo directorio físico ya procesado por otra ruta.
         return Ok(());
     }
+    estado
+        .presupuesto
+        .reservar_ruta_fisica(relativa.as_os_str().len())
+        .map_err(|recurso| {
+            error_limite_bundle(
+                Some(&relativa_a_raiz(ctx.raiz, dir)),
+                recurso,
+                estado.presupuesto.limites,
+            )
+        })?;
+    let insertado = estado.procesados.insert(relativa.to_path_buf());
+    debug_assert!(
+        insertado,
+        "el recorrido no inserta directorios concurrentemente"
+    );
     // Seam determinista: permite sustituir la ruta tras su validación y
     // antes de abrirla para enumerar; la apertura relativa debe fallar sin
     // seguir symlinks ni reparse points.
@@ -2489,7 +2504,9 @@ mod tests {
     #[test]
     fn cargar_bundle_presupuesta_ruta_fisica_canonica_exacta_y_exceso() {
         let nombre_fisico = format!("target-{}", "p".repeat(64));
-        let bytes_fisicos = nombre_fisico.len();
+        // La raíz canónica queda retenida por el índice de raíces y por el
+        // set `procesados` del recorrido.
+        let bytes_fisicos = nombre_fisico.len() * 2;
         let contenido = doc("a", "Doc", "");
 
         for (bytes_rutas, esperado) in [(bytes_fisicos, true), (bytes_fisicos - 1, false)] {
@@ -2517,6 +2534,48 @@ mod tests {
                 assert_eq!(errores.len(), 1, "{errores:?}");
                 assert_eq!(errores[0].regla, Regla::LimiteBundleExcedido);
                 assert_eq!(errores[0].path.as_deref(), Some("alias"));
+            }
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn cargar_bundle_presupuesta_rutas_procesadas_y_no_duplica_diamantes() {
+        let nombre_base = format!("target-{}", "p".repeat(48));
+        let nombre_subdir = "subdir";
+        let contenido = doc("a", "Doc", "");
+        let bytes_base = nombre_base.len();
+        let bytes_subdir_fisico = nombre_base.len() + 1 + nombre_subdir.len();
+        let bytes_fisicos = 2 * bytes_base + bytes_subdir_fisico;
+
+        for (bytes_rutas, esperado) in [(bytes_fisicos, true), (bytes_fisicos - 1, false)] {
+            let raiz = tempfile::tempdir().unwrap();
+            let destino = raiz.path().join(&nombre_base);
+            let subdir = destino.join(nombre_subdir);
+            std::fs::create_dir_all(&subdir).unwrap();
+            std::fs::write(subdir.join("doc.md"), &contenido).unwrap();
+            enlazar_directorio(&destino.join("a"), &subdir);
+            enlazar_directorio(&destino.join("b"), &subdir);
+            enlazar_directorio(&raiz.path().join("alias"), &destino);
+
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = vec!["alias".into()];
+            manifiesto.layout.sin_iota.clear();
+            let limites = LimitesInventario {
+                bytes_raw: contenido.len(),
+                entradas: 5,
+                profundidad: 3,
+                bytes_rutas,
+            };
+            let resultado = cargar_bundle_con_presupuesto_test(raiz.path(), manifiesto, limites);
+
+            if esperado {
+                assert_eq!(resultado.unwrap().len_nodos(), 1);
+            } else {
+                let errores = resultado.unwrap_err();
+                assert_eq!(errores.len(), 1, "{errores:?}");
+                assert_eq!(errores[0].regla, Regla::LimiteBundleExcedido);
+                assert_eq!(errores[0].path.as_deref(), Some("alias/a"));
             }
         }
     }

@@ -457,8 +457,10 @@ Chain strategy: feature-branch-chain
   límites son inclusivos. El inventario cuenta bytes raw de todos los archivos
   regulares; `cargar_bundle` solo suma documentos Markdown efectivamente leídos.
   `cargar_bundle` aplica además un presupuesto físico independiente de 16 MiB
-  para las rutas canónicas relativas de las raíces declaradas que retiene en su
-  índice; ese costo no sustituye ni se suma al presupuesto de rutas lógicas.
+  para todas las rutas canónicas relativas que retiene: raíces declaradas en el
+  índice y directorios únicos en `procesados`. Los aliases de diamante omitidos
+  no se cobran dos veces; cada copia retenida sí cuenta. Este costo no sustituye
+  ni se suma al presupuesto de rutas lógicas.
   El preflight de limpieza de `StageAnclado` reutiliza solo los límites
   estructurales compartidos (100.000 entradas, profundidad 128 y 16 MiB de
   rutas); no lee ni presupuesta bytes raw de contenido. Si se exceden, devuelve
