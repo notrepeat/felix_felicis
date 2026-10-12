@@ -262,8 +262,7 @@ pub fn calcular_token_snapshot(
     invariantes_raw: &[u8],
     entradas: &[EntradaSnapshot],
 ) -> Result<SnapshotToken, ErrorSnapshot> {
-    let mut ordenadas: Vec<_> = entradas.iter().collect();
-    ordenadas.sort_by(|a, b| a.ruta.as_bytes().cmp(b.ruta.as_bytes()));
+    let ordenadas = ordenar_y_validar_rutas(entradas)?;
 
     let mut hash = Sha256::new();
     hash_field(&mut hash, b"domain", DOMAIN)?;
@@ -296,15 +295,7 @@ pub fn calcular_token_snapshot(
 pub(crate) fn calcular_digest_raw_tree(
     entradas: &[EntradaSnapshot],
 ) -> Result<RawTreeDigest, ErrorSnapshot> {
-    let mut ordenadas: Vec<_> = entradas.iter().collect();
-    ordenadas.sort_by(|a, b| a.ruta.as_bytes().cmp(b.ruta.as_bytes()));
-
-    for (indice, entrada) in ordenadas.iter().enumerate() {
-        validar_ruta_raw_tree(entrada.ruta())?;
-        if indice > 0 && ordenadas[indice - 1].ruta() == entrada.ruta() {
-            return Err(ErrorSnapshot::RutaNoRepresentable);
-        }
-    }
+    let ordenadas = ordenar_y_validar_rutas(entradas)?;
 
     let mut hash = Sha256::new();
     hash.update(RAW_TREE_DOMAIN);
@@ -331,7 +322,23 @@ pub(crate) fn calcular_digest_raw_tree(
     Ok(RawTreeDigest::from_digest(hash.finalize().into()))
 }
 
-fn validar_ruta_raw_tree(ruta: &str) -> Result<(), ErrorSnapshot> {
+fn ordenar_y_validar_rutas(
+    entradas: &[EntradaSnapshot],
+) -> Result<Vec<&EntradaSnapshot>, ErrorSnapshot> {
+    let mut ordenadas: Vec<_> = entradas.iter().collect();
+    ordenadas.sort_by(|a, b| a.ruta().as_bytes().cmp(b.ruta().as_bytes()));
+
+    for (indice, entrada) in ordenadas.iter().enumerate() {
+        validar_ruta_snapshot(entrada.ruta())?;
+        if indice > 0 && ordenadas[indice - 1].ruta() == entrada.ruta() {
+            return Err(ErrorSnapshot::RutaNoRepresentable);
+        }
+    }
+
+    Ok(ordenadas)
+}
+
+fn validar_ruta_snapshot(ruta: &str) -> Result<(), ErrorSnapshot> {
     if ruta.is_empty() || ruta.contains('\\') || ruta.contains('\0') {
         return Err(ErrorSnapshot::RutaNoRepresentable);
     }
@@ -465,6 +472,32 @@ mod tests {
         assert!(!format!("{result:?}").contains(&result.to_hex()));
         assert!(!result.to_string().contains(&result.to_hex()));
         assert!(!format!("{result:?}").contains("CANARY"));
+    }
+
+    #[test]
+    fn token_rechaza_rutas_no_representables_y_duplicadas_con_error_redactado() {
+        for ruta in [
+            "", "/a", "a/", "a//b", ".", "..", "./a", "a/.", "../a", "a/..", "a/../b", "a\\b",
+            "a\0b",
+        ] {
+            assert_eq!(
+                calcular_token_snapshot("1", "p", b"m", b"i", &[archivo(ruta, b"x")]),
+                Err(ErrorSnapshot::RutaNoRepresentable),
+                "la ruta inválida debe rechazarse: {ruta:?}"
+            );
+        }
+
+        let duplicadas = [archivo("CANARY/path", b"x"), archivo("CANARY/path", b"y")];
+        let error = calcular_token_snapshot("1", "p", b"m", b"i", &duplicadas).unwrap_err();
+        assert_eq!(error, ErrorSnapshot::RutaNoRepresentable);
+        assert_eq!(error.codigo(), "snapshot_path_not_representable");
+        assert_eq!(error.to_string(), "snapshot_path_not_representable");
+        assert_eq!(
+            format!("{error:?}"),
+            "ErrorSnapshot(\"snapshot_path_not_representable\")"
+        );
+        assert!(!error.to_string().contains("CANARY"));
+        assert!(!format!("{error:?}").contains("CANARY"));
     }
 
     #[test]
