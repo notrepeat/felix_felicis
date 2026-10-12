@@ -284,7 +284,7 @@ fn sibling_fifo_root_backup_stage_no_se_bloquea() {
 
     let temp = tempdir().unwrap();
     let root = temp.path().join("bundle");
-    fs::create_dir(&root).unwrap();
+    // La raíz debe faltar para crear el FIFO con su mismo nombre.
     let lock = LockEscritura::adquirir(&root).unwrap();
     let location = lock.ubicacion();
     let parent = DirectorioAnclado::parent_solo_lectura_desde_ubicacion(location).unwrap();
