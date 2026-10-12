@@ -10,6 +10,7 @@ use universo_core::{
 
 use crate::documento::{EntradaCruda, parsear_documento};
 use crate::errores::{ErrorBundle, ErrorDocumento, ErrorEntrada, Regla};
+use crate::transaccion::anclado::{IdentidadDirectorio, identidad_directorio_para_recorrido};
 
 /// Un archivo ya localizado como `BundlePath`, con su contenido crudo.
 struct ArchivoBundle {
@@ -763,6 +764,7 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
         }
     };
 
+    let mut bases_procesadas: HashSet<IdentidadBaseLayout> = HashSet::new();
     for directorio in &manifiesto.layout.directorios {
         if !directorio_layout_seguro(directorio) {
             errores.push(error(
@@ -808,6 +810,28 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
                 None,
                 Regla::Io,
                 "el directorio declarado resuelve fuera de la raíz del bundle",
+            ));
+            continue;
+        }
+        let identidad_base = match identidad_directorio_para_recorrido(&base_canonica) {
+            Ok(Some(identidad)) => IdentidadBaseLayout::Fisica(identidad),
+            Ok(None) => IdentidadBaseLayout::Canonica(base_canonica.clone()),
+            Err(_) => {
+                errores.push(error(
+                    Some(directorio),
+                    None,
+                    Regla::Io,
+                    "no se pudo identificar el directorio declarado",
+                ));
+                continue;
+            }
+        };
+        if !registrar_directorio_procesado(&mut bases_procesadas, identidad_base) {
+            errores.push(error(
+                None,
+                None,
+                Regla::Estructura,
+                "layout.directorios contiene rutas que resuelven al mismo directorio",
             ));
             continue;
         }
@@ -895,6 +919,19 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
             Err(errores)
         }
     }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum IdentidadBaseLayout {
+    Fisica(IdentidadDirectorio),
+    Canonica(PathBuf),
+}
+
+fn registrar_directorio_procesado<I: std::hash::Hash + Eq>(
+    procesados_globales: &mut HashSet<I>,
+    identidad: I,
+) -> bool {
+    procesados_globales.insert(identidad)
 }
 
 /// Path relativo a `raiz`, con separador `/`, tal como se reporta en los
@@ -1483,6 +1520,88 @@ mod tests {
             0,
             "un directorio declarado existente puede estar vacío"
         );
+    }
+
+    #[test]
+    fn identidad_global_evitar_releer_alias_y_preserva_paths_case_sensitive() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        struct IdentidadFs(u8);
+
+        // El seam representa dos rutas declaradas distintas que el FS mapea
+        // al mismo objeto. El contador modela el recorrido que solo ocurre
+        // después de insertar una identidad nueva en el set compartido.
+        let raices = [
+            ("docs", IdentidadFs(1)),
+            ("DOCS", IdentidadFs(1)),
+            ("otra", IdentidadFs(2)),
+        ];
+        let mut procesadas = HashSet::new();
+        let mut arboles_leidos = 0;
+        for (_declarada, identidad) in raices {
+            if registrar_directorio_procesado(&mut procesadas, identidad) {
+                arboles_leidos += 1;
+            }
+        }
+        assert_eq!(arboles_leidos, 2);
+
+        let mut paths_case_sensitive = HashSet::new();
+        assert!(registrar_directorio_procesado(
+            &mut paths_case_sensitive,
+            PathBuf::from("docs")
+        ));
+        assert!(registrar_directorio_procesado(
+            &mut paths_case_sensitive,
+            PathBuf::from("DOCS")
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cargar_bundle_rechaza_alias_case_de_directorio_en_filesystem_insensible() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("docs")).unwrap();
+        std::fs::write(temp.path().join("docs").join("doc.md"), doc("a", "Doc", "")).unwrap();
+        let alias = temp.path().join("DOCS");
+        if !alias.is_dir() {
+            eprintln!("SKIP explícito: el filesystem de prueba distingue mayúsculas");
+            return;
+        }
+
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["docs".into(), "DOCS".into()];
+        manifiesto.layout.sin_iota.clear();
+        let errores = cargar_bundle(temp.path(), manifiesto).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Estructura);
+        assert_eq!(errores[0].path, None);
+        assert_eq!(
+            errores[0].detalle,
+            "layout.directorios contiene rutas que resuelven al mismo directorio"
+        );
+        assert!(
+            !errores[0]
+                .detalle
+                .contains(&temp.path().to_string_lossy().to_string()),
+            "el error no debe revelar rutas físicas"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_conserva_directorios_distintos_por_case_en_unix() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("docs")).unwrap();
+        std::fs::create_dir(temp.path().join("DOCS")).unwrap();
+        std::fs::write(temp.path().join("docs").join("uno.md"), doc("a", "Uno", "")).unwrap();
+        std::fs::write(temp.path().join("DOCS").join("dos.md"), doc("a", "Dos", "")).unwrap();
+
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["docs".into(), "DOCS".into()];
+        manifiesto.layout.sin_iota.clear();
+        let estructura = cargar_bundle(temp.path(), manifiesto).unwrap();
+
+        assert_eq!(estructura.len_nodos(), 2);
     }
 
     #[test]

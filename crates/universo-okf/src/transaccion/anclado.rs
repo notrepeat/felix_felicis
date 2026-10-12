@@ -84,7 +84,7 @@ impl fmt::Debug for ErrorCrearStageSibling {
 }
 
 /// Identidad obtenida de metadata de un handle abierto, no de una ruta.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct IdentidadDirectorio {
     #[cfg(unix)]
     dispositivo: u64,
@@ -650,6 +650,35 @@ fn metadata_directorio(handle: &File) -> Result<IdentidadDirectorio, ErrorDirect
     let metadata = handle.metadata().map_err(mapear_io)?;
     validar_metadata_directorio_por_metadata(&metadata)?;
     identidad_desde_metadata(handle, &metadata)
+}
+
+/// Obtiene la identidad física del directorio abierto para una deduplicación
+/// de recorrido. `None` permite al llamador usar la ruta canónica cuando el
+/// filesystem de Windows no implementa `FILE_ID_INFO`.
+pub(crate) fn identidad_directorio_para_recorrido(
+    ruta: &Path,
+) -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado> {
+    let handle = abrir_directorio_por_ruta(ruta, false)?;
+    let metadata = handle.metadata().map_err(mapear_io)?;
+    validar_metadata_directorio_por_metadata(&metadata)?;
+
+    #[cfg(unix)]
+    {
+        identidad_desde_metadata(&handle, &metadata).map(Some)
+    }
+    #[cfg(windows)]
+    {
+        match identidad_windows(&handle) {
+            Ok(identidad) => Ok(Some(identidad)),
+            Err(error) if filesystem_sin_file_id(&error) => Ok(None),
+            Err(error) => Err(mapear_io(error)),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (handle, metadata);
+        Ok(None)
+    }
 }
 
 fn validar_metadata_directorio_por_metadata(
