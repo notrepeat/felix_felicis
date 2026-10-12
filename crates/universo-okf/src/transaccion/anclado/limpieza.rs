@@ -326,3 +326,42 @@ fn validar_identidad(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ErrorLimpiezaAnclado, PresupuestoLimpieza};
+    use crate::transaccion::inventario::LimitesInventario;
+
+    #[test]
+    fn presupuesto_limpieza_respeta_limites_del_contrato_sin_archivos() {
+        let contrato = LimitesInventario::CONTRATO;
+
+        let mut entradas = PresupuestoLimpieza::nuevo(contrato);
+        for _ in 0..contrato.entradas {
+            entradas.reservar(0, 1).unwrap();
+        }
+        assert_eq!(entradas.entradas, 100_000);
+        assert_eq!(
+            entradas.reservar(0, 1),
+            Err(ErrorLimpiezaAnclado::LimiteEstructuralExcedido)
+        );
+        assert_eq!(entradas.entradas, contrato.entradas);
+
+        let mut profundidad = PresupuestoLimpieza::nuevo(contrato);
+        profundidad.reservar(0, contrato.profundidad).unwrap();
+        assert_eq!(
+            profundidad.reservar(0, contrato.profundidad + 1),
+            Err(ErrorLimpiezaAnclado::LimiteEstructuralExcedido)
+        );
+        assert_eq!(profundidad.entradas, 1);
+
+        let mut rutas = PresupuestoLimpieza::nuevo(contrato);
+        rutas.reservar(contrato.bytes_rutas, 1).unwrap();
+        assert_eq!(rutas.bytes_rutas, 16 * 1024 * 1024);
+        assert_eq!(
+            rutas.reservar(1, 1),
+            Err(ErrorLimpiezaAnclado::LimiteEstructuralExcedido)
+        );
+        assert_eq!(rutas.bytes_rutas, contrato.bytes_rutas);
+    }
+}

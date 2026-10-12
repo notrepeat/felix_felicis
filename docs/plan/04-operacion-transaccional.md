@@ -459,6 +459,15 @@ Chain strategy: feature-branch-chain
   `cargar_bundle` aplica además un presupuesto físico independiente de 16 MiB
   para las rutas canónicas relativas de las raíces declaradas que retiene en su
   índice; ese costo no sustituye ni se suma al presupuesto de rutas lógicas.
+  El preflight de limpieza de `StageAnclado` reutiliza solo los límites
+  estructurales compartidos (100.000 entradas, profundidad 128 y 16 MiB de
+  rutas); no lee ni presupuesta bytes raw de contenido. Si se exceden, devuelve
+  `stage_cleanup_resource_limit` antes del primer unlink y conserva la
+  capability recuperable del stage para que pueda corregirse y reintentarse.
+  Ese preflight evita borrar parcialmente por exceso de cuota, pero no es una
+  instantánea atómica frente a procesos externos: el lock coordina escritores
+  Felix cooperantes y las comprobaciones de identidad reducen, sin eliminar, la
+  carrera de mutación hostil entre comprobación y unlink.
   En inventarios, el root tiene profundidad 0; en un bundle, la profundidad
   cuenta componentes desde la raíz del bundle y cada directorio declarado se
   cuenta como entrada. Las entradas incluyen directorios y archivos bajo las
