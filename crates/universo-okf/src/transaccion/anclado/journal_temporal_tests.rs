@@ -317,8 +317,8 @@ fn temporal_se_crea_con_permisos_restringidos_sin_cambiar_umask() {
     capability.crear_nuevo(b"private journal bytes").unwrap();
 
     assert_eq!(
-        fs::metadata(temporal).unwrap().permissions().mode() & 0o777,
-        0o600
+        fs::metadata(temporal).unwrap().permissions().mode() & 0o077,
+        0
     );
 }
 
@@ -333,10 +333,15 @@ fn fallo_de_escritura_limpia_solo_la_identidad_creada_y_preserva_el_error() {
     let mut identidad_escrita = None;
 
     let error = capability
-        .crear_nuevo_con(b"partial journal", |archivo, _| {
-            identidad_escrita = Some(super::identidad_archivo(archivo).unwrap());
-            Err(ErrorJournalAnclado::Io)
-        })
+        .crear_nuevo_con(
+            b"partial journal",
+            |archivo, _| {
+                identidad_escrita = Some(super::identidad_archivo(archivo).unwrap());
+                std::io::Write::write_all(archivo, b"partial prefix").unwrap();
+                Err(ErrorJournalAnclado::Io)
+            },
+            |_| Ok(()),
+        )
         .unwrap_err();
 
     assert_eq!(error, ErrorJournalAnclado::Io);
@@ -356,12 +361,17 @@ fn cleanup_tras_fallo_de_escritura_preserva_reemplazo_conflictivo() {
     let mut identidad_original = None;
 
     let error = capability
-        .crear_nuevo_con(b"partial journal", |archivo, _| {
-            identidad_original = Some(super::identidad_archivo(archivo).unwrap());
-            fs::remove_file(&temporal).unwrap();
-            fs::write(&temporal, replacement).unwrap();
-            Err(ErrorJournalAnclado::Io)
-        })
+        .crear_nuevo_con(
+            b"partial journal",
+            |archivo, _| {
+                identidad_original = Some(super::identidad_archivo(archivo).unwrap());
+                std::io::Write::write_all(archivo, b"partial prefix").unwrap();
+                fs::remove_file(&temporal).unwrap();
+                fs::write(&temporal, replacement).unwrap();
+                Err(ErrorJournalAnclado::Io)
+            },
+            |_| Ok(()),
+        )
         .unwrap_err();
 
     assert_eq!(error, ErrorJournalAnclado::Io);
@@ -370,6 +380,47 @@ fn cleanup_tras_fallo_de_escritura_preserva_reemplazo_conflictivo() {
         super::identidad_archivo(&fs::File::open(&temporal).unwrap()).unwrap()
     );
     assert_eq!(fs::read(temporal).unwrap(), replacement);
+}
+
+#[cfg(unix)]
+#[test]
+fn fallo_de_sync_limpia_temporal_y_preserva_el_error_original() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+
+    let error = capability
+        .crear_nuevo_con(
+            b"journal written before sync failure",
+            |archivo, bytes| {
+                std::io::Write::write_all(archivo, bytes).map_err(|_| ErrorJournalAnclado::Io)
+            },
+            |archivo| {
+                assert_eq!(
+                    archivo.metadata().unwrap().len(),
+                    b"journal written before sync failure".len() as u64
+                );
+                Err(ErrorJournalAnclado::Io)
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(error, ErrorJournalAnclado::Io);
+    assert!(!temporal.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn acceso_de_creacion_incluye_generic_write_para_sync_all() {
+    use windows_sys::Win32::Foundation::GENERIC_WRITE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+
+    assert_eq!(
+        super::acceso_temporal_creacion(),
+        FILE_READ_ATTRIBUTES | GENERIC_WRITE
+    );
 }
 
 #[test]

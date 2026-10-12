@@ -197,22 +197,30 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         })
     }
 
-    /// Crea el singleton de forma exclusiva y lo cierra al terminar la escritura.
+    /// Crea el singleton de forma exclusiva, escribe y sincroniza el archivo.
+    /// Si falla escritura o sincronización, intenta retirar solo la identidad
+    /// creada y devuelve el error original. El temporal puede permanecer si no
+    /// se demuestra esa identidad o la retirada falla.
     pub(crate) fn crear_nuevo(
         &self,
         bytes: &[u8],
     ) -> Result<IdentidadArchivoJournal, ErrorJournalAnclado> {
-        self.crear_nuevo_con(bytes, |archivo, bytes| {
-            archivo
-                .write_all(bytes)
-                .map_err(|_| ErrorJournalAnclado::Io)
-        })
+        self.crear_nuevo_con(
+            bytes,
+            |archivo, bytes| {
+                archivo
+                    .write_all(bytes)
+                    .map_err(|_| ErrorJournalAnclado::Io)
+            },
+            |archivo| archivo.sync_all().map_err(|_| ErrorJournalAnclado::Io),
+        )
     }
 
     fn crear_nuevo_con(
         &self,
         bytes: &[u8],
         escribir: impl FnOnce(&mut File, &[u8]) -> Result<(), ErrorJournalAnclado>,
+        sincronizar: impl FnOnce(&File) -> Result<(), ErrorJournalAnclado>,
     ) -> Result<IdentidadArchivoJournal, ErrorJournalAnclado> {
         if bytes.len() > MAX_JOURNAL_BYTES {
             return Err(ErrorJournalAnclado::TooLarge);
@@ -232,15 +240,14 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         #[cfg(windows)]
         {
             use fs_at::os::windows::OpenOptionsExt;
-            use windows_sys::Win32::Storage::FileSystem::{FILE_READ_ATTRIBUTES, FILE_WRITE_DATA};
-            opciones.desired_access(FILE_READ_ATTRIBUTES | FILE_WRITE_DATA);
+            opciones.desired_access(acceso_temporal_creacion());
         }
         let mut archivo = opciones
             .open_at(&self.parent, Path::new(&self.nombre))
             .map_err(mapear_error_io)?;
         validar_archivo_regular(&archivo)?;
         let identidad = identidad_archivo(&archivo)?;
-        if let Err(error) = escribir(&mut archivo, bytes) {
+        if let Err(error) = escribir(&mut archivo, bytes).and_then(|()| sincronizar(&archivo)) {
             drop(archivo);
             let _ = self.limpiar_temporal_si_coincide(identidad);
             return Err(error);
@@ -348,6 +355,14 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         }
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn acceso_temporal_creacion() -> u32 {
+    use windows_sys::Win32::Foundation::GENERIC_WRITE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+
+    FILE_READ_ATTRIBUTES | GENERIC_WRITE
 }
 
 fn validar_archivo_regular(handle: &File) -> Result<(), ErrorJournalAnclado> {
