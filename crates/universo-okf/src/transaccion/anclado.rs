@@ -180,6 +180,56 @@ impl DirectorioLecturaAnclado {
         Ok(Self { raiz })
     }
 
+    /// Opens a canonical directory path one component at a time from the
+    /// held root. Symlinks and reparse points are never followed.
+    pub(crate) fn abrir_directorio_relativo(
+        &self,
+        relativa: &Path,
+    ) -> Result<File, ErrorDirectorioAnclado> {
+        let mut directorio = clonar_handle(&self.raiz)?;
+        for componente in relativa.components() {
+            let Component::Normal(componente) = componente else {
+                return Err(ErrorDirectorioAnclado::ComponenteInvalido);
+            };
+            directorio = abrir::abrir_entrada_relativa(
+                &directorio,
+                componente,
+                TipoEntradaAnclada::Directorio,
+            )?;
+        }
+        Ok(directorio)
+    }
+
+    /// Opens one child directory from an already anchored parent handle.
+    pub(crate) fn abrir_directorio_hijo(
+        &self,
+        padre: &File,
+        nombre: &OsStr,
+    ) -> Result<File, ErrorDirectorioAnclado> {
+        abrir::abrir_entrada_relativa(padre, nombre, TipoEntradaAnclada::Directorio)
+    }
+
+    /// Enumerates a directory handle opened by this anchored capability.
+    /// Directory identity is deliberately not queried, so unsupported file
+    /// IDs on FAT/SMB do not prevent bundle loading.
+    pub(crate) fn nombres_directorio_abierto(
+        &self,
+        directorio: &mut File,
+    ) -> Result<Vec<OsString>, ErrorDirectorioAnclado> {
+        metadata_directorio_validada(directorio)?;
+        let mut entradas = fs_at::read_dir(directorio).map_err(mapear_io)?;
+        let mut nombres = Vec::new();
+        for entrada in &mut entradas {
+            let entrada = entrada.map_err(mapear_io)?;
+            let nombre = entrada.name();
+            if nombre == OsStr::new(".") || nombre == OsStr::new("..") {
+                continue;
+            }
+            nombres.push(nombre.to_os_string());
+        }
+        Ok(nombres)
+    }
+
     /// Opens a file by resolving each component from the held root handle.
     /// Neither a symlink nor a reparse point can replace an ancestor during
     /// the walk, and file opens remain nonblocking for special files.

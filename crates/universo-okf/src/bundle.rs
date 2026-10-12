@@ -1,6 +1,7 @@
 //! Carga de un bundle OKF a una `Estructura` (spec §3.3, §3.4, §4.2).
 
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -913,19 +914,21 @@ fn cargar_bundle_con_observadores(
         let mut procesados: HashSet<PathBuf> = HashSet::new();
         let recorrido = Recorrido {
             raiz: &raiz_canonica,
+            raiz_anclada: &raiz_anclada,
             base_declarada: directorio,
             base_canonica: &base_canonica,
             raiz_canonica: &raiz_canonica,
         };
-        observar_recorrido();
-        recorrer(
-            &recorrido,
-            &base,
-            &mut encontrados,
-            &mut errores,
-            &mut camino,
-            &mut procesados,
-        );
+        {
+            let mut estado = EstadoRecorrido {
+                encontrados: &mut encontrados,
+                errores: &mut errores,
+                camino: &mut camino,
+                procesados: &mut procesados,
+                observar: &mut observar_recorrido,
+            };
+            recorrer(&recorrido, &base, &mut estado);
+        }
         encontrados.sort();
         for ruta in encontrados {
             let relativa = relativa_a_raiz(&raiz_canonica, &ruta);
@@ -1073,6 +1076,9 @@ pub(crate) fn directorio_layout_seguro(directorio: &str) -> bool {
 struct Recorrido<'a> {
     /// Raíz del bundle (para reportar paths relativos).
     raiz: &'a Path,
+    /// Capability retenida para abrir y enumerar rutas sin volver a resolver
+    /// nombres desde el filesystem mutable.
+    raiz_anclada: &'a DirectorioLecturaAnclado,
     /// Nombre del directorio tal como lo declara el manifiesto.
     base_declarada: &'a str,
     /// Forma canónica de ese directorio: todo lo recorrido debe quedar
@@ -1082,7 +1088,17 @@ struct Recorrido<'a> {
     raiz_canonica: &'a Path,
 }
 
-/// Recorre `dir` recursivamente. Sigue symlinks (vía `Path::is_dir`), así
+struct EstadoRecorrido<'a, O> {
+    encontrados: &'a mut Vec<PathBuf>,
+    errores: &'a mut Vec<ErrorBundle>,
+    camino: &'a mut Vec<PathBuf>,
+    procesados: &'a mut HashSet<PathBuf>,
+    observar: &'a mut O,
+}
+
+/// Recorre `dir` recursivamente. Sigue symlinks a destinos internos al
+/// canonicalizar cada nombre, pero enumera esos destinos por handle anclado,
+/// así
 /// que distingue por el path canonicalizado dos situaciones que un `HashSet`
 /// único de "visitados" confundiría:
 ///
@@ -1105,18 +1121,11 @@ struct Recorrido<'a> {
 ///   se reporta `Regla::Io` y no se recorre. Sin esta comprobación, un
 ///   enlace a la raíz haría entrar archivos de fuera del layout antes de
 ///   que la pila de ancestros detectara el ciclo.
-fn recorrer(
-    ctx: &Recorrido<'_>,
-    dir: &Path,
-    encontrados: &mut Vec<std::path::PathBuf>,
-    errores: &mut Vec<ErrorBundle>,
-    camino: &mut Vec<PathBuf>,
-    procesados: &mut HashSet<PathBuf>,
-) {
+fn recorrer<O: FnMut()>(ctx: &Recorrido<'_>, dir: &Path, estado: &mut EstadoRecorrido<'_, O>) {
     let canonico = match std::fs::canonicalize(dir) {
         Ok(c) => c,
         Err(err) => {
-            errores.push(error(
+            estado.errores.push(error(
                 Some(&relativa_a_raiz(ctx.raiz, dir)),
                 None,
                 Regla::Io,
@@ -1126,8 +1135,20 @@ fn recorrer(
         }
     };
 
+    recorrer_canonico(ctx, dir, canonico, None, estado);
+}
+
+/// Procesa una ruta lógica ya canonicalizada. La enumeración siempre ocurre
+/// sobre un handle abierto desde la raíz retenida, nunca sobre `dir`.
+fn recorrer_canonico<O: FnMut()>(
+    ctx: &Recorrido<'_>,
+    dir: &Path,
+    canonico: PathBuf,
+    mut directorio_abierto: Option<File>,
+    estado: &mut EstadoRecorrido<'_, O>,
+) {
     if !canonico.starts_with(ctx.raiz_canonica) || !canonico.starts_with(ctx.base_canonica) {
-        errores.push(error(
+        estado.errores.push(error(
             Some(&relativa_a_raiz(ctx.raiz, dir)),
             None,
             Regla::Io,
@@ -1144,8 +1165,8 @@ fn recorrer(
         return;
     }
 
-    if camino.contains(&canonico) {
-        errores.push(error(
+    if estado.camino.contains(&canonico) {
+        estado.errores.push(error(
             Some(&relativa_a_raiz(ctx.raiz, dir)),
             None,
             Regla::Io,
@@ -1156,44 +1177,145 @@ fn recorrer(
         ));
         return;
     }
-    if !procesados.insert(canonico.clone()) {
+    if !estado.procesados.insert(canonico.clone()) {
         // Diamante: mismo directorio físico ya procesado por otra ruta.
         return;
     }
 
-    let entradas = match std::fs::read_dir(dir) {
-        Ok(e) => e,
+    let relativa = match canonico.strip_prefix(ctx.raiz_canonica) {
+        Ok(relativa) => relativa,
+        Err(_) => return,
+    };
+    // Seam determinista: permite sustituir la ruta tras su validación y
+    // antes de abrirla para enumerar; la apertura relativa debe fallar sin
+    // seguir symlinks ni reparse points.
+    (estado.observar)();
+    let mut directorio_abierto = match directorio_abierto.take() {
+        Some(directorio) => directorio,
+        None => match ctx.raiz_anclada.abrir_directorio_relativo(relativa) {
+            Ok(directorio) => directorio,
+            Err(err) => {
+                estado.errores.push(error(
+                    Some(&relativa_a_raiz(ctx.raiz, dir)),
+                    None,
+                    Regla::Io,
+                    error_lectura_anclada(err).to_string(),
+                ));
+                return;
+            }
+        },
+    };
+    let nombres = match ctx
+        .raiz_anclada
+        .nombres_directorio_abierto(&mut directorio_abierto)
+    {
+        Ok(nombres) => nombres,
         Err(err) => {
-            errores.push(error(
+            estado.errores.push(error(
                 Some(&relativa_a_raiz(ctx.raiz, dir)),
                 None,
                 Regla::Io,
-                err.to_string(),
+                error_lectura_anclada(err).to_string(),
             ));
             return;
         }
     };
-    let mut hijos: Vec<std::path::PathBuf> = Vec::new();
-    for entrada in entradas {
-        match entrada {
-            Ok(e) => hijos.push(e.path()),
-            Err(err) => {
-                errores.push(error(None, None, Regla::Io, err.to_string()));
+    let mut hijos: Vec<_> = nombres
+        .into_iter()
+        .map(|nombre| (dir.join(&nombre), nombre))
+        .collect();
+    hijos.sort_by(|(ruta_a, _), (ruta_b, _)| ruta_a.cmp(ruta_b));
+
+    estado.camino.push(canonico.clone());
+    for (ruta, nombre) in hijos {
+        let ruta_canonica = match std::fs::canonicalize(&ruta) {
+            Ok(canonica) => canonica,
+            Err(_) => {
+                if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
+                    estado.encontrados.push(ruta);
+                }
                 continue;
             }
-        }
-    }
-    hijos.sort();
-
-    camino.push(canonico);
-    for ruta in hijos {
-        if ruta.is_dir() {
-            recorrer(ctx, &ruta, encontrados, errores, camino, procesados);
+        };
+        let es_directorio = if ruta_canonica.starts_with(ctx.raiz_canonica)
+            && ruta_canonica.starts_with(ctx.base_canonica)
+        {
+            let relativa = match ruta_canonica.strip_prefix(ctx.raiz_canonica) {
+                Ok(relativa) => relativa,
+                Err(_) => continue,
+            };
+            let directorio = match ctx
+                .raiz_anclada
+                .abrir_directorio_hijo(&directorio_abierto, &nombre)
+            {
+                Ok(directorio) => Some(directorio),
+                Err(
+                    err @ (ErrorDirectorioAnclado::EnlaceNoPermitido
+                    | ErrorDirectorioAnclado::TipoNoAdmitido),
+                ) => {
+                    // Algunos sistemas reportan un symlink de directorio como
+                    // tipo no admitido al abrirlo con no-follow. La metadata
+                    // solo clasifica; nunca se usa para enumerar el destino.
+                    let podria_ser_directorio = err == ErrorDirectorioAnclado::EnlaceNoPermitido
+                        || std::fs::metadata(&ruta)
+                            .map(|metadata| metadata.is_dir())
+                            .unwrap_or(false);
+                    if !podria_ser_directorio {
+                        None
+                    } else {
+                        // Symlinks internos conservan la semántica histórica:
+                        // se sigue su destino solo tras canonicalizarlo y
+                        // comprobar que permanece dentro del layout.
+                        match ctx.raiz_anclada.abrir_directorio_relativo(relativa) {
+                            Ok(directorio) => Some(directorio),
+                            Err(ErrorDirectorioAnclado::TipoNoAdmitido) => None,
+                            Err(err) => {
+                                if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
+                                    estado.errores.push(error(
+                                        Some(&relativa_a_raiz(ctx.raiz, &ruta)),
+                                        None,
+                                        Regla::Io,
+                                        error_lectura_anclada(err).to_string(),
+                                    ));
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
+                        estado.errores.push(error(
+                            Some(&relativa_a_raiz(ctx.raiz, &ruta)),
+                            None,
+                            Regla::Io,
+                            error_lectura_anclada(err).to_string(),
+                        ));
+                    }
+                    continue;
+                }
+            };
+            match directorio {
+                Some(directorio) => {
+                    recorrer_canonico(ctx, &ruta, ruta_canonica, Some(directorio), estado);
+                    continue;
+                }
+                None => false,
+            }
+        } else {
+            // No se enumeran destinos externos. Solo se consulta su tipo para
+            // conservar el diagnóstico previo de una fuga de directorio.
+            std::fs::metadata(&ruta_canonica)
+                .map(|metadata| metadata.is_dir())
+                .unwrap_or(false)
+        };
+        if es_directorio {
+            recorrer_canonico(ctx, &ruta, ruta_canonica, None, estado);
         } else if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
-            encontrados.push(ruta);
+            estado.encontrados.push(ruta);
         }
     }
-    camino.pop();
+    estado.camino.pop();
 }
 
 #[cfg(test)]
@@ -1935,6 +2057,50 @@ mod tests {
     #[cfg(unix)]
     fn enlazar_directorio(enlace: &Path, destino: &Path) {
         std::os::unix::fs::symlink(destino, enlace).unwrap();
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn enumeracion_no_sigue_ancestro_sustituido_tras_validarlo() {
+        let temp = tempfile::tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        let directorio = raiz.join("n");
+        let movido = temp.path().join("n-original");
+        let externo = temp.path().join("externo");
+        std::fs::create_dir_all(&directorio).unwrap();
+        std::fs::create_dir(&externo).unwrap();
+        std::fs::write(directorio.join("interior.md"), doc("a", "Interior", "")).unwrap();
+        std::fs::write(externo.join("externo.md"), doc("a", "Externo", "")).unwrap();
+
+        let mut sustituido = false;
+        let errores = cargar_bundle_con_observadores(
+            &raiz,
+            manifiesto_minimo(),
+            identidad_directorio_para_recorrido,
+            || {
+                if !sustituido {
+                    std::fs::rename(&directorio, &movido).unwrap();
+                    enlazar_directorio(&directorio, &externo);
+                    sustituido = true;
+                }
+            },
+            |_| {},
+        )
+        .unwrap_err();
+
+        assert!(sustituido);
+        assert!(
+            errores
+                .iter()
+                .any(|error| error.path.as_deref() == Some("n")),
+            "la apertura anclada debe fallar cerrada tras sustituir el directorio: {errores:?}"
+        );
+        assert!(
+            !errores
+                .iter()
+                .any(|error| error.path.as_deref() == Some("n/externo.md")),
+            "no deben enumerarse nombres del directorio externo: {errores:?}"
+        );
     }
 
     #[cfg(windows)]
