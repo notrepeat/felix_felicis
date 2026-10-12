@@ -10,7 +10,10 @@ pub(crate) use observer::{ErrorObservadorRecovery, observar_inventario_recovery}
 #[path = "recovery/runner.rs"]
 mod runner;
 #[allow(unused_imports)]
-pub(crate) use runner::{ErrorFilaJournalOld, ResultadoFilaJournalOld, ejecutar_fila_journal_old};
+pub(crate) use runner::{
+    ErrorFilaJournalOld, ErrorFilaJournalRestoreOld, ResultadoFilaJournalOld,
+    ResultadoFilaJournalRestoreOld, ejecutar_fila_journal_old, ejecutar_fila_journal_restore_old,
+};
 
 /// Resultado abstracto de clasificar root, backup o stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
