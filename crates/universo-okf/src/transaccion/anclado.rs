@@ -557,12 +557,30 @@ fn abrir_directorio_absoluto(
     let mut actual = abrir_directorio_por_ruta(&volumen, parent_transaccional)?;
 
     for (indice, nombre) in nombres.iter().enumerate() {
-        let opciones = if parent_transaccional && indice + 1 == nombres.len() {
-            opciones_parent_stage()
-        } else {
-            opciones_directorio()
-        };
-        actual = abrir_directorio_hijo_con_opciones(&actual, nombre, &opciones)?;
+        #[cfg(unix)]
+        {
+            let _ = indice;
+            let _ = parent_transaccional;
+            // `fs_at::open_dir_at` does not guarantee O_NONBLOCK on Unix. A
+            // path component replaced with a FIFO must fail without waiting
+            // for a writer, so use the shared openat primitive with the full
+            // no-follow, nonblocking directory flags.
+            actual =
+                abrir::abrir_entrada_relativa(&actual, nombre, TipoEntradaAnclada::Directorio)?;
+            metadata_directorio(&actual)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let opciones = if parent_transaccional && indice + 1 == nombres.len() {
+                opciones_parent_stage()
+            } else {
+                opciones_directorio()
+            };
+            // Windows uses fs_at's handle-relative open with follow(false),
+            // which opens reparse points themselves for rejection by the
+            // metadata check and never follows a substituted junction.
+            actual = abrir_directorio_hijo_con_opciones(&actual, nombre, &opciones)?;
+        }
     }
     Ok(actual)
 }

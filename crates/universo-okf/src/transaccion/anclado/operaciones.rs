@@ -20,6 +20,15 @@ impl DirectorioAnclado {
         ubicacion: &UbicacionRaiz,
         componente: &OsStr,
     ) -> Result<Option<DirectorioAnclado>, ErrorDirectorioAnclado> {
+        // Bind the path-derived allowlist to the actual directory handle, not
+        // just to a matching root basename. A same-named root under another
+        // parent must never redirect this capability.
+        let parent_de_ubicacion =
+            DirectorioAnclado::parent_solo_lectura_desde_ubicacion(ubicacion)?;
+        if parent_de_ubicacion.identidad_parent != self.identidad_parent {
+            return Err(ErrorDirectorioAnclado::Io);
+        }
+
         validar_componente(componente)?;
         let basename = ubicacion
             .ruta()
@@ -374,5 +383,75 @@ mod sibling_read_only_tests {
             open(&parent, &location, OsStr::new("unrelated")),
             Err(ErrorDirectorioAnclado::ComponenteInvalido)
         ));
+    }
+
+    #[test]
+    fn no_acepta_ubicacion_con_mismo_basename_bajo_otro_parent() {
+        let temp = tempdir().unwrap();
+        let first_parent = temp.path().join("first");
+        let second_parent = temp.path().join("second");
+        fs::create_dir(&first_parent).unwrap();
+        fs::create_dir(&second_parent).unwrap();
+        let first_root = first_parent.join("bundle");
+        let second_root = second_parent.join("bundle");
+        fs::create_dir(&first_root).unwrap();
+        fs::create_dir(&second_root).unwrap();
+        let first_location = UbicacionRaiz::nueva(&first_root).unwrap();
+        let second_location = UbicacionRaiz::nueva(&second_root).unwrap();
+        let backup_name = first_location
+            .backup()
+            .as_path()
+            .file_name()
+            .unwrap()
+            .to_owned();
+        let first_backup = first_location.backup();
+        let second_backup = second_location.backup();
+        fs::create_dir(first_backup.as_path()).unwrap();
+        fs::write(first_backup.as_path().join("canary"), b"anchored-canary").unwrap();
+        fs::create_dir(second_backup.as_path()).unwrap();
+        fs::write(second_backup.as_path().join("canary"), b"other-canary").unwrap();
+        let anchor = parent(&first_location);
+
+        assert!(matches!(
+            open(&anchor, &second_location, &backup_name),
+            Err(ErrorDirectorioAnclado::Io)
+        ));
+        assert_eq!(
+            fs::read(first_backup.as_path().join("canary")).unwrap(),
+            b"anchored-canary"
+        );
+        assert_eq!(
+            fs::read(second_backup.as_path().join("canary")).unwrap(),
+            b"other-canary"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_read_only_rechaza_fifo_en_un_componente_sin_bloquear() {
+        use std::ffi::CString;
+        use std::os::unix::{ffi::OsStrExt, fs::FileTypeExt};
+
+        let temp = tempdir().unwrap();
+        let parent_path = temp.path().join("parent");
+        fs::create_dir(&parent_path).unwrap();
+        let location = UbicacionRaiz::nueva(&parent_path.join("bundle")).unwrap();
+        let renamed_parent = temp.path().join("renamed-parent");
+        fs::rename(&parent_path, &renamed_parent).unwrap();
+        let fifo_path = parent_path;
+        let fifo_name = CString::new(fifo_path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `fifo_name` is a live NUL-terminated path for this call.
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+
+        let opened = DirectorioAnclado::parent_solo_lectura_desde_ubicacion(&location);
+
+        assert!(opened.is_err());
+        assert!(
+            fs::symlink_metadata(fifo_path)
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
+        assert!(renamed_parent.is_dir());
     }
 }
