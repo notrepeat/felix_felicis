@@ -254,7 +254,11 @@ fn hash_field(hash: &mut Sha256, name: &[u8], value: &[u8]) -> Result<(), ErrorS
 }
 
 /// Calcula la huella sobre buffers raw. Las entradas se ordenan por bytes de
-/// ruta UTF-8; la captura de disco valida que esas rutas sean únicas y portables.
+/// ruta UTF-8. Rechaza las rutas vacías, las que tengan un componente vacío
+/// (por `/` inicial, final o repetida), un componente `.` o `..`, o contengan
+/// una barra inversa o NUL. También rechaza rutas exactamente duplicadas,
+/// comparadas sin normalizar caso ni Unicode; todos esos casos devuelven
+/// [`ErrorSnapshot::RutaNoRepresentable`].
 pub fn calcular_token_snapshot(
     version_motor: &str,
     policy_id: &str,

@@ -5,6 +5,12 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
 
 ## Unreleased — candidato a 0.2.0
 
+### Tokens de snapshot
+
+- El endurecimiento pre-release hace que `calcular_token_snapshot` rechace
+  rutas lógicas no representables y duplicados exactos; los tokens v1 de
+  entradas válidas conservan sus bytes.
+
 ### Límites y seguridad de carga
 
 - `cargar_bundle` limita la lectura desde disco a 128 MiB de contenido Markdown,
