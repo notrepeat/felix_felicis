@@ -20,7 +20,7 @@ use super::anclado::{
 };
 use super::captura::{Snapshot, materializar_desde_entradas};
 use super::inventario::{
-    inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
+    inventariar_root_anclado, inventariar_root_con_lector_limitado, leer_archivo_regular_limitado,
 };
 use super::journal::{DirectoryIdentity, RawTreeDigest};
 use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
@@ -451,7 +451,7 @@ pub(crate) fn materializar_staging(
         plan,
         generar_id_stage,
         escribir_archivo_nuevo,
-        leer_archivo_regular,
+        leer_archivo_regular_limitado,
     )?;
     if validar_candidato_recargado(snapshot, candidato, &recapturado).is_err() {
         return Err(ErrorEscrituraStage {
@@ -825,7 +825,7 @@ fn materializar_staging_y_recargar_con<G, W, R>(
 where
     G: FnMut() -> Result<String, CodigoEscrituraStage>,
     W: FnMut(&Path, &[u8]) -> Result<(), CodigoEscrituraStage>,
-    R: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+    R: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     let stage = materializar_staging_con(ubicacion, plan, siguiente_id, escribir_archivo)?;
     match recargar_staging_con_lector(snapshot, plan, &stage, leer_archivo) {
@@ -845,10 +845,10 @@ fn recargar_staging_con_lector<R>(
     leer_archivo: R,
 ) -> Result<Snapshot, CodigoEscrituraStage>
 where
-    R: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+    R: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
-    let recapturadas =
-        inventariar_root_con_lector(stage.ruta(), leer_archivo).map_err(mapear_error_snapshot)?;
+    let recapturadas = inventariar_root_con_lector_limitado(stage.ruta(), leer_archivo)
+        .map_err(mapear_error_snapshot)?;
     let objetivo = inventario_objetivo(plan)?;
     if !inventarios_iguales(&recapturadas, &objetivo) {
         return Err(CodigoEscrituraStage::InventarioInconsistente);
@@ -2820,8 +2820,12 @@ ignorados = ["ignored.md"]
                 _ => unreachable!(),
             }
 
-            let resultado =
-                recargar_staging_con_lector(&snapshot, &plan, &stage, leer_archivo_regular);
+            let resultado = recargar_staging_con_lector(
+                &snapshot,
+                &plan,
+                &stage,
+                leer_archivo_regular_limitado,
+            );
             if escenario == "success" {
                 let recargado = match resultado {
                     Ok(recargado) => recargado,
@@ -2852,7 +2856,7 @@ ignorados = ["ignored.md"]
             &plan,
             || Ok("invalid-doc-stage".to_owned()),
             escribir_archivo_nuevo,
-            leer_archivo_regular,
+            leer_archivo_regular_limitado,
         )
         .unwrap_err();
 
@@ -2879,8 +2883,9 @@ ignorados = ["ignored.md"]
         fs::remove_file(stage.ruta().join("payload.bin")).unwrap();
         symlink(&externo, stage.ruta().join("payload.bin")).unwrap();
 
-        let error = recargar_staging_con_lector(&snapshot, &plan, &stage, leer_archivo_regular)
-            .unwrap_err();
+        let error =
+            recargar_staging_con_lector(&snapshot, &plan, &stage, leer_archivo_regular_limitado)
+                .unwrap_err();
 
         assert_eq!(error.codigo(), "stage_link_not_allowed");
         assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), original);
@@ -2907,8 +2912,9 @@ ignorados = ["ignored.md"]
             .unwrap();
         assert!(salida.status.success(), "mklink /J must create a junction");
 
-        let error = recargar_staging_con_lector(&snapshot, &plan, &stage, leer_archivo_regular)
-            .unwrap_err();
+        let error =
+            recargar_staging_con_lector(&snapshot, &plan, &stage, leer_archivo_regular_limitado)
+                .unwrap_err();
 
         assert_eq!(error.codigo(), "stage_link_not_allowed");
         assert_eq!(

@@ -450,6 +450,20 @@ Chain strategy: feature-branch-chain
   garantiza coordinación entre escritores Felix cooperantes. Rollback: old en
   prepared/backup_ready, new validado en
   installed/committed. Objetivo por slice: <400 líneas authored.
+
+  Contrato propuesto e implementado para cada inventario de snapshot, stage o
+  recovery (path y anchored): 128 MiB de bytes raw acumulados, 100.000 entradas
+  incluyendo directorios, profundidad máxima 128 (el root tiene profundidad 0)
+  y 16 MiB de rutas UTF-8 acumuladas. Los límites son inclusivos; el primer
+  byte o elemento adicional devuelve `snapshot_resource_limit`. Los lectores
+  preflight-ean el tamaño y leen como máximo el remanente más un byte, también
+  si el archivo crece concurrentemente. El recorrido procesa hermanos uno a
+  uno y mantiene handles en proporción a la profundidad, no al fanout. El error
+  público `ErrorSnapshot::LimiteInventarioExcedido` amplía en 0.1 el enum
+  exhaustivo: los consumidores con `match` exhaustivo deben manejar esta nueva
+  variante. Este contrato no promete RSS exacto ni timeout duro, y no cubre el
+  recorrido público independiente de `bundle::cargar_bundle`; limita solo los
+  inventarios de snapshot/stage/recovery de este slice.
 - [ ] 8 — CLI simulate: `crates/universo-cli/src/propose.rs`.
   Test `crates/universo-cli/tests/propose_transaccional.rs`
   (`cargo test -p universo-cli --test propose_transaccional`) ejecuta el binario,

@@ -4,13 +4,16 @@ use std::ffi::OsStr;
 use std::fmt;
 
 use crate::transaccion::anclado::{DirectorioAnclado, ErrorDirectorioAnclado};
-use crate::transaccion::inventario::inventariar_root_anclado;
+use crate::transaccion::inventario::{LimitesInventario, inventariar_root_anclado_con_limites};
 use crate::transaccion::journal::{ArtifactFingerprint, Journal};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::raiz::UbicacionRaiz;
 use crate::transaccion::snapshot::{ErrorSnapshot, calcular_digest_raw_tree};
 
 use super::{ObservedArtifact, RecoveryInventory, classify_artifact};
+
+#[cfg(test)]
+use crate::transaccion::inventario::inventariar_root_anclado;
 
 /// Redacted failure while observing a recovery inventory under the writer lock.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,6 +62,14 @@ pub(crate) fn observar_inventario_recovery(
     lock: &LockEscritura,
     journal: &Journal,
 ) -> Result<RecoveryInventory, ErrorObservadorRecovery> {
+    observar_inventario_recovery_con_limites(lock, journal, LimitesInventario::CONTRATO)
+}
+
+fn observar_inventario_recovery_con_limites(
+    lock: &LockEscritura,
+    journal: &Journal,
+    limites: LimitesInventario,
+) -> Result<RecoveryInventory, ErrorObservadorRecovery> {
     let ubicacion = lock.ubicacion();
     let parent = DirectorioAnclado::parent_solo_lectura_desde_ubicacion(ubicacion)
         .map_err(|_| ErrorObservadorRecovery::Io)?;
@@ -87,9 +98,9 @@ pub(crate) fn observar_inventario_recovery(
         .file_name()
         .ok_or(ErrorObservadorRecovery::InvalidStageName)?;
 
-    let root = observar_artifacto(&parent, ubicacion, root_name)?;
-    let backup = observar_artifacto(&parent, ubicacion, backup_name)?;
-    let stage = observar_artifacto(&parent, ubicacion, stage_name)?;
+    let root = observar_artifacto(&parent, ubicacion, root_name, limites)?;
+    let backup = observar_artifacto(&parent, ubicacion, backup_name, limites)?;
+    let stage = observar_artifacto(&parent, ubicacion, stage_name, limites)?;
 
     Ok(RecoveryInventory {
         root: classify_artifact(root.as_ref(), journal.old(), journal.new_fingerprint()),
@@ -103,6 +114,7 @@ fn observar_artifacto(
     parent: &DirectorioAnclado,
     ubicacion: &UbicacionRaiz,
     nombre: &OsStr,
+    limites: LimitesInventario,
 ) -> Result<Option<ObservedArtifact>, ErrorObservadorRecovery> {
     let Some(artifact) = parent
         .abrir_artifacto_sibling_directorio_lectura(ubicacion, nombre)
@@ -116,7 +128,8 @@ fn observar_artifacto(
         .ok_or(ErrorObservadorRecovery::Io)?
         .journal_identity()
         .ok_or(ErrorObservadorRecovery::ParentIdentityUnavailable)?;
-    let entries = inventariar_root_anclado(artifact).map_err(ErrorObservadorRecovery::Snapshot)?;
+    let entries = inventariar_root_anclado_con_limites(artifact, limites)
+        .map_err(ErrorObservadorRecovery::Snapshot)?;
     let digest = calcular_digest_raw_tree(&entries).map_err(ErrorObservadorRecovery::Snapshot)?;
     let fingerprint = ArtifactFingerprint::new(identidad, digest);
     Ok(Some(ObservedArtifact::new(fingerprint)))

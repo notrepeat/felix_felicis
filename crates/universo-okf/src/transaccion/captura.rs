@@ -20,7 +20,7 @@ use crate::manifiesto_toml::parsear_manifiesto;
 
 use super::anclado::{DirectorioAnclado, IdentidadDirectorio};
 use super::inventario::{
-    inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
+    inventariar_root, inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
     ruta_absoluta_lexica, validar_archivo_sin_enlaces,
 };
 use super::journal::RawTreeDigest;
@@ -286,12 +286,15 @@ fn capturar_snapshot_raw(
     version_motor: &str,
     policy_id: &str,
 ) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
-    capturar_snapshot_raw_con_lector(
+    let raiz = ruta_absoluta_lexica(raiz)?;
+    let entradas = inventariar_root(&raiz)?;
+    capturar_snapshot_raw_con_entradas(
         raiz,
         ruta_manifiesto,
         ruta_invariantes,
         version_motor,
         policy_id,
+        entradas,
         leer_archivo_regular,
     )
 }
@@ -330,6 +333,29 @@ where
 {
     let raiz = ruta_absoluta_lexica(raiz)?;
     let entradas = inventariar_root_con_lector(&raiz, &mut leer)?;
+    capturar_snapshot_raw_con_entradas(
+        raiz,
+        ruta_manifiesto,
+        ruta_invariantes,
+        version_motor,
+        policy_id,
+        entradas,
+        leer,
+    )
+}
+
+fn capturar_snapshot_raw_con_entradas<F>(
+    raiz: PathBuf,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+    entradas: Vec<EntradaSnapshot>,
+    mut leer: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+{
     let mut cache_externa = HashMap::new();
     let manifiesto = bytes_fuente(
         &raiz,

@@ -798,6 +798,7 @@ mod tests {
                 lecturas_handle += 1;
                 let mut bytes = Vec::new();
                 archivo
+                    .take(1024)
                     .read_to_end(&mut bytes)
                     .map_err(|_| ErrorSnapshot::Io)?;
                 Ok(bytes)

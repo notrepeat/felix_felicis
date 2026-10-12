@@ -1,4 +1,5 @@
 use super::*;
+use crate::transaccion::inventario::LimitesInventario;
 use crate::transaccion::journal::recovery::ArtifactState;
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
 use crate::transaccion::lock::LockEscritura;
@@ -48,6 +49,47 @@ fn parent_identity(lock: &LockEscritura) -> DirectoryIdentity {
         .identidad_parent()
         .journal_identity()
         .unwrap()
+}
+
+#[test]
+fn inventory_resource_limit_fails_closed_for_root_backup_and_stage() {
+    for target in ["root", "backup", "stage"] {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        crear_arbol(&root, b"old-tree");
+        let lock = LockEscritura::adquirir(&root).unwrap();
+        let backup = backup_path(&lock);
+        crear_arbol(&backup, b"old-tree");
+        let stage = stage_path(&lock);
+        crear_arbol(&stage, b"new-tree");
+        let record = journal(&lock, fingerprint(&root), fingerprint(&stage));
+
+        let overflow_target = match target {
+            "root" => root.clone(),
+            "backup" => backup,
+            "stage" => stage,
+            _ => unreachable!(),
+        };
+        fs::write(overflow_target.join("private-overflow.bin"), b"X").unwrap();
+        let before = filesystem_snapshot(&lock);
+        let limites = LimitesInventario {
+            bytes_raw: 8,
+            entradas: 100,
+            profundidad: 128,
+            bytes_rutas: 1024,
+        };
+
+        let error = observar_inventario_recovery_con_limites(&lock, &record, limites).unwrap_err();
+
+        assert_eq!(
+            error,
+            ErrorObservadorRecovery::Snapshot(ErrorSnapshot::LimiteInventarioExcedido),
+            "artifacto limitado: {target}"
+        );
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        assert!(!format!("{error:?}").contains("private-overflow.bin"));
+        assert_eq!(filesystem_snapshot(&lock), before);
+    }
 }
 
 fn journal(lock: &LockEscritura, old: ArtifactFingerprint, new: ArtifactFingerprint) -> Journal {
