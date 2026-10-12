@@ -11,9 +11,9 @@ use crate::transaccion::journal::JournalState;
 use crate::transaccion::lock::LockEscritura;
 
 use super::{
-    clasificar_fila_recovery, observar_inventario_recovery, preflight_recovery, ArtifactState,
-    ContextoPreflightRecovery, ErrorObservadorRecovery, FilaRecoverySoportada, RecoveryInventory,
-    ResultadoPreflightRecovery,
+    ArtifactState, ContextoPreflightRecovery, ErrorObservadorRecovery, FilaRecoverySoportada,
+    RecoveryInventory, ResultadoPreflightRecovery, clasificar_fila_recovery,
+    observar_inventario_recovery, preflight_recovery,
 };
 
 /// Resultado explícito de ejecutar o no la fila acotada.

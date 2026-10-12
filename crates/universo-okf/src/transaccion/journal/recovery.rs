@@ -5,28 +5,28 @@ use super::{ArtifactFingerprint, JournalState};
 #[path = "recovery/observer.rs"]
 mod observer;
 #[allow(unused_imports)]
-pub(crate) use observer::{observar_inventario_recovery, ErrorObservadorRecovery};
+pub(crate) use observer::{ErrorObservadorRecovery, observar_inventario_recovery};
 
 #[path = "recovery/preflight.rs"]
 mod preflight;
 pub(crate) use preflight::{
-    clasificar_fila_recovery, preflight_recovery, ContextoPreflightRecovery,
-    ErrorPreflightRecovery, FilaRecoverySoportada, ResultadoPreflightRecovery,
+    ContextoPreflightRecovery, ErrorPreflightRecovery, FilaRecoverySoportada,
+    ResultadoPreflightRecovery, clasificar_fila_recovery, preflight_recovery,
 };
 
 #[path = "recovery/dispatcher.rs"]
 mod dispatcher;
 #[allow(unused_imports)]
 pub(crate) use dispatcher::{
-    ejecutar_recovery_soportado, ErrorRecoverySoportado, ResultadoRecoverySoportado,
+    ErrorRecoverySoportado, ResultadoRecoverySoportado, ejecutar_recovery_soportado,
 };
 
 #[path = "recovery/runner.rs"]
 mod runner;
 #[allow(unused_imports)]
 pub(crate) use runner::{
-    ejecutar_fila_journal_old, ejecutar_fila_journal_restore_old, ErrorFilaJournalOld,
-    ErrorFilaJournalRestoreOld, ResultadoFilaJournalOld, ResultadoFilaJournalRestoreOld,
+    ErrorFilaJournalOld, ErrorFilaJournalRestoreOld, ResultadoFilaJournalOld,
+    ResultadoFilaJournalRestoreOld, ejecutar_fila_journal_old, ejecutar_fila_journal_restore_old,
 };
 
 /// Resultado abstracto de clasificar root, backup o stage.

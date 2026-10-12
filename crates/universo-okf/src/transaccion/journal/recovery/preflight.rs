@@ -5,8 +5,8 @@ use crate::transaccion::journal::{Journal, JournalState};
 use crate::transaccion::lock::LockEscritura;
 
 use super::{
-    decide_recovery, observar_inventario_recovery, ArtifactState, ErrorObservadorRecovery,
-    RecoveryDecision, RecoveryInventory, RecoveryStep,
+    ArtifactState, ErrorObservadorRecovery, RecoveryDecision, RecoveryInventory, RecoveryStep,
+    decide_recovery, observar_inventario_recovery,
 };
 
 /// One of the only recovery rows currently implemented by a runner.

@@ -1,7 +1,7 @@
 use super::*;
 
 use super::super::dispatcher::{
-    ejecutar_recovery_soportado_con, ErrorRecoverySoportado, ResultadoRecoverySoportado,
+    ErrorRecoverySoportado, ResultadoRecoverySoportado, ejecutar_recovery_soportado_con,
 };
 use crate::transaccion::anclado::DirectorioAnclado;
 use crate::transaccion::inventario::inventariar_root_anclado;
