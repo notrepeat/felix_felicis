@@ -1,6 +1,8 @@
 //! Carga de un bundle OKF a una `Estructura` (spec §3.3, §3.4, §4.2).
 
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
 use universo_core::{
@@ -923,7 +925,7 @@ fn cargar_bundle_observando(
                 ));
                 continue;
             }
-            match std::fs::read(&ruta_canonica) {
+            match leer_archivo_regular_bundle(&ruta_canonica) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(texto) => archivos.push((relativa, texto)),
                     Err(_) => {
@@ -958,6 +960,59 @@ fn cargar_bundle_observando(
             ordenar_errores(&mut errores);
             Err(errores)
         }
+    }
+}
+
+/// Rechaza especiales en el preflight y valida de nuevo el handle abierto.
+/// Unix añade O_NONBLOCK para que una sustitución concurrente por FIFO no
+/// bloquee el recorrido; Windows abre el leaf sin seguir reparse points.
+fn leer_archivo_regular_bundle(ruta: &Path) -> io::Result<Vec<u8>> {
+    let metadata_previa = std::fs::symlink_metadata(ruta)?;
+    if !metadata_previa.is_file() || metadata_es_reparse(&metadata_previa) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "la entrada no es un archivo regular",
+        ));
+    }
+
+    let mut opciones = OpenOptions::new();
+    opciones.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opciones
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        opciones.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut archivo = opciones.open(ruta)?;
+    let metadata_abierta = archivo.metadata()?;
+    if !metadata_abierta.is_file() || metadata_es_reparse(&metadata_abierta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "la entrada abierta no es un archivo regular",
+        ));
+    }
+    let mut bytes = Vec::new();
+    archivo.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn metadata_es_reparse(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
     }
 }
 
@@ -1560,6 +1615,41 @@ mod tests {
             0,
             "un directorio declarado existente puede estar vacío"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_rechaza_fifo_md_sin_bloquear() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().unwrap();
+        let directorio = temp.path().join("n");
+        std::fs::create_dir(&directorio).unwrap();
+        let fifo = directorio.join("bloqueo.md");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the path is nul-terminated and mkfifo does not retain it.
+        assert_eq!(
+            unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) },
+            0,
+            "mkfifo failed: {}",
+            io::Error::last_os_error()
+        );
+
+        let raiz = temp.path().to_path_buf();
+        let (enviar, recibir) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = enviar.send(cargar_bundle(&raiz, manifiesto_minimo()));
+        });
+        let errores = recibir
+            .recv_timeout(Duration::from_secs(2))
+            .expect("la carga de un FIFO sin writer quedó bloqueada")
+            .unwrap_err();
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path.as_deref(), Some("n/bloqueo.md"));
     }
 
     #[test]
