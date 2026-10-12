@@ -2829,13 +2829,14 @@ mod tests {
 
     #[test]
     fn parsear_bundle_mapea_rutas_layout_no_portables_a_path_invalido() {
-        for campo in [0, 1, 2] {
+        for campo in [0, 1, 2, 3] {
             let mut manifiesto = manifiesto_minimo();
             manifiesto.layout.sin_iota.clear();
             match campo {
                 0 => manifiesto.layout.directorios = vec!["docs/COM²".into()],
                 1 => manifiesto.layout.sin_iota = vec!["n/LPT9.txt".into()],
-                _ => manifiesto.layout.ignorados = vec!["COM1.md".into()],
+                2 => manifiesto.layout.ignorados = vec!["COM1.md".into()],
+                _ => manifiesto.layout.directorios = vec![format!("docs/{}", "a".repeat(256))],
             }
             let errores = parsear_bundle(&[], manifiesto).unwrap_err();
             assert_eq!(errores.len(), 1, "{errores:?}");
@@ -2843,6 +2844,19 @@ mod tests {
             assert_eq!(errores[0].path, None);
             assert!(errores[0].detalle.contains("layout."));
         }
+    }
+
+    #[test]
+    fn parsear_bundle_mapea_stem_temporal_demasiado_largo_a_path_invalido() {
+        let archivo = format!("n/{}.md", "a".repeat(249));
+        let path_esperado = format!("n/{}", "a".repeat(249));
+        let errores =
+            parsear_bundle(&[(archivo, doc("a", "X", ""))], manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::PathInvalido);
+        assert_eq!(errores[0].path.as_deref(), Some(path_esperado.as_str()));
+        assert!(errores[0].detalle.contains("248 unidades UTF-16"));
     }
 
     #[test]

@@ -2,6 +2,9 @@
 //! bundle, separador `/`, sin extensión `.md`, bytes conservados (spec
 //! §3.2). Los segmentos también deben ser representables en Windows.
 
+pub(crate) const LIMITE_SEGMENTO_UTF16: usize = 255;
+const LIMITE_STEM_BUNDLE_UTF16: usize = LIMITE_SEGMENTO_UTF16 - ".md.tmp".len();
+
 /// Identidad de nodo: ruta relativa a la raíz del bundle, normalizada con
 /// separador `/`, sin extensión `.md`, con los bytes del nombre
 /// conservados (la comparación de igualdad es sensible a mayúsculas).
@@ -35,6 +38,8 @@ pub enum ErrorPath {
     DispositivoReservado,
     /// Un segmento contiene un carácter que Windows no admite en nombres.
     CaracterNoPortable(char),
+    /// Un segmento excede el límite indicado en unidades UTF-16.
+    SegmentoDemasiadoLargo { limite_utf16: usize },
 }
 
 impl std::fmt::Display for ErrorPath {
@@ -70,6 +75,10 @@ impl std::fmt::Display for ErrorPath {
                     "la ruta contiene el carácter no portable a Windows {c:?}"
                 )
             }
+            ErrorPath::SegmentoDemasiadoLargo { limite_utf16 } => write!(
+                f,
+                "un segmento excede el máximo portable de {limite_utf16} unidades UTF-16"
+            ),
         }
     }
 }
@@ -112,15 +121,26 @@ fn caracter_no_portable(c: char) -> bool {
 }
 
 pub(crate) fn clave_case_ruta(ruta: &str) -> String {
-    // El upcase completo también colapsa pares como `Σ`/`ς`, que el
-    // lowercase de Rust deja distintos aunque Windows los resuelva igual.
+    // El upcase completo colapsa pares como `Σ`/`ς` y `ᾀ`/`ᾈ`, que el
+    // lowercase de Rust deja distintos. Es una clave conservadora de
+    // portabilidad, no una equivalencia exacta de las reglas de Windows.
     // Algunas expansiones (por ejemplo `ß` → `SS`) pueden sobre-rechazar
-    // aliases que un filesystem distinguiría; es una clave conservadora de
-    // portabilidad, nunca una normalización de identidad.
+    // aliases que un filesystem distinguiría; nunca resuelve identidad.
     ruta.chars().flat_map(char::to_uppercase).collect()
 }
 
-pub(crate) fn validar_segmento_portable_windows(segmento: &str) -> Result<(), ErrorPath> {
+pub(crate) fn validar_segmento_portable_windows(
+    segmento: &str,
+    limite_utf16: usize,
+) -> Result<(), ErrorPath> {
+    if segmento
+        .encode_utf16()
+        .take(limite_utf16.saturating_add(1))
+        .count()
+        > limite_utf16
+    {
+        return Err(ErrorPath::SegmentoDemasiadoLargo { limite_utf16 });
+    }
     if segmento.ends_with('.') {
         return Err(ErrorPath::SegmentoTerminaEnPunto);
     }
@@ -158,14 +178,22 @@ impl BundlePath {
         if ruta.starts_with('/') {
             return Err(ErrorPath::Absoluto);
         }
-        for segmento in ruta.split('/') {
+        let mut segmentos = ruta.split('/').peekable();
+        while let Some(segmento) = segmentos.next() {
             if segmento.is_empty() {
                 return Err(ErrorPath::SegmentoVacio);
             }
             if segmento == "." || segmento == ".." {
                 return Err(ErrorPath::SegmentoRelativo);
             }
-            validar_segmento_portable_windows(segmento)?;
+            // La hoja se escribe como `<stem>.md.tmp`; reserva esas siete
+            // unidades para no rebasar el máximo Windows de 255 unidades.
+            let limite_utf16 = if segmentos.peek().is_none() {
+                LIMITE_STEM_BUNDLE_UTF16
+            } else {
+                LIMITE_SEGMENTO_UTF16
+            };
+            validar_segmento_portable_windows(segmento, limite_utf16)?;
         }
         if let Some(c) = ruta.chars().find(|c| caracter_prohibido(*c)) {
             return Err(ErrorPath::CaracterProhibido(c));
@@ -235,10 +263,17 @@ mod tests {
     }
 
     #[test]
-    fn clave_case_detecta_sigma_final_sin_colapsar_i_con_punto() {
+    fn clave_case_detecta_pares_unicode_y_preserva_el_near_miss_de_i_con_punto() {
         let sigma = BundlePath::nuevo("Σ").unwrap();
         let sigma_final = BundlePath::nuevo("ς").unwrap();
         assert_eq!(sigma.clave_case(), sigma_final.clave_case());
+
+        let alfa_con_iota = BundlePath::nuevo("ᾀ").unwrap();
+        let alfa_mayuscula_con_iota = BundlePath::nuevo("ᾈ").unwrap();
+        assert_eq!(
+            alfa_con_iota.clave_case(),
+            alfa_mayuscula_con_iota.clave_case()
+        );
 
         let i_mayuscula_punto = BundlePath::nuevo("İ").unwrap();
         let i_mas_punto = BundlePath::nuevo("i\u{307}").unwrap();
@@ -339,6 +374,45 @@ mod tests {
                 .unwrap()
                 .como_str(),
             "docs/report.v1"
+        );
+    }
+
+    #[test]
+    fn limita_longitud_por_segmento_en_unidades_utf16() {
+        let ascii_255 = "a".repeat(255);
+        let ascii_256 = "a".repeat(256);
+        assert!(BundlePath::nuevo(&format!("{ascii_255}/x")).is_ok());
+        assert_eq!(
+            BundlePath::nuevo(&format!("{ascii_256}/x")).unwrap_err(),
+            ErrorPath::SegmentoDemasiadoLargo { limite_utf16: 255 }
+        );
+
+        let astrales_255 = format!("{}a", "😀".repeat(127));
+        let astrales_256 = "😀".repeat(128);
+        assert_eq!(astrales_255.encode_utf16().count(), 255);
+        assert_eq!(astrales_256.encode_utf16().count(), 256);
+        assert!(BundlePath::nuevo(&format!("{astrales_255}/x")).is_ok());
+        assert_eq!(
+            BundlePath::nuevo(&format!("{astrales_256}/x")).unwrap_err(),
+            ErrorPath::SegmentoDemasiadoLargo { limite_utf16: 255 }
+        );
+
+        let stem_248 = "a".repeat(248);
+        let stem_249 = "a".repeat(249);
+        assert!(BundlePath::nuevo(&stem_248).is_ok());
+        assert_eq!(
+            BundlePath::nuevo(&stem_249).unwrap_err(),
+            ErrorPath::SegmentoDemasiadoLargo { limite_utf16: 248 }
+        );
+
+        let stem_astral_248 = format!("{}aa", "😀".repeat(123));
+        let stem_astral_249 = format!("{}a", "😀".repeat(124));
+        assert_eq!(stem_astral_248.encode_utf16().count(), 248);
+        assert_eq!(stem_astral_249.encode_utf16().count(), 249);
+        assert!(BundlePath::nuevo(&stem_astral_248).is_ok());
+        assert_eq!(
+            BundlePath::nuevo(&stem_astral_249).unwrap_err(),
+            ErrorPath::SegmentoDemasiadoLargo { limite_utf16: 248 }
         );
     }
     #[test]

@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::path::{clave_case_ruta, validar_segmento_portable_windows};
+use crate::path::{LIMITE_SEGMENTO_UTF16, clave_case_ruta, validar_segmento_portable_windows};
 use crate::tipos::Sorte;
 
 /// Sortes de nodo reservados por el motor (plan 07: `Retirado`, lápida con
@@ -274,7 +274,7 @@ fn ruta_layout_portable(ruta: &str, permite_directorios: bool) -> bool {
         !segmento.is_empty()
             && segmento != "."
             && segmento != ".."
-            && validar_segmento_portable_windows(segmento).is_ok()
+            && validar_segmento_portable_windows(segmento, LIMITE_SEGMENTO_UTF16).is_ok()
     })
 }
 
@@ -968,6 +968,16 @@ pub(crate) mod tests {
                 .contains(&ErrorManifiesto::DirectoriosDuplicados)
         );
 
+        let mut alfa_con_iota = base();
+        alfa_con_iota.layout.directorios = vec!["ᾀ".into(), "ᾈ".into()];
+        alfa_con_iota.layout.sin_iota.clear();
+        assert!(
+            alfa_con_iota
+                .validar()
+                .unwrap_err()
+                .contains(&ErrorManifiesto::DirectoriosDuplicados)
+        );
+
         let mut i_con_punto = base();
         i_con_punto.layout.directorios = vec!["İ".into(), "i\u{307}".into()];
         i_con_punto.layout.sin_iota.clear();
@@ -1004,6 +1014,50 @@ pub(crate) mod tests {
         validos.layout.sin_iota = vec!["docs/COM0/sub".into()];
         validos.layout.ignorados = vec!["read me.md".into()];
         validos.validar().unwrap();
+    }
+
+    #[test]
+    fn limita_segmentos_del_layout_a_255_unidades_utf16() {
+        let segmento_255 = "a".repeat(255);
+        let segmento_256 = "a".repeat(256);
+        let astrales_255 = format!("{}a", "😀".repeat(127));
+        let astrales_256 = "😀".repeat(128);
+
+        for segmento in [&segmento_255, &astrales_255] {
+            for campo in 0..3 {
+                let mut manifiesto = base();
+                match campo {
+                    0 => manifiesto.layout.directorios = vec![format!("docs/{segmento}")],
+                    1 => manifiesto.layout.sin_iota = vec![format!("n/{segmento}")],
+                    _ => manifiesto.layout.ignorados = vec![segmento.to_string()],
+                }
+                manifiesto.validar().unwrap();
+            }
+        }
+
+        for segmento in [&segmento_256, &astrales_256] {
+            for (campo, esperado) in [
+                (0, ErrorManifiesto::DirectoriosRutaInvalida),
+                (1, ErrorManifiesto::SinIotaRutaInvalida),
+                (2, ErrorManifiesto::IgnoradosRutaInvalida),
+            ] {
+                let mut manifiesto = base();
+                match campo {
+                    0 => manifiesto.layout.directorios = vec![format!("docs/{segmento}")],
+                    1 => manifiesto.layout.sin_iota = vec![format!("n/{segmento}")],
+                    _ => manifiesto.layout.ignorados = vec![segmento.to_string()],
+                }
+                let errores = manifiesto.validar().unwrap_err();
+                assert!(errores.contains(&esperado), "campo {campo}: {errores:?}");
+                if campo == 1 {
+                    assert!(
+                        !errores.contains(&ErrorManifiesto::SinIotaFueraDeLayout(format!(
+                            "n/{segmento}"
+                        )))
+                    );
+                }
+            }
+        }
     }
 
     #[test]

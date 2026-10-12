@@ -21,7 +21,8 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
 ### Compatibilidad pre-1.0
 
 - Se agregan variantes públicas a enums exhaustivos: `ErrorPath::{SegmentoTerminaEnPunto,
-  SegmentoTerminaEnEspacio, DispositivoReservado, CaracterNoPortable}`;
+  SegmentoTerminaEnEspacio, DispositivoReservado, CaracterNoPortable,
+  SegmentoDemasiadoLargo { limite_utf16 }}`;
   `ErrorManifiesto::{DirectoriosDuplicados, DirectoriosSolapados,
   DirectoriosRutaInvalida, SinIotaRutaInvalida, IgnoradosRutaInvalida}`;
   `ErrorEstructura::HijoDuplicadoEnLote`; `ErrorSnapshot::LimiteInventarioExcedido`
@@ -29,17 +30,24 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   deben contemplar estas variantes.
 - `BundlePath` y las rutas de `layout.directorios`/`layout.sin_iota` exigen
   segmentos portables a Windows; `layout.ignorados` exige un nombre de un solo
-  segmento portable. Se rechazan caracteres Windows no admitidos, puntos o
-  espacios finales y dispositivos DOS reservados (incluidos `COM¹`–`COM³` y
-  `LPT¹`–`LPT³`).
+  segmento portable. En las rutas de layout cada componente físico admite
+  hasta 255 unidades UTF-16. En `BundlePath`, los componentes intermedios
+  admiten 255 y el último stem admite 248 para dejar espacio a `.md.tmp`.
+  `ErrorPath::SegmentoDemasiadoLargo` informa el límite aplicable. Se rechazan
+  caracteres Windows no admitidos, puntos o espacios finales y dispositivos
+  DOS reservados (incluidos `COM¹`–`COM³` y `LPT¹`–`LPT³`). Acorta los nombres
+  que excedan el límite antes de migrar.
 - Renombra los archivos y directorios que incumplan esas reglas y actualiza
   `layout.directorios`, `layout.sin_iota`, `layout.ignorados`, los wikilinks y
   cualquier referencia `Parent` explícita que apunte a las rutas renombradas.
 - `layout.directorios` exige rutas disjuntas: no se admiten declaraciones
-  iguales ni rutas que sean ancestro/descendiente entre sí, comparando también
-  sin distinguir mayúsculas/minúsculas para portabilidad; por ejemplo, `Docs`
-  y `docs/sub` se solapan. También se rechazan raíces que resuelvan por
-  symlink/junction al mismo directorio o a directorios físicamente solapados.
+  iguales ni rutas que sean ancestro/descendiente entre sí; por ejemplo, `Docs`
+  y `docs/sub` se solapan. La clave Unicode completa en mayúsculas es
+  conservadora: colapsa `Σ`/`ς` y `ᾀ`/`ᾈ`, y puede rechazar expansiones como
+  `ß`/`SS`. No afirma equivalencia exacta con las reglas de Windows; el staging
+  en Windows compara rutas físicas con `CompareStringOrdinal`. También se
+  rechazan raíces que resuelvan por symlink/junction al mismo directorio o a
+  directorios físicamente solapados.
 - Para errores, `regla` y `path` sirven para clasificar y localizar. El campo
   `detalle` es texto humano no estable y no debe analizarse programáticamente;
   si se exceden varias cuotas a la vez, cuál se reporta primero tampoco es un

@@ -504,4 +504,20 @@ mod tests {
         let contenido = std::fs::read_to_string(dir.path().join("n/x.md")).unwrap();
         assert_eq!(contenido, serializar_nodo(&u, x));
     }
+
+    #[test]
+    fn serializar_bundle_admite_el_stem_248_que_deja_temporal_en_255_unidades() {
+        let stem = "a".repeat(248);
+        let archivo = format!("n/{stem}.md");
+        let archivos = vec![(archivo, "---\ntype: a\ntitle: X\n---\n".to_string())];
+        let u = parsear_bundle(&archivos, manifiesto_minimo()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+
+        serializar_bundle(&u, dir.path()).unwrap();
+
+        let destino = dir.path().join("n").join(format!("{stem}.md"));
+        let temporal = dir.path().join("n").join(format!("{stem}.md.tmp"));
+        assert!(destino.is_file());
+        assert!(!temporal.exists());
+    }
 }
