@@ -2593,7 +2593,7 @@ mod tests {
         }
 
         let comparaciones = COMPARACIONES_RUTAS_CANONICAS.with(std::cell::Cell::get);
-        let logaritmo = (usize::BITS - (CANTIDAD as usize).leading_zeros()) as usize;
+        let logaritmo = (usize::BITS - CANTIDAD.leading_zeros()) as usize;
         let techo = CANTIDAD * (8 * logaritmo + 16);
         assert!(
             comparaciones <= techo,
