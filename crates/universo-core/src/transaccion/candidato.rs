@@ -151,23 +151,32 @@ pub fn construir_candidato(
 
     let mut aristas_retiradas = HashSet::new();
     let mut etiquetas_retiradas = HashMap::<AristaId, Etiqueta>::new();
+    let mut indice_resolucion = None;
     for atomo in delta.retirar() {
         match atomo {
             Atomo::Edge { id, .. } => {
+                let indice = indice_resolucion
+                    .get_or_insert_with(|| aristas::IndiceResolucion::nuevo(snapshot));
                 let handle =
-                    aristas::resolver(snapshot, id).ok_or(ErrorCandidato::RemoveNotFound {
-                        clase: ClaseOperacion::Edge,
-                    })?;
+                    indice
+                        .resolver(snapshot, id)
+                        .ok_or(ErrorCandidato::RemoveNotFound {
+                            clase: ClaseOperacion::Edge,
+                        })?;
                 aristas_retiradas.insert(handle);
             }
             Atomo::HasLab {
                 sujeto: Sujeto::Arista(id),
                 etiqueta,
             } => {
+                let indice = indice_resolucion
+                    .get_or_insert_with(|| aristas::IndiceResolucion::nuevo(snapshot));
                 let handle =
-                    aristas::resolver(snapshot, id).ok_or(ErrorCandidato::RemoveNotFound {
-                        clase: ClaseOperacion::HasLab,
-                    })?;
+                    indice
+                        .resolver(snapshot, id)
+                        .ok_or(ErrorCandidato::RemoveNotFound {
+                            clase: ClaseOperacion::HasLab,
+                        })?;
                 if snapshot
                     .arista(handle)
                     .is_none_or(|arista| arista.etiqueta != *etiqueta)
