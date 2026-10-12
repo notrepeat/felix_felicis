@@ -649,6 +649,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-11 | Verificación integrada en HEAD `2475dc3` (sobre `61b22fd`) | Workspace 377 passed/5 ignored; `snapshot_transaccional` 2/2; captura 8/8 y harness 1 ignored; clippy, fmt y `check_public_boundary.py` pasan. `2475dc3` solo califica métricas, sin agregar pruebas. | U4 cerrada como primitiva interna; U5 conserva avance parcial. |
 | 2026-10-11 | Harness U5 en HEAD `2475dc3` | 2 writers: total 103,390 ms, espera 55,635/27,817/54,842 ms, 5 busy de 7 (71,4%); 8 writers: total 413,403 ms, espera 1.423,391/177,924/363,207 ms, 92 busy de 100 (92,0%). Máximo de intervalos marcados: 1 en ambos escenarios. | Una muestra release orientativa; los marcadores no cubren toda la vida del lock. |
 | 2026-10-11 | `43c4f98`, `cddc3e3`; verificación en HEAD `cddc3e3` | Harness privado `stage_bundle_transaccional`: 10.000 auxiliares, 104.857.600 bytes, 51.158,840 ms, 2,050 MB/s y 1,955 MiB/s. El test Windows confirma root junction/reparse y canary intacto al rechazar el lock, antes del staging; el test focal, workspace, clippy, fmt y frontera pública pasan. | U6 cerrada para root anclado/staging; no conecta a apply. Runtime orientativo, sin SLA. |
+| 2026-10-11 | `46877ed`, `a5d9371`, `5f66ad1`, `6f72af2` | Observer crate-private read-only de root/backup/stage bajo lock y parent anclado; usa identidad y digest raw, representa `root_new_validated=false` y no decide ni muta artefactos. `recovery::observer` 7/7 y `sibling_read_only_tests` 5/5 en Windows, incluidos parent mismatch, mismo basename bajo otro parent, identidad/digest mismatch, ausencia, tipo y junction con canary. Clippy `-D warnings` compila todos los targets en Windows y Linux; incluye regresión FIFO Unix. | Avance parcial U7; conserva Journal v1 y no integra apply/recovery ni restart. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
@@ -659,7 +660,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. La captura por ruta conserva TOCTOU; el root anclado de U6 está probado por separado |
 | 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
 | 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
-| 7 | `journal_recuperacion_transaccional` | Pendiente |
+| 7 | `journal_recuperacion_transaccional` | Avance parcial: observador read-only anclado y clasificación de root/backup/stage con cobertura focal; faltan decisión/ejecución de recovery, integración al apply y pruebas de restart. |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | Pendiente |
 
 ## Siguiente fase
