@@ -21,6 +21,26 @@ const RAW_TREE_DOMAIN: &[u8] = b"FELIX-RAW-TREE\0v1";
 pub struct SnapshotToken([u8; 32]);
 
 impl SnapshotToken {
+    /// Decodifica una representación hexadecimal canónica en minúsculas.
+    ///
+    /// Solo acepta exactamente 64 bytes ASCII entre `0-9` y `a-f`; el error
+    /// no conserva ni expone el texto recibido.
+    pub fn from_hex(hex: &str) -> Result<Self, ErrorParseSnapshotToken> {
+        let bytes = hex.as_bytes();
+        if bytes.len() != 64 {
+            return Err(ErrorParseSnapshotToken);
+        }
+
+        let mut token = [0; 32];
+        for (indice, par) in bytes.chunks_exact(2).enumerate() {
+            let alto = nibble_hex_minuscula(par[0]).ok_or(ErrorParseSnapshotToken)?;
+            let bajo = nibble_hex_minuscula(par[1]).ok_or(ErrorParseSnapshotToken)?;
+            token[indice] = (alto << 4) | bajo;
+        }
+
+        Ok(Self(token))
+    }
+
     /// Codificación hexadecimal minúscula para un flujo que pidió el token.
     pub fn to_hex(self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -32,6 +52,41 @@ impl SnapshotToken {
         salida
     }
 }
+
+fn nibble_hex_minuscula(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+/// Error fijo y redactado al parsear un token de snapshot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ErrorParseSnapshotToken;
+
+impl ErrorParseSnapshotToken {
+    /// Código estable sin incluir el texto recibido.
+    pub const fn codigo(self) -> &'static str {
+        "snapshot_token_invalid"
+    }
+}
+
+impl fmt::Debug for ErrorParseSnapshotToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ErrorParseSnapshotToken")
+            .field(&self.codigo())
+            .finish()
+    }
+}
+
+impl fmt::Display for ErrorParseSnapshotToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorParseSnapshotToken {}
 
 impl fmt::Debug for SnapshotToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -292,6 +347,7 @@ fn validar_ruta_raw_tree(ruta: &str) -> Result<(), ErrorSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn token(
         version: &str,
@@ -305,6 +361,81 @@ mod tests {
 
     fn archivo(path: &str, bytes: &[u8]) -> EntradaSnapshot {
         EntradaSnapshot::archivo(path, Arc::<[u8]>::from(bytes))
+    }
+
+    #[test]
+    fn parsear_token_hex_acepta_vector_conocido_y_ceros() {
+        let cero = SnapshotToken::from_hex(&"0".repeat(64)).unwrap();
+        assert_eq!(cero.0, [0; 32]);
+        assert_eq!(cero.to_hex(), "0".repeat(64));
+
+        let vector = "6cffaa8a4d9cfcf5e298d8f73d72d6ada739b383d4aa9bdf21d30bba5577fb72";
+        let calculado = token(
+            "engine/1",
+            "policy/1",
+            b"manifest",
+            b"rules",
+            &[archivo("n/á.md", b"CANARY-CONTENT")],
+        );
+        assert_eq!(SnapshotToken::from_hex(vector), Ok(calculado));
+    }
+
+    #[test]
+    fn parsear_token_hex_rechaza_representaciones_no_canonicas() {
+        let invalidos = [
+            "0".repeat(63),
+            "0".repeat(65),
+            format!("{}A", "0".repeat(63)),
+            format!("{}g{}", "0".repeat(31), "0".repeat(32)),
+            format!("0x{}", "0".repeat(62)),
+            format!("{} {}", "0".repeat(31), "0".repeat(32)),
+            format!("{}é{}", "0".repeat(31), "0".repeat(31)),
+            format!("{}\0{}", "0".repeat(31), "0".repeat(32)),
+            format!("{}-{}", "0".repeat(31), "0".repeat(32)),
+        ];
+
+        for invalido in invalidos {
+            assert_eq!(
+                SnapshotToken::from_hex(&invalido),
+                Err(ErrorParseSnapshotToken),
+                "la entrada no canónica debe rechazarse"
+            );
+        }
+    }
+
+    #[test]
+    fn error_de_parseo_es_estable_y_no_revela_entrada() {
+        let canario = format!("{}CANARY{}", "0".repeat(20), "0".repeat(38));
+        let error = SnapshotToken::from_hex(&canario).unwrap_err();
+
+        assert_eq!(error.codigo(), "snapshot_token_invalid");
+        assert_eq!(error.to_string(), "snapshot_token_invalid");
+        assert_eq!(
+            format!("{error:?}"),
+            "ErrorParseSnapshotToken(\"snapshot_token_invalid\")"
+        );
+        assert!(!error.to_string().contains("CANARY"));
+        assert!(!format!("{error:?}").contains("CANARY"));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn token_hex_redondea_bytes(bytes in any::<[u8; 32]>()) {
+            let token = SnapshotToken(bytes);
+            let hex = token.to_hex();
+            prop_assert_eq!(SnapshotToken::from_hex(&hex), Ok(token));
+        }
+
+        #[test]
+        fn parsear_string_arbitrario_no_panic_y_solo_acepta_canonico(entrada in any::<String>()) {
+            if let Ok(token) = SnapshotToken::from_hex(&entrada) {
+                prop_assert_eq!(entrada.len(), 64);
+                prop_assert!(entrada.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')));
+                prop_assert_eq!(token.to_hex(), entrada);
+            }
+        }
     }
 
     #[test]
