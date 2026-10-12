@@ -395,7 +395,7 @@ pub(crate) fn leer_archivo_regular_limitado(
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        opciones.custom_flags(libc::O_NOFOLLOW);
+        opciones.custom_flags(flags_lectura_regular_unix());
     }
     #[cfg(windows)]
     {
@@ -415,6 +415,11 @@ pub(crate) fn leer_archivo_regular_limitado(
         .checked_sub(1)
         .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
     leer_hasta_presupuesto(archivo, metadata.len(), bytes_disponibles)
+}
+
+#[cfg(unix)]
+fn flags_lectura_regular_unix() -> libc::c_int {
+    libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC
 }
 
 fn leer_hasta_presupuesto<R: Read>(
@@ -1185,6 +1190,45 @@ mod tests {
             rechazo_path_sin_lectura(root.path()),
             ErrorSnapshot::TipoNoAdmitido
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lector_path_rechaza_fifo_sin_bloquear() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let fifo = root.path().join("fifo");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `fifo_c` is nul-terminated and mkfifo does not retain it.
+        let status = unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) };
+        assert_eq!(
+            status,
+            0,
+            "mkfifo failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let flags = flags_lectura_regular_unix();
+        assert_ne!(flags & libc::O_NONBLOCK, 0);
+        assert_ne!(flags & libc::O_NOFOLLOW, 0);
+        assert_ne!(flags & libc::O_NOCTTY, 0);
+        assert_ne!(flags & libc::O_CLOEXEC, 0);
+
+        // Ejecutar la apertura en un worker permite que el test señale una
+        // regresión que vuelva bloqueante al open de una FIFO sin writer.
+        let (enviar, recibir) = mpsc::channel();
+        std::thread::spawn(move || {
+            let resultado = leer_archivo_regular_limitado(&fifo, 16);
+            let _ = enviar.send(resultado);
+        });
+        let resultado = recibir
+            .recv_timeout(Duration::from_secs(2))
+            .expect("abrir una FIFO sin writer quedó bloqueado");
+        assert_eq!(resultado.unwrap_err(), ErrorSnapshot::TipoNoAdmitido);
     }
 
     #[cfg(unix)]
