@@ -1,10 +1,14 @@
 use super::*;
 
+use super::super::dispatcher::{
+    ejecutar_recovery_soportado_con, ErrorRecoverySoportado, ResultadoRecoverySoportado,
+};
 use crate::transaccion::anclado::DirectorioAnclado;
 use crate::transaccion::inventario::inventariar_root_anclado;
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal};
 use crate::transaccion::raiz::UbicacionRaiz;
 use crate::transaccion::snapshot::calcular_digest_raw_tree;
+use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -108,6 +112,187 @@ fn inventario_restore_old_inesperado() -> RecoveryInventory {
         stage: ArtifactState::Absent,
         root_new_validated: false,
     }
+}
+
+fn ejecutar_dispatcher_contando_observaciones(
+    lock: &mut LockEscritura,
+    observaciones: &Cell<usize>,
+) -> Result<ResultadoRecoverySoportado, ErrorRecoverySoportado> {
+    ejecutar_recovery_soportado_con(
+        lock,
+        |lock, journal| {
+            observaciones.set(observaciones.get() + 1);
+            observar_inventario_recovery(lock, journal)
+        },
+        |_| {},
+        |_| {},
+    )
+}
+
+#[test]
+fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial() {
+    for state in [
+        JournalState::Prepared,
+        JournalState::BackupReady,
+        JournalState::Installed,
+    ] {
+        let (_temp, root, mut lock, canonical, _) = preparar_fila(state);
+        let observaciones = Cell::new(0);
+
+        assert_eq!(
+            ejecutar_dispatcher_contando_observaciones(&mut lock, &observaciones),
+            Ok(ResultadoRecoverySoportado::KeepOld(
+                ResultadoFilaJournalOld::Eliminado
+            )),
+            "KeepOld en {state:?}"
+        );
+        assert_eq!(observaciones.get(), 1, "KeepOld en {state:?}");
+        assert!(!canonical.exists());
+        assert_root_intact(&root);
+
+        let (_temp, root, mut lock, canonical, _) = preparar_fila(state);
+        fs::rename(&root, backup_path(&lock)).unwrap();
+        let observaciones = Cell::new(0);
+
+        assert_eq!(
+            ejecutar_dispatcher_contando_observaciones(&mut lock, &observaciones),
+            Ok(ResultadoRecoverySoportado::RestoreOld(
+                ResultadoFilaJournalRestoreOld::Eliminado
+            )),
+            "RestoreOld en {state:?}"
+        );
+        assert_eq!(observaciones.get(), 1, "RestoreOld en {state:?}");
+        assert!(!canonical.exists());
+        assert!(!backup_path(&lock).exists());
+        assert_root_intact(&root);
+    }
+}
+
+#[test]
+fn dispatcher_con_journal_ausente_no_observa() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    crear_arbol(&root, b"old-tree");
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let observaciones = Cell::new(0);
+
+    assert_eq!(
+        ejecutar_recovery_soportado_con(
+            &mut lock,
+            |_, _| {
+                observaciones.set(observaciones.get() + 1);
+                Err(ErrorObservadorRecovery::Io)
+            },
+            |_| {},
+            |_| {},
+        ),
+        Ok(ResultadoRecoverySoportado::JournalAusente)
+    );
+    assert_eq!(observaciones.get(), 0);
+    assert_root_intact(&root);
+}
+
+#[test]
+fn dispatcher_committed_falla_antes_de_observar_y_conserva_canarios() {
+    let (_temp, root, mut lock, canonical, mut journal) = preparar_fila(JournalState::Prepared);
+    journal.advance(JournalState::BackupReady).unwrap();
+    journal.advance(JournalState::Installed).unwrap();
+    journal.advance(JournalState::Committed).unwrap();
+    let journal_bytes = journal.encode().unwrap();
+    fs::write(&canonical, &journal_bytes).unwrap();
+    let backup = backup_path(&lock);
+    let backup_canary = b"regular-file-at-backup-name";
+    fs::write(&backup, backup_canary).unwrap();
+    let observaciones = Cell::new(0);
+
+    assert_eq!(
+        ejecutar_dispatcher_contando_observaciones(&mut lock, &observaciones),
+        Err(ErrorRecoverySoportado::FaseNoSoportada)
+    );
+    assert_eq!(observaciones.get(), 0);
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert_eq!(fs::read(backup).unwrap(), backup_canary);
+    assert_root_intact(&root);
+}
+
+#[test]
+fn dispatcher_stage_presente_falla_cerrado_y_no_modifica_la_fila() {
+    let (_temp, root, mut lock, canonical, _) = preparar_fila(JournalState::Installed);
+    let stage = stage_path(&lock);
+    crear_arbol(&stage, b"stage-canary");
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let observaciones = Cell::new(0);
+
+    assert_eq!(
+        ejecutar_dispatcher_contando_observaciones(&mut lock, &observaciones),
+        Err(ErrorRecoverySoportado::FilaNoSoportada)
+    );
+    assert_eq!(observaciones.get(), 1);
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert_root_intact(&root);
+    assert_eq!(fs::read(stage.join("data.bin")).unwrap(), b"stage-canary");
+}
+
+#[test]
+fn dispatcher_no_enmascara_error_keep_old_con_un_intento_restore_old() {
+    let (_temp, root, mut lock, canonical, _) = preparar_fila(JournalState::Installed);
+    let replacement = canonical.with_extension("replacement");
+    fs::copy(&canonical, &replacement).unwrap();
+    let replacement_bytes = fs::read(&replacement).unwrap();
+    let observaciones = Cell::new(0);
+
+    let result = ejecutar_recovery_soportado_con(
+        &mut lock,
+        |lock, journal| {
+            observaciones.set(observaciones.get() + 1);
+            observar_inventario_recovery(lock, journal)
+        },
+        |_| panic!("KeepOld no debe intentar RestoreOld"),
+        |_| {
+            fs::remove_file(&canonical).unwrap();
+            fs::rename(&replacement, &canonical).unwrap();
+        },
+    );
+
+    assert_eq!(
+        result,
+        Err(ErrorRecoverySoportado::KeepOld(
+            ErrorFilaJournalOld::ConflictoAlEliminar(ErrorJournalAnclado::IdentityMismatch)
+        ))
+    );
+    assert_eq!(observaciones.get(), 1);
+    assert_eq!(fs::read(&canonical).unwrap(), replacement_bytes);
+    assert_root_intact(&root);
+}
+
+#[test]
+fn dispatcher_no_enmascara_error_restore_old_con_un_intento_keep_old() {
+    let (_temp, root, mut lock, canonical, _) = preparar_fila(JournalState::Installed);
+    let backup = backup_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let observaciones = Cell::new(0);
+
+    let result = ejecutar_recovery_soportado_con(
+        &mut lock,
+        |lock, journal| {
+            observaciones.set(observaciones.get() + 1);
+            observar_inventario_recovery(lock, journal)
+        },
+        |_| fs::remove_dir_all(&backup).unwrap(),
+        |_| panic!("RestoreOld fallido no debe intentar KeepOld"),
+    );
+
+    assert_eq!(
+        result,
+        Err(ErrorRecoverySoportado::RestoreOld(
+            ErrorFilaJournalRestoreOld::Renombrar(ErrorRenombrarAnclado::FuenteAusente)
+        ))
+    );
+    assert_eq!(observaciones.get(), 1);
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert!(!root.exists());
+    assert!(!backup.exists());
 }
 
 #[test]
