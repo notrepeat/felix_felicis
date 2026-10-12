@@ -90,6 +90,28 @@ fn prepared_y_backup_ready_eliminan_solo_el_journal_y_conservan_root() {
 }
 
 #[test]
+fn installed_y_committed_root_old_sin_vecinos_fallan_y_conservan_estado() {
+    for state in [JournalState::Installed, JournalState::Committed] {
+        let (_temp, root, mut lock, canonical, mut journal) = preparar_fila(JournalState::Prepared);
+        journal.advance(JournalState::BackupReady).unwrap();
+        journal.advance(JournalState::Installed).unwrap();
+        if state == JournalState::Committed {
+            journal.advance(JournalState::Committed).unwrap();
+        }
+        let bytes = journal.encode().unwrap();
+        fs::write(&canonical, &bytes).unwrap();
+
+        assert_eq!(
+            ejecutar_fila_journal_old(&mut lock),
+            Err(ErrorFilaJournalOld::FilaNoAutorizada),
+            "fase {state:?}"
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), bytes);
+        assert_root_intact(&root);
+    }
+}
+
+#[test]
 fn repeticion_tras_reinicio_sin_journal_es_no_aplicable_y_no_toca_root() {
     let (_temp, root, mut lock, canonical, _journal) = preparar_fila(JournalState::Prepared);
     assert_eq!(
