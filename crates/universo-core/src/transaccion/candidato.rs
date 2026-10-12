@@ -223,6 +223,15 @@ pub(super) fn construir_topologia_aristas(
     snapshot: &Estructura,
     delta: &Delta,
 ) -> Result<Candidato, ErrorCandidato> {
+    construir_topologia_aristas_observando(snapshot, delta, || {}, || {})
+}
+
+fn construir_topologia_aristas_observando(
+    snapshot: &Estructura,
+    delta: &Delta,
+    mut observar_arista: impl FnMut(),
+    mut observar_busqueda: impl FnMut(),
+) -> Result<Candidato, ErrorCandidato> {
     let retiros = delta
         .retirar()
         .iter()
@@ -234,13 +243,22 @@ pub(super) fn construir_topologia_aristas(
     let mut candidato = construir_candidato(snapshot, &delta_retiros)?;
 
     let mut altas_topologicas = Vec::new();
+    let mut indice = None;
     for atomo in delta.agregar() {
         let Atomo::Edge { id, .. } = atomo else {
             continue;
         };
+        let indice = indice.get_or_insert_with(|| {
+            aristas::IndiceResolucion::nuevo_observando(candidato.estructura(), || {
+                observar_arista()
+            })
+        });
         // Las altas Edge que ya resuelven tras los retiros son no-op. Omitirlas
         // evita que una etiqueta sintética sustituya la del handle existente.
-        if aristas::resolver(candidato.estructura(), id).is_some() {
+        if indice
+            .resolver_observando(candidato.estructura(), id, &mut observar_busqueda)
+            .is_some()
+        {
             continue;
         }
         altas_topologicas.push(atomo.clone());
@@ -250,10 +268,13 @@ pub(super) fn construir_topologia_aristas(
         });
     }
 
-    aplicar_altas(
+    aplicar_altas_con_indice(
         &mut candidato.estructura,
         &altas_topologicas,
         &HashMap::new(),
+        &mut indice,
+        observar_arista,
+        observar_busqueda,
     )?;
     Ok(candidato)
 }
@@ -264,6 +285,25 @@ fn aplicar_altas(
     estructura: &mut Estructura,
     atomos: &[Atomo],
     etiquetas_retiradas: &HashMap<AristaId, Etiqueta>,
+) -> Result<(), ErrorCandidato> {
+    let mut indice = None;
+    aplicar_altas_con_indice(
+        estructura,
+        atomos,
+        etiquetas_retiradas,
+        &mut indice,
+        || {},
+        || {},
+    )
+}
+
+fn aplicar_altas_con_indice(
+    estructura: &mut Estructura,
+    atomos: &[Atomo],
+    etiquetas_retiradas: &HashMap<AristaId, Etiqueta>,
+    indice: &mut Option<aristas::IndiceResolucion>,
+    mut observar_arista: impl FnMut(),
+    mut observar_busqueda: impl FnMut(),
 ) -> Result<(), ErrorCandidato> {
     let mut grupos = BTreeMap::<GrupoArista, Vec<&Atomo>>::new();
     let mut etiquetas = HashMap::<IdArista, Vec<&Etiqueta>>::new();
@@ -357,15 +397,11 @@ fn aplicar_altas(
             .ok_or(ErrorCandidato::AddConflict {
                 clase: ClaseOperacion::Edge,
             })?;
-        let supervivientes = estructura
-            .salientes(origen)
-            .iter()
-            .filter(|handle| {
-                estructura
-                    .arista(**handle)
-                    .is_some_and(|arista| arista.tipo == sorte && arista.destino == destino)
-            })
-            .count();
+        let indice = indice.get_or_insert_with(|| {
+            aristas::IndiceResolucion::nuevo_observando(estructura, &mut observar_arista)
+        });
+        let supervivientes =
+            indice.cantidad_grupo_observando(origen, &sorte, destino, &mut observar_busqueda);
         let mut nuevas = 0usize;
 
         for atomo in altas {
@@ -399,8 +435,11 @@ fn aplicar_altas(
                 clase: ClaseOperacion::Edge,
             })?;
             if ordinal < supervivientes {
-                let existente =
-                    aristas::resolver(estructura, id).ok_or(ErrorCandidato::AddConflict {
+                let existente = indice
+                    .resolver_grupo_observando(origen, &sorte, destino, id.ordinal, || {
+                        observar_busqueda()
+                    })
+                    .ok_or(ErrorCandidato::AddConflict {
                         clase: ClaseOperacion::Edge,
                     })?;
                 if estructura
@@ -425,11 +464,12 @@ fn aplicar_altas(
                     clase: ClaseOperacion::Edge,
                 });
             }
-            estructura
+            let handle = estructura
                 .insertar_arista(origen, destino, sorte.clone(), (*etiqueta).clone())
                 .map_err(|_| ErrorCandidato::AddConflict {
                     clase: ClaseOperacion::Edge,
                 })?;
+            indice.registrar(estructura, handle);
             nuevas += 1;
         }
     }
@@ -503,5 +543,67 @@ fn clase(atomo: &Atomo) -> ClaseOperacion {
         Atomo::Parent { .. } => ClaseOperacion::Parent,
         Atomo::HasLab { .. } => ClaseOperacion::HasLab,
         Atomo::Ext { .. } => ClaseOperacion::Ext,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BundlePath, manifiesto::tests::base};
+
+    fn path(valor: &str) -> BundlePath {
+        BundlePath::nuevo(valor).unwrap()
+    }
+
+    fn edge_atom(id: IdArista) -> Atomo {
+        Atomo::Edge {
+            origen: id.origen.clone(),
+            destino: id.destino.clone(),
+            sorte: id.sorte.clone(),
+            id,
+        }
+    }
+
+    #[test]
+    fn topologia_consulta_altas_con_un_scan_y_busquedas_constantes() {
+        let mut snapshot = Estructura::nueva(base()).unwrap();
+        let origen = snapshot
+            .insertar_nodo(path("n/origen"), Sorte::nuevo("a"), Etiqueta::nuevo("o"))
+            .unwrap();
+        let destino = snapshot
+            .insertar_nodo(path("n/destino"), Sorte::nuevo("a"), Etiqueta::nuevo("d"))
+            .unwrap();
+        let cantidad = 256u32;
+        let mut altas = Vec::new();
+        for _ in 0..cantidad {
+            let handle = snapshot
+                .insertar_arista(origen, destino, Sorte::nuevo("rel"), Etiqueta::nuevo(""))
+                .unwrap();
+            altas.push(edge_atom(identidad_arista(&snapshot, handle).unwrap()));
+        }
+        let nueva = IdArista {
+            origen: path("n/origen"),
+            sorte: Sorte::nuevo("rel"),
+            destino: path("n/destino"),
+            ordinal: cantidad,
+        };
+        altas.push(edge_atom(nueva.clone()));
+        let delta = Delta::nuevo(altas, std::iter::empty()).unwrap();
+
+        let mut aristas_visitadas = 0;
+        let mut busquedas = 0;
+        let candidato = construir_topologia_aristas_observando(
+            &snapshot,
+            &delta,
+            || aristas_visitadas += 1,
+            || busquedas += 1,
+        )
+        .unwrap();
+
+        assert_eq!(aristas_visitadas, cantidad as usize);
+        assert_eq!(busquedas, cantidad as usize + 2);
+        assert_eq!(candidato.estructura().len_aristas(), cantidad as usize + 1);
+        assert!(aristas::resolver(candidato.estructura(), &nueva).is_some());
+        assert_eq!(snapshot.len_aristas(), cantidad as usize);
     }
 }

@@ -4,10 +4,16 @@ use crate::{AristaId, Estructura, IdArista, NodoId, Sorte};
 
 type GrupoArista = (NodoId, Sorte, NodoId);
 
+#[derive(Default)]
+struct IndiceGrupo {
+    ordinales: HashMap<u32, AristaId>,
+    cantidad: usize,
+}
+
 /// Índice efímero para resolver muchos IDs contra el mismo snapshot sin
 /// volver a recorrer las aristas salientes por cada operación.
 pub(super) struct IndiceResolucion {
-    grupos: HashMap<GrupoArista, HashMap<u32, AristaId>>,
+    grupos: HashMap<GrupoArista, IndiceGrupo>,
 }
 
 impl IndiceResolucion {
@@ -15,17 +21,20 @@ impl IndiceResolucion {
         Self::nuevo_observando(snapshot, || {})
     }
 
-    fn nuevo_observando(snapshot: &Estructura, mut observar_arista: impl FnMut()) -> Self {
-        let mut grupos = HashMap::<GrupoArista, HashMap<u32, AristaId>>::new();
+    pub(super) fn nuevo_observando(
+        snapshot: &Estructura,
+        mut observar_arista: impl FnMut(),
+    ) -> Self {
+        let mut grupos = HashMap::<GrupoArista, IndiceGrupo>::new();
         for (origen, _) in snapshot.nodos() {
             for &handle in snapshot.salientes(origen) {
                 observar_arista();
                 if let Some(arista) = snapshot.arista(handle) {
-                    grupos
+                    let grupo = grupos
                         .entry((arista.origen, arista.tipo.clone(), arista.destino))
-                        .or_default()
-                        .entry(arista.ordinal)
-                        .or_insert(handle);
+                        .or_default();
+                    grupo.cantidad += 1;
+                    grupo.ordinales.entry(arista.ordinal).or_insert(handle);
                 }
             }
         }
@@ -36,7 +45,7 @@ impl IndiceResolucion {
         self.resolver_observando(snapshot, id, || {})
     }
 
-    fn resolver_observando(
+    pub(super) fn resolver_observando(
         &self,
         snapshot: &Estructura,
         id: &IdArista,
@@ -45,10 +54,62 @@ impl IndiceResolucion {
         observar_busqueda();
         let origen = snapshot.por_path(&id.origen)?;
         let destino = snapshot.por_path(&id.destino)?;
+        self.resolver_grupo(origen, &id.sorte, destino, id.ordinal)
+    }
+
+    pub(super) fn resolver_grupo(
+        &self,
+        origen: NodoId,
+        sorte: &Sorte,
+        destino: NodoId,
+        ordinal: u32,
+    ) -> Option<AristaId> {
         self.grupos
-            .get(&(origen, id.sorte.clone(), destino))?
-            .get(&id.ordinal)
+            .get(&(origen, sorte.clone(), destino))?
+            .ordinales
+            .get(&ordinal)
             .copied()
+    }
+
+    pub(super) fn resolver_grupo_observando(
+        &self,
+        origen: NodoId,
+        sorte: &Sorte,
+        destino: NodoId,
+        ordinal: u32,
+        mut observar_busqueda: impl FnMut(),
+    ) -> Option<AristaId> {
+        observar_busqueda();
+        self.resolver_grupo(origen, sorte, destino, ordinal)
+    }
+
+    pub(super) fn cantidad_grupo(&self, origen: NodoId, sorte: &Sorte, destino: NodoId) -> usize {
+        self.grupos
+            .get(&(origen, sorte.clone(), destino))
+            .map_or(0, |grupo| grupo.cantidad)
+    }
+
+    pub(super) fn cantidad_grupo_observando(
+        &self,
+        origen: NodoId,
+        sorte: &Sorte,
+        destino: NodoId,
+        mut observar_busqueda: impl FnMut(),
+    ) -> usize {
+        observar_busqueda();
+        self.cantidad_grupo(origen, sorte, destino)
+    }
+
+    pub(super) fn registrar(&mut self, estructura: &Estructura, handle: AristaId) {
+        let Some(arista) = estructura.arista(handle) else {
+            return;
+        };
+        let grupo = self
+            .grupos
+            .entry((arista.origen, arista.tipo.clone(), arista.destino))
+            .or_default();
+        grupo.cantidad += 1;
+        grupo.ordinales.entry(arista.ordinal).or_insert(handle);
     }
 }
 
