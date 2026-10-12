@@ -13,7 +13,7 @@ use universo_core::{
 use crate::documento::{EntradaCruda, parsear_documento};
 use crate::errores::{ErrorBundle, ErrorDocumento, ErrorEntrada, Regla};
 use crate::transaccion::anclado::{
-    DirectorioLecturaAnclado, ErrorDirectorioAnclado, IdentidadDirectorio,
+    DirectorioLecturaAnclado, ErrorDirectorioAnclado, ErrorLecturaNombres, IdentidadDirectorio,
     identidad_directorio_para_recorrido,
 };
 use crate::transaccion::inventario::LimitesInventario;
@@ -1015,15 +1015,27 @@ fn cargar_bundle_con_limites(
             base_canonica: &base_canonica,
             raiz_canonica: &raiz_canonica,
         };
-        {
+        let resultado = {
             let mut estado = EstadoRecorrido {
                 encontrados: &mut encontrados,
                 errores: &mut errores,
                 camino: &mut camino,
                 procesados: &mut procesados,
                 observar: &mut observar_recorrido,
+                presupuesto: &mut presupuesto,
             };
-            recorrer(&recorrido, &base, &mut estado);
+            recorrer(
+                &recorrido,
+                &base,
+                directorio.split('/').count(),
+                directorio.len(),
+                &mut estado,
+            )
+        };
+        if let Err(limite) = resultado {
+            errores.push(limite);
+            ordenar_errores(&mut errores);
+            return Err(errores);
         }
         encontrados.sort();
         for ruta in encontrados {
@@ -1216,20 +1228,21 @@ struct EstadoRecorrido<'a, O> {
     camino: &'a mut Vec<PathBuf>,
     procesados: &'a mut HashSet<PathBuf>,
     observar: &'a mut O,
+    presupuesto: &'a mut PresupuestoBundle,
 }
 
-/// Recorre `dir` recursivamente. Sigue symlinks a destinos internos al
+/// Recorre `dir` con DFS de profundidad limitada por el contrato de carga.
+/// Sigue symlinks a destinos internos al
 /// canonicalizar cada nombre, pero enumera esos destinos por handle anclado,
 /// así
 /// que distingue por el path canonicalizado dos situaciones que un `HashSet`
 /// único de "visitados" confundiría:
 ///
 /// - Ciclo real: el directorio a punto de entrar ya está en `camino`, la
-///   pila de directorios ancestros de la recursión actual (se empuja antes
-///   de recursar y se saca al volver). Un symlink que apunta a sí mismo o a
+///   pila de directorios ancestros del DFS (se empuja antes de bajar y se
+///   saca al volver). Un symlink que apunta a sí mismo o a
 ///   un ancestro repite un canonicalizado que ya está en esa pila; se
-///   reporta `Regla::Io` y se corta ahí en vez de recursar sin límite (lo
-///   que desbordaría la pila).
+///   reporta `Regla::Io` y se corta antes de entrar.
 /// - Diamante: dos rutas distintas, ninguna ancestro de la otra, llevan al
 ///   mismo directorio físico (p. ej. dos symlinks al mismo destino). No es
 ///   un ciclo ni un error. Para no cargar los mismos archivos dos veces
@@ -1243,7 +1256,17 @@ struct EstadoRecorrido<'a, O> {
 ///   se reporta `Regla::Io` y no se recorre. Sin esta comprobación, un
 ///   enlace a la raíz haría entrar archivos de fuera del layout antes de
 ///   que la pila de ancestros detectara el ciclo.
-fn recorrer<O: FnMut()>(ctx: &Recorrido<'_>, dir: &Path, estado: &mut EstadoRecorrido<'_, O>) {
+///
+/// Los nombres del directorio actual se retienen para ordenarlos, pero cada
+/// uno reserva antes sus bytes/ruta y entrada. Los límites controlan el input
+/// lógico, no el RSS exacto de `Vec`, `PathBuf` y `OsString`.
+fn recorrer<O: FnMut()>(
+    ctx: &Recorrido<'_>,
+    dir: &Path,
+    profundidad: usize,
+    bytes_ruta: usize,
+    estado: &mut EstadoRecorrido<'_, O>,
+) -> Result<(), ErrorBundle> {
     let canonico = match std::fs::canonicalize(dir) {
         Ok(c) => c,
         Err(err) => {
@@ -1253,11 +1276,11 @@ fn recorrer<O: FnMut()>(ctx: &Recorrido<'_>, dir: &Path, estado: &mut EstadoReco
                 Regla::Io,
                 err.to_string(),
             ));
-            return;
+            return Ok(());
         }
     };
 
-    recorrer_canonico(ctx, dir, canonico, None, estado);
+    recorrer_canonico(ctx, dir, canonico, None, profundidad, bytes_ruta, estado)
 }
 
 /// Procesa una ruta lógica ya canonicalizada. La enumeración siempre ocurre
@@ -1267,8 +1290,10 @@ fn recorrer_canonico<O: FnMut()>(
     dir: &Path,
     canonico: PathBuf,
     mut directorio_abierto: Option<File>,
+    profundidad: usize,
+    bytes_ruta: usize,
     estado: &mut EstadoRecorrido<'_, O>,
-) {
+) -> Result<(), ErrorBundle> {
     if !canonico.starts_with(ctx.raiz_canonica) || !canonico.starts_with(ctx.base_canonica) {
         estado.errores.push(error(
             Some(&relativa_a_raiz(ctx.raiz, dir)),
@@ -1284,7 +1309,7 @@ fn recorrer_canonico<O: FnMut()>(
                 ctx.base_declarada
             ),
         ));
-        return;
+        return Ok(());
     }
 
     if estado.camino.contains(&canonico) {
@@ -1297,16 +1322,16 @@ fn recorrer_canonico<O: FnMut()>(
                 relativa_a_raiz(ctx.raiz, dir)
             ),
         ));
-        return;
+        return Ok(());
     }
     if !estado.procesados.insert(canonico.clone()) {
         // Diamante: mismo directorio físico ya procesado por otra ruta.
-        return;
+        return Ok(());
     }
 
     let relativa = match canonico.strip_prefix(ctx.raiz_canonica) {
         Ok(relativa) => relativa,
-        Err(_) => return,
+        Err(_) => return Ok(()),
     };
     // Seam determinista: permite sustituir la ruta tras su validación y
     // antes de abrirla para enumerar; la apertura relativa debe fallar sin
@@ -1323,33 +1348,67 @@ fn recorrer_canonico<O: FnMut()>(
                     Regla::Io,
                     error_lectura_anclada(err).to_string(),
                 ));
-                return;
+                return Ok(());
             }
         },
     };
-    let nombres = match ctx
-        .raiz_anclada
-        .nombres_directorio_abierto(&mut directorio_abierto)
-    {
-        Ok(nombres) => nombres,
-        Err(err) => {
+    let entradas_antes = estado.presupuesto.entradas;
+    let rutas_antes = estado.presupuesto.bytes_rutas;
+    let mut hijos = Vec::new();
+    let relativa_directorio = relativa_a_raiz(ctx.raiz, dir);
+    let nombres =
+        ctx.raiz_anclada
+            .nombres_directorio_abierto_con(&mut directorio_abierto, |nombre| {
+                let profundidad_hijo = profundidad.checked_add(1).ok_or_else(|| {
+                    error_limite_bundle(
+                        Some(&relativa_directorio),
+                        RecursoBundle::Profundidad,
+                        estado.presupuesto.limites,
+                    )
+                })?;
+                let bytes_nombre = nombre.to_string_lossy().len();
+                let bytes_ruta_hijo = bytes_ruta
+                    .checked_add(usize::from(bytes_ruta > 0))
+                    .and_then(|bytes| bytes.checked_add(bytes_nombre))
+                    .ok_or_else(|| {
+                        error_limite_bundle(
+                            Some(&relativa_directorio),
+                            RecursoBundle::BytesRutas,
+                            estado.presupuesto.limites,
+                        )
+                    })?;
+                estado
+                    .presupuesto
+                    .reservar_entrada(bytes_ruta_hijo, profundidad_hijo)
+                    .map_err(|recurso| {
+                        error_limite_bundle(
+                            Some(&relativa_directorio),
+                            recurso,
+                            estado.presupuesto.limites,
+                        )
+                    })?;
+                hijos.push((dir.join(&nombre), nombre, profundidad_hijo, bytes_ruta_hijo));
+                Ok(())
+            });
+    match nombres {
+        Ok(()) => {}
+        Err(ErrorLecturaNombres::Visitante(limite)) => return Err(limite),
+        Err(ErrorLecturaNombres::Directorio(err)) => {
+            estado.presupuesto.entradas = entradas_antes;
+            estado.presupuesto.bytes_rutas = rutas_antes;
             estado.errores.push(error(
                 Some(&relativa_a_raiz(ctx.raiz, dir)),
                 None,
                 Regla::Io,
                 error_lectura_anclada(err).to_string(),
             ));
-            return;
+            return Ok(());
         }
-    };
-    let mut hijos: Vec<_> = nombres
-        .into_iter()
-        .map(|nombre| (dir.join(&nombre), nombre))
-        .collect();
-    hijos.sort_by(|(ruta_a, _), (ruta_b, _)| ruta_a.cmp(ruta_b));
+    }
+    hijos.sort_by(|(ruta_a, _, _, _), (ruta_b, _, _, _)| ruta_a.cmp(ruta_b));
 
     estado.camino.push(canonico.clone());
-    for (ruta, nombre) in hijos {
+    for (ruta, nombre, profundidad_hijo, bytes_ruta_hijo) in hijos {
         let ruta_canonica = match std::fs::canonicalize(&ruta) {
             Ok(canonica) => canonica,
             Err(err) => {
@@ -1393,9 +1452,6 @@ fn recorrer_canonico<O: FnMut()>(
                         // comprobar que permanece dentro del layout.
                         match ctx.raiz_anclada.abrir_directorio_relativo(relativa) {
                             Ok(directorio) => Some(directorio),
-                            Err(ErrorDirectorioAnclado::TipoNoAdmitido) if destino_es_archivo => {
-                                None
-                            }
                             Err(err) => {
                                 estado.errores.push(error_recorrido_io(
                                     ctx.raiz,
@@ -1423,7 +1479,15 @@ fn recorrer_canonico<O: FnMut()>(
             };
             match directorio {
                 Some(directorio) => {
-                    recorrer_canonico(ctx, &ruta, ruta_canonica, Some(directorio), estado);
+                    recorrer_canonico(
+                        ctx,
+                        &ruta,
+                        ruta_canonica,
+                        Some(directorio),
+                        profundidad_hijo,
+                        bytes_ruta_hijo,
+                        estado,
+                    )?;
                     continue;
                 }
                 None => false,
@@ -1444,12 +1508,21 @@ fn recorrer_canonico<O: FnMut()>(
             }
         };
         if es_directorio {
-            recorrer_canonico(ctx, &ruta, ruta_canonica, None, estado);
+            recorrer_canonico(
+                ctx,
+                &ruta,
+                ruta_canonica,
+                None,
+                profundidad_hijo,
+                bytes_ruta_hijo,
+                estado,
+            )?;
         } else if es_markdown(&ruta) {
             estado.encontrados.push(ruta);
         }
     }
     estado.camino.pop();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1463,6 +1536,21 @@ mod tests {
     }
     fn atomos_txt(u: &Estructura) -> Vec<String> {
         u.atomos().iter().map(ToString::to_string).collect()
+    }
+
+    fn cargar_bundle_con_presupuesto_test(
+        raiz: &Path,
+        manifiesto: Manifiesto,
+        limites: LimitesInventario,
+    ) -> Result<Estructura, Vec<ErrorBundle>> {
+        cargar_bundle_con_limites(
+            raiz,
+            manifiesto,
+            limites,
+            identidad_directorio_para_recorrido,
+            || {},
+            |_| {},
+        )
     }
 
     #[test]
@@ -1512,6 +1600,69 @@ mod tests {
             presupuesto.reservar_entrada(1, 1),
             Err(RecursoBundle::BytesRutas)
         );
+    }
+
+    #[test]
+    fn limites_de_recorrido_son_globales_y_aceptan_el_valor_exacto() {
+        let dir = tempfile::tempdir().unwrap();
+        for (root, name) in [("n", "X"), ("m", "Y")] {
+            std::fs::create_dir_all(dir.path().join(root)).unwrap();
+            std::fs::write(
+                dir.path()
+                    .join(root)
+                    .join(if root == "n" { "x.md" } else { "y.md" }),
+                doc("a", name, ""),
+            )
+            .unwrap();
+        }
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios.push("m".to_string());
+        let exactos = LimitesInventario {
+            bytes_raw: usize::MAX,
+            entradas: 4,
+            profundidad: 2,
+            bytes_rutas: 14,
+        };
+        assert_eq!(
+            cargar_bundle_con_presupuesto_test(dir.path(), manifiesto.clone(), exactos)
+                .unwrap()
+                .len_nodos(),
+            2
+        );
+
+        for (limites, esperado) in [
+            (
+                LimitesInventario {
+                    entradas: 3,
+                    ..exactos
+                },
+                "entradas",
+            ),
+            (
+                LimitesInventario {
+                    profundidad: 1,
+                    ..exactos
+                },
+                "profundidad",
+            ),
+            (
+                LimitesInventario {
+                    bytes_rutas: 13,
+                    ..exactos
+                },
+                "bytes de rutas",
+            ),
+        ] {
+            let errores =
+                cargar_bundle_con_presupuesto_test(dir.path(), manifiesto.clone(), limites)
+                    .unwrap_err();
+            assert!(
+                errores.iter().any(|error| {
+                    error.regla == Regla::LimiteBundleExcedido && error.detalle.contains(esperado)
+                }),
+                "se esperaba límite de {esperado}: {errores:?}"
+            );
+        }
     }
 
     #[test]

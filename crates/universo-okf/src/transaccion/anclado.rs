@@ -211,23 +211,32 @@ impl DirectorioLecturaAnclado {
 
     /// Enumerates a directory handle opened by this anchored capability.
     /// Directory identity is deliberately not queried, so unsupported file
-    /// IDs on FAT/SMB do not prevent bundle loading.
-    pub(crate) fn nombres_directorio_abierto(
+    /// IDs on FAT/SMB do not prevent bundle loading. Each name is handed to
+    /// the visitor immediately so its caller can reserve input budget before
+    /// retaining it.
+    pub(crate) fn nombres_directorio_abierto_con<E, F>(
         &self,
         directorio: &mut File,
-    ) -> Result<Vec<OsString>, ErrorDirectorioAnclado> {
-        metadata_directorio_validada(directorio)?;
-        let mut entradas = fs_at::read_dir(directorio).map_err(mapear_io)?;
-        let mut nombres = Vec::new();
+        mut visitar: F,
+    ) -> Result<(), ErrorLecturaNombres<E>>
+    where
+        F: FnMut(OsString) -> Result<(), E>,
+    {
+        metadata_directorio_validada(directorio).map_err(ErrorLecturaNombres::Directorio)?;
+        let mut entradas = fs_at::read_dir(directorio)
+            .map_err(mapear_io)
+            .map_err(ErrorLecturaNombres::Directorio)?;
         for entrada in &mut entradas {
-            let entrada = entrada.map_err(mapear_io)?;
+            let entrada = entrada
+                .map_err(mapear_io)
+                .map_err(ErrorLecturaNombres::Directorio)?;
             let nombre = entrada.name();
             if nombre == OsStr::new(".") || nombre == OsStr::new("..") {
                 continue;
             }
-            nombres.push(nombre.to_os_string());
+            visitar(nombre.to_os_string()).map_err(ErrorLecturaNombres::Visitante)?;
         }
-        Ok(nombres)
+        Ok(())
     }
 
     /// Opens a file by resolving each component from the held root handle.
