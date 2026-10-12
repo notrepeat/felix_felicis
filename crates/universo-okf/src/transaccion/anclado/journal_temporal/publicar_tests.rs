@@ -398,6 +398,46 @@ fn efecto_de_publicacion_seguido_de_error_se_confirma_como_ya_publicado() {
     assert!(!temporal.exists());
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn publicacion_exitosa_con_journal_canonico_distinto_no_limpia_evidencia() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal_path = nombre_journal(&root);
+    let (journal_esperado, _, esperada) = preparar_temporal(&capability);
+    let journal_conflictivo = journal_prueba(&capability, "1123456789abcdef0123456789abcdef");
+    let bytes_conflictivos = journal_conflictivo.encode().unwrap();
+    let mut syscall_reporto_exito = false;
+
+    let resultado = capability.publicar_con(esperada, &journal_esperado, |_, _| {
+        fs::hard_link(&temporal, &journal_path).map_err(|_| ErrorJournalAnclado::Io)?;
+        fs::write(&journal_path, &bytes_conflictivos).map_err(|_| ErrorJournalAnclado::Io)?;
+        syscall_reporto_exito = true;
+        Ok(())
+    });
+
+    assert!(syscall_reporto_exito);
+    assert_eq!(
+        resultado,
+        ResultadoPublicacionJournal::Indeterminado {
+            causa: super::super::CausaIndeterminacionPublicacionJournal::CanonicoNoVerificable(
+                ErrorJournalAnclado::JournalMismatch
+            ),
+        }
+    );
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(identidad(&journal_path), esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes_conflictivos);
+    assert_eq!(fs::read(&journal_path).unwrap(), bytes_conflictivos);
+    assert_eq!(
+        Journal::parse(&bytes_conflictivos).unwrap(),
+        journal_conflictivo
+    );
+}
+
 #[test]
 fn error_de_publicacion_con_observaciones_inciertas_preserva_evidencia() {
     let temp = tempdir().unwrap();
