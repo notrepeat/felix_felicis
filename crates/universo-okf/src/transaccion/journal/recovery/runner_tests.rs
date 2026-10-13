@@ -82,28 +82,68 @@ fn stage_path(lock: &LockEscritura) -> PathBuf {
     lock.ubicacion().stage(TXN).unwrap().as_path().to_path_buf()
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum EntradaParentAssertion {
+    Directorio,
+    Archivo {
+        longitud: u64,
+        bytes: Option<Vec<u8>>,
+    },
+}
+
 fn inventario_parent_para_assertions(
     parent: &Path,
     journal: &Path,
-) -> Vec<(String, bool, Option<Vec<u8>>)> {
-    let mut entradas = fs::read_dir(parent)
-        .unwrap()
-        .map(|entrada| {
-            let entrada = entrada.unwrap();
-            let nombre = entrada.file_name().to_string_lossy().into_owned();
-            let tipo = entrada.file_type().unwrap();
+    lockfile: &Path,
+) -> Vec<(String, EntradaParentAssertion)> {
+    fn visitar(
+        parent: &Path,
+        directorio: &Path,
+        journal: &Path,
+        lockfile: &Path,
+        entradas: &mut Vec<(String, EntradaParentAssertion)>,
+    ) {
+        let mut hijos = fs::read_dir(directorio)
+            .unwrap()
+            .map(|entrada| entrada.unwrap())
+            .collect::<Vec<_>>();
+        hijos.sort_by_key(|entrada| entrada.file_name());
+
+        for hijo in hijos {
+            let ruta = hijo.path();
+            let relativa = ruta
+                .strip_prefix(parent)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let tipo = hijo.file_type().unwrap();
             if tipo.is_dir() {
-                (nombre, true, None)
+                entradas.push((relativa, EntradaParentAssertion::Directorio));
+                visitar(parent, &ruta, journal, lockfile, entradas);
             } else {
                 assert!(
                     tipo.is_file(),
                     "fixture only contains files and directories"
                 );
-                let bytes = (entrada.path() == journal).then(|| fs::read(entrada.path()).unwrap());
-                (nombre, false, bytes)
+                let longitud = hijo.metadata().unwrap().len();
+                let bytes = if ruta == lockfile {
+                    None
+                } else {
+                    Some(fs::read(&ruta).unwrap())
+                };
+                if ruta == journal {
+                    assert!(bytes.is_some(), "journal bytes are part of the inventory");
+                }
+                entradas.push((
+                    relativa,
+                    EntradaParentAssertion::Archivo { longitud, bytes },
+                ));
             }
-        })
-        .collect::<Vec<_>>();
+        }
+    }
+
+    let mut entradas = Vec::new();
+    visitar(parent, parent, journal, lockfile, &mut entradas);
     entradas.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
     entradas
 }
@@ -170,15 +210,26 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
         let stage = stage_path(&lock);
         let journal_bytes = fs::read(&canonical).unwrap();
         let parent = canonical.parent().unwrap();
-        let mut parent_after_keep_old = inventario_parent_para_assertions(parent, &canonical);
-        let journal_name = canonical.file_name().unwrap().to_string_lossy();
+        let lockfile = lock.ubicacion().lock().as_path().to_path_buf();
+        let mut parent_after_keep_old =
+            inventario_parent_para_assertions(parent, &canonical, &lockfile);
+        let journal_name = canonical
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let journal_index = parent_after_keep_old
             .iter()
-            .position(|(name, _, _)| name == journal_name.as_ref())
+            .position(|(name, _)| name == &journal_name)
             .unwrap();
+        let (removed_name, removed_entry) = parent_after_keep_old.remove(journal_index);
+        assert_eq!(removed_name, journal_name);
         assert_eq!(
-            parent_after_keep_old.remove(journal_index),
-            (journal_name.into_owned(), false, Some(journal_bytes))
+            removed_entry,
+            EntradaParentAssertion::Archivo {
+                longitud: journal_bytes.len() as u64,
+                bytes: Some(journal_bytes),
+            }
         );
         let observaciones = Cell::new(0);
 
@@ -198,7 +249,7 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
         assert!(fingerprint(&root) == fingerprint_old);
         assert_root_intact(&root);
         assert_eq!(
-            inventario_parent_para_assertions(parent, &canonical),
+            inventario_parent_para_assertions(parent, &canonical, &lockfile),
             parent_after_keep_old,
             "KeepOld en {state:?} solo debe retirar el journal esperado"
         );
@@ -208,7 +259,43 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
         assert!(fingerprint(&root) == fingerprint_old);
         let backup = backup_path(&lock);
         let stage = stage_path(&lock);
+        let lockfile = lock.ubicacion().lock().as_path().to_path_buf();
         fs::rename(&root, &backup).unwrap();
+        let journal_bytes = fs::read(&canonical).unwrap();
+        let parent = canonical.parent().unwrap();
+        let parent_before_restore_old =
+            inventario_parent_para_assertions(parent, &canonical, &lockfile);
+        let journal_name = canonical
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let backup_name = backup.file_name().unwrap().to_string_lossy().into_owned();
+        let root_name = root.file_name().unwrap().to_string_lossy().into_owned();
+        let journal_index = parent_before_restore_old
+            .iter()
+            .position(|(name, _)| name == &journal_name)
+            .unwrap();
+        assert_eq!(
+            parent_before_restore_old[journal_index].1,
+            EntradaParentAssertion::Archivo {
+                longitud: journal_bytes.len() as u64,
+                bytes: Some(journal_bytes.clone()),
+            }
+        );
+        let mut parent_after_restore_old = parent_before_restore_old
+            .into_iter()
+            .filter_map(|(name, entry)| {
+                if name == journal_name {
+                    None
+                } else if name == backup_name || name.starts_with(&format!("{backup_name}/")) {
+                    Some((format!("{root_name}{}", &name[backup_name.len()..]), entry))
+                } else {
+                    Some((name, entry))
+                }
+            })
+            .collect::<Vec<_>>();
+        parent_after_restore_old.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
         let observaciones = Cell::new(0);
 
         assert_eq!(
@@ -225,6 +312,11 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
         assert!(!backup.exists());
         assert!(!stage.exists());
         assert_root_intact(&root);
+        assert_eq!(
+            inventario_parent_para_assertions(parent, &canonical, &lockfile),
+            parent_after_restore_old,
+            "RestoreOld solo debe mover backup a root y retirar el journal esperado"
+        );
     }
 }
 
