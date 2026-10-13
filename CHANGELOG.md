@@ -55,6 +55,16 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   proveedor acotado antes del lock y sus callers de apply/CLI, además de cotas
   para `version_motor` y `policy_id`; no se afirma atomicidad ante cambios
   hostiles.
+- El CAS privado por ruta compara el token después de capturar también la
+  configuración externa. Las regresiones verifican que un match conserva los
+  nombres, tipos y bytes del árbol y los bytes externos, no crea un lockfile
+  sibling y funciona con el guard del caller retenido (`writer_lock_busy` para
+  un segundo escritor). Si cambió la configuración externa, devuelve `stale`
+  redactado antes de parsear, sin cambios de contenido o namespace. La ruta no
+  hace escrituras intencionales de contenido o namespace, pero estas pruebas
+  no cubren atime, permisos, metadatos ni identidad de objetos. Se conserva
+  TOCTOU y no se garantiza atomicidad ante cambios hostiles; el helper sigue
+  privado, sin caller desde apply/CLI ni simulación pública.
 
 ### Límites y seguridad de carga
 
