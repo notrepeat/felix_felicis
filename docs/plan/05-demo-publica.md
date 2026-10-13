@@ -48,6 +48,9 @@ examples/software-architecture/
 
 ## Verificación prevista
 
+Pendiente: `./examples/software-architecture/demo.ps1` aún no existe. Su
+creación y ejecución siguen siendo el objetivo de esta verificación.
+
 ```powershell
 ./examples/software-architecture/demo.ps1
 cargo test --workspace --test demo_arquitectura

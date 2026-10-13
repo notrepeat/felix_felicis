@@ -201,24 +201,26 @@ y `1/1/1/1`. Ambos validan JSON v2, una línea JSON por `stdout`, `stderr`
 vacío, estructura/valores permitidos y ausencia de los marcadores conocidos de
 rutas/etiquetas/textos/IDs de la fixture.
 
-`2534fd4` añade un test de integración sintético y `e0fc2e6` refuerza sus
-aserciones. La propuesta vacía se admite y deja intactos los átomos y anexos
-del bundle base. El delta domain→adapter se rechaza en core con un testigo de
-fuente 0, línea 2, columna 1; el test confirma que el base sigue intacto tras
-el rechazo y tras construir en memoria el candidato contradictorio. La fixture
-aporta explícitamente el delta correctivo domain→port→adapter y Felix lo
-admite. Solo el candidato corregido se serializa y recarga; el test compara
-átomos y anexos y comprueba que una segunda serialización conserva los bytes
-de los tres Markdown. Después ejecuta CLI `validate` y `check` solo sobre el
-corregido: 3 nodos, 2 aristas y `failed=0`.
+`2534fd4` añade el test de integración `demo_arquitectura`, que ejecuta un
+flujo sintético; `e0fc2e6` refuerza sus aserciones. La propuesta vacía se
+admite y deja intactos los átomos y anexos del bundle base. El delta
+domain→adapter se rechaza en core con un testigo de fuente 0, línea 2, columna
+1; el test confirma que el base sigue intacto tras el rechazo y tras construir
+en memoria el candidato contradictorio. La fixture aporta explícitamente el
+delta correctivo domain→port→adapter y Felix lo admite. Solo el candidato
+corregido se serializa y recarga; el test compara átomos y anexos y comprueba
+que una segunda serialización conserva los bytes de los tres Markdown.
+Después ejecuta CLI `validate` y `check` solo sobre el corregido: 3 nodos, 2
+aristas y `failed=0`.
 
-La prueba sintética no trae fixture durable de la historia arquitectónica, un
-runner que reproduzca la historia completa ni goldens/comparación golden; no
-comprueba el rechazo por CLI (que sí cubre el smoke anterior), generación
-automatizada de la corrección ni persistencia del contradictorio. Tampoco
-demuestra `apply`, publicación, atomicidad o recovery. La evidencia conjunta
-sigue siendo parcial: fase 05 pendiente, todos sus criterios de aceptación
-abiertos y progreso maestro en 3/9.
+No hay fixture durable de la historia arquitectónica ni runner autónomo de la
+demo pública con fixture durable; tampoco hay goldens ni comparación golden.
+`demo_arquitectura` ejecuta un flujo sintético y no deja una fixture durable.
+El test no comprueba el rechazo por CLI (que sí cubre el smoke anterior),
+generación automatizada de la corrección ni persistencia del contradictorio.
+Tampoco demuestra `apply`, publicación, atomicidad o recovery. La evidencia
+conjunta sigue siendo parcial: fase 05 pendiente, todos sus criterios de
+aceptación abiertos y progreso maestro en 3/9.
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed

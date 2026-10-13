@@ -102,9 +102,10 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   código 1 y `1/1/1/1`. Ambos validan JSON v2, los streams, una allowlist de
   estructura/valores y la ausencia de los marcadores conocidos de
   rutas/etiquetas/textos/IDs de la fixture.
-- `2534fd4` añade un test de integración sintético y `e0fc2e6` refuerza sus
-  aserciones. La matriz local independiente sobre `e0fc2e6` pasa en Windows y
-  WSL Ubuntu: prueba focal `demo_arquitectura`, 1 passed/0 failed/0 ignored en
+- `2534fd4` añade el test de integración `demo_arquitectura`, que ejecuta un
+  flujo sintético; `e0fc2e6` refuerza sus aserciones. La matriz local
+  independiente sobre `e0fc2e6` pasa en Windows y WSL Ubuntu: prueba focal
+  `demo_arquitectura`, 1 passed/0 failed/0 ignored en
   ambos; smoke CLI admit/reject pasa en ambos; `cargo test --workspace`
   registra Windows 703 passed/0 failed/6 ignored (38 suites) y WSL 711/0/6
   (38 suites). `fmt`, `clippy` y la frontera pública pasan en ambos. No se
@@ -119,11 +120,12 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   los tres Markdown. `validate` y `check` se ejecutan solo sobre ese candidato
   corregido: 3 nodos, 2 aristas y `failed=0`.
 - La evidencia sigue siendo parcial. No hay fixture durable de la historia
-  arquitectónica, runner que la reproduzca completa, goldens ni comparación
-  con ellos. Este test no prueba rechazo por CLI (el smoke previo sí cubre
-  `admit`/`reject` estáticos), generación automatizada de la corrección ni
-  persistencia del contradictorio. Tampoco prueba `apply`, publicación,
-  atomicidad o recovery; la fase 05 permanece pendiente.
+  arquitectónica ni runner autónomo de la demo pública con fixture durable;
+  tampoco hay goldens ni comparación con ellos. `demo_arquitectura` ejecuta
+  un flujo sintético. Este test no prueba rechazo por CLI (el smoke
+  previo sí cubre `admit`/`reject` estáticos), generación automatizada de la
+  corrección ni persistencia del contradictorio. Tampoco prueba `apply`,
+  publicación, atomicidad o recovery; la fase 05 permanece pendiente.
 
 ### Límites y seguridad de carga
 
