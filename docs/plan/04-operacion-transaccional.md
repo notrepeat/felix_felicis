@@ -42,8 +42,8 @@ consumidor sigue siendo una defensa necesaria. Esta garantía es distinta de
 la captura privada por ruta, que limita la lectura en curso y permite como
 máximo el remanente más un byte centinela en fuentes externas. Siguen
 pendientes el proveedor con lectura acotada antes del lock, los callers de
-apply/CLI y las cotas para `version_motor` y `policy_id`. No hay limpieza de
-stage ni recovery completo. Fase 04 sigue en curso: lock, captura anclada y
+apply/CLI y las cotas para `version_motor` y `policy_id`. El recovery U7 aún no
+limpia stage ni está completo. Fase 04 sigue en curso: lock, captura anclada y
 staging aún no están conectados a apply ni publican candidatos.
 
 En `609936a`, las regresiones del CAS privado por ruta verifican que un match
