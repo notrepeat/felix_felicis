@@ -11,6 +11,9 @@ The intended story is ordered:
 3. Starting from that contradictory candidate, the
    `proposals/valid/delta.json` proposal removes the direct edge and adds
    domain-to-port and port-to-adapter edges.
+4. Starting from the corrected state, `proposals/gap/delta.json` removes the
+   domain-to-port edge. `invariants/architecture-gap.sx` then reports the
+   missing existential obligation in `states/gap/`.
 
 The correction is supplied explicitly by this fixture. Felix evaluates a
 proposal; it does not generate the correction. The valid delta is a patch for
@@ -41,11 +44,17 @@ cargo run -p universo-cli -- validate examples/software-architecture/bundle --ma
 cargo run -p universo-cli -- check examples/software-architecture/bundle --manifiesto examples/software-architecture/manifest.toml --invariantes examples/software-architecture/invariants/architecture.sx
 ```
 
+The snapshots under `states/`, including `states/gap/`, are complete,
+versioned illustrative states aligned with their deltas; they are not outputs
+of `apply` or generated corrections. The correction and the gap-producing
+removal are both supplied explicitly by this fixture.
+
 The standard-library runner
 [`run_software_architecture_demo.py`](../../tools/run_software_architecture_demo.py)
-builds the CLI and checks `validate` and `check` in JSON and text for all three
+builds the CLI and checks `validate` and `check` in JSON and text for the
 versioned states against the exact outputs in `expected/`. The contradictory
-check uses `--explain decide` so its redacted witness is part of the golden.
+check uses `--explain decide`; the gap check uses `--explain enumerate` so its
+redacted witness and gap summary are part of the goldens.
 Run it from the repository root with:
 
 ```powershell

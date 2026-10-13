@@ -1,0 +1,2 @@
+; Every domain component must depend on a port through a dependency edge.
+(forall ((x N)) :guarda (Type x domain) (exists ((e E) (y N)) :guarda (Edge e x y depends) (Type y port)))
