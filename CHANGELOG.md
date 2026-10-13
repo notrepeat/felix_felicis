@@ -87,6 +87,24 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   37 suites. `fmt` y `clippy` pasan en ambos entornos. Estos son conteos del
   workspace, no resultados focales de las pruebas de U7 o U8.
 
+### Smoke público de admisión y rechazo
+
+- `ae99906` incorpora un smoke de la CLI sobre las fixtures públicas de
+  admisión y rechazo; `c76e292` aclara que `check` es evaluación estática y
+  precisa el contrato de JSON y streams. La matriz local sobre `c76e292` pasa
+  en Windows y WSL Ubuntu: respectivamente, el workspace registra 702 y 710
+  pruebas `passed`, 0 `failed` y 6 `ignored` en 37 suites. `fmt`, `clippy` y
+  la frontera pública también pasan en ambos entornos.
+- Cada smoke compila la CLI y realiza dos invocaciones directas, una de
+  admisión y otra de rechazo: cuatro invocaciones CLI en total entre ambos
+  sistemas operativos; no son pruebas Cargo. El caso admit devuelve código 0
+  y resumen `sources/instances/evaluated/failed = 3/3/3/0`; reject devuelve
+  código 1 y `1/1/1/1`. Ambos validan JSON v2, los streams y una allowlist de
+  estructura/valores con redacción de datos de la fixture.
+- Es evidencia parcial de evaluación estática. No demuestra reparación,
+  persistencia, round-trip ni readmisión, comparación con goldens, ejecución
+  de `validate` o recovery; la fase 05 sigue pendiente.
+
 ### Límites y seguridad de carga
 
 - `cargar_bundle` limita la lectura desde disco a 128 MiB de contenido Markdown,

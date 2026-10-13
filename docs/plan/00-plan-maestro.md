@@ -181,6 +181,30 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `a3cc3c9c2e5d166f066d6f7bfccf6cdec9214211` | Añade una prueba privada de CAS por ruta para match/stale con journal sibling: compara inventarios observados de root, configuración y parent, bytes de journal y `ArtifactFingerprint` del root; no aparecen backup, stage ni lockfile. No invoca el dispatcher. No hay conteo focal registrado para este commit. |
 | `51cd5c4fbf9607dffac1825a9739cac9e92d97e2` | Extiende esa matriz de recovery con inventario recursivo: rutas/tipos/bytes de archivos normales; el lock abierto se compara solo por presencia, tipo y longitud. `RestoreOld` compara contra el modelo backup→root y retiro de journal. Matriz workspace independiente sobre este SHA: Windows 702 passed/0 failed/6 ignored (37 suites), WSL Ubuntu 710/0/6 (37 suites); fmt y clippy pasan en ambos. Son conteos workspace, no focales. U7 sigue parcial y sin caller productivo; el inventario no observa atime/permisos/metadatos y no elimina TOCTOU ni demuestra atomicidad ante cambios hostiles. |
 
+### Evidencia parcial de fase 05 — smoke de CLI
+
+`ae99906` añade `tools/check_public_cli_demo.py` y lo incorpora a los jobs de
+CI; `c76e292` precisa en README que `check` realiza evaluación estática y
+documenta el contrato JSON/streams. La siguiente matriz es local y corresponde
+a `c76e292`; no registra un resultado de CI remoto.
+
+| Entorno | Smoke | `cargo test --workspace` | Otras comprobaciones |
+|---|---|---|---|
+| Windows | Pasa: dos invocaciones CLI directas (admit/reject) | 702 passed/0 failed/6 ignored (37 suites) | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings` y `python tools/check_public_boundary.py` pasan. |
+| WSL Ubuntu | Pasa: dos invocaciones CLI directas (admit/reject) | 710 passed/0 failed/6 ignored (37 suites) | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings` y `python tools/check_public_boundary.py` pasan. |
+
+Cada smoke compila el binario y ejecuta exactamente dos comandos `universo
+check` directamente, cuatro invocaciones CLI entre los dos sistemas; ese número
+no corresponde a pruebas Cargo. El caso `admit` termina con código 0 y resumen
+`sources/instances/evaluated/failed = 3/3/3/0`; `reject` termina con código 1
+y `1/1/1/1`. Ambos validan JSON v2, una línea JSON por `stdout`, `stderr`
+vacío, estructura/valores permitidos y redacción de la fixture.
+
+La evidencia cubre evaluación estática de las fixtures. No demuestra
+reparación, persistencia, round-trip ni readmisión, comparación con goldens,
+`validate` o recovery. Por ello la fase 05 permanece pendiente y todos sus
+criterios de aceptación siguen abiertos; el progreso maestro continúa en 3/9.
+
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
 canonicaliza y deduplica repeticiones; el parser JSON rechaza duplicados en las
