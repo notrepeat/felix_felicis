@@ -994,6 +994,44 @@ ignorados = ["ignored.md"]
         entradas
     }
 
+    fn inventario_parent_para_assertions(
+        parent: &Path,
+    ) -> Vec<(String, TipoEntradaSnapshot, Option<Vec<u8>>)> {
+        let mut entradas = fs::read_dir(parent)
+            .unwrap()
+            .map(|entrada| {
+                let entrada = entrada.unwrap();
+                let nombre = entrada.file_name().to_string_lossy().into_owned();
+                let tipo = entrada.file_type().unwrap();
+                if tipo.is_dir() {
+                    (nombre, TipoEntradaSnapshot::Directorio, None)
+                } else {
+                    assert!(
+                        tipo.is_file(),
+                        "fixture only contains files and directories"
+                    );
+                    (
+                        nombre,
+                        TipoEntradaSnapshot::Archivo,
+                        Some(fs::read(entrada.path()).unwrap()),
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+        entradas.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
+        entradas
+    }
+
+    fn fingerprint_para_assertions(
+        raiz: &Path,
+    ) -> crate::transaccion::journal::ArtifactFingerprint {
+        let ubicacion = UbicacionRaiz::nueva(raiz).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let identidad = ancla.identidad_raiz().unwrap().journal_identity().unwrap();
+        let digest = calcular_digest_raw_tree(&inventariar_root_anclado(ancla).unwrap()).unwrap();
+        crate::transaccion::journal::ArtifactFingerprint::new(identidad, digest)
+    }
+
     fn assert_error_snapshot_redactado(error: ErrorSnapshot, codigo: &str, secretos: &[&str]) {
         assert_eq!(error.codigo(), codigo);
         assert_eq!(error.to_string(), codigo);
@@ -1883,6 +1921,130 @@ ignorados = ["ignored.md"]
         assert_eq!(snapshot.invariantes_raw(), b"\n");
         assert_eq!(inventario_para_assertions(&root), root_antes);
         assert_eq!(inventario_para_assertions(&configuracion), config_antes);
+        assert!(!lockfile.exists());
+    }
+
+    #[test]
+    fn cas_por_ruta_match_y_stale_preserva_parent_y_journal_sin_dispatcher() {
+        use crate::transaccion::journal::{ArtifactFingerprint, Journal, RawTreeDigest};
+
+        const TXN: &str = "0123456789abcdef0123456789abcdef";
+
+        let temporal = tempdir().unwrap();
+        let root = temporal.path().join("bundle");
+        let configuracion = temporal.path().join("config");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&configuracion).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let manifiesto = configuracion.join("manifest.toml");
+        let invariantes = configuracion.join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+
+        let esperado = capturar_snapshot(&root, &manifiesto, &invariantes, "engine/1", "policy/1")
+            .unwrap()
+            .token();
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let fingerprint_old = fingerprint_para_assertions(&root);
+        let identidad_parent = DirectorioAnclado::parent_solo_lectura_desde_ubicacion(&ubicacion)
+            .unwrap()
+            .identidad_parent()
+            .journal_identity()
+            .unwrap();
+        let fingerprint_new = ArtifactFingerprint::new(
+            fingerprint_old.identity().clone(),
+            RawTreeDigest::from_digest([0xff; 32]),
+        );
+        assert!(fingerprint_new != fingerprint_old);
+        let journal = Journal::new(
+            TXN,
+            identidad_parent,
+            fingerprint_old.clone(),
+            fingerprint_new,
+        )
+        .unwrap();
+        let journal_path = ubicacion.journal().as_path().to_path_buf();
+        let journal_bytes = journal.encode().unwrap();
+        fs::write(&journal_path, &journal_bytes).unwrap();
+
+        let backup = ubicacion.backup().as_path().to_path_buf();
+        let stage = ubicacion.stage(TXN).unwrap().as_path().to_path_buf();
+        let lockfile = ubicacion.lock().as_path().to_path_buf();
+        let mut parent_esperado = vec![
+            (
+                ".bundle.felix.journal".to_owned(),
+                TipoEntradaSnapshot::Archivo,
+                Some(journal_bytes.clone()),
+            ),
+            ("bundle".to_owned(), TipoEntradaSnapshot::Directorio, None),
+            ("config".to_owned(), TipoEntradaSnapshot::Directorio, None),
+        ];
+        parent_esperado.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
+
+        let root_antes = inventario_para_assertions(&root);
+        let config_antes = inventario_para_assertions(&configuracion);
+        let fingerprint_antes = fingerprint_para_assertions(&root);
+        assert!(fingerprint_antes == fingerprint_old);
+        assert_eq!(
+            inventario_parent_para_assertions(temporal.path()),
+            parent_esperado
+        );
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert!(!lockfile.exists());
+
+        let snapshot = capturar_snapshot_con_cas(
+            &root,
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), esperado);
+        assert_eq!(inventario_para_assertions(&root), root_antes);
+        assert_eq!(inventario_para_assertions(&configuracion), config_antes);
+        assert!(fingerprint_para_assertions(&root) == fingerprint_antes);
+        assert_eq!(
+            inventario_parent_para_assertions(temporal.path()),
+            parent_esperado
+        );
+        assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert!(!lockfile.exists());
+
+        fs::write(&invariantes, "\n\n").unwrap();
+        let root_antes_stale = inventario_para_assertions(&root);
+        let config_antes_stale = inventario_para_assertions(&configuracion);
+        let parent_antes_stale = inventario_parent_para_assertions(temporal.path());
+        let fingerprint_antes_stale = fingerprint_para_assertions(&root);
+        let error = capturar_snapshot_con_cas(
+            &root,
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(inventario_para_assertions(&root), root_antes_stale);
+        assert_eq!(
+            inventario_para_assertions(&configuracion),
+            config_antes_stale
+        );
+        assert!(fingerprint_para_assertions(&root) == fingerprint_antes_stale);
+        assert_eq!(
+            inventario_parent_para_assertions(temporal.path()),
+            parent_antes_stale
+        );
+        assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
+        assert!(!backup.exists());
+        assert!(!stage.exists());
         assert!(!lockfile.exists());
     }
 
