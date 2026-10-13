@@ -14,7 +14,7 @@ resultado de un agente en escenarios reproducibles.
 | Próximo gate | `v0.2.0` |
 | Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. Matriz local Windows+WSL y CI `38232932504` son históricas para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; no hay CI verde del dispatcher final. |
 | Foco actual | Fase 04, Unidad 7: journal, commit y recovery. U7 incluye `KeepOld` y `RestoreOld` acotadas. El preflight compartido se ejecuta una vez; el dispatcher crate-private solo enruta esas dos filas, sin caller desde apply/producción. No limpia stage ni ejecuta `DiscardNewRestoreOld`, validación de `New`, `Committed` o recovery completo. |
-| Última actualización | 2026-10-12 |
+| Última actualización | 2026-10-13 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | U0–U4 y U6 cerradas en sus límites; U5, U7 y U8 conservan avance parcial. U7 ejecuta solo `KeepOld` y `RestoreOld` tras un preflight inicial compartido; U8 añade captura CAS bajo lock, aún sin caller de apply/CLI. Cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, recovery completo, U9–U10, `Type`, publicación filesystem y CLI siguen pendientes. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | U0–U4 y U6 cerradas en sus límites; U5, U7 y U8 conservan avance parcial. U7 ejecuta solo `KeepOld` y `RestoreOld` tras un preflight inicial compartido; U8 añade CAS bajo lock y captura por ruta con lectura de configuración acotada para pruebas/simulación. Faltan el contrato que suministra `ConfigRawCapturada` antes del lock y los callers de apply/CLI. Cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, recovery completo, U9–U10, `Type`, publicación filesystem y CLI siguen pendientes. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. Un preflight compartido inicial alimenta el dispatcher crate-private, que solo enruta `KeepOld` y `RestoreOld`; aún no hay caller desde apply/producción. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false` en `Prepared`/`BackupReady`/`Installed`. No limpia stage, ejecuta `DiscardNewRestoreOld`, valida `New`, maneja `Committed` ni completa recovery. U5 permanece parcial. U6 aporta root anclado y staging; U8 suma un helper crate-private de CAS bajo lock, pero captura y staging aún no están conectados a apply. Escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
+Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. Un preflight compartido inicial alimenta el dispatcher crate-private, que solo enruta `KeepOld` y `RestoreOld`; aún no hay caller desde apply/producción. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false` en `Prepared`/`BackupReady`/`Installed`. No limpia stage, ejecuta `DiscardNewRestoreOld`, valida `New`, maneja `Committed` ni completa recovery. U5 permanece parcial. U6 aporta root anclado y staging; U8 suma un helper crate-private de CAS bajo lock y una captura por ruta que acota la lectura de configuración en su variante privada para pruebas/simulación. El suministro de `ConfigRawCapturada` bajo un contrato previo al lock y los callers de apply/CLI siguen pendientes; captura anclada y staging no están conectados a apply. Escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -262,8 +262,16 @@ desde `lock.ubicacion()` y delega al CAS anclado (`aa5d496`); las pruebas
 caso en que root dejó de ser directorio: `TipoNoAdmitido` /
 `snapshot_entry_type_not_allowed`. El parser público `SnapshotToken::from_hex`
 (`885657aa`, pruebas `032668e`) acepta exactamente 64 bytes ASCII `0-9a-f`
-minúscula y devuelve el error fijo/redactado `snapshot_token_invalid`. No hay
-caller desde apply/CLI; la recaptura de configuración raw externa sigue
-pendiente. Apply/publicador filesystem y cleanup/restart completos, U9–U10,
+minúscula y devuelve el error fijo/redactado `snapshot_token_invalid`. El
+commit `2357a82` limita durante la lectura la configuración de la captura
+privada por ruta: combina `manifiesto_raw` e `invariantes_raw` bajo una cuota
+inclusiva de 128 MiB independiente de la cuota del árbol. Reutiliza buffers ya
+capturados del root; una ruta externa absoluta normalizada se lee una vez,
+pero sus bytes se cobran por cada campo que la use, y la lectura queda acotada
+al remanente más un byte centinela. No promete límite de RSS/parser,
+deduplicación por identidad física ni atomicidad ante cambios hostiles;
+`version_motor` y `policy_id` siguen sin cota. No hay caller desde apply/CLI:
+faltan el contrato que suministra `ConfigRawCapturada` antes del lock y su
+integración. Apply/publicador filesystem y cleanup/restart completos, U9–U10,
 CLI y soporte transaccional de `Type` también siguen pendientes. El presupuesto
 agregado de evaluación aún no tiene cota global.

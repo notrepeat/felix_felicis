@@ -20,6 +20,15 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   `version_motor` y `policy_id` aún no tienen cota. Los tokens v1 dentro de
   cuota conservan sus bytes. Este chequeo de slices ya recibidas no garantiza
   un límite de memoria total ni del parser.
+- La captura privada por ruta limita durante la lectura la suma de
+  `manifiesto_raw` e `invariantes_raw` a una cuota inclusiva de 128 MiB,
+  independiente de la cuota del árbol raw. Reutiliza los buffers de archivos
+  ya inventariados bajo root; para un archivo externo limita la lectura al
+  remanente más un byte centinela. La misma ruta externa absoluta normalizada
+  se lee una vez, aunque sus bytes se cobran por cada campo que la referencia.
+  No deduplica por identidad física ni garantiza un límite de RSS o del parser;
+  la captura por ruta conserva TOCTOU y no garantiza atomicidad ante cambios
+  hostiles del filesystem. `version_motor` y `policy_id` siguen sin cota.
 
 ### Límites y seguridad de carga
 
