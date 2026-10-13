@@ -100,8 +100,11 @@ python tools/run_software_architecture_demo.py
 El smoke compila el binario y lo ejecuta directamente para comprobar los
 streams propios de la CLI, aislados de los mensajes del wrapper `cargo run`.
 El [runner de la fixture pública de arquitectura](examples/software-architecture/README.md)
-compara `validate` y `check` en JSON y texto para tres estados versionados con
-12 goldens. Inspecciona esos snapshots; no reproduce la secuencia de deltas.
+compara `validate` y `check` en JSON y texto para cuatro estados versionados
+con 16 goldens. Inspecciona esos snapshots; no reproduce la secuencia de
+deltas. También valida el contrato de las explicaciones y su presupuesto,
+rechaza claves JSON duplicadas y comprueba que las salidas y los goldens no
+contengan marcadores concretos de esta fixture.
 
 El estudio que fundamenta el diseño comienza en
 [`docs/00-indice.md`](docs/00-indice.md).
@@ -122,7 +125,9 @@ explicación redactada usa `--explain decide` o `--explain enumerate`. La salida
 `--explain` omite IDs y etiquetas de entidades, texto de fórmula y rutas en
 diagnósticos de error, pero revela predicados, valores de verdad y resultados derivados,
 estructura de reglas, posiciones de fuente y contadores. No publiques salidas
-de `--explain` generadas sobre instancias privadas.
+de `--explain` generadas sobre instancias privadas. La comprobación de
+marcadores del runner corresponde a la fixture pública; no certifica salidas
+de bundles privados.
 
 ## Licencia
 

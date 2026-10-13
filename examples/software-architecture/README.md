@@ -12,8 +12,10 @@ The intended story is ordered:
    `proposals/valid/delta.json` proposal removes the direct edge and adds
    domain-to-port and port-to-adapter edges.
 4. Starting from the corrected state, `proposals/gap/delta.json` removes the
-   domain-to-port edge. `invariants/architecture-gap.sx` then reports the
-   missing existential obligation in `states/gap/`.
+   domain-to-port edge and its `HasLab` atom. `invariants/architecture-gap.sx`
+   then reports the missing existential obligation in `states/gap/`. This
+   state has three nodes and one remaining edge: it demonstrates a missing
+   relation witness, not an empty bundle.
 
 The correction is supplied explicitly by this fixture. Felix evaluates a
 proposal; it does not generate the correction. The valid delta is a patch for
@@ -22,13 +24,15 @@ base bundle.
 
 The integration test
 [`demo_arquitectura`](../../crates/universo-cli/tests/demo_arquitectura.rs)
-consumes this durable fixture: it loads the bundle, manifest, invariant, and
-both proposal deltas. It rejects the contradictory proposal in core, builds
-that contradictory candidate in memory to evaluate the explicit correction,
-then serializes and reloads only the corrected candidate. The CLI
-`validate`/`check` calls in the test run only on that corrected candidate; the
-test does not reject this proposal through the CLI or serialize the
-reconstructed in-memory contradictory candidate.
+consumes this durable fixture: it loads the bundle, manifest, both invariants,
+and three proposal deltas. Core rejects the contradictory and gap proposals;
+the test also builds their candidates in memory and compares them with the
+durable snapshots. The concrete mapping from the abstract gap witness to the
+removed edge and label is asserted only in the test. Only the corrected
+candidate is serialized and reloaded. CLI `validate`/`check` run on that
+candidate, and `validate`/`check --explain enumerate` run on the gap snapshot;
+the test does not reject a proposal through the CLI or serialize the
+reconstructed contradictory or gap candidates.
 
 `states/contradictory/` and `states/corrected/` are complete, versioned,
 illustrative snapshots for the states after the respective deltas. The test
@@ -51,10 +55,14 @@ removal are both supplied explicitly by this fixture.
 
 The standard-library runner
 [`run_software_architecture_demo.py`](../../tools/run_software_architecture_demo.py)
-builds the CLI and checks `validate` and `check` in JSON and text for the
-versioned states against the exact outputs in `expected/`. The contradictory
+builds the CLI and checks `validate` and `check` in JSON and text for the four
+versioned states against 16 exact outputs in `expected/`. The contradictory
 check uses `--explain decide`; the gap check uses `--explain enumerate` so its
-redacted witness and gap summary are part of the goldens.
+abstract, redacted witness and gap summary are part of the goldens. The runner
+validates the JSON structure and budget, rejects duplicate object keys, and
+checks stdout, stderr, and goldens for concrete fixture markers. These
+marker checks cover this public fixture; the CLI witness does not expose its
+concrete filenames, atom IDs, labels, or formula.
 Run it from the repository root with:
 
 ```powershell

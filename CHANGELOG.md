@@ -168,10 +168,36 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   byte por byte: 196 archivos y 2.429.126 bytes; no hubo drift en los goldens.
   `.github/workflows/ci.yml` ejecuta el runner en ambos jobs, pero aún no hay
   resultado de CI remoto para `e857d1c`.
-- La fase 05 permanece pendiente: el testigo solo señala posición de fuente y
-  predicados, no nombres de archivo ni IDs/argumentos de átomos; la fixture no
-  incluye el caso de vacío por ausencia; y el runner no mide duración ni RSS.
-  Tampoco demuestra `apply`, publicación, atomicidad o recovery.
+- Al cierre de `e857d1c`, la fase 05 permanecía pendiente: el testigo solo
+  señalaba posición de fuente y predicados, no nombres de archivo ni
+  IDs/argumentos de átomos; la fixture aún no incluía un caso de ausencia; y
+  el runner no medía duración ni RSS. Tampoco demostraba `apply`, publicación,
+  atomicidad o recovery.
+- `3b05f42` añade un caso de ausencia por falta de testigo existencial: el
+  delta retira la arista `domain→port` y su átomo `HasLab`, dejando tres nodos
+  y una arista. La prueba Rust verifica la correspondencia entre esa operación,
+  el snapshot y el testigo abstracto, sin exponer los valores concretos.
+- `fab86f8` amplía el runner de tres estados y 12 salidas a cuatro estados
+  (base, contradictorio, corregido y gap) y 16 salidas exactas. Valida la forma
+  del testigo de gap y el presupuesto, rechaza claves JSON duplicadas y busca
+  marcadores concretos de la fixture en `stdout`, `stderr` y los goldens. El
+  testigo público sigue siendo abstracto y redactado.
+- Matriz local aislada sobre `fab86f8`: Windows y WSL Ubuntu pasan el smoke CLI
+  público, el runner (16/16 salidas exactas), la prueba focal
+  `demo_arquitectura` (1 passed/0 failed/0 ignored), `cargo test --locked
+  --workspace` (Windows 703/0/6 y WSL 711/0/6; 38 suites en ambos),
+  `cargo fmt --all -- --check`, `cargo clippy --locked --workspace
+  --all-targets -- -D warnings` y `python tools/check_public_boundary.py`.
+  Los checkouts aislados son idénticos: 205 archivos y 2.451.333 bytes; los 16
+  goldens LF no cambiaron, con SHA-256
+  `1560c1995381ff042502a657d703d3c42523acaf0c3f91c692764218a0523faf` y hash
+  canónico del árbol `bfd293225bddfd418aa6dfd1146525645ec0a72a0f7e0040f494089ea50a1781`.
+  No se comprobó CI remoto para este SHA.
+- La fase 05 sigue pendiente bajo su política integral: el runner compara
+  snapshots, pero no reproduce los deltas; el test verifica la correspondencia
+  concreta solo internamente, mientras el testigo público no señala archivos
+  ni átomos concretos. No hay medición de duración o RSS ni demostración de
+  `apply`, publicación, atomicidad o recovery.
 
 ### Límites y seguridad de carga
 

@@ -75,7 +75,7 @@ flowchart LR
 
 - [x] 01 — El contrato estructural de `validate` y la aceptación semántica de `check` están implementados y verificados conjuntamente.
 - [x] 02 — El evaluador de referencia ejecuta todo el AST soportado, con pruebas por variante, oráculo y límites de recursos documentados.
-- [x] 03 — Los veredictos explican contradicciones y vacíos dentro de fragmentos acotados, con privacidad y presupuesto verificados.
+- [x] 03 — Los veredictos explican contradicciones y vacíos mediante árboles testigo abstractos y acotados; los tests los relacionan con casos concretos sin exponer sus átomos, y verifican privacidad y presupuesto.
 - [ ] 04 — Las propuestas son transaccionales.
 - [ ] 05 — La demo pública corre en CI.
 - [ ] 06 — El loop MCP funciona de extremo a extremo.
@@ -255,17 +255,44 @@ byte por byte (196 archivos, 2.429.126 bytes); los 12 goldens no presentan
 drift. El workflow invoca el runner en Linux y Windows; aún no hay resultado de
 CI remoto para este SHA.
 
-El runner comprueba `validate` y `check` en los tres estados versionados, pero
-no reproduce la secuencia de deltas. El test Rust separado usa `proponer` para
-rechazar la propuesta contradictoria y evaluar la corrección explícita. Después
-hace round-trip del candidato corregido; no crea esos estados mediante `apply`.
-El testigo solo
-incluye posición de fuente y árbol de predicados, sin nombre de archivo ni
-argumentos/IDs de átomos. No hay caso de vacío por ausencia ni medición de
-duración o RSS; tampoco se demuestra `apply`, publicación, atomicidad o
-recovery. La demo integral no cumple todavía sus criterios, por lo que fase 05
-permanece pendiente, todas sus casillas siguen abiertas y el progreso maestro
-continúa en 3/9. Véase el registro completo en [05 — Demo pública](05-demo-publica.md).
+Al cierre de `e857d1c`, el runner comprobaba `validate` y `check` en tres
+estados versionados, pero no reproducía la secuencia de deltas. El test Rust
+separado usaba `proponer` para rechazar la propuesta contradictoria y evaluar
+la corrección explícita; después hacía round-trip del candidato corregido, sin
+crear esos estados mediante `apply`. En ese SHA no había caso de ausencia ni
+medición de duración o RSS.
+
+En `3b05f42`, la fixture añade el estado `gap`: retirar `domain→port` y su
+`HasLab` deja tres nodos y una arista, sin testigo para la obligación
+existencial. No es un bundle vacío. La prueba de integración rechaza la
+propuesta y relaciona su mapeo concreto con el snapshot y el testigo abstracto;
+esa relación queda dentro del test.
+
+En `fab86f8`, el runner compara cuatro estados versionados (base,
+contradictorio, corregido y gap) y sus 16 salidas exactas de `validate` y
+`check` en JSON y texto. Valida la estructura de las explicaciones y el
+presupuesto, rechaza claves JSON duplicadas y busca marcadores de la fixture
+en `stdout`, `stderr` y goldens. La matriz local aislada pasa en Windows y WSL
+Ubuntu: smoke CLI público, runner 16/16, prueba focal `demo_arquitectura`
+1 passed/0 failed/0 ignored, workspace Windows 703/0/6 y WSL 711/0/6 (38
+suites en ambos), `cargo fmt --all -- --check`, `cargo clippy --locked
+--workspace --all-targets -- -D warnings` y frontera pública. Los árboles
+aislados son idénticos byte por byte: 205 archivos, 2.451.333 bytes, SHA-256
+canónico `bfd293225bddfd418aa6dfd1146525645ec0a72a0f7e0040f494089ea50a1781`.
+Los 16 goldens LF permanecieron iguales, SHA-256
+`1560c1995381ff042502a657d703d3c42523acaf0c3f91c692764218a0523faf`. No se
+comprobó CI remoto para este SHA.
+
+El runner sigue comprobando snapshots, no reproduciendo la secuencia de
+deltas. El test Rust cubre por separado las propuestas y la correspondencia
+concreta; el testigo CLI conserva solo posición de fuente y predicados, sin
+archivos ni átomos concretos. No hay medición de duración o RSS ni evidencia
+de `apply`, publicación, atomicidad o recovery. La demo integral no cumple
+todavía sus criterios, por lo que fase 05 permanece pendiente, sus seis
+casillas siguen abiertas y el progreso maestro continúa en 3/9. El checklist
+maestro 03 permanece cerrado por la explicación abstracta acotada y las
+verificaciones de presupuesto y privacidad. Véase el registro completo en
+[05 — Demo pública](05-demo-publica.md).
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
