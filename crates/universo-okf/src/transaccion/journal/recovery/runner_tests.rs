@@ -82,6 +82,32 @@ fn stage_path(lock: &LockEscritura) -> PathBuf {
     lock.ubicacion().stage(TXN).unwrap().as_path().to_path_buf()
 }
 
+fn inventario_parent_para_assertions(
+    parent: &Path,
+    journal: &Path,
+) -> Vec<(String, bool, Option<Vec<u8>>)> {
+    let mut entradas = fs::read_dir(parent)
+        .unwrap()
+        .map(|entrada| {
+            let entrada = entrada.unwrap();
+            let nombre = entrada.file_name().to_string_lossy().into_owned();
+            let tipo = entrada.file_type().unwrap();
+            if tipo.is_dir() {
+                (nombre, true, None)
+            } else {
+                assert!(
+                    tipo.is_file(),
+                    "fixture only contains files and directories"
+                );
+                let bytes = (entrada.path() == journal).then(|| fs::read(entrada.path()).unwrap());
+                (nombre, false, bytes)
+            }
+        })
+        .collect::<Vec<_>>();
+    entradas.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
+    entradas
+}
+
 fn assert_root_intact(root: &Path) {
     assert_eq!(fs::read(root.join("data.bin")).unwrap(), b"old-tree");
     assert!(root.join("empty-dir").is_dir());
@@ -136,7 +162,24 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
         JournalState::BackupReady,
         JournalState::Installed,
     ] {
-        let (_temp, root, mut lock, canonical, _) = preparar_fila(state);
+        let (_temp, root, mut lock, canonical, journal) = preparar_fila(state);
+        let fingerprint_old = journal.old().clone();
+        let fingerprint_before = fingerprint(&root);
+        assert!(fingerprint_before == fingerprint_old);
+        let backup = backup_path(&lock);
+        let stage = stage_path(&lock);
+        let journal_bytes = fs::read(&canonical).unwrap();
+        let parent = canonical.parent().unwrap();
+        let mut parent_after_keep_old = inventario_parent_para_assertions(parent, &canonical);
+        let journal_name = canonical.file_name().unwrap().to_string_lossy();
+        let journal_index = parent_after_keep_old
+            .iter()
+            .position(|(name, _, _)| name == journal_name.as_ref())
+            .unwrap();
+        assert_eq!(
+            parent_after_keep_old.remove(journal_index),
+            (journal_name.into_owned(), false, Some(journal_bytes))
+        );
         let observaciones = Cell::new(0);
 
         assert_eq!(
@@ -148,10 +191,24 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
         );
         assert_eq!(observaciones.get(), 1, "KeepOld en {state:?}");
         assert!(!canonical.exists());
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert!(root.is_dir());
+        assert!(fingerprint(&root) == fingerprint_before);
+        assert!(fingerprint(&root) == fingerprint_old);
         assert_root_intact(&root);
+        assert_eq!(
+            inventario_parent_para_assertions(parent, &canonical),
+            parent_after_keep_old,
+            "KeepOld en {state:?} solo debe retirar el journal esperado"
+        );
 
-        let (_temp, root, mut lock, canonical, _) = preparar_fila(state);
-        fs::rename(&root, backup_path(&lock)).unwrap();
+        let (_temp, root, mut lock, canonical, journal) = preparar_fila(state);
+        let fingerprint_old = journal.old().clone();
+        assert!(fingerprint(&root) == fingerprint_old);
+        let backup = backup_path(&lock);
+        let stage = stage_path(&lock);
+        fs::rename(&root, &backup).unwrap();
         let observaciones = Cell::new(0);
 
         assert_eq!(
@@ -162,8 +219,11 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
             "RestoreOld en {state:?}"
         );
         assert_eq!(observaciones.get(), 1, "RestoreOld en {state:?}");
+        assert!(root.is_dir());
+        assert!(fingerprint(&root) == fingerprint_old);
         assert!(!canonical.exists());
-        assert!(!backup_path(&lock).exists());
+        assert!(!backup.exists());
+        assert!(!stage.exists());
         assert_root_intact(&root);
     }
 }
