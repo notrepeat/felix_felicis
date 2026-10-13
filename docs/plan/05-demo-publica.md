@@ -39,6 +39,12 @@ examples/software-architecture/
 
 ## Criterios de aceptación
 
+Estas casillas evalúan la demo pública completa y autónoma: un clon limpio
+debe recorrer la historia con el runner de un comando y comparar las salidas
+con goldens. El registro siguiente conserva evidencia parcial de pasos
+individuales; por sí sola, esa evidencia no cierra los criterios de la demo
+integral.
+
 - [ ] Un clon limpio reproduce la demo sin configuración privada.
 - [ ] El caso contradictorio falla por la razón esperada.
 - [ ] El testigo señala archivos y átomos concretos.
@@ -66,15 +72,11 @@ cargo test --workspace --test demo_arquitectura
 
 Las matrices sobre `e0fc2e6` y `434f4fc` son locales; esta sección no registra
 un resultado de CI remoto para esos SHA. El smoke previo cubre evaluación
-estática por CLI. El test actual consume la fixture durable, rechaza en core,
-evalúa la corrección explícita y hace round-trip solo del candidato corregido;
-`validate` y `check` por CLI también se ejecutan solo sobre ese corregido. En
-conjunto no forman todavía la demo reproducible completa descrita en esta
-fase: siguen pendientes el runner `demo.ps1`, los goldens y su comparación,
-el rechazo por CLI dentro de esta historia, la generación de la corrección,
-la persistencia del contradictorio y `apply`/publicación/atomicidad/recovery.
-La fase 05 sigue pendiente y todas las casillas de aceptación permanecen sin
-marcar.
+estática por CLI y la prueba focal acredita los pasos parciales descritos en
+la fila más reciente. Esa evidencia aún no satisface la demo integral con
+runner y goldens; la fase 05 sigue pendiente y todas las casillas de
+aceptación permanecen sin marcar. Los límites restantes están detallados en
+esa misma fila.
 
 ## Siguiente fase
 
