@@ -29,6 +29,14 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   No deduplica por identidad física ni garantiza un límite de RSS o del parser;
   la captura por ruta conserva TOCTOU y no garantiza atomicidad ante cambios
   hostiles del filesystem. `version_motor` y `policy_id` siguen sin cota.
+- La captura anclada valida esa suma combinada antes de abrir el root bajo lock
+  y antes de inventariarlo. Si excede la cuota, devuelve el error redactado
+  `snapshot_resource_limit`, conserva intacto el root/canary y retiene el guard
+  recibido. Dentro de cuota, el CAS sigue ocurriendo antes de provenance y
+  parseo. `ConfigRawCapturada` ya fue materializada al invocar este helper: esta
+  validación no evita su asignación previa. Aún faltan el contrato/proveedor que
+  la limite antes del lock y sus callers de apply/CLI, además de cotas para
+  `version_motor` y `policy_id`; no se afirma atomicidad ante cambios hostiles.
 
 ### Límites y seguridad de carga
 
