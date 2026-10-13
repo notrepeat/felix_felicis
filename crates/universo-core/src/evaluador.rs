@@ -480,6 +480,45 @@ impl Presupuesto {
     }
 }
 
+/// Contexto interno para compartir el presupuesto semántico entre varias
+/// fórmulas. Cada llamada conserva el mismo preflight y la misma evaluación
+/// que `evaluar_con_presupuesto`; el contador común cobra ambos recorridos.
+pub(crate) struct ContextoPresupuestoEvaluacion {
+    limite: u64,
+    total_compartido: Rc<Cell<ContadorGlobal>>,
+}
+
+impl ContextoPresupuestoEvaluacion {
+    pub(crate) fn nuevo(limite: u64) -> Self {
+        Self {
+            limite,
+            total_compartido: Rc::new(Cell::new(ContadorGlobal::nuevo(limite))),
+        }
+    }
+
+    pub(crate) fn evaluar(
+        &mut self,
+        formula: &Formula,
+        estructura: &Estructura,
+    ) -> Result<bool, ErrorEvaluacion> {
+        let mut presupuesto = preparar_evaluacion_con_total(
+            formula,
+            estructura,
+            self.limite,
+            Some(self.total_compartido.clone()),
+        )?;
+        let mut modo_evidencia = ModoEvidencia::Omitir;
+        evaluar_interno(
+            formula,
+            estructura,
+            &mut Entorno::default(),
+            &mut presupuesto,
+            &mut modo_evidencia,
+        )
+        .map(|resultado| resultado.valor)
+    }
+}
+
 struct PresupuestoEvidencia {
     limite: u64,
     restante: u64,
