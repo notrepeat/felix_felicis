@@ -87,7 +87,7 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   37 suites. `fmt` y `clippy` pasan en ambos entornos. Estos son conteos del
   workspace, no resultados focales de las pruebas de U7 o U8.
 
-### Evidencia parcial de fase 05: smoke CLI y fixture de arquitectura
+### Evidencia parcial de fase 05: smoke CLI, fixture y runner de arquitectura
 
 - `ae99906` incorpora un smoke de la CLI sobre las fixtures públicas de
   admisión y rechazo; `c76e292` aclara que `check` es evaluación estática y
@@ -145,14 +145,33 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   de `apply` ni correcciones generadas. El candidato contradictorio reconstruido
   durante la prueba sigue solo en memoria; solo el corregido se serializa y
   recarga, y solo sobre él corren CLI `validate` y `check`.
-- La evidencia sigue siendo parcial. El test ya consume la fixture durable,
-  pero no hay runner autónomo de la demo pública (`demo.ps1`) ni
-  goldens/comparación con ellos. Esta historia no prueba rechazo por CLI (el
-  smoke separado sí cubre `admit`/`reject` estáticos), generación automatizada
-  de la corrección ni serialización/round-trip del candidato contradictorio
-  calculado en runtime; su snapshot fixture no proviene de `apply`. Tampoco
-  prueba `apply`, publicación, atomicidad o recovery; la fase 05 permanece
-  pendiente.
+- Al cierre de `5510329`, la evidencia seguía siendo parcial: el test consumía
+  la fixture durable y contrastaba sus snapshots, pero aún no había runner
+  autónomo ni goldens. El candidato contradictorio calculado en runtime seguía
+  en memoria; el snapshot no provenía de `apply`. Esa versión tampoco probaba
+  rechazo por CLI, generación automatizada de la corrección, `apply`,
+  publicación, atomicidad o recovery.
+- `71784b0` añade 12 goldens de texto y JSON para `validate` y `check` en los
+  estados base, contradictorio y corregido. `179b5f7` agrega
+  `tools/run_software_architecture_demo.py`, que compila la CLI y compara esas
+  12 salidas byte por byte; `e857d1c` valida además el esquema de los goldens
+  JSON y la forma del testigo abstracto. El runner inspecciona los tres estados
+  versionados; no reproduce la secuencia de deltas. El test Rust separado
+  cubre el rechazo por `proponer`, la corrección explícita y el round-trip del
+  candidato corregido, pero no usa `apply`.
+- Matriz local sobre `e857d1c`: Windows y WSL Ubuntu pasan las 12 comparaciones
+  exactas del runner, la prueba focal `demo_arquitectura` (1 passed/0 failed/0
+  ignored), `cargo test --locked --workspace` (Windows 703 passed/0 failed/6 ignored;
+  WSL 711/0/6, 38 suites en ambos), `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings` y
+  `python tools/check_public_boundary.py`. Los checkouts aislados son idénticos
+  byte por byte: 196 archivos y 2.429.126 bytes; no hubo drift en los goldens.
+  `.github/workflows/ci.yml` ejecuta el runner en ambos jobs, pero aún no hay
+  resultado de CI remoto para `e857d1c`.
+- La fase 05 permanece pendiente: el testigo solo señala posición de fuente y
+  predicados, no nombres de archivo ni IDs/argumentos de átomos; la fixture no
+  incluye el caso de vacío por ausencia; y el runner no mide duración ni RSS.
+  Tampoco demuestra `apply`, publicación, atomicidad o recovery.
 
 ### Límites y seguridad de carga
 

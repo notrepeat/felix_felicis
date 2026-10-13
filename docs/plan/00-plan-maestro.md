@@ -181,7 +181,7 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `a3cc3c9c2e5d166f066d6f7bfccf6cdec9214211` | Añade una prueba privada de CAS por ruta para match/stale con journal sibling: compara inventarios observados de root, configuración y parent, bytes de journal y `ArtifactFingerprint` del root; no aparecen backup, stage ni lockfile. No invoca el dispatcher. No hay conteo focal registrado para este commit. |
 | `51cd5c4fbf9607dffac1825a9739cac9e92d97e2` | Extiende esa matriz de recovery con inventario recursivo: rutas/tipos/bytes de archivos normales; el lock abierto se compara solo por presencia, tipo y longitud. `RestoreOld` compara contra el modelo backup→root y retiro de journal. Matriz workspace independiente sobre este SHA: Windows 702 passed/0 failed/6 ignored (37 suites), WSL Ubuntu 710/0/6 (37 suites); fmt y clippy pasan en ambos. Son conteos workspace, no focales. U7 sigue parcial y sin caller productivo; el inventario no observa atime/permisos/metadatos y no elimina TOCTOU ni demuestra atomicidad ante cambios hostiles. |
 
-### Evidencia parcial de fase 05 — smoke CLI y fixture de arquitectura
+### Evidencia parcial de fase 05 — smoke CLI, fixture y runner de arquitectura
 
 `ae99906` añade `tools/check_public_cli_demo.py` y lo incorpora a los jobs de
 CI; `c76e292` precisa en README que `check` realiza evaluación estática y
@@ -241,15 +241,30 @@ contradictorio reconstruido durante la prueba sigue solo en memoria; solo el
 corregido se serializa y recarga, y la CLI `validate` y `check` corre solo
 sobre él.
 
-El test ya consume la fixture durable, pero no existe runner autónomo de la
-demo pública (`demo.ps1`) ni goldens/comparación golden. Esta historia no
-comprueba el rechazo por CLI (el smoke anterior sí cubre `admit`/`reject`
-estáticos), generación automatizada de la corrección ni serialización/round-trip
-del candidato contradictorio calculado en runtime; su snapshot fixture no
-proviene de `apply`. Tampoco demuestra `apply`, publicación, atomicidad o
-recovery.
-La evidencia conjunta sigue siendo parcial: fase 05 pendiente, todos sus
-criterios de aceptación abiertos y progreso maestro en 3/9.
+Al cierre de `5510329`, todavía no existían runner autónomo ni goldens. Después,
+`71784b0` añade 12 goldens JSON/texto; `179b5f7` añade
+`tools/run_software_architecture_demo.py`; y `e857d1c` valida los esquemas de
+los goldens y la forma del testigo. La matriz local aislada sobre `e857d1c`
+pasa en Windows y WSL Ubuntu: runner 12/12 salidas exactas, prueba focal
+`demo_arquitectura` 1 passed/0 failed/0 ignored. La suite
+`cargo test --locked --workspace` registra Windows 703 passed/0 failed/6
+ignored y WSL 711 passed/0 failed/6 ignored (38 suites en ambos), además de
+`fmt`, `clippy` y la frontera pública. Los
+checkouts aislados son idénticos
+byte por byte (196 archivos, 2.429.126 bytes); los 12 goldens no presentan
+drift. El workflow invoca el runner en Linux y Windows; aún no hay resultado de
+CI remoto para este SHA.
+
+El runner comprueba `validate` y `check` en los tres estados versionados, pero
+no reproduce la secuencia de deltas. El test Rust separado rechaza la propuesta
+contradictoria con `proponer`, aplica la corrección explícita y hace round-trip
+del candidato corregido; no crea esos estados mediante `apply`. El testigo solo
+incluye posición de fuente y árbol de predicados, sin nombre de archivo ni
+argumentos/IDs de átomos. No hay caso de vacío por ausencia ni medición de
+duración o RSS; tampoco se demuestra `apply`, publicación, atomicidad o
+recovery. La demo integral no cumple todavía sus criterios, por lo que fase 05
+permanece pendiente, todas sus casillas siguen abiertas y el progreso maestro
+continúa en 3/9. Véase el registro completo en [05 — Demo pública](05-demo-publica.md).
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed

@@ -94,10 +94,14 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 python tools/check_public_boundary.py
 python tools/check_public_cli_demo.py
+python tools/run_software_architecture_demo.py
 ```
 
 El smoke compila el binario y lo ejecuta directamente para comprobar los
 streams propios de la CLI, aislados de los mensajes del wrapper `cargo run`.
+El [runner de la fixture pública de arquitectura](examples/software-architecture/README.md)
+compara `validate` y `check` en JSON y texto para tres estados versionados con
+12 goldens. Inspecciona esos snapshots; no reproduce la secuencia de deltas.
 
 El estudio que fundamenta el diseño comienza en
 [`docs/00-indice.md`](docs/00-indice.md).

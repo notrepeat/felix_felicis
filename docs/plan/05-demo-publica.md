@@ -44,9 +44,10 @@ examples/software-architecture/
 
 Estas casillas evalúan la demo pública completa y autónoma: un clon limpio
 debe recorrer la historia con el runner de un comando y comparar las salidas
-con goldens. El registro siguiente conserva evidencia parcial de pasos
-individuales; por sí sola, esa evidencia no cierra los criterios de la demo
-integral.
+con goldens. En `e857d1c`, el runner compara los tres estados durables, pero no
+reproduce la secuencia de deltas; el test Rust recorre parte de esa secuencia
+por separado. Por esta política integral, la evidencia de componentes no cierra
+ninguna casilla mientras falte un recorrido completo con el runner.
 
 - [ ] Un clon limpio reproduce la demo sin configuración privada.
 - [ ] El caso contradictorio falla por la razón esperada.
@@ -55,14 +56,17 @@ integral.
 - [ ] CI compara la salida con los goldens.
 - [ ] La demo completa tarda y consume memoria medidos, no prometidos.
 
-## Verificación prevista
+## Comandos de verificación
 
-Pendiente: `./examples/software-architecture/demo.ps1` aún no existe. Su
-creación y ejecución siguen siendo el objetivo de esta verificación.
+El runner disponible verifica los snapshots versionados y sus 12 salidas
+golden. La prueba de integración verifica por separado la propuesta rechazada,
+la corrección explícita y el round-trip del candidato corregido. El workflow de
+CI ejecuta el runner y la suite workspace en Linux y Windows; todavía no hay
+resultado de CI remoto para `e857d1c`.
 
 ```powershell
-./examples/software-architecture/demo.ps1
-cargo test --workspace --test demo_arquitectura
+python tools/run_software_architecture_demo.py
+cargo test --locked --workspace --test demo_arquitectura
 ```
 
 ## Registro de evidencia
@@ -73,13 +77,18 @@ cargo test --workspace --test demo_arquitectura
 | 2026-10-13 | `2534fd4`, `e0fc2e6` | Matriz local independiente sobre `e0fc2e6`: Windows y WSL Ubuntu pasan la prueba focal `demo_arquitectura` (1 passed/0 failed/0 ignored) y el smoke CLI admit/reject. `cargo test --workspace`: Windows 703 passed/0 failed/6 ignored (38 suites), WSL 711/0/6 (38 suites). `fmt`, `clippy` y `python tools/check_public_boundary.py` pasan en ambos; no hay resultado de CI remoto registrado para esta matriz. El test sintético admite el delta vacío sin mutar el bundle base y rechaza en core domain→adapter con testigo fuente 0, línea 2, columna 1; comprueba el base intacto tras el rechazo y tras construir en memoria el contradictorio. En esa versión, el test construye el delta correctivo domain→port→adapter y Felix lo admite. Solo el corregido se serializa/recarga; se comparan átomos/anexos y la segunda serialización es byte-estable para los tres Markdown. CLI `validate` y `check` se ejecutan solo sobre el corregido (3 nodos, 2 aristas, `failed=0`). | Parcial: corrección explícita y round-trip solo del corregido. En `e0fc2e6` el test aún construía el escenario en memoria; la demo autónoma, goldens/comparación y los demás límites siguen pendientes. |
 | 2026-10-13 | `8fe29c1`, `434f4fc` | Matriz local sobre `434f4fc`: Windows y WSL Ubuntu pasan la prueba focal `demo_arquitectura` (1 passed/0 failed/0 ignored) y el smoke CLI admit/reject. `cargo test --workspace`: Windows 703 passed/0 failed/6 ignored (38 suites), WSL Ubuntu 711/0/6 (38 suites). `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings` y `python tools/check_public_boundary.py` pasan en ambos. `8fe29c1` añade la fixture durable y `434f4fc` hace que el test consuma su bundle, manifiesto, invariante y deltas. `proponer` rechaza domain→adapter en core con testigo fuente 0, línea 2, columna 1; el candidato contradictorio se construye en memoria y la corrección domain→port→adapter es explícita en la fixture. Solo se serializa/recarga el candidato corregido; CLI `validate` y `check` corren solo sobre ese corregido (3 nodos, 2 aristas, `failed=0`). | Parcial: el test consume la fixture durable, pero no existe runner autónomo `demo.ps1` ni goldens/comparación. No prueba rechazo por CLI en esta historia, generación automatizada de la corrección ni carga/comparación de snapshots de estado. El candidato contradictorio permanecía solo en memoria. No demuestra `apply`, publicación, atomicidad ni recovery. La fase 05 sigue pendiente. |
 | 2026-10-13 | `5510329` | Matriz local sobre HEAD `55103297`: Windows pasa `cargo test --locked --workspace --test demo_arquitectura` (1 passed/0 failed/0 ignored), el smoke CLI admit/reject JSON v2 y `cargo test --locked --workspace` (703 passed/0 failed/6 ignored, 38 suites); `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` y `python tools/check_public_boundary.py` pasan. WSL Ubuntu pasa las mismas comprobaciones, con workspace 711/0/6 (38 suites), en checkout aislado idéntico byte a byte de 184 archivos y 5.145.096 bytes. No se comprobó CI remoto. El test carga `states/contradictory` y `states/corrected` y compara átomos/anexos con los candidatos calculados. Los snapshots son datos ilustrativos de fixture, no salidas de `apply` ni correcciones generadas. El contradictorio runtime sigue en memoria, sin serialización/round-trip; solo el corregido pasa por round-trip y CLI `validate`/`check`. | Parcial: se verifica el vínculo entre ambos snapshots durables y candidatos, pero sigue sin runner autónomo, goldens/comparación ni rechazo por CLI en esta historia. No demuestra generación automática de corrección, `apply`, publicación, atomicidad o recovery. Fase 05 pendiente. |
+| 2026-10-13 | `71784b0`, `179b5f7`, `e857d1c` | `71784b0` añade 12 goldens JSON/texto; `179b5f7` añade `tools/run_software_architecture_demo.py`; `e857d1c` valida los esquemas JSON y el testigo esperado. La matriz local aislada sobre `e857d1c` pasa en Windows y WSL Ubuntu: runner, 12/12 salidas exactas; prueba focal `demo_arquitectura`, 1 passed/0 failed/0 ignored; `cargo test --locked --workspace`, Windows 703 passed/0 failed/6 ignored y WSL 711/0/6 (38 suites en ambos); `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` y `python tools/check_public_boundary.py` pasan en ambos. Los checkouts aislados son idénticos byte por byte: 196 archivos y 2.429.126 bytes; los 12 goldens permanecieron byte por byte iguales, sin drift. `.github/workflows/ci.yml` invoca el runner en ambos jobs; no se comprobó CI remoto para este SHA. El runner evalúa `validate` y `check` en los estados base, contradictorio y corregido; no reproduce los deltas. El test Rust separado cubre el rechazo con `proponer`, la corrección explícita y el round-trip/CLI del corregido. | Parcial: hay ejecución local reproducible del runner y comparación con goldens, pero la demo integral sigue incompleta. El testigo expone posición de fuente y árbol de predicados, no nombre de archivo ni IDs/argumentos concretos de átomos; falta el caso de vacío por ausencia; no hay métricas de duración o RSS. No demuestra `apply`, publicación, atomicidad ni recovery. La fase 05 permanece pendiente. |
 
-Las matrices sobre `e0fc2e6`, `434f4fc` y `55103297` son locales; esta sección
-no registra un resultado de CI remoto para ellas. El smoke CLI cubre evaluación
-estática por separado y la prueba focal acredita los pasos parciales descritos
-en la fila más reciente. Esa evidencia aún no satisface la demo integral con
-runner y goldens; la fase 05 sigue pendiente y todas las casillas de aceptación
-permanecen sin marcar. Los límites restantes están detallados en esa misma fila.
+Las matrices sobre `e0fc2e6`, `434f4fc`, `55103297` y `e857d1c` son locales;
+esta sección no registra un resultado de CI remoto para esos commits. Los dos
+jobs del workflow ya ejecutan el runner, pero todavía no hay un run remoto que
+lo acredite. El runner compara salidas de tres estados versionados; no ejecuta
+las propuestas ni produce la reparación. El testigo público sigue siendo
+abstracto, no hay caso de ausencia ni medición de tiempo/RSS, y no se cubren
+`apply`, publicación, atomicidad o recovery. Como la secuencia integral aún no
+se reproduce desde un clon limpio con un solo runner, fase 05 sigue pendiente y
+las seis casillas de aceptación permanecen abiertas; el progreso global
+continúa en 3/9.
 
 ## Siguiente fase
 
