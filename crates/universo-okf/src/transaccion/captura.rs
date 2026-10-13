@@ -949,6 +949,65 @@ sin_iota = []
 ignorados = ["ignored.md"]
 "#;
 
+    fn inventario_para_assertions(
+        raiz: &Path,
+    ) -> Vec<(String, TipoEntradaSnapshot, Option<Vec<u8>>)> {
+        fn visitar(
+            raiz: &Path,
+            directorio: &Path,
+            entradas: &mut Vec<(String, TipoEntradaSnapshot, Option<Vec<u8>>)>,
+        ) {
+            let mut hijos: Vec<_> = fs::read_dir(directorio)
+                .unwrap()
+                .map(|entrada| entrada.unwrap())
+                .collect();
+            hijos.sort_by_key(|entrada| entrada.file_name());
+
+            for hijo in hijos {
+                let ruta = hijo.path();
+                let relativa = ruta
+                    .strip_prefix(raiz)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let tipo = hijo.file_type().unwrap();
+                if tipo.is_dir() {
+                    entradas.push((relativa, TipoEntradaSnapshot::Directorio, None));
+                    visitar(raiz, &ruta, entradas);
+                } else {
+                    assert!(
+                        tipo.is_file(),
+                        "fixture only contains files and directories"
+                    );
+                    entradas.push((
+                        relativa,
+                        TipoEntradaSnapshot::Archivo,
+                        Some(fs::read(ruta).unwrap()),
+                    ));
+                }
+            }
+        }
+
+        let mut entradas = Vec::new();
+        visitar(raiz, raiz, &mut entradas);
+        entradas.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
+        entradas
+    }
+
+    fn assert_error_snapshot_redactado(error: ErrorSnapshot, codigo: &str, secretos: &[&str]) {
+        assert_eq!(error.codigo(), codigo);
+        assert_eq!(error.to_string(), codigo);
+        let debug = format!("{error:?}");
+        assert_eq!(debug, format!("ErrorSnapshot({codigo:?})"));
+        for secreto in secretos {
+            assert!(!debug.contains(secreto), "Debug leaked {secreto}");
+            assert!(
+                !error.to_string().contains(secreto),
+                "Display leaked {secreto}"
+            );
+        }
+    }
+
     #[test]
     fn config_raw_capturada_acepta_limite_inclusivo_y_rechaza_un_byte_mas() {
         let exacta = ConfigRawCapturada::nueva_con_limite(
@@ -1786,6 +1845,144 @@ ignorados = ["ignored.md"]
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn cas_por_ruta_match_con_configuracion_externa_no_modifica_archivos_ni_crea_lock() {
+        let temporal = tempdir().unwrap();
+        let root = temporal.path().join("bundle");
+        let configuracion = temporal.path().join("config");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&configuracion).unwrap();
+        let manifiesto = configuracion.join("manifest.toml");
+        let invariantes = configuracion.join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+
+        let esperado = capturar_snapshot(&root, &manifiesto, &invariantes, "engine/1", "policy/1")
+            .unwrap()
+            .token();
+        let lockfile = temporal.path().join(".bundle.felix.lock");
+        assert!(!lockfile.exists());
+        let root_antes = inventario_para_assertions(&root);
+        let config_antes = inventario_para_assertions(&configuracion);
+
+        let snapshot = capturar_snapshot_con_cas(
+            &root,
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), esperado);
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(inventario_para_assertions(&root), root_antes);
+        assert_eq!(inventario_para_assertions(&configuracion), config_antes);
+        assert!(!lockfile.exists());
+    }
+
+    #[test]
+    fn cas_por_ruta_match_conserva_guard_de_lock_adquirido_por_quien_llama() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifiesto = root.path().join("manifest.toml");
+        let invariantes = root.path().join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let esperado = capturar_snapshot(
+            root.path(),
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+        )
+        .unwrap()
+        .token();
+        let guard = LockEscritura::adquirir(root.path()).unwrap();
+
+        let snapshot = capturar_snapshot_con_cas(
+            root.path(),
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), esperado);
+        let error = LockEscritura::adquirir(root.path()).unwrap_err();
+        assert_eq!(error, ErrorLockEscritura::Busy);
+        assert_eq!(error.codigo(), "writer_lock_busy");
+        assert_eq!(error.to_string(), "writer_lock_busy");
+        let debug = format!("{error:?}");
+        assert_eq!(debug, "ErrorLockEscritura(\"writer_lock_busy\")");
+        assert!(!debug.contains(root.path().to_string_lossy().as_ref()));
+        assert!(
+            !error
+                .to_string()
+                .contains(root.path().to_string_lossy().as_ref())
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn cas_stale_por_configuracion_externa_precede_parseo_sin_modificar_archivos_ni_crear_lock() {
+        let temporal = tempdir().unwrap();
+        let root = temporal.path().join("bundle");
+        let configuracion = temporal.path().join("config");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&configuracion).unwrap();
+        let manifiesto = configuracion.join("PRIVATE-CONFIG-CANARY.toml");
+        let invariantes = configuracion.join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let esperado = capturar_snapshot(&root, &manifiesto, &invariantes, "engine/1", "policy/1")
+            .unwrap()
+            .token();
+        fs::write(&manifiesto, b"\xffPRIVATE-CANARY invalid manifest").unwrap();
+        let lockfile = temporal.path().join(".bundle.felix.lock");
+        assert!(!lockfile.exists());
+        let root_antes = inventario_para_assertions(&root);
+        let config_antes = inventario_para_assertions(&configuracion);
+        let root_path = root.to_string_lossy().into_owned();
+        let config_path = configuracion.to_string_lossy().into_owned();
+
+        let error = capturar_snapshot_con_cas(
+            &root,
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_error_snapshot_redactado(
+            error,
+            "stale",
+            &[
+                "PRIVATE-CANARY",
+                "PRIVATE-CONFIG-CANARY",
+                root_path.as_str(),
+                config_path.as_str(),
+            ],
+        );
+        assert_eq!(inventario_para_assertions(&root), root_antes);
+        assert_eq!(inventario_para_assertions(&configuracion), config_antes);
+        assert!(!lockfile.exists());
     }
 
     #[test]
