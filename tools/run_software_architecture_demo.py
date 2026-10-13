@@ -9,7 +9,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, Union
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,10 +55,39 @@ PREDICATES = {
     "equal_node",
     "equal_edge",
 }
+PRIVATE_FIXTURE_MARKERS = (
+    "n/domain",
+    "n/port",
+    "n/adapter",
+    "n/domain→n/adapter#depends#0",
+    "n/domain→n/port#depends#0",
+    "n/port→n/adapter#depends#0",
+    '"domain"',
+    '"port"',
+    '"adapter"',
+    '"dependency"',
+    "type: domain",
+    "type: port",
+    "type: adapter",
+    "kind: dependency",
+    "Domain",
+    "Port",
+    "Adapter",
+    "Core domain body.",
+    "Application boundary.",
+    "External adapter.",
+    "fixture-note: preserve domain",
+    "fixture-note: preserve port",
+    "fixture-note: preserve adapter",
+)
 
 
 class DemoFailure(Exception):
     """A concise, sanitized runner failure."""
+
+
+class DuplicateJSONKeyError(ValueError):
+    """A JSON object contains a key more than once."""
 
 
 @dataclass(frozen=True)
@@ -68,12 +97,25 @@ class State:
     edges: int
     check_status: str
     check_code: int
+    invariant: str = "invariants/architecture.sx"
+    explain_mode: str = "decide"
+    gap_expected: bool = False
 
 
 STATES = (
     State("base", "bundle", 0, "admit", 0),
     State("contradictory", "states/contradictory", 1, "reject", 1),
     State("corrected", "states/corrected", 2, "admit", 0),
+    State(
+        "gap",
+        "states/gap",
+        1,
+        "reject",
+        1,
+        "invariants/architecture-gap.sx",
+        "enumerate",
+        True,
+    ),
 )
 
 
@@ -97,6 +139,77 @@ def run_process(
         raise DemoFailure(f"{label}: no se pudo iniciar el proceso.") from None
 
 
+def unique_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise DuplicateJSONKeyError
+        value[key] = item
+    return value
+
+
+def strict_json_loads(raw: Union[bytes, str]) -> Any:
+    return json.loads(raw, object_pairs_hook=unique_object_pairs)
+
+
+def private_fixture_markers() -> tuple[bytes, ...]:
+    markers = {marker.encode("utf-8") for marker in PRIVATE_FIXTURE_MARKERS}
+    path_relatives = (
+        "manifest.toml",
+        "bundle/n/domain.md",
+        "bundle/n/port.md",
+        "bundle/n/adapter.md",
+        "invariants/architecture.sx",
+        "invariants/architecture-gap.sx",
+        "proposals/contradictory/delta.json",
+        "proposals/valid/delta.json",
+        "proposals/gap/delta.json",
+        "states/contradictory/n/domain.md",
+        "states/contradictory/n/port.md",
+        "states/contradictory/n/adapter.md",
+        "states/corrected/n/domain.md",
+        "states/corrected/n/port.md",
+        "states/corrected/n/adapter.md",
+        "states/gap/n/domain.md",
+        "states/gap/n/port.md",
+        "states/gap/n/adapter.md",
+    )
+    for relative in path_relatives:
+        path = FIXTURE / relative
+        for marker in (
+            str(path),
+            path.as_posix(),
+            (Path("examples/software-architecture") / relative).as_posix(),
+        ):
+            markers.add(marker.encode("utf-8"))
+            markers.add(marker.casefold().encode("utf-8"))
+
+    for relative in ("invariants/architecture.sx", "invariants/architecture-gap.sx"):
+        try:
+            invariant = (FIXTURE / relative).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            raise DemoFailure("no se pudo cargar la fixture para comprobar la redacción.") from None
+        markers.update(
+            line.strip().encode("utf-8")
+            for line in invariant.splitlines()
+            if line.strip() and not line.lstrip().startswith(";")
+        )
+
+    for marker in (str(FIXTURE), FIXTURE.as_posix()):
+        markers.add(marker.encode("utf-8"))
+        markers.add(marker.casefold().encode("utf-8"))
+    for marker in tuple(markers):
+        for ensure_ascii in (False, True):
+            escaped = json.dumps(marker.decode("utf-8"), ensure_ascii=ensure_ascii)[1:-1]
+            markers.add(escaped.encode("utf-8"))
+    return tuple(sorted(markers, key=len, reverse=True))
+
+
+def verify_redaction(state: State, output_name: str, raw: bytes) -> None:
+    if any(marker in raw for marker in private_fixture_markers()):
+        raise DemoFailure(f"{state.name} {output_name}: se expuso un marcador concreto de la fixture.")
+
+
 def build_cli() -> Path:
     cargo = shutil.which("cargo")
     if cargo is None:
@@ -118,11 +231,11 @@ def build_cli() -> Path:
     if metadata.returncode != 0:
         raise DemoFailure(f"Cargo metadata terminó con código {metadata.returncode}.")
     try:
-        document = json.loads(metadata.stdout)
+        document = strict_json_loads(metadata.stdout)
         target_directory = document["target_directory"]
         if not isinstance(target_directory, str):
             raise TypeError
-    except (KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError):
         raise DemoFailure("Cargo metadata no devolvió un directorio de compilación válido.") from None
 
     executable_name = "universo.exe" if os.name == "nt" else "universo"
@@ -204,8 +317,76 @@ def counterexample_tree_is_valid(node: Any) -> bool:
     return False
 
 
-def explanation_object_is_valid(item: Any) -> bool:
+def gap_contract_is_valid(gap: Any) -> bool:
+    counts = {
+        "available_edges": 1,
+        "available_nodes": 3,
+        "existential_candidates_evaluated": 3,
+        "universal_bindings_examined": 2,
+    }
+    form = {
+        "body": {"kind": "atom", "predicate": "type"},
+        "edge_binders": 1,
+        "guard": {"kind": "atom", "predicate": "edge"},
+        "node_binders": 1,
+    }
     return (
+        exact_keys(gap, {"class", "counts", "form"})
+        and gap["class"] == "forall_exists_without_witness"
+        and exact_keys(gap["counts"], set(counts))
+        and all(is_nonnegative_int(gap["counts"][key]) for key in counts)
+        and gap["counts"] == counts
+        and exact_keys(gap["form"], set(form))
+        and type(gap["form"]["edge_binders"]) is int
+        and type(gap["form"]["node_binders"]) is int
+        and exact_keys(gap["form"]["body"], {"kind", "predicate"})
+        and exact_keys(gap["form"]["guard"], {"kind", "predicate"})
+        and gap["form"] == form
+    )
+
+
+def is_gap_witness(tree: Any) -> bool:
+    if (
+        not exact_keys(tree, {"rule", "value", "search_exhausted", "instances"})
+        or tree["rule"] != "forall"
+        or tree["value"] is not False
+        or tree["search_exhausted"] is not False
+        or not isinstance(tree["instances"], list)
+        or len(tree["instances"]) != 2
+    ):
+        return False
+
+    first, failing = tree["instances"]
+    if (
+        first["value"] is not True
+        or first["body"] is not None
+        or first["guard"] != {"rule": "atom", "value": False, "predicate": "type"}
+    ):
+        return False
+
+    existential = failing["body"]
+    if (
+        failing["value"] is not False
+        or failing["guard"] != {"rule": "atom", "value": True, "predicate": "type"}
+        or not exact_keys(existential, {"rule", "value", "search_exhausted", "instances"})
+        or existential["rule"] != "exists"
+        or existential["value"] is not False
+        or existential["search_exhausted"] is not True
+        or not isinstance(existential["instances"], list)
+        or len(existential["instances"]) != 3
+    ):
+        return False
+
+    return all(
+        instance["value"] is False
+        and instance["body"] is None
+        and instance["guard"] == {"rule": "atom", "value": False, "predicate": "edge"}
+        for instance in existential["instances"]
+    )
+
+
+def explanation_object_is_valid(item: Any, state: State) -> bool:
+    structurally_valid = (
         exact_keys(item, OBJECT_KEYS)
         and item["kind"] == "counterexample"
         and is_nonnegative_int(item["source_index"])
@@ -214,8 +395,12 @@ def explanation_object_is_valid(item: Any) -> bool:
         and (item["instance_index"] is None or is_nonnegative_int(item["instance_index"]))
         and counterexample_tree_is_valid(item["counterexample"])
         and item["presence_core"] is None
-        and item["gap"] is None
     )
+    if not structurally_valid:
+        return False
+    if state.gap_expected:
+        return gap_contract_is_valid(item["gap"]) and is_gap_witness(item["counterexample"])
+    return item["gap"] is None and is_architecture_witness(item["counterexample"])
 
 
 def is_architecture_witness(tree: Any) -> bool:
@@ -260,7 +445,7 @@ def is_architecture_witness(tree: Any) -> bool:
 def explanation_contract_is_valid(value: Any, state: State) -> bool:
     if (
         not exact_keys(value, EXPLANATION_KEYS)
-        or value["mode"] != "decide"
+        or value["mode"] != state.explain_mode
         or value["truncated"] is not False
         or value["reason"] is not None
         or not isinstance(value["objects"], list)
@@ -281,20 +466,21 @@ def explanation_contract_is_valid(value: Any, state: State) -> bool:
         return objects == []
     return (
         len(objects) == 1
-        and explanation_object_is_valid(objects[0])
+        and explanation_object_is_valid(objects[0], state)
         and objects[0]["source_index"] == 0
         and objects[0]["line"] == 2
         and objects[0]["column"] == 1
         and objects[0]["instance_index"] is None
-        and is_architecture_witness(objects[0]["counterexample"])
     )
 
 
-def verify_json_contract(state: State, command: str, expected: bytes) -> None:
+def verify_json_contract(state: State, command: str, raw: bytes, output_name: str) -> None:
     try:
-        document = json.loads(expected)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        raise DemoFailure(f"{state.name} {command}: el golden JSON no es válido.") from None
+        document = strict_json_loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        raise DemoFailure(
+            f"{state.name} {command}: {output_name} JSON no es válido o repite claves."
+        ) from None
 
     if command == "validate":
         summary = document.get("summary") if isinstance(document, dict) else None
@@ -349,9 +535,9 @@ def verify_output(
         argv.extend(
             [
                 "--invariantes",
-                str(FIXTURE / "invariants" / "architecture.sx"),
+                str(FIXTURE / state.invariant),
                 "--explain",
-                "decide",
+                state.explain_mode,
             ]
         )
         expected_code = state.check_code
@@ -359,14 +545,17 @@ def verify_output(
 
     label = f"{state.name} {command} {output_format}"
     result = run_process(argv, 60, label)
+    golden = read_golden(state, command, output_format)
+    verify_redaction(state, "stdout", result.stdout)
+    verify_redaction(state, "stderr", result.stderr)
+    verify_redaction(state, "golden", golden)
+    if output_format == "json":
+        verify_json_contract(state, command, result.stdout, "stdout")
+        verify_json_contract(state, command, golden, "golden")
     if result.returncode != expected_code:
         raise DemoFailure(f"{label}: código de salida inesperado ({result.returncode}).")
     if result.stderr:
         raise DemoFailure(f"{label}: stderr debía estar vacío.")
-
-    golden = read_golden(state, command, output_format)
-    if output_format == "json":
-        verify_json_contract(state, command, golden)
     if result.stdout != golden:
         offset = next(
             (index for index, pair in enumerate(zip(result.stdout, golden)) if pair[0] != pair[1]),
@@ -389,7 +578,7 @@ def main() -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
-    print("OK: 3 estados de arquitectura; validate/check JSON y texto coinciden con sus goldens")
+    print("OK: 4 estados de arquitectura; validate/check JSON y texto coinciden con sus goldens")
     return 0
 
 
