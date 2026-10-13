@@ -107,7 +107,7 @@ privada. `check` separa errores de autoría, datos y recursos de un rechazo
 semántico. El resultado baseline no incluye contraejemplos; para pedir una
 explicación redactada usa `--explain decide` o `--explain enumerate`. La salida
 `--explain` omite IDs y etiquetas de entidades, texto de fórmula y rutas en
-diagnósticos de error, pero revela predicados, valores y resultados derivados,
+diagnósticos de error, pero revela predicados, valores de verdad y resultados derivados,
 estructura de reglas, posiciones de fuente y contadores. No publiques salidas
 de `--explain` generadas sobre instancias privadas.
 
