@@ -140,7 +140,7 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   smoke CLI admit/reject, el workspace (703 passed/0 failed/6 ignored, 38
   suites), `fmt`, `clippy` y la frontera pública. WSL Ubuntu pasa las mismas
   comprobaciones, con workspace 711/0/6 (38 suites); usa un checkout aislado
-  idéntico byte a byte de 184 archivos y 5.145.096 bytes. No se comprobó CI remoto.
+  con 184 archivos. No se comprobó CI remoto.
   Los snapshots son datos ilustrativos versionados de la fixture, no salidas
   de `apply` ni correcciones generadas. El candidato contradictorio reconstruido
   durante la prueba sigue solo en memoria; solo el corregido se serializa y
@@ -164,8 +164,8 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   ignored), `cargo test --locked --workspace` (Windows 703 passed/0 failed/6 ignored;
   WSL 711/0/6, 38 suites en ambos), `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings` y
-  `python tools/check_public_boundary.py`. Los checkouts aislados son idénticos
-  byte por byte: 196 archivos y 2.429.126 bytes; no hubo drift en los goldens.
+  `python tools/check_public_boundary.py`. La comparación incluyó 196 archivos;
+  no hubo drift en los goldens.
   `.github/workflows/ci.yml` ejecuta el runner en ambos jobs, pero aún no hay
   resultado de CI remoto para `e857d1c`.
 - Al cierre de `e857d1c`, la fase 05 permanecía pendiente: el testigo solo
@@ -188,11 +188,10 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   --workspace` (Windows 703/0/6 y WSL 711/0/6; 38 suites en ambos),
   `cargo fmt --all -- --check`, `cargo clippy --locked --workspace
   --all-targets -- -D warnings` y `python tools/check_public_boundary.py`.
-  Los checkouts aislados son idénticos: 205 archivos y 2.451.333 bytes; los 16
-  goldens LF no cambiaron, con SHA-256
-  `1560c1995381ff042502a657d703d3c42523acaf0c3f91c692764218a0523faf` y hash
-  canónico del árbol `bfd293225bddfd418aa6dfd1146525645ec0a72a0f7e0040f494089ea50a1781`.
-  No se comprobó CI remoto para este SHA.
+  La comparación de SHA-256 por archivo confirma que los 205 archivos de los
+  checkouts Windows y WSL son byte-idénticos; los 16 goldens LF permanecieron
+  iguales y pasaron las comparaciones exactas. No se comprobó CI remoto para
+  este SHA.
 - La fase 05 sigue pendiente bajo su política integral: el runner compara
   snapshots, pero no reproduce los deltas; el test verifica la correspondencia
   concreta solo internamente, mientras el testigo público no señala archivos

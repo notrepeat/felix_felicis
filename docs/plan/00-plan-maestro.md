@@ -234,7 +234,7 @@ los candidatos calculados desde la fixture. La matriz local sobre HEAD
 `55103297` pasa en Windows y WSL Ubuntu: prueba focal 1 passed/0 failed/0
 ignored, smoke CLI admit/reject, workspace Windows 703 passed/0 failed/6
 ignored y WSL 711/0/6 (38 suites en ambos), `fmt`, `clippy` y frontera pública.
-WSL usa un checkout aislado idéntico byte a byte de 184 archivos y 5.145.096 bytes.
+WSL usa un checkout aislado con 184 archivos.
 No se comprobó CI remoto. Los snapshots son datos ilustrativos versionados de
 la fixture, no salidas de `apply` ni correcciones generadas. El candidato
 contradictorio reconstruido durante la prueba sigue solo en memoria; solo el
@@ -250,8 +250,7 @@ pasa en Windows y WSL Ubuntu: runner 12/12 salidas exactas, prueba focal
 `cargo test --locked --workspace` registra Windows 703 passed/0 failed/6
 ignored y WSL 711 passed/0 failed/6 ignored (38 suites en ambos), además de
 `fmt`, `clippy` y la frontera pública. Los
-checkouts aislados son idénticos
-byte por byte (196 archivos, 2.429.126 bytes); los 12 goldens no presentan
+la comparación de esa matriz incluyó 196 archivos; los 12 goldens no presentan
 drift. El workflow invoca el runner en Linux y Windows; aún no hay resultado de
 CI remoto para este SHA.
 
@@ -276,12 +275,10 @@ en `stdout`, `stderr` y goldens. La matriz local aislada pasa en Windows y WSL
 Ubuntu: smoke CLI público, runner 16/16, prueba focal `demo_arquitectura`
 1 passed/0 failed/0 ignored, workspace Windows 703/0/6 y WSL 711/0/6 (38
 suites en ambos), `cargo fmt --all -- --check`, `cargo clippy --locked
---workspace --all-targets -- -D warnings` y frontera pública. Los árboles
-aislados son idénticos byte por byte: 205 archivos, 2.451.333 bytes, SHA-256
-canónico `bfd293225bddfd418aa6dfd1146525645ec0a72a0f7e0040f494089ea50a1781`.
-Los 16 goldens LF permanecieron iguales, SHA-256
-`1560c1995381ff042502a657d703d3c42523acaf0c3f91c692764218a0523faf`. No se
-comprobó CI remoto para este SHA.
+--workspace --all-targets -- -D warnings` y frontera pública. La comparación
+de SHA-256 por archivo confirma que los 205 archivos de los checkouts Windows
+y WSL son byte-idénticos; los 16 goldens LF permanecieron iguales y pasaron
+las comparaciones exactas. No se comprobó CI remoto para este SHA.
 
 El runner sigue comprobando snapshots, no reproduciendo la secuencia de
 deltas. El test Rust cubre por separado las propuestas y la correspondencia

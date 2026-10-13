@@ -62,7 +62,9 @@ abstract, redacted witness and gap summary are part of the goldens. The runner
 validates the JSON structure and budget, rejects duplicate object keys, and
 checks stdout, stderr, and goldens for concrete fixture markers. These
 marker checks cover this public fixture; the CLI witness does not expose its
-concrete filenames, atom IDs, labels, or formula.
+concrete filenames, atom IDs, labels, formula text, or concrete arguments. Its
+allowlisted abstract `gap.form` does expose predicate names, binder shape, and
+counts.
 Run it from the repository root with:
 
 ```powershell
