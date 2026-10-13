@@ -73,6 +73,7 @@ impl BundleFixture {
             None,
             None,
         )
+        .expect("fixture de configuración dentro del presupuesto")
     }
 
     fn capturar_snapshot_actual(&self) -> Snapshot {

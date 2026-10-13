@@ -1639,7 +1639,8 @@ ignorados = ["ignored.md"]
             fs::read(&invariantes).unwrap(),
             None,
             None,
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let snapshot = capturar_snapshot_con_cas_anclado(
             &ancla,
             configuracion,
@@ -2346,7 +2347,8 @@ ignorados = ["ignored.md"]
             fs::read(&invariantes).unwrap(),
             None,
             None,
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let snapshot = capturar_snapshot_con_cas_anclado(
             &ancla,
             configuracion,

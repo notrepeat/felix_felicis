@@ -78,20 +78,52 @@ pub(crate) struct ConfigRawCapturada {
 }
 
 impl ConfigRawCapturada {
-    /// Conserva los bytes ya leídos sin guardar rutas que puedan reabrirse.
+    /// Valida el presupuesto de los bytes ya materializados sin guardar rutas
+    /// que puedan reabrirse. No limita la lectura ni la asignación previa.
     pub(crate) fn nueva(
         manifiesto_raw: impl Into<Arc<[u8]>>,
         invariantes_raw: impl Into<Arc<[u8]>>,
         ruta_manifiesto_root: Option<String>,
         ruta_invariantes_root: Option<String>,
-    ) -> Self {
-        Self {
-            manifiesto_raw: manifiesto_raw.into(),
-            invariantes_raw: invariantes_raw.into(),
+    ) -> Result<Self, ErrorSnapshot> {
+        Self::nueva_con_limite(
+            manifiesto_raw,
+            invariantes_raw,
             ruta_manifiesto_root,
             ruta_invariantes_root,
-        }
+            PRESUPUESTO_BYTES_RAW,
+        )
     }
+
+    fn nueva_con_limite(
+        manifiesto_raw: impl Into<Arc<[u8]>>,
+        invariantes_raw: impl Into<Arc<[u8]>>,
+        ruta_manifiesto_root: Option<String>,
+        ruta_invariantes_root: Option<String>,
+        limite: usize,
+    ) -> Result<Self, ErrorSnapshot> {
+        let manifiesto_raw = manifiesto_raw.into();
+        let invariantes_raw = invariantes_raw.into();
+        validar_suma_bytes_configuracion(manifiesto_raw.len(), invariantes_raw.len())?;
+        validar_presupuesto_configuracion(&manifiesto_raw, &invariantes_raw, limite)?;
+
+        Ok(Self {
+            manifiesto_raw,
+            invariantes_raw,
+            ruta_manifiesto_root,
+            ruta_invariantes_root,
+        })
+    }
+}
+
+fn validar_suma_bytes_configuracion(
+    manifiesto: usize,
+    invariantes: usize,
+) -> Result<(), ErrorSnapshot> {
+    manifiesto
+        .checked_add(invariantes)
+        .map(|_| ())
+        .ok_or(ErrorSnapshot::LimiteInventarioExcedido)
 }
 
 impl fmt::Debug for ConfigRawCapturada {
@@ -918,6 +950,81 @@ ignorados = ["ignored.md"]
 "#;
 
     #[test]
+    fn config_raw_capturada_acepta_limite_inclusivo_y_rechaza_un_byte_mas() {
+        let exacta = ConfigRawCapturada::nueva_con_limite(
+            b"manifest".as_slice(),
+            b"vars".as_slice(),
+            None,
+            None,
+            12,
+        )
+        .unwrap();
+        assert_eq!(
+            exacta.manifiesto_raw.len() + exacta.invariantes_raw.len(),
+            12
+        );
+
+        let error = ConfigRawCapturada::nueva_con_limite(
+            b"manifest".as_slice(),
+            b"vars!".as_slice(),
+            None,
+            None,
+            12,
+        )
+        .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+    }
+
+    #[test]
+    fn config_raw_capturada_cuenta_arc_compartida_por_sus_dos_vistas() {
+        let compartida: Arc<[u8]> = Arc::from(&b"shared"[..]);
+        let aceptada = ConfigRawCapturada::nueva_con_limite(
+            Arc::clone(&compartida),
+            Arc::clone(&compartida),
+            None,
+            None,
+            12,
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(
+            &aceptada.manifiesto_raw,
+            &aceptada.invariantes_raw
+        ));
+
+        let error =
+            ConfigRawCapturada::nueva_con_limite(compartida.clone(), compartida, None, None, 11)
+                .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+    }
+
+    #[test]
+    fn config_raw_capturada_rechaza_overflow_y_redacta_error() {
+        assert_eq!(
+            validar_suma_bytes_configuracion(usize::MAX, 1),
+            Err(ErrorSnapshot::LimiteInventarioExcedido)
+        );
+
+        let error = ConfigRawCapturada::nueva_con_limite(
+            b"PRIVATE-CONFIG-CANARY".as_slice(),
+            b"config".as_slice(),
+            Some("PRIVATE-CANARY.toml".to_owned()),
+            None,
+            1,
+        )
+        .unwrap_err();
+        assert_eq!(error.codigo(), "snapshot_resource_limit");
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        assert_eq!(
+            format!("{error:?}"),
+            "ErrorSnapshot(\"snapshot_resource_limit\")"
+        );
+        for secreto in ["PRIVATE-CONFIG-CANARY", "PRIVATE-CANARY.toml"] {
+            assert!(!format!("{error:?}").contains(secreto));
+            assert!(!error.to_string().contains(secreto));
+        }
+    }
+
+    #[test]
     fn archivos_markdown_distribuye_por_ancestros_con_crecimiento_acotado() {
         fn techo_log2(valor: usize) -> usize {
             if valor <= 1 {
@@ -1271,7 +1378,8 @@ ignorados = ["ignored.md"]
             fs::read(&invariants).unwrap(),
             Some("manifest.toml".to_owned()),
             Some("invariants.smt2".to_owned()),
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
         let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
 
@@ -1322,13 +1430,15 @@ ignorados = ["ignored.md"]
                 b"\n".as_slice(),
                 Some("manifest.toml".to_owned()),
                 Some("manifest.toml".to_owned()),
-            ),
+            )
+            .expect("fixture de configuración dentro del presupuesto"),
             ConfigRawCapturada::nueva(
                 b"PRIVATE-CANARY mismatched config".as_slice(),
                 b"\n".as_slice(),
                 Some("manifest.toml".to_owned()),
                 Some("invariants.smt2".to_owned()),
-            ),
+            )
+            .expect("fixture de configuración dentro del presupuesto"),
         ];
         for config in casos_invalidos {
             let error =
@@ -1354,7 +1464,8 @@ ignorados = ["ignored.md"]
                 b"\n".as_slice(),
                 Some(ruta.to_owned()),
                 None,
-            );
+            )
+            .expect("fixture de configuración dentro del presupuesto");
             let error =
                 capturar_snapshot_raw_anclado(&ancla, config, "engine/1", "policy/1").unwrap_err();
             assert_eq!(error, ErrorSnapshot::BundleInvalido);
@@ -1384,7 +1495,8 @@ ignorados = ["ignored.md"]
             fs::read(&invariants).unwrap(),
             None,
             None,
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         fs::write(&manifest, b"PRIVATE-CANARY invalid manifest").unwrap();
         fs::write(&invariants, b"PRIVATE-CANARY invalid invariants").unwrap();
 
@@ -1424,7 +1536,8 @@ ignorados = ["ignored.md"]
             fs::read(&invariants).unwrap(),
             None,
             None,
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let debug_config = format!("{config:?}");
         fs::remove_file(&manifest).unwrap();
         fs::remove_file(&invariants).unwrap();
@@ -1467,7 +1580,8 @@ ignorados = ["ignored.md"]
             b"\n".as_slice(),
             Some("manifest.toml".to_owned()),
             Some("invariants.smt2".to_owned()),
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let snapshot = materializar(
             capturar_snapshot_raw_anclado(&ancla, config, "engine/1", "policy/1").unwrap(),
         )
@@ -1486,7 +1600,8 @@ ignorados = ["ignored.md"]
             b"\n".as_slice(),
             Some("manifest.toml".to_owned()),
             Some("invariants.smt2".to_owned()),
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let nuevo_snapshot = materializar(
             capturar_snapshot_raw_anclado(&nueva_ancla, nueva_config, "engine/1", "policy/1")
                 .unwrap(),
@@ -1527,7 +1642,8 @@ ignorados = ["ignored.md"]
             fs::read(root.join("invariants.smt2")).unwrap(),
             Some("manifest.toml".to_owned()),
             Some("invariants.smt2".to_owned()),
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
         let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
 
@@ -1583,7 +1699,8 @@ ignorados = ["ignored.md"]
             fs::read(root.join("invariants.smt2")).unwrap(),
             Some("manifest.toml".to_owned()),
             Some("invariants.smt2".to_owned()),
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
         let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
 
@@ -1691,7 +1808,8 @@ ignorados = ["ignored.md"]
             b"\n".as_slice(),
             Some("manifest.toml".to_owned()),
             Some("invariants.smt2".to_owned()),
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let esperado =
             capturar_snapshot_raw_anclado(&ancla, validada.clone(), "engine/1", "policy/1")
                 .unwrap()
@@ -1725,7 +1843,8 @@ ignorados = ["ignored.md"]
                     b"\n".as_slice(),
                     Some("PRIVATE-CANARY-missing.toml".to_owned()),
                     None,
-                ),
+                )
+                .expect("fixture de configuración dentro del presupuesto"),
                 "PRIVATE-CANARY-missing.toml",
             ),
             (
@@ -1734,7 +1853,8 @@ ignorados = ["ignored.md"]
                     b"\n".as_slice(),
                     Some("knowledge".to_owned()),
                     None,
-                ),
+                )
+                .expect("fixture de configuración dentro del presupuesto"),
                 "knowledge",
             ),
             (
@@ -1743,7 +1863,8 @@ ignorados = ["ignored.md"]
                     b"\n".as_slice(),
                     Some("manifest.toml".to_owned()),
                     Some("invariants.smt2".to_owned()),
-                ),
+                )
+                .expect("fixture de configuración dentro del presupuesto"),
                 "PRIVATE-CANARY",
             ),
         ] {
@@ -1773,7 +1894,8 @@ ignorados = ["ignored.md"]
                 "PRIVATE-INVARIANT-CANARY",
             ),
         ] {
-            let invalida = ConfigRawCapturada::nueva(manifiesto, invariantes, None, None);
+            let invalida = ConfigRawCapturada::nueva(manifiesto, invariantes, None, None)
+                .expect("fixture de configuración dentro del presupuesto");
             let error = capturar_snapshot_con_cas_anclado(
                 &ancla, invalida, "engine/1", "policy/1", esperado,
             )
@@ -1796,7 +1918,8 @@ ignorados = ["ignored.md"]
             b"".as_slice(),
             None,
             None,
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
 
         let error = capturar_snapshot_raw_anclado_con_limite(
             &ancla,
@@ -1833,7 +1956,8 @@ ignorados = ["ignored.md"]
             b"".as_slice(),
             None,
             None,
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
         let mut lock = LockEscritura::adquirir(&root).unwrap();
         fs::remove_dir(&root).unwrap();
         fs::write(&root, b"PRIVATE-ROOT-CANARY").unwrap();
@@ -1885,7 +2009,8 @@ ignorados = ["ignored.md"]
             b"\n".as_slice(),
             Some("manifest.toml".to_owned()),
             Some("invariants.smt2".to_owned()),
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
 
         let mut lock = LockEscritura::adquirir(root.path()).unwrap();
         let _: fn(
@@ -1929,7 +2054,8 @@ ignorados = ["ignored.md"]
         let root = temp.path().join("bundle");
         fs::create_dir(&root).unwrap();
         let configuracion =
-            ConfigRawCapturada::nueva(MANIFIESTO.as_bytes(), b"\n".as_slice(), None, None);
+            ConfigRawCapturada::nueva(MANIFIESTO.as_bytes(), b"\n".as_slice(), None, None)
+                .expect("fixture de configuración dentro del presupuesto");
         let mut lock = LockEscritura::adquirir(&root).unwrap();
         let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
         let esperado =
@@ -1973,7 +2099,8 @@ ignorados = ["ignored.md"]
             b"\n".as_slice(),
             Some("manifest.toml".to_owned()),
             Some("invariants.smt2".to_owned()),
-        );
+        )
+        .expect("fixture de configuración dentro del presupuesto");
 
         let esperado = {
             let lock = LockEscritura::adquirir(root.path()).unwrap();
