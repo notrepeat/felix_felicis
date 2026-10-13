@@ -41,6 +41,17 @@ cargo run -p universo-cli -- validate examples/software-architecture/bundle --ma
 cargo run -p universo-cli -- check examples/software-architecture/bundle --manifiesto examples/software-architecture/manifest.toml --invariantes examples/software-architecture/invariants/architecture.sx
 ```
 
-This fixture has no standalone `demo.ps1` runner or golden-output comparison.
-It does not implement `apply`, generate proposals or corrections, publish a
-candidate, promise atomicity, or implement recovery.
+The standard-library runner
+[`run_software_architecture_demo.py`](../../tools/run_software_architecture_demo.py)
+builds the CLI and checks `validate` and `check` in JSON and text for all three
+versioned states against the exact outputs in `expected/`. The contradictory
+check uses `--explain decide` so its redacted witness is part of the golden.
+Run it from the repository root with:
+
+```powershell
+python tools/run_software_architecture_demo.py
+```
+
+The runner inspects the durable fixture states; it does not implement `apply`,
+generate proposals or corrections, publish a candidate, promise atomicity, or
+implement recovery.
