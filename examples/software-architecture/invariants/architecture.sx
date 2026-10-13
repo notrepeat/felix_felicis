@@ -1,0 +1,4 @@
+; A domain component cannot depend directly on an external adapter.
+(forall ((e E) (x N) (y N))
+  :guarda (Edge e x y depends)
+  (or (not (Type x domain)) (not (Type y adapter))))
