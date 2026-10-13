@@ -1,4 +1,4 @@
-"""Run the durable software-architecture fixture against the public CLI."""
+"""Run the fixture integration story and verify the public CLI snapshots."""
 
 from __future__ import annotations
 
@@ -137,6 +137,32 @@ def run_process(
         raise DemoFailure(f"{label}: excedió el tiempo límite.") from None
     except OSError:
         raise DemoFailure(f"{label}: no se pudo iniciar el proceso.") from None
+
+
+def run_integration_story() -> None:
+    cargo = shutil.which("cargo")
+    if cargo is None:
+        raise DemoFailure("no se encontró Cargo para ejecutar la historia de integración.")
+
+    result = run_process(
+        [
+            cargo,
+            "test",
+            "--locked",
+            "-p",
+            "universo-cli",
+            "--test",
+            "demo_arquitectura",
+            "--quiet",
+        ],
+        300,
+        "historia de integración de arquitectura",
+    )
+    if result.returncode != 0:
+        raise DemoFailure(
+            "la historia de integración de arquitectura falló "
+            f"(código {result.returncode})."
+        )
 
 
 def unique_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -569,6 +595,7 @@ def verify_output(
 
 def main() -> int:
     try:
+        run_integration_story()
         executable = build_cli()
         for state in STATES:
             for command in ("validate", "check"):
@@ -578,7 +605,10 @@ def main() -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
-    print("OK: 4 estados de arquitectura; validate/check JSON y texto coinciden con sus goldens")
+    print(
+        "OK: historia de integración aprobada; 4 estados de arquitectura y "
+        "16 salidas validate/check JSON/texto coinciden con sus goldens"
+    )
     return 0
 
 

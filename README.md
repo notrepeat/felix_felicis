@@ -100,11 +100,13 @@ python tools/run_software_architecture_demo.py
 El smoke compila el binario y lo ejecuta directamente para comprobar los
 streams propios de la CLI, aislados de los mensajes del wrapper `cargo run`.
 El [runner de la fixture pública de arquitectura](examples/software-architecture/README.md)
-compara `validate` y `check` en JSON y texto para cuatro estados versionados
-con 16 goldens. Inspecciona esos snapshots; no reproduce la secuencia de
-deltas. También valida el contrato de las explicaciones y su presupuesto,
-rechaza claves JSON duplicadas y comprueba que las salidas y los goldens no
-contengan marcadores concretos de esta fixture.
+ejecuta primero el test de integración `demo_arquitectura`, que recorre la
+historia de propuestas con la API pública; luego compara `validate` y `check`
+en JSON y texto para cuatro snapshots versionados con 16 goldens. También
+valida el contrato de las explicaciones y su presupuesto, rechaza claves JSON
+duplicadas y comprueba que las salidas y los goldens no contengan marcadores
+concretos de esta fixture. La historia la aporta el test y no implica un
+comando CLI para aplicar o generar deltas.
 
 El estudio que fundamenta el diseño comienza en
 [`docs/00-indice.md`](docs/00-indice.md).
