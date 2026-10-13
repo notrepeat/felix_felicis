@@ -13,9 +13,13 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
 - `calcular_token_snapshot` y `calcular_digest_raw_tree` aplican antes de
   ordenar cuotas inclusivas al árbol raw: 100.000 entradas, 128 MiB de
   contenido raw, profundidad 128 y 16 MiB de rutas UTF-8 acumuladas. Exceder
-  una cuota devuelve `snapshot_resource_limit`. Los tokens v1 dentro de cuota
-  conservan sus bytes; `manifiesto_raw`, `invariantes_raw`, `version_motor` y
-  `policy_id` aún no quedan cubiertos por estas cuotas.
+  una cuota devuelve `snapshot_resource_limit`. `calcular_token_snapshot`
+  también aplica, antes de validar u ordenar el árbol y de iniciar el hashing,
+  una cuota inclusiva independiente de 128 MiB para la suma de
+  `manifiesto_raw` e `invariantes_raw`; esta cuota no se suma a la del árbol.
+  `version_motor` y `policy_id` aún no tienen cota. Los tokens v1 dentro de
+  cuota conservan sus bytes. Este chequeo de slices ya recibidas no garantiza
+  un límite de memoria total ni del parser.
 
 ### Límites y seguridad de carga
 

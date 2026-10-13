@@ -481,9 +481,13 @@ Chain strategy: feature-branch-chain
   regulares; `cargar_bundle` solo suma documentos Markdown efectivamente leídos.
   `calcular_token_snapshot` y `calcular_digest_raw_tree` validan estas cuotas
   sobre el árbol raw antes de ordenar; exceder alguna devuelve
-  `snapshot_resource_limit`. En el token, `manifiesto_raw`, `invariantes_raw`,
-  `version_motor` y `policy_id` aún no quedan cubiertos por estas cuotas. El
-  framing y los bytes de los tokens v1 que permanecen dentro de cuota no cambian.
+  `snapshot_resource_limit`. El token aplica además una cuota inclusiva e
+  independiente de 128 MiB a la suma de `manifiesto_raw` e
+  `invariantes_raw`, antes de validar u ordenar el árbol y de iniciar el
+  hashing; no se suma al presupuesto separado del árbol raw. `version_motor` y
+  `policy_id` siguen sin cota. El framing y los bytes de los tokens v1 que
+  permanecen dentro de cuota no cambian. El chequeo mide slices raw ya
+  recibidas y no garantiza memoria total del proceso ni del parser.
   `cargar_bundle` aplica además un presupuesto físico independiente de 16 MiB
   para todas las rutas canónicas relativas que retiene: raíces declaradas en el
   índice y directorios únicos en `procesados`. Los aliases de diamante omitidos
@@ -725,6 +729,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-12 | CI `38242930608`, SHA `db71e3c` | Run completado con éxito para el estado con runner `RestoreOld` previo al dispatcher. | Evidencia histórica del runner anterior; no valida el dispatcher final. |
 | 2026-10-12 | `1dddce1`, `a4d01e5`, `85f7e89`, `7656d15`, `0e8f0d4` | Preflight compartido una sola vez y dispatcher crate-private que enruta solo `KeepOld`/`RestoreOld`; no hay caller desde apply/producción. CI run `38246129604` pasó para la base `a4d01e5` únicamente; no acredita el dispatcher final. | U7 parcial; cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, recovery completo y conexión desde apply siguen pendientes. |
 | 2026-10-12 | `56a6516` | Ambos calculadores de snapshot aplican antes de ordenar las cuotas inclusivas del árbol raw; `snapshot_resource_limit` al excederlas. Los tokens v1 admitidos conservan sus bytes. Test focal `cargo test --locked -p universo-okf transaccion::snapshot::tests::presupuesto_del_arbol`: 2/2. Runtime: N/A, documentación de una función pura. | U8 parcial; `manifiesto_raw`, `invariantes_raw`, `version_motor` y `policy_id` aún no están cubiertos. |
+| 2026-10-12 | `02c7adde` | `calcular_token_snapshot` suma `manifiesto_raw` e `invariantes_raw` con cuota inclusiva independiente de 128 MiB antes de validar/ordenar el árbol y de iniciar el hashing; conserva las cuotas separadas del árbol. Los tokens v1 dentro de cuota conservan sus bytes; `version_motor` y `policy_id` siguen sin cota. `presupuesto_de_configuracion`: 3/3; `presupuesto_del_arbol`: 1/1. Runtime: N/A, cambio en calculadores puros. | U8 parcial; no impone cota total de memoria ni del parser. Sigue sin caller desde apply/CLI y la recaptura externa de configuración raw está pendiente. |
 
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
@@ -736,7 +741,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
 | 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
 | 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: preflight compartido inicial y dispatcher crate-private enrutan solo las filas exactas `KeepOld` y `RestoreOld` en las fases soportadas. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false`, restaura el backup verificado y retira el journal. Sin caller desde apply/producción. Cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, demás filas y recovery completo siguen pendientes. |
-| 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | U8 sigue parcial: helper crate-private de CAS bajo lock (`aa5d496`) abre root desde `lock.ubicacion()` y delega al CAS anclado; pruebas match/stale/lock/no mutación (`8250f0d`) y el caso root dejó de ser directorio → `TipoNoAdmitido` / `snapshot_entry_type_not_allowed`, redactado (`08e4659`). `SnapshotToken::from_hex` público (`885657aa`; pruebas `032668e`) acepta exactamente 64 bytes ASCII `0-9a-f` en minúscula y devuelve el error fijo/redactado `snapshot_token_invalid`. El commit `56a6516` limita con cuotas inclusivas el árbol raw en ambos calculadores antes del ordenamiento; los tokens v1 dentro de cuota conservan sus bytes. `manifiesto_raw`, `invariantes_raw`, `version_motor` y `policy_id` aún no quedan cubiertos. Sigue sin caller desde apply/CLI; la recaptura de configuración raw externa también está pendiente. Matriz Windows+WSL verde en SHA `08e46595`: workspace, clippy, fmt, boundary y `cas_bajo_lock` 3/3. CI final del parser pendiente. U7 sigue parcial; U9–10 pendientes. |
+| 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | U8 sigue parcial: helper crate-private de CAS bajo lock (`aa5d496`) abre root desde `lock.ubicacion()` y delega al CAS anclado; pruebas match/stale/lock/no mutación (`8250f0d`) y el caso root dejó de ser directorio → `TipoNoAdmitido` / `snapshot_entry_type_not_allowed`, redactado (`08e4659`). `SnapshotToken::from_hex` público (`885657aa`; pruebas `032668e`) acepta exactamente 64 bytes ASCII `0-9a-f` en minúscula y devuelve el error fijo/redactado `snapshot_token_invalid`. El commit `56a6516` limita con cuotas inclusivas el árbol raw en ambos calculadores antes del ordenamiento; los tokens v1 dentro de cuota conservan sus bytes. `02c7adde` añade al token una cuota combinada e inclusiva de 128 MiB para `manifiesto_raw` + `invariantes_raw`, independiente de la cuota del árbol y comprobada antes de validarlo/ordenarlo y de iniciar el hashing; `version_motor` y `policy_id` siguen sin cota. Esta validación de slices recibidas no promete un límite de memoria total ni del parser. Sigue sin caller desde apply/CLI; la recaptura de configuración raw externa también está pendiente. Matriz Windows+WSL verde en SHA `08e46595`: workspace, clippy, fmt, boundary y `cas_bajo_lock` 3/3. CI final del parser pendiente. U7 sigue parcial; U9–10 pendientes. |
 
 ## Siguiente fase
 
