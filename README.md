@@ -18,13 +18,13 @@ Implementado:
 - parser y serializador de bundles OKF;
 - AST y parser de invariantes FO bisortidos;
 - validación estática, expansión de esquemas y evaluador de referencia en la API de `universo-core`;
+- `check --explain decide|enumerate` opt-in, con explicaciones redactadas en texto o JSON v2; el resultado baseline conserva JSON v1;
 - CLI (`atomos`, `validate`, `check`; `verificar` es alias compatible de `validate`);
 - pruebas unitarias, de propiedades, compile-fail y round-trip.
 
 En construcción:
 
-- veredictos explicables y extracción de testigos (fase 03);
-- revisión, recuperación por patrones y operaciones transaccionales;
+- revisión, recuperación por patrones y operaciones transaccionales (fase 04, parcial);
 - servidor MCP.
 
 ## Probar el ejemplo
@@ -44,22 +44,26 @@ intencionalmente falsa y está separada del ejemplo normal; al ejecutarla,
 
 ```powershell
 cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/rejected-invariants.sx --format json
+cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/rejected-invariants.sx --explain decide --format json
 ```
 
 El comando usa código 0 para `admit`, 1 para `reject` o `error` y 2 para uso
 inválido. En texto, el resultado va por `stdout` y los diagnósticos por
 `stderr`; con `--format json`, emite un objeto JSON v1 en una sola línea por
-`stdout` y deja `stderr` vacío. Un `reject` informa solo cantidades, no
-testigos, asignaciones ni contenido del bundle; la extracción de testigos se
-reserva para la fase 03. Un archivo vacío o solo con comentarios se admite con
-cero invariantes, por lo que no equivale a una comprobación sustantiva.
+`stdout` y deja `stderr` vacío, siempre que no se solicite `--explain`. Sin esa
+opción, un `reject` informa solo cantidades, no contraejemplos, asignaciones ni
+contenido del bundle. `--explain decide|enumerate` solicita una explicación
+redactada en un pase opt-in separado; en JSON, esa salida usa schema v2. Un
+archivo vacío o solo con comentarios se admite con cero invariantes, por lo que
+no equivale a una comprobación sustantiva.
 
-En JSON, `status` es `admit`, `reject` o `error`. `summary` cuenta las fuentes,
-instancias expandidas, fórmulas evaluadas y fallidas; es `null` en errores.
-`errors` contiene diagnósticos tipados (`data`, `authorship` o `resource`) con
-código y ubicación cuando aplica. Los errores no incluyen texto de fórmulas ni
-testigos, aunque las rutas de diagnóstico pueden ser sensibles y revelar
-rutas locales o identificadores; no publiques salidas privadas.
+En el JSON baseline v1, `status` es `admit`, `reject` o `error`. `summary`
+cuenta las fuentes, instancias expandidas, fórmulas evaluadas y fallidas; es
+`null` en errores. `errors` contiene diagnósticos tipados (`data`, `authorship`
+o `resource`) con código y ubicación cuando aplica. Los errores no incluyen
+texto de fórmulas ni contraejemplos, aunque las rutas de diagnóstico pueden
+ser sensibles y revelar rutas locales o identificadores; no publiques salidas
+privadas.
 
 Para el comando `check`, una admisión de este ejemplo tiene la forma:
 
@@ -74,7 +78,7 @@ Para el comando `check`, una admisión de este ejemplo tiene la forma:
 ```
 
 La fixture falsa produce `status: "reject"`, `failed: 1` y código 1; no añade
-una explicación con testigos.
+una explicación porque ese comando no solicita `--explain`.
 
 ## Desarrollo
 
@@ -99,7 +103,8 @@ Las herramientas reciben rutas locales y leen los bundles; `atomos` muestra
 átomos y algunos diagnósticos pueden incluir rutas del bundle o rutas absolutas
 de archivos. No publiques sus salidas cuando se ejecuten sobre una instancia
 privada. `check` separa errores de autoría, datos y recursos de un rechazo
-semántico, y no incluye testigos en fase 02.
+semántico. El resultado baseline no incluye contraejemplos; para pedir una
+explicación redactada usa `--explain decide` o `--explain enumerate`.
 
 ## Licencia
 
