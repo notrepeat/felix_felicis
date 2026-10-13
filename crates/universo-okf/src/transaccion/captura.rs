@@ -28,7 +28,7 @@ use super::limites::PRESUPUESTO_BYTES_RAW;
 use super::lock::LockEscritura;
 use super::snapshot::{
     EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_digest_raw_tree,
-    calcular_token_snapshot,
+    calcular_token_snapshot, validar_presupuesto_configuracion,
 };
 
 /// Snapshot completo que conserva las entradas raw y sus vistas parseadas.
@@ -287,9 +287,38 @@ pub(crate) fn capturar_snapshot_con_cas_bajo_lock(
     policy_id: &str,
     esperado: SnapshotToken,
 ) -> Result<Snapshot, ErrorSnapshot> {
+    capturar_snapshot_con_cas_bajo_lock_con_limite(
+        lock,
+        configuracion,
+        version_motor,
+        policy_id,
+        esperado,
+        PRESUPUESTO_BYTES_RAW,
+    )
+}
+
+fn capturar_snapshot_con_cas_bajo_lock_con_limite(
+    lock: &mut LockEscritura,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+    limite_configuracion: usize,
+) -> Result<Snapshot, ErrorSnapshot> {
+    validar_presupuesto_configuracion(
+        &configuracion.manifiesto_raw,
+        &configuracion.invariantes_raw,
+        limite_configuracion,
+    )?;
     let raiz = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
         .map_err(super::inventario::mapear_error_anclado)?;
-    capturar_snapshot_con_cas_anclado(&raiz, configuracion, version_motor, policy_id, esperado)
+    capturar_snapshot_con_cas_anclado_prevalidado(
+        &raiz,
+        configuracion,
+        version_motor,
+        policy_id,
+        esperado,
+    )
 }
 
 fn capturar_snapshot_raw_anclado_sin_validar(
@@ -298,7 +327,52 @@ fn capturar_snapshot_raw_anclado_sin_validar(
     version_motor: &str,
     policy_id: &str,
 ) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
-    let entradas = inventariar_root_anclado(raiz.clonar().map_err(|_| ErrorSnapshot::Io)?)?;
+    capturar_snapshot_raw_anclado_con_limite(
+        raiz,
+        configuracion,
+        version_motor,
+        policy_id,
+        PRESUPUESTO_BYTES_RAW,
+        inventariar_root_anclado,
+    )
+}
+
+fn capturar_snapshot_raw_anclado_con_limite<F>(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    limite_configuracion: usize,
+    inventariar: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnOnce(DirectorioAnclado) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>,
+{
+    validar_presupuesto_configuracion(
+        &configuracion.manifiesto_raw,
+        &configuracion.invariantes_raw,
+        limite_configuracion,
+    )?;
+    capturar_snapshot_raw_anclado_prevalidado(
+        raiz,
+        configuracion,
+        version_motor,
+        policy_id,
+        inventariar,
+    )
+}
+
+fn capturar_snapshot_raw_anclado_prevalidado<F>(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    inventariar: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnOnce(DirectorioAnclado) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>,
+{
+    let entradas = inventariar(raiz.clonar().map_err(|_| ErrorSnapshot::Io)?)?;
     let identidad_root = raiz.identidad_raiz().ok_or(ErrorSnapshot::RaizInvalida)?;
     let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
     let token = calcular_token_snapshot(
@@ -321,6 +395,24 @@ fn capturar_snapshot_raw_anclado_sin_validar(
         ruta_manifiesto_root: configuracion.ruta_manifiesto_root,
         ruta_invariantes_root: configuracion.ruta_invariantes_root,
     })
+}
+
+fn capturar_snapshot_con_cas_anclado_prevalidado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let captura = capturar_snapshot_raw_anclado_prevalidado(
+        raiz,
+        configuracion,
+        version_motor,
+        policy_id,
+        inventariar_root_anclado,
+    )?;
+    super::snapshot::comparar_snapshot_esperado(esperado, captura.token)?;
+    materializar(captura)
 }
 
 /// Lee las entradas y configura la identidad solo desde sus buffers raw. Debe
@@ -1691,6 +1783,90 @@ ignorados = ["ignored.md"]
             assert!(!format!("{error:?}").contains(canary));
             assert!(!error.to_string().contains(canary));
         }
+    }
+
+    #[test]
+    fn configuracion_raw_anclada_excedida_no_invoca_inventariador() {
+        let root = tempdir().unwrap();
+        let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let llamadas_inventario = std::cell::Cell::new(0);
+        let configuracion = ConfigRawCapturada::nueva(
+            b"PRIVATE-CONFIG-CANARY".as_slice(),
+            b"".as_slice(),
+            None,
+            None,
+        );
+
+        let error = capturar_snapshot_raw_anclado_con_limite(
+            &ancla,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            4,
+            |_| {
+                llamadas_inventario.set(llamadas_inventario.get() + 1);
+                Ok(Vec::new())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(llamadas_inventario.get(), 0);
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(error.codigo(), "snapshot_resource_limit");
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        assert_eq!(
+            format!("{error:?}"),
+            "ErrorSnapshot(\"snapshot_resource_limit\")"
+        );
+        assert!(!format!("{error:?}").contains("PRIVATE-CONFIG-CANARY"));
+        assert!(!error.to_string().contains("PRIVATE-CONFIG-CANARY"));
+    }
+
+    #[test]
+    fn cas_bajo_lock_configuracion_excedida_precede_apertura_root_y_reten_guard() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir(&root).unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            b"PRIVATE-CONFIG-CANARY".as_slice(),
+            b"".as_slice(),
+            None,
+            None,
+        );
+        let mut lock = LockEscritura::adquirir(&root).unwrap();
+        fs::remove_dir(&root).unwrap();
+        fs::write(&root, b"PRIVATE-ROOT-CANARY").unwrap();
+
+        let error = capturar_snapshot_con_cas_bajo_lock_con_limite(
+            &mut lock,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            SnapshotToken::from_hex(&"0".repeat(64)).unwrap(),
+            4,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(error.codigo(), "snapshot_resource_limit");
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for secreto in [
+            "PRIVATE-CONFIG-CANARY",
+            "PRIVATE-ROOT-CANARY",
+            root.to_string_lossy().as_ref(),
+        ] {
+            assert!(!debug.contains(secreto), "Debug leaked {secreto}");
+            assert!(!display.contains(secreto), "Display leaked {secreto}");
+        }
+        assert_eq!(fs::read(&root).unwrap(), b"PRIVATE-ROOT-CANARY");
+        assert_eq!(
+            LockEscritura::adquirir_en(lock.ubicacion()).unwrap_err(),
+            ErrorLockEscritura::Busy,
+            "la prevalidación debe dejar retenido el guard recibido"
+        );
     }
 
     #[test]

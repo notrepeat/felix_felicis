@@ -319,7 +319,7 @@ fn calcular_token_snapshot_con_limites(
     Ok(SnapshotToken(hash.finalize().into()))
 }
 
-fn validar_presupuesto_configuracion(
+pub(crate) fn validar_presupuesto_configuracion(
     manifiesto_raw: &[u8],
     invariantes_raw: &[u8],
     limite: usize,
@@ -704,6 +704,9 @@ mod tests {
     #[test]
     fn presupuesto_de_configuracion_acepta_limite_inclusivo_y_rechaza_mas_uno() {
         let limites = limites_prueba(4, 10, 10, usize::MAX);
+        assert_eq!(validar_presupuesto_configuracion(b"ab", b"cd", 4), Ok(()));
+        assert_error_limite(validar_presupuesto_configuracion(b"ab", b"cde", 4));
+
         assert!(
             calcular_token_snapshot_con_limites("engine", "policy", b"ab", b"cd", &[], limites,)
                 .is_ok()
