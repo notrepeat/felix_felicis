@@ -63,8 +63,9 @@ validates the JSON structure and budget, rejects duplicate object keys, and
 checks stdout, stderr, and goldens for concrete fixture markers. These
 marker checks cover this public fixture; the CLI witness does not expose its
 concrete filenames, atom IDs, labels, formula text, or concrete arguments. Its
-allowlisted abstract `gap.form` does expose predicate names, binder shape, and
-counts.
+abstract gap summary exposes predicate names, binder shape, and counts:
+allowlisted `gap.form` carries predicates and binders, while sibling
+`gap.counts` carries counts.
 Run it from the repository root with:
 
 ```powershell
