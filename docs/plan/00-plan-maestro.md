@@ -198,7 +198,8 @@ check` directamente, cuatro invocaciones CLI entre los dos sistemas; ese número
 no corresponde a pruebas Cargo. El caso `admit` termina con código 0 y resumen
 `sources/instances/evaluated/failed = 3/3/3/0`; `reject` termina con código 1
 y `1/1/1/1`. Ambos validan JSON v2, una línea JSON por `stdout`, `stderr`
-vacío, estructura/valores permitidos y redacción de la fixture.
+vacío, estructura/valores permitidos y ausencia de los marcadores conocidos de
+rutas/etiquetas/textos/IDs de la fixture.
 
 La evidencia cubre evaluación estática de las fixtures. No demuestra
 reparación, persistencia, round-trip ni readmisión, comparación con goldens,

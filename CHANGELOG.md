@@ -99,8 +99,9 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   admisión y otra de rechazo: cuatro invocaciones CLI en total entre ambos
   sistemas operativos; no son pruebas Cargo. El caso admit devuelve código 0
   y resumen `sources/instances/evaluated/failed = 3/3/3/0`; reject devuelve
-  código 1 y `1/1/1/1`. Ambos validan JSON v2, los streams y una allowlist de
-  estructura/valores con redacción de datos de la fixture.
+  código 1 y `1/1/1/1`. Ambos validan JSON v2, los streams, una allowlist de
+  estructura/valores y la ausencia de los marcadores conocidos de
+  rutas/etiquetas/textos/IDs de la fixture.
 - Es evidencia parcial de evaluación estática. No demuestra reparación,
   persistencia, round-trip ni readmisión, comparación con goldens, ejecución
   de `validate` o recovery; la fase 05 sigue pendiente.
