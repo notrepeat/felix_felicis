@@ -9,12 +9,52 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "examples" / "software-architecture"
 EXPECTED = FIXTURE / "expected"
+VALIDATE_KEYS = {"schema_version", "command", "status", "summary", "errors"}
+CHECK_KEYS = {
+    "schema_version",
+    "command",
+    "status",
+    "summary",
+    "errors",
+    "explanations",
+}
+VALIDATE_SUMMARY_KEYS = {"nodes", "edges"}
+CHECK_SUMMARY_KEYS = {"sources", "instances", "evaluated", "failed"}
+EXPLANATION_KEYS = {"mode", "objects", "truncated", "reason", "budget"}
+BUDGET_KEYS = {
+    "limit",
+    "consumed",
+    "semantic_units",
+    "evidence_units",
+    "aggregator_units",
+}
+OBJECT_KEYS = {
+    "kind",
+    "source_index",
+    "line",
+    "column",
+    "instance_index",
+    "counterexample",
+    "presence_core",
+    "gap",
+}
+PREDICATES = {
+    "type",
+    "edge",
+    "parent",
+    "has_label_node",
+    "has_label_edge",
+    "extension",
+    "tc_parent",
+    "equal_node",
+    "equal_edge",
+}
 
 
 class DemoFailure(Exception):
@@ -105,47 +145,189 @@ def read_golden(state: State, command: str, output_format: str) -> bytes:
         raise DemoFailure(f"{state.name} {command} {output_format}: falta el golden esperado.") from None
 
 
+def exact_keys(value: Any, expected: set[str]) -> bool:
+    return isinstance(value, dict) and set(value) == expected
+
+
+def is_nonnegative_int(value: Any) -> bool:
+    return type(value) is int and value >= 0
+
+
+def counterexample_tree_is_valid(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    rule = node.get("rule")
+    if not isinstance(rule, str) or type(node.get("value")) is not bool:
+        return False
+
+    if rule == "atom":
+        return (
+            exact_keys(node, {"rule", "value", "predicate"})
+            and isinstance(node["predicate"], str)
+            and node["predicate"] in PREDICATES
+        )
+    if rule == "not":
+        return exact_keys(node, {"rule", "value", "inner"}) and counterexample_tree_is_valid(
+            node["inner"]
+        )
+    if rule in {"and", "or"}:
+        return (
+            exact_keys(node, {"rule", "value", "children"})
+            and isinstance(node["children"], list)
+            and all(counterexample_tree_is_valid(child) for child in node["children"])
+        )
+    if rule == "implies":
+        return (
+            exact_keys(node, {"rule", "value", "antecedent", "consequent"})
+            and counterexample_tree_is_valid(node["antecedent"])
+            and (
+                node["consequent"] is None
+                or counterexample_tree_is_valid(node["consequent"])
+            )
+        )
+    if rule in {"forall", "exists"}:
+        instances = node.get("instances")
+        return (
+            exact_keys(node, {"rule", "value", "search_exhausted", "instances"})
+            and type(node["search_exhausted"]) is bool
+            and isinstance(instances, list)
+            and all(
+                exact_keys(instance, {"value", "guard", "body"})
+                and type(instance["value"]) is bool
+                and all(
+                    child is None or counterexample_tree_is_valid(child)
+                    for child in (instance["guard"], instance["body"])
+                )
+                for instance in instances
+            )
+        )
+    return False
+
+
+def explanation_object_is_valid(item: Any) -> bool:
+    return (
+        exact_keys(item, OBJECT_KEYS)
+        and item["kind"] == "counterexample"
+        and is_nonnegative_int(item["source_index"])
+        and is_nonnegative_int(item["line"])
+        and is_nonnegative_int(item["column"])
+        and (item["instance_index"] is None or is_nonnegative_int(item["instance_index"]))
+        and counterexample_tree_is_valid(item["counterexample"])
+        and item["presence_core"] is None
+        and item["gap"] is None
+    )
+
+
+def is_architecture_witness(tree: Any) -> bool:
+    if (
+        not exact_keys(tree, {"rule", "value", "search_exhausted", "instances"})
+        or tree["rule"] != "forall"
+        or tree["value"] is not False
+        or tree["search_exhausted"] is not False
+        or not isinstance(tree["instances"], list)
+        or len(tree["instances"]) != 4
+    ):
+        return False
+
+    for instance in tree["instances"][:3]:
+        if (
+            instance["value"] is not True
+            or instance["body"] is not None
+            or instance["guard"] != {"rule": "atom", "value": False, "predicate": "edge"}
+        ):
+            return False
+
+    failing = tree["instances"][3]
+    body = failing["body"]
+    return (
+        failing["value"] is False
+        and failing["guard"] == {"rule": "atom", "value": True, "predicate": "edge"}
+        and exact_keys(body, {"rule", "value", "children"})
+        and body["rule"] == "or"
+        and body["value"] is False
+        and isinstance(body["children"], list)
+        and len(body["children"]) == 2
+        and all(
+            exact_keys(child, {"rule", "value", "inner"})
+            and child["rule"] == "not"
+            and child["value"] is False
+            and child["inner"] == {"rule": "atom", "value": True, "predicate": "type"}
+            for child in body["children"]
+        )
+    )
+
+
+def explanation_contract_is_valid(value: Any, state: State) -> bool:
+    if (
+        not exact_keys(value, EXPLANATION_KEYS)
+        or value["mode"] != "decide"
+        or value["truncated"] is not False
+        or value["reason"] is not None
+        or not isinstance(value["objects"], list)
+    ):
+        return False
+
+    budget = value["budget"]
+    if (
+        not exact_keys(budget, BUDGET_KEYS)
+        or any(not is_nonnegative_int(budget[key]) for key in BUDGET_KEYS)
+        or budget["limit"] != 1_000_000
+        or budget["consumed"] > budget["limit"]
+    ):
+        return False
+
+    objects = value["objects"]
+    if state.check_status == "admit":
+        return objects == []
+    return (
+        len(objects) == 1
+        and explanation_object_is_valid(objects[0])
+        and objects[0]["source_index"] == 0
+        and objects[0]["line"] == 2
+        and objects[0]["column"] == 1
+        and objects[0]["instance_index"] is None
+        and is_architecture_witness(objects[0]["counterexample"])
+    )
+
+
 def verify_json_contract(state: State, command: str, expected: bytes) -> None:
     try:
         document = json.loads(expected)
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise DemoFailure(f"{state.name} {command}: el golden JSON no es válido.") from None
-    if not isinstance(document, dict) or document.get("command") != command:
-        raise DemoFailure(f"{state.name} {command}: el golden no coincide con el comando.")
 
     if command == "validate":
+        summary = document.get("summary") if isinstance(document, dict) else None
         if (
-            document.get("status") != "valid"
-            or document.get("errors") != []
-            or document.get("summary") != {"edges": state.edges, "nodes": 3}
+            not exact_keys(document, VALIDATE_KEYS)
+            or type(document["schema_version"]) is not int
+            or document["schema_version"] != 1
+            or document["command"] != "validate"
+            or document["status"] != "valid"
+            or document["errors"] != []
+            or not exact_keys(summary, VALIDATE_SUMMARY_KEYS)
+            or any(not is_nonnegative_int(summary[key]) for key in VALIDATE_SUMMARY_KEYS)
+            or summary != {"edges": state.edges, "nodes": 3}
         ):
             raise DemoFailure(f"{state.name} validate: el contrato del golden no es válido.")
         return
 
+    summary = document.get("summary") if isinstance(document, dict) else None
     expected_failed = 1 if state.check_status == "reject" else 0
     if (
-        document.get("status") != state.check_status
-        or document.get("errors") != []
-        or document.get("summary")
+        not exact_keys(document, CHECK_KEYS)
+        or type(document["schema_version"]) is not int
+        or document["schema_version"] != 2
+        or document["command"] != "check"
+        or document["status"] != state.check_status
+        or document["errors"] != []
+        or not exact_keys(summary, CHECK_SUMMARY_KEYS)
+        or any(not is_nonnegative_int(summary[key]) for key in CHECK_SUMMARY_KEYS)
+        or summary
         != {"evaluated": 1, "failed": expected_failed, "instances": 1, "sources": 1}
+        or not explanation_contract_is_valid(document["explanations"], state)
     ):
         raise DemoFailure(f"{state.name} check: el contrato del golden no es válido.")
-    explanation = document.get("explanations")
-    objects = explanation.get("objects") if isinstance(explanation, dict) else None
-    if not isinstance(objects, list):
-        raise DemoFailure(f"{state.name} check: falta la explicación esperada.")
-    if state.check_status == "admit" and objects:
-        raise DemoFailure(f"{state.name} check: la admisión no debía tener witness.")
-    if state.check_status == "reject":
-        if (
-            len(objects) != 1
-            or not isinstance(objects[0], dict)
-            or any(
-                objects[0].get(key) != value
-                for key, value in (("source_index", 0), ("line", 2), ("column", 1))
-            )
-        ):
-            raise DemoFailure("contradictory check: el witness no coincide con la fixture.")
 
 
 def verify_output(
