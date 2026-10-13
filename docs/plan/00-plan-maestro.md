@@ -12,7 +12,7 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. En `63e59d1`, la matriz local U8 registra Windows 691/6 y WSL 699/6 (passed/ignored); no hay CI remoto publicado para ese SHA. CI `38232932504` es histórico para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; ninguno acredita el dispatcher final. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. En `4b94261`, la matriz local U8 registra Windows 694/6 y WSL 702/6 (passed/ignored); no hay CI remoto publicado para ese SHA. CI `38232932504` es histórico para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; ninguno acredita el dispatcher final. |
 | Foco actual | Fase 04, Unidad 7: journal, commit y recovery. U7 incluye `KeepOld` y `RestoreOld` acotadas. El preflight compartido se ejecuta una vez; el dispatcher crate-private solo enruta esas dos filas, sin caller desde apply/producción. No limpia stage ni ejecuta `DiscardNewRestoreOld`, validación de `New`, `Committed` o recovery completo. |
 | Última actualización | 2026-10-13 |
 
@@ -52,7 +52,7 @@ flowchart LR
 | [01](01-contrato-de-verdad.md) | Contrato de verdad | completo | — | `validate` y `check` respetan contrato de comandos, códigos, canales, JSON v1 y privacidad; pruebas y CLI en `a9e1983`. |
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
-| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | U0–U4 y U6 cerradas en sus límites; U5, U7 y U8 conservan avance parcial. U7 ejecuta solo `KeepOld` y `RestoreOld` tras un preflight inicial compartido. U8 valida en `63e59d1` la cuota combinada de configuración antes de abrir el root bajo lock y antes del inventario anclado; `ConfigRawCapturada` ya llega materializada, así que falta el contrato/proveedor acotado antes del lock y los callers de apply/CLI. Límites para `version_motor` y `policy_id`, cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, recovery completo, U9–U10, `Type`, publicación filesystem y CLI siguen pendientes. |
+| [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | U0–U4 y U6 cerradas en sus límites; U5, U7 y U8 conservan avance parcial. U7 ejecuta solo `KeepOld` y `RestoreOld` tras un preflight inicial compartido. U8 mantiene el preflight consumidor antes de abrir root bajo lock/inventariar; desde `4b94261`, `ConfigRawCapturada::nueva` también rechaza sumas combinadas fuera de cuota después de convertir a `Arc`, sin limitar la materialización previa. Siguen pendientes el proveedor acotado antes del lock, los callers de apply/CLI y las cotas de `version_motor`/`policy_id`; también cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, recovery completo, U9–U10, `Type` y publicación filesystem. |
 | [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. Un preflight compartido inicial alimenta el dispatcher crate-private, que solo enruta `KeepOld` y `RestoreOld`; aún no hay caller desde apply/producción. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false` en `Prepared`/`BackupReady`/`Installed`. No limpia stage, ejecuta `DiscardNewRestoreOld`, valida `New`, maneja `Committed` ni completa recovery. U5 permanece parcial. U6 aporta root anclado y staging. U8 valida en `63e59d1` la suma de `manifiesto_raw` e `invariantes_raw` antes de abrir el root bajo lock y antes de inventariar el root anclado; si se excede, el error `snapshot_resource_limit` es redactado, el root/canary queda intacto y el guard se conserva. Si cabe, el CAS aún precede provenance y parseo. La configuración ya está materializada al entrar al helper, así que el preflight no evita asignaciones previas; siguen pendientes el contrato/proveedor acotado antes del lock y los callers de apply/CLI. Las cuotas de `version_motor`/`policy_id`, conexión de captura anclada y staging a apply, escritura filesystem y publicación siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
+Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. Un preflight compartido inicial alimenta el dispatcher crate-private, que solo enruta `KeepOld` y `RestoreOld`; aún no hay caller desde apply/producción. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false` en `Prepared`/`BackupReady`/`Installed`. No limpia stage, ejecuta `DiscardNewRestoreOld`, valida `New`, maneja `Committed` ni completa recovery. U5 permanece parcial. U6 aporta root anclado y staging. U8 valida la suma de `manifiesto_raw` e `invariantes_raw` en el consumidor antes de abrir root bajo lock y antes de inventariar; si se excede, `snapshot_resource_limit` es redactado, el root/canary queda intacto y el guard se conserva. Si cabe, el CAS aún precede provenance y parseo. Desde `4b94261`, el constructor fallible de `ConfigRawCapturada` también impone esa suma como invariante, contando cada campo lógico incluso cuando comparte el mismo `Arc`; convierte a `Arc` antes de revisar el tamaño, por lo que no limita lectura ni asignaciones previas. Este chequeo no acota RSS ni I/O antes del lock; el preflight consumidor sigue siendo defensa necesaria. La captura privada por ruta conserva su garantía distinta: acota durante la lectura y admite como máximo el remanente más un byte centinela para fuentes externas. Siguen pendientes el proveedor acotado antes del lock, los callers de apply/CLI y las cotas para `version_motor`/`policy_id`; conexión de captura anclada y staging a apply, escritura filesystem y publicación también siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -271,13 +271,20 @@ pero sus bytes se cobran por cada campo que la use, y la lectura queda acotada
 al remanente más un byte centinela. No promete límite de RSS/parser,
 deduplicación por identidad física ni atomicidad ante cambios hostiles;
 `version_motor` y `policy_id` siguen sin cota. No hay caller desde apply/CLI:
-faltan el contrato que suministra `ConfigRawCapturada` antes del lock y su
-integración. `63e59d1` suma el preflight de cuota en la captura anclada: valida
-antes de abrir root bajo lock y antes de clonar/inventariar el root; el exceso
-retorna `snapshot_resource_limit` redactado, conserva root/canary y retiene el
-guard. Para una configuración dentro de cuota, el CAS se mantiene antes de
-provenance y parseo. La estructura ya fue construida al entrar al helper, por
-lo que la comprobación no limita asignaciones previas. Apply/publicador
-filesystem y cleanup/restart completos, U9–U10, CLI y soporte transaccional de
+falta el proveedor que entregue `ConfigRawCapturada` con lectura acotada antes
+del lock y su integración. `63e59d1` añade el preflight consumidor de cuota en
+la captura anclada: valida antes de abrir root bajo lock y antes de
+clonar/inventariar el root; el exceso retorna `snapshot_resource_limit`
+redactado, conserva root/canary y retiene el guard. Para una configuración
+dentro de cuota, el CAS se mantiene antes de provenance y parseo. En
+`4b94261`, `ConfigRawCapturada::nueva` se vuelve fallible y aplica la misma
+cuota combinada como invariante después de convertir ambas entradas a
+`Arc<[u8]>`; el conteo es por campo lógico, aunque ambos compartan la misma
+asignación. Por eso el constructor no limita lectura, materialización,
+asignaciones previas, RSS ni I/O antes del lock, y el preflight consumidor se
+conserva como defensa. Esta comprobación es distinta de la captura privada por
+ruta de `2357a82`, que sí limita la lectura mientras la realiza. El proveedor
+acotado y los callers de apply/CLI siguen pendientes. Apply/publicador
+filesystem y cleanup/restart completos, U9–U10 y soporte transaccional de
 `Type` también siguen pendientes. El presupuesto agregado de evaluación aún
 no tiene cota global.

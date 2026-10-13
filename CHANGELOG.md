@@ -33,10 +33,15 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   y antes de inventariarlo. Si excede la cuota, devuelve el error redactado
   `snapshot_resource_limit`, conserva intacto el root/canary y retiene el guard
   recibido. Dentro de cuota, el CAS sigue ocurriendo antes de provenance y
-  parseo. `ConfigRawCapturada` ya fue materializada al invocar este helper: esta
-  validación no evita su asignación previa. Aún faltan el contrato/proveedor que
-  la limite antes del lock y sus callers de apply/CLI, además de cotas para
-  `version_motor` y `policy_id`; no se afirma atomicidad ante cambios hostiles.
+  parseo. Desde `4b94261`, `ConfigRawCapturada::nueva` también es fallible y
+  rechaza una suma fuera de cuota como invariante de construcción. La comprobación
+  ocurre después de convertir ambas entradas a `Arc<[u8]>`: no limita lectura,
+  asignaciones previas, RSS ni I/O antes del lock. Cuenta por campo lógico, así
+  que dos campos que comparten el mismo `Arc` se cobran dos veces. El preflight
+  del consumidor sigue siendo una defensa en el límite de uso. Aún faltan el
+  proveedor acotado antes del lock y sus callers de apply/CLI, además de cotas
+  para `version_motor` y `policy_id`; no se afirma atomicidad ante cambios
+  hostiles.
 
 ### Límites y seguridad de carga
 
