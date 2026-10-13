@@ -87,7 +87,7 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   37 suites. `fmt` y `clippy` pasan en ambos entornos. Estos son conteos del
   workspace, no resultados focales de las pruebas de U7 o U8.
 
-### Evidencia parcial de fase 05: smoke CLI y corrección sintética
+### Evidencia parcial de fase 05: smoke CLI y fixture de arquitectura
 
 - `ae99906` incorpora un smoke de la CLI sobre las fixtures públicas de
   admisión y rechazo; `c76e292` aclara que `check` es evaluación estática y
@@ -103,28 +103,42 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   estructura/valores y la ausencia de los marcadores conocidos de
   rutas/etiquetas/textos/IDs de la fixture.
 - `2534fd4` añade el test de integración `demo_arquitectura`, que ejecuta un
-  flujo sintético; `e0fc2e6` refuerza sus aserciones. La matriz local
-  independiente sobre `e0fc2e6` pasa en Windows y WSL Ubuntu: prueba focal
-  `demo_arquitectura`, 1 passed/0 failed/0 ignored en
-  ambos; smoke CLI admit/reject pasa en ambos; `cargo test --workspace`
+  flujo sintético en memoria; `e0fc2e6` refuerza sus aserciones. La matriz
+  local independiente sobre `e0fc2e6` pasa en Windows y WSL Ubuntu: prueba
+  focal `demo_arquitectura`, 1 passed/0 failed/0 ignored en ambos; smoke CLI
+  admit/reject pasa en ambos; `cargo test --workspace`
   registra Windows 703 passed/0 failed/6 ignored (38 suites) y WSL 711/0/6
   (38 suites). `fmt`, `clippy` y la frontera pública pasan en ambos. No se
   registra un resultado de CI remoto para esta matriz.
 - El test admite el delta vacío y verifica que los átomos y anexos del bundle
   base permanecen intactos. `proponer` rechaza el delta domain→adapter con un
   testigo en fuente 0, línea 2, columna 1; vuelve a comprobar el bundle base
-  tras el rechazo y tras construir en memoria el candidato contradictorio. La
-  fixture aporta explícitamente el delta correctivo domain→port→adapter y
-  Felix lo admite. Solo se serializa y recarga el candidato corregido; se
-  comparan átomos y anexos, y la segunda serialización conserva los bytes de
-  los tres Markdown. `validate` y `check` se ejecutan solo sobre ese candidato
-  corregido: 3 nodos, 2 aristas y `failed=0`.
-- La evidencia sigue siendo parcial. No hay runner autónomo de la demo pública
-  con fixture durable ni goldens/comparación con ellos. Este test no prueba
-  rechazo por CLI (el smoke previo sí cubre `admit`/`reject` estáticos),
-  generación automatizada de la corrección ni persistencia del contradictorio.
-  Tampoco prueba `apply`, publicación, atomicidad o recovery; la fase 05
-  permanece pendiente.
+  tras el rechazo y tras construir en memoria el candidato contradictorio. En
+  esa versión, el test construye explícitamente el delta correctivo
+  domain→port→adapter y Felix lo admite. Solo se serializa y recarga el
+  candidato corregido; se comparan átomos y anexos, y la segunda serialización
+  conserva los bytes de los tres Markdown. `validate` y `check` se ejecutan
+  solo sobre ese candidato corregido: 3 nodos, 2 aristas y `failed=0`.
+- `8fe29c1` incorpora la fixture pública durable en
+  `examples/software-architecture/`; `434f4fc` cambia
+  `demo_arquitectura` para cargar de ella el bundle, manifiesto, invariante y
+  deltas contradictorio y correctivo. La matriz local sobre `434f4fc` pasa en
+  Windows y WSL Ubuntu: la prueba focal registra 1 passed/0 failed/0 ignored
+  en ambos, y el smoke CLI admit/reject pasa en ambos. `cargo test --workspace`
+  registra Windows 703 passed/0 failed/6 ignored (38 suites) y WSL Ubuntu
+  711 passed/0 failed/6 ignored (38 suites); `fmt`, `clippy` y la frontera
+  pública pasan en ambos. `proponer` rechaza domain→adapter en core con
+  testigo fuente 0, línea 2, columna 1; el test construye en memoria el
+  candidato contradictorio y la fixture aporta la corrección explícita
+  domain→port→adapter. Solo serializa y recarga el candidato corregido; la
+  CLI `validate` y `check` se ejecutan sobre ese corregido (3 nodos, 2 aristas,
+  `failed=0`).
+- La evidencia sigue siendo parcial. El test ya consume la fixture durable,
+  pero no hay runner autónomo de la demo pública (`demo.ps1`) ni
+  goldens/comparación con ellos. Esta historia no prueba rechazo por CLI (el
+  smoke separado sí cubre `admit`/`reject` estáticos), generación automatizada
+  de la corrección ni persistencia del contradictorio. Tampoco prueba `apply`,
+  publicación, atomicidad o recovery; la fase 05 permanece pendiente.
 
 ### Límites y seguridad de carga
 

@@ -17,13 +17,24 @@ proposal; it does not generate the correction. The valid delta is a patch for
 the candidate after the contradictory delta, not a patch against the original
 base bundle.
 
-The CLI can validate and check the base bundle:
+The integration test
+[`demo_arquitectura`](../../crates/universo-cli/tests/demo_arquitectura.rs)
+consumes this durable fixture: it loads the bundle, manifest, invariant, and
+both proposal deltas. It rejects the contradictory proposal in core, builds
+that contradictory candidate in memory to evaluate the explicit correction,
+then serializes and reloads only the corrected candidate. The CLI
+`validate`/`check` calls in the test run only on that corrected candidate; the
+test does not reject this proposal through the CLI or persist the contradictory
+candidate.
+
+These CLI commands inspect only the base bundle. They do not load or apply the
+proposal files:
 
 ```powershell
 cargo run -p universo-cli -- validate examples/software-architecture/bundle --manifiesto examples/software-architecture/manifest.toml
 cargo run -p universo-cli -- check examples/software-architecture/bundle --manifiesto examples/software-architecture/manifest.toml --invariantes examples/software-architecture/invariants/architecture.sx
 ```
 
-These commands inspect the base only; they do not load or apply the proposal
-files. This fixture does not implement `apply`, generate proposals or
-corrections, publish a candidate, promise atomicity, or implement recovery.
+This fixture has no standalone `demo.ps1` runner or golden-output comparison.
+It does not implement `apply`, generate proposals or corrections, publish a
+candidate, promise atomicity, or implement recovery.

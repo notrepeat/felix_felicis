@@ -181,7 +181,7 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `a3cc3c9c2e5d166f066d6f7bfccf6cdec9214211` | Añade una prueba privada de CAS por ruta para match/stale con journal sibling: compara inventarios observados de root, configuración y parent, bytes de journal y `ArtifactFingerprint` del root; no aparecen backup, stage ni lockfile. No invoca el dispatcher. No hay conteo focal registrado para este commit. |
 | `51cd5c4fbf9607dffac1825a9739cac9e92d97e2` | Extiende esa matriz de recovery con inventario recursivo: rutas/tipos/bytes de archivos normales; el lock abierto se compara solo por presencia, tipo y longitud. `RestoreOld` compara contra el modelo backup→root y retiro de journal. Matriz workspace independiente sobre este SHA: Windows 702 passed/0 failed/6 ignored (37 suites), WSL Ubuntu 710/0/6 (37 suites); fmt y clippy pasan en ambos. Son conteos workspace, no focales. U7 sigue parcial y sin caller productivo; el inventario no observa atime/permisos/metadatos y no elimina TOCTOU ni demuestra atomicidad ante cambios hostiles. |
 
-### Evidencia parcial de fase 05 — smoke CLI y corrección sintética
+### Evidencia parcial de fase 05 — smoke CLI y fixture de arquitectura
 
 `ae99906` añade `tools/check_public_cli_demo.py` y lo incorpora a los jobs de
 CI; `c76e292` precisa en README que `check` realiza evaluación estática y
@@ -202,24 +202,39 @@ vacío, estructura/valores permitidos y ausencia de los marcadores conocidos de
 rutas/etiquetas/textos/IDs de la fixture.
 
 `2534fd4` añade el test de integración `demo_arquitectura`, que ejecuta un
-flujo sintético; `e0fc2e6` refuerza sus aserciones. La propuesta vacía se
-admite y deja intactos los átomos y anexos del bundle base. El delta
+flujo sintético en memoria; `e0fc2e6` refuerza sus aserciones. La propuesta
+vacía se admite y deja intactos los átomos y anexos del bundle base. El delta
 domain→adapter se rechaza en core con un testigo de fuente 0, línea 2, columna
 1; el test confirma que el base sigue intacto tras el rechazo y tras construir
-en memoria el candidato contradictorio. La fixture aporta explícitamente el
-delta correctivo domain→port→adapter y Felix lo admite. Solo el candidato
-corregido se serializa y recarga; el test compara átomos y anexos y comprueba
-que una segunda serialización conserva los bytes de los tres Markdown.
-Después ejecuta CLI `validate` y `check` solo sobre el corregido: 3 nodos, 2
-aristas y `failed=0`.
+en memoria el candidato contradictorio. En esa versión, el test construye
+explícitamente el delta correctivo domain→port→adapter y Felix lo admite. Solo
+el candidato corregido se serializa y recarga; el test compara átomos y anexos
+y comprueba que una segunda serialización conserva los bytes de los tres
+Markdown. Después ejecuta CLI `validate` y `check` solo sobre el corregido:
+3 nodos, 2 aristas y `failed=0`.
 
-No hay runner autónomo de la demo pública con fixture durable ni
-goldens/comparación golden. El test no comprueba el rechazo por CLI (que sí
-cubre el smoke anterior), generación automatizada de la corrección ni
-persistencia del contradictorio. Tampoco demuestra `apply`, publicación,
-atomicidad o recovery. La evidencia conjunta sigue siendo parcial: fase 05
-pendiente, todos sus criterios de aceptación abiertos y progreso maestro en
-3/9.
+`8fe29c1` incorpora la fixture pública durable en
+`examples/software-architecture/`; `434f4fc` cambia `demo_arquitectura` para
+cargar de ella el bundle, manifiesto, invariante y deltas contradictorio y
+correctivo. La matriz local sobre `434f4fc` pasa en Windows y WSL Ubuntu: la
+prueba focal registra 1 passed/0 failed/0 ignored en ambos, y el smoke CLI
+admit/reject pasa en ambos. `cargo test --workspace` registra Windows 703
+passed/0 failed/6 ignored (38 suites) y WSL Ubuntu 711 passed/0 failed/6
+ignored (38 suites); `cargo fmt`, `clippy` y la frontera pública pasan en
+ambos. `proponer` rechaza domain→adapter en core con testigo fuente 0, línea
+2, columna 1; el test construye en memoria el candidato contradictorio y la
+fixture aporta la corrección explícita domain→port→adapter. Solo serializa y
+recarga el candidato corregido; los comandos CLI `validate` y `check` se
+ejecutan sobre
+ese corregido (3 nodos, 2 aristas, `failed=0`).
+
+El test ya consume la fixture durable, pero no existe runner autónomo de la
+demo pública (`demo.ps1`) ni goldens/comparación golden. Esta historia no
+comprueba el rechazo por CLI (el smoke anterior sí cubre `admit`/`reject`
+estáticos), generación automatizada de la corrección ni persistencia del
+contradictorio. Tampoco demuestra `apply`, publicación, atomicidad o recovery.
+La evidencia conjunta sigue siendo parcial: fase 05 pendiente, todos sus
+criterios de aceptación abiertos y progreso maestro en 3/9.
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
