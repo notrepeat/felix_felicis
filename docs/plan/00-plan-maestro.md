@@ -228,11 +228,26 @@ recarga el candidato corregido; los comandos CLI `validate` y `check` se
 ejecutan sobre
 ese corregido (3 nodos, 2 aristas, `failed=0`).
 
+`5510329` hace que `demo_arquitectura` cargue los snapshots durables
+`states/contradictory` y `states/corrected` y compare sus átomos y anexos con
+los candidatos calculados desde la fixture. La matriz local sobre HEAD
+`55103297` pasa en Windows y WSL Ubuntu: prueba focal 1 passed/0 failed/0
+ignored, smoke CLI admit/reject, workspace Windows 703 passed/0 failed/6
+ignored y WSL 711/0/6 (38 suites en ambos), `fmt`, `clippy` y frontera pública.
+WSL usa un checkout aislado idéntico byte a byte de 184 archivos y 5.145.096 bytes.
+No se comprobó CI remoto. Los snapshots son datos ilustrativos versionados de
+la fixture, no salidas de `apply` ni correcciones generadas. El candidato
+contradictorio reconstruido durante la prueba sigue solo en memoria; solo el
+corregido se serializa y recarga, y la CLI `validate` y `check` corre solo
+sobre él.
+
 El test ya consume la fixture durable, pero no existe runner autónomo de la
 demo pública (`demo.ps1`) ni goldens/comparación golden. Esta historia no
 comprueba el rechazo por CLI (el smoke anterior sí cubre `admit`/`reject`
-estáticos), generación automatizada de la corrección ni persistencia del
-contradictorio. Tampoco demuestra `apply`, publicación, atomicidad o recovery.
+estáticos), generación automatizada de la corrección ni serialización/round-trip
+del candidato contradictorio calculado en runtime; su snapshot fixture no
+proviene de `apply`. Tampoco demuestra `apply`, publicación, atomicidad o
+recovery.
 La evidencia conjunta sigue siendo parcial: fase 05 pendiente, todos sus
 criterios de aceptación abiertos y progreso maestro en 3/9.
 
