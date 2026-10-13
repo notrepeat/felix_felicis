@@ -52,8 +52,9 @@ empieza después de construir el candidato, detectar conflictos y completar la
 expansión, cuya cuota separada sigue en 100.000 instancias. Al agotarse,
 devuelve `evaluation_budget_exhausted` sin candidato ni resultado parcial.
 `evaluar` conserva su presupuesto por llamada y el `check` CLI baseline lo
-reinicia por fórmula. La cuota solo mide evaluación: no limita el trabajo de
-preparación, copias, memoria ni tiempo total.
+reinicia por fórmula. La cuota incluye el preflight de cada fórmula, pero no
+cubre la preparación previa al contador: construcción del candidato, detección
+de conflictos y expansión; tampoco acota memoria ni tiempo total.
 
 ## Decisiones de contrato v1
 
