@@ -20,10 +20,11 @@ use crate::manifiesto_toml::parsear_manifiesto_sin_validar;
 
 use super::anclado::{DirectorioAnclado, IdentidadDirectorio};
 use super::inventario::{
-    inventariar_root, inventariar_root_anclado, inventariar_root_con_lector, leer_archivo_regular,
-    ruta_absoluta_lexica, validar_archivo_sin_enlaces,
+    inventariar_root, inventariar_root_anclado, inventariar_root_con_lector_limitado,
+    leer_archivo_regular_limitado, ruta_absoluta_lexica, validar_archivo_sin_enlaces,
 };
 use super::journal::RawTreeDigest;
+use super::limites::PRESUPUESTO_BYTES_RAW;
 use super::lock::LockEscritura;
 use super::snapshot::{
     EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_digest_raw_tree,
@@ -102,6 +103,36 @@ impl fmt::Debug for ConfigRawCapturada {
 struct FuenteRaw {
     bytes: Arc<[u8]>,
     ruta_root: Option<String>,
+}
+
+struct PresupuestoConfiguracion {
+    limite: usize,
+    usados: usize,
+}
+
+impl PresupuestoConfiguracion {
+    fn nuevo(limite: usize) -> Self {
+        Self { limite, usados: 0 }
+    }
+
+    fn restante(&self) -> usize {
+        self.limite - self.usados
+    }
+
+    fn maximo_lectura(&self) -> Result<usize, ErrorSnapshot> {
+        self.restante()
+            .checked_add(1)
+            .ok_or(ErrorSnapshot::LongitudExcedida)
+    }
+
+    fn cobrar(&mut self, bytes: usize) -> Result<(), ErrorSnapshot> {
+        self.usados = self
+            .usados
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limite)
+            .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
+        Ok(())
+    }
 }
 
 impl fmt::Debug for CapturaSnapshotRaw {
@@ -305,12 +336,12 @@ fn capturar_snapshot_raw(
     let entradas = inventariar_root(&raiz)?;
     capturar_snapshot_raw_con_entradas(
         raiz,
-        ruta_manifiesto,
-        ruta_invariantes,
+        [ruta_manifiesto, ruta_invariantes],
         version_motor,
         policy_id,
         entradas,
-        leer_archivo_regular,
+        PresupuestoConfiguracion::nuevo(PRESUPUESTO_BYTES_RAW),
+        leer_archivo_regular_limitado,
     )
 }
 
@@ -323,7 +354,7 @@ fn capturar_snapshot_con_lector<F>(
     leer: F,
 ) -> Result<Snapshot, ErrorSnapshot>
 where
-    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     materializar(capturar_snapshot_raw_con_lector(
         raiz,
@@ -344,39 +375,66 @@ fn capturar_snapshot_raw_con_lector<F>(
     mut leer: F,
 ) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
 where
-    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     let raiz = ruta_absoluta_lexica(raiz)?;
-    let entradas = inventariar_root_con_lector(&raiz, &mut leer)?;
+    let entradas = inventariar_root_con_lector_limitado(&raiz, &mut leer)?;
     capturar_snapshot_raw_con_entradas(
         raiz,
-        ruta_manifiesto,
-        ruta_invariantes,
+        [ruta_manifiesto, ruta_invariantes],
         version_motor,
         policy_id,
         entradas,
+        PresupuestoConfiguracion::nuevo(PRESUPUESTO_BYTES_RAW),
+        leer,
+    )
+}
+
+fn capturar_snapshot_raw_con_lector_y_limite<F>(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+    limite_configuracion: usize,
+    mut leer: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let raiz = ruta_absoluta_lexica(raiz)?;
+    let entradas = inventariar_root_con_lector_limitado(&raiz, &mut leer)?;
+    capturar_snapshot_raw_con_entradas(
+        raiz,
+        [ruta_manifiesto, ruta_invariantes],
+        version_motor,
+        policy_id,
+        entradas,
+        PresupuestoConfiguracion::nuevo(limite_configuracion),
         leer,
     )
 }
 
 fn capturar_snapshot_raw_con_entradas<F>(
     raiz: PathBuf,
-    ruta_manifiesto: &Path,
-    ruta_invariantes: &Path,
+    rutas_configuracion: [&Path; 2],
     version_motor: &str,
     policy_id: &str,
     entradas: Vec<EntradaSnapshot>,
+    mut presupuesto: PresupuestoConfiguracion,
     mut leer: F,
 ) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
 where
-    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
+    let [ruta_manifiesto, ruta_invariantes] = rutas_configuracion;
     let mut cache_externa = HashMap::new();
     let manifiesto = bytes_fuente(
         &raiz,
         ruta_manifiesto,
         &entradas,
         &mut cache_externa,
+        &mut presupuesto,
         &mut leer,
     )?;
     let invariantes = bytes_fuente(
@@ -384,6 +442,7 @@ where
         ruta_invariantes,
         &entradas,
         &mut cache_externa,
+        &mut presupuesto,
         &mut leer,
     )?;
 
@@ -551,10 +610,11 @@ fn bytes_fuente<F>(
     ruta: &Path,
     entradas: &[EntradaSnapshot],
     cache_externa: &mut HashMap<PathBuf, Arc<[u8]>>,
+    presupuesto: &mut PresupuestoConfiguracion,
     leer: &mut F,
 ) -> Result<FuenteRaw, ErrorSnapshot>
 where
-    F: FnMut(&Path) -> Result<Vec<u8>, ErrorSnapshot>,
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     let absoluta = ruta_absoluta_lexica(ruta)?;
     let relativa_lexica = absoluta
@@ -565,7 +625,7 @@ where
         && let Some(bytes) = bytes_entrada(entradas, relativa)
     {
         return Ok(FuenteRaw {
-            bytes,
+            bytes: cobrar_configuracion(presupuesto, bytes)?,
             ruta_root: Some(relativa.to_owned()),
         });
     }
@@ -583,7 +643,7 @@ where
             let relativa = ruta_relativa(&raiz_real, &archivo_real)?;
             let bytes = bytes_entrada(entradas, &relativa).ok_or(ErrorSnapshot::Io)?;
             return Ok(FuenteRaw {
-                bytes,
+                bytes: cobrar_configuracion(presupuesto, bytes)?,
                 ruta_root: Some(relativa),
             });
         }
@@ -598,16 +658,26 @@ where
     validar_archivo_sin_enlaces(&absoluta)?;
     if let Some(bytes) = cache_externa.get(&absoluta) {
         return Ok(FuenteRaw {
-            bytes: Arc::clone(bytes),
+            bytes: cobrar_configuracion(presupuesto, Arc::clone(bytes))?,
             ruta_root: None,
         });
     }
-    let bytes: Arc<[u8]> = Arc::from(leer(&absoluta)?);
+    let maximo_lectura = presupuesto.maximo_lectura()?;
+    let bytes: Arc<[u8]> = Arc::from(leer(&absoluta, maximo_lectura)?);
+    let bytes = cobrar_configuracion(presupuesto, bytes)?;
     cache_externa.insert(absoluta, Arc::clone(&bytes));
     Ok(FuenteRaw {
         bytes,
         ruta_root: None,
     })
+}
+
+fn cobrar_configuracion(
+    presupuesto: &mut PresupuestoConfiguracion,
+    bytes: Arc<[u8]>,
+) -> Result<Arc<[u8]>, ErrorSnapshot> {
+    presupuesto.cobrar(bytes.len())?;
+    Ok(bytes)
 }
 
 fn ruta_relativa(raiz: &Path, absoluta: &Path) -> Result<String, ErrorSnapshot> {
@@ -842,9 +912,9 @@ ignorados = ["ignored.md"]
             &root.path().join("invariants.smt2"),
             "engine-test/1",
             "policy-test/1",
-            |path| {
+            |path, maximo_lectura| {
                 *lecturas.entry(path.to_path_buf()).or_default() += 1;
-                leer_archivo_regular(path)
+                leer_archivo_regular_limitado(path, maximo_lectura)
             },
         )
         .unwrap();
@@ -861,6 +931,150 @@ ignorados = ["ignored.md"]
         assert!(snapshot.fuentes_invariantes().is_empty());
         assert!(!format!("{snapshot:?}").contains("snapshot-test"));
         assert!(!format!("{snapshot:?}").contains("knowledge/a.md"));
+    }
+
+    #[test]
+    fn presupuesto_configuracion_cuenta_root_y_fuente_externa_hasta_el_limite() {
+        for (bytes_externos, debe_exceder) in [(&b"abc"[..], false), (&b"SECR"[..], true)] {
+            let temporal = tempdir().unwrap();
+            let root = temporal.path().join("bundle");
+            fs::create_dir(&root).unwrap();
+            let manifiesto = root.join("manifest.toml");
+            let invariantes = temporal.path().join("private-config-canary");
+            fs::write(&manifiesto, b"root").unwrap();
+            fs::write(&invariantes, bytes_externos).unwrap();
+            let mut lecturas = HashMap::<PathBuf, usize>::new();
+            let mut maximo_externo = None;
+
+            let resultado = capturar_snapshot_raw_con_lector_y_limite(
+                &root,
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+                7,
+                |path, maximo_lectura| {
+                    *lecturas.entry(path.to_path_buf()).or_default() += 1;
+                    if path == invariantes.as_path() {
+                        maximo_externo = Some(maximo_lectura);
+                    }
+                    leer_archivo_regular_limitado(path, maximo_lectura)
+                },
+            );
+
+            assert_eq!(
+                lecturas.get(&manifiesto),
+                Some(&1),
+                "el root se lee una vez"
+            );
+            assert_eq!(lecturas.get(&invariantes), Some(&1));
+            assert_eq!(maximo_externo, Some(4), "restante más el byte centinela");
+            if debe_exceder {
+                let error = resultado.unwrap_err();
+                assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+                assert!(!format!("{error:?}").contains("private-config-canary"));
+                assert!(!error.to_string().contains("SECR"));
+            } else {
+                let raw = resultado.unwrap();
+                assert_eq!(&*raw.manifiesto_raw, b"root");
+                assert_eq!(&*raw.invariantes_raw, b"abc");
+            }
+        }
+    }
+
+    #[test]
+    fn presupuesto_restante_cero_admite_configuracion_externa_vacia() {
+        for (bytes_externos, debe_exceder) in [(&b""[..], false), (&b"x"[..], true)] {
+            let temporal = tempdir().unwrap();
+            let root = temporal.path().join("bundle");
+            fs::create_dir(&root).unwrap();
+            let manifiesto = root.join("manifest.toml");
+            let invariantes = temporal.path().join("invariants.smt2");
+            fs::write(&manifiesto, b"root").unwrap();
+            fs::write(&invariantes, bytes_externos).unwrap();
+            let mut maximo_externo = None;
+
+            let resultado = capturar_snapshot_raw_con_lector_y_limite(
+                &root,
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+                4,
+                |path, maximo_lectura| {
+                    if path == invariantes.as_path() {
+                        maximo_externo = Some(maximo_lectura);
+                    }
+                    leer_archivo_regular_limitado(path, maximo_lectura)
+                },
+            );
+
+            assert_eq!(maximo_externo, Some(1));
+            if debe_exceder {
+                assert_eq!(
+                    resultado.unwrap_err(),
+                    ErrorSnapshot::LimiteInventarioExcedido
+                );
+            } else {
+                assert_eq!(&*resultado.unwrap().invariantes_raw, b"");
+            }
+        }
+    }
+
+    #[test]
+    fn cache_externa_lee_una_vez_y_cobra_cada_campo_logico() {
+        for (limite, debe_exceder) in [(8, false), (7, true)] {
+            let temporal = tempdir().unwrap();
+            let root = temporal.path().join("bundle");
+            fs::create_dir(&root).unwrap();
+            let externa = temporal.path().join("shared-config");
+            fs::write(&externa, b"raw!").unwrap();
+            let mut lecturas_externas = 0;
+            let mut maximo_externo = None;
+
+            let resultado = capturar_snapshot_raw_con_lector_y_limite(
+                &root,
+                &externa,
+                &externa,
+                "engine/1",
+                "policy/1",
+                limite,
+                |path, maximo_lectura| {
+                    if path == externa.as_path() {
+                        lecturas_externas += 1;
+                        maximo_externo = Some(maximo_lectura);
+                    }
+                    leer_archivo_regular_limitado(path, maximo_lectura)
+                },
+            );
+
+            assert_eq!(lecturas_externas, 1);
+            assert_eq!(maximo_externo, Some(limite + 1));
+            if debe_exceder {
+                assert_eq!(
+                    resultado.unwrap_err(),
+                    ErrorSnapshot::LimiteInventarioExcedido
+                );
+            } else {
+                let raw = resultado.unwrap();
+                assert_eq!(&*raw.manifiesto_raw, b"raw!");
+                assert_eq!(&*raw.invariantes_raw, b"raw!");
+            }
+        }
+    }
+
+    #[test]
+    fn presupuesto_configuracion_detecta_overflow_con_error_redactado() {
+        let mut presupuesto = PresupuestoConfiguracion::nuevo(usize::MAX);
+        presupuesto.cobrar(usize::MAX).unwrap();
+        let error = presupuesto.cobrar(1).unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        assert_eq!(
+            PresupuestoConfiguracion::nuevo(usize::MAX).maximo_lectura(),
+            Err(ErrorSnapshot::LongitudExcedida)
+        );
     }
 
     #[test]
@@ -1748,10 +1962,10 @@ ignorados = ["ignored.md"]
             &root_case_alias.join("INVARIANTS.SMT2"),
             "engine/1",
             "policy/1",
-            |path| {
+            |path, maximo_lectura| {
                 let real = fs::canonicalize(path).unwrap();
                 *lecturas.entry(real).or_default() += 1;
-                leer_archivo_regular(path)
+                leer_archivo_regular_limitado(path, maximo_lectura)
             },
         )
         .unwrap();
