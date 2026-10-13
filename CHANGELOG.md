@@ -119,13 +119,12 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   comparan átomos y anexos, y la segunda serialización conserva los bytes de
   los tres Markdown. `validate` y `check` se ejecutan solo sobre ese candidato
   corregido: 3 nodos, 2 aristas y `failed=0`.
-- La evidencia sigue siendo parcial. No hay fixture durable de la historia
-  arquitectónica ni runner autónomo de la demo pública con fixture durable;
-  tampoco hay goldens ni comparación con ellos. `demo_arquitectura` ejecuta
-  un flujo sintético. Este test no prueba rechazo por CLI (el smoke
-  previo sí cubre `admit`/`reject` estáticos), generación automatizada de la
-  corrección ni persistencia del contradictorio. Tampoco prueba `apply`,
-  publicación, atomicidad o recovery; la fase 05 permanece pendiente.
+- La evidencia sigue siendo parcial. No hay runner autónomo de la demo pública
+  con fixture durable ni goldens/comparación con ellos. Este test no prueba
+  rechazo por CLI (el smoke previo sí cubre `admit`/`reject` estáticos),
+  generación automatizada de la corrección ni persistencia del contradictorio.
+  Tampoco prueba `apply`, publicación, atomicidad o recovery; la fase 05
+  permanece pendiente.
 
 ### Límites y seguridad de carga
 

@@ -213,14 +213,13 @@ que una segunda serialización conserva los bytes de los tres Markdown.
 Después ejecuta CLI `validate` y `check` solo sobre el corregido: 3 nodos, 2
 aristas y `failed=0`.
 
-No hay fixture durable de la historia arquitectónica ni runner autónomo de la
-demo pública con fixture durable; tampoco hay goldens ni comparación golden.
-`demo_arquitectura` ejecuta un flujo sintético y no deja una fixture durable.
-El test no comprueba el rechazo por CLI (que sí cubre el smoke anterior),
-generación automatizada de la corrección ni persistencia del contradictorio.
-Tampoco demuestra `apply`, publicación, atomicidad o recovery. La evidencia
-conjunta sigue siendo parcial: fase 05 pendiente, todos sus criterios de
-aceptación abiertos y progreso maestro en 3/9.
+No hay runner autónomo de la demo pública con fixture durable ni
+goldens/comparación golden. El test no comprueba el rechazo por CLI (que sí
+cubre el smoke anterior), generación automatizada de la corrección ni
+persistencia del contradictorio. Tampoco demuestra `apply`, publicación,
+atomicidad o recovery. La evidencia conjunta sigue siendo parcial: fase 05
+pendiente, todos sus criterios de aceptación abiertos y progreso maestro en
+3/9.
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
