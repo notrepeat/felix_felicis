@@ -261,13 +261,13 @@ fn hash_field(hash: &mut Sha256, name: &[u8], value: &[u8]) -> Result<(), ErrorS
 /// comparadas sin normalizar caso ni Unicode; todos esos casos devuelven
 /// [`ErrorSnapshot::RutaNoRepresentable`].
 ///
-/// Antes de ordenar las entradas, aplica al árbol raw cuotas inclusivas de
-/// 100.000 entradas, 128 MiB de contenido raw, profundidad 128 y 16 MiB de
-/// rutas UTF-8 acumuladas. Exceder una cuota devuelve
+/// Antes de validar u ordenar el árbol, limita a 128 MiB la suma de
+/// `manifiesto_raw` e `invariantes_raw`. El árbol raw tiene además cuotas
+/// inclusivas de 100.000 entradas, 128 MiB de contenido raw, profundidad 128 y
+/// 16 MiB de rutas UTF-8 acumuladas. Exceder una cuota devuelve
 /// [`ErrorSnapshot::LimiteInventarioExcedido`] (`snapshot_resource_limit`).
-/// Estas cuotas no limitan `manifiesto_raw`, `invariantes_raw`, `version_motor`
-/// ni `policy_id`. Los tokens v1 de árboles admitidos conservan el mismo
-/// framing y bytes.
+/// `version_motor` y `policy_id` no tienen esta cuota. Los tokens v1 de
+/// entradas admitidas conservan el mismo framing y bytes.
 pub fn calcular_token_snapshot(
     version_motor: &str,
     policy_id: &str,
@@ -293,6 +293,7 @@ fn calcular_token_snapshot_con_limites(
     entradas: &[EntradaSnapshot],
     limites: LimitesInventario,
 ) -> Result<SnapshotToken, ErrorSnapshot> {
+    validar_presupuesto_configuracion(manifiesto_raw, invariantes_raw, limites.bytes_raw)?;
     let ordenadas = ordenar_y_validar_rutas_con_limites(entradas, limites)?;
 
     let mut hash = Sha256::new();
@@ -316,6 +317,14 @@ fn calcular_token_snapshot_con_limites(
     }
 
     Ok(SnapshotToken(hash.finalize().into()))
+}
+
+fn validar_presupuesto_configuracion(
+    manifiesto_raw: &[u8],
+    invariantes_raw: &[u8],
+    limite: usize,
+) -> Result<(), ErrorSnapshot> {
+    sumar_presupuesto(manifiesto_raw.len(), invariantes_raw.len(), limite).map(|_| ())
 }
 
 /// Calcula la identidad raw del árbol sin agregar contexto externo ni metadatos.
@@ -477,7 +486,7 @@ mod tests {
     fn assert_error_limite<T>(resultado: Result<T, ErrorSnapshot>) {
         let error = resultado
             .err()
-            .expect("el árbol debe exceder el presupuesto");
+            .expect("la operación debe exceder el presupuesto");
         assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
         assert_eq!(error.codigo(), "snapshot_resource_limit");
         assert_eq!(error.to_string(), "snapshot_resource_limit");
@@ -497,8 +506,8 @@ mod tests {
         let token = calcular_token_snapshot_con_limites(
             "CANARY-engine",
             "CANARY-policy",
-            b"CANARY-manifest",
-            b"CANARY-invariants",
+            b"",
+            b"",
             entradas,
             limites,
         );
@@ -693,7 +702,54 @@ mod tests {
     }
 
     #[test]
-    fn presupuesto_del_arbol_detecta_overflow_sin_wraparound() {
+    fn presupuesto_de_configuracion_acepta_limite_inclusivo_y_rechaza_mas_uno() {
+        let limites = limites_prueba(4, 10, 10, usize::MAX);
+        assert!(
+            calcular_token_snapshot_con_limites("engine", "policy", b"ab", b"cd", &[], limites,)
+                .is_ok()
+        );
+
+        assert_error_limite(calcular_token_snapshot_con_limites(
+            "engine",
+            "policy",
+            b"ab",
+            b"cde",
+            &[],
+            limites,
+        ));
+    }
+
+    #[test]
+    fn presupuesto_de_configuracion_se_evalua_antes_de_validar_el_arbol() {
+        let entradas = [archivo("../CANARY", b"")];
+        let error = calcular_token_snapshot_con_limites(
+            "engine",
+            "policy",
+            b"CANARY",
+            b"xxx",
+            &entradas,
+            limites_prueba(8, 10, 10, usize::MAX),
+        );
+
+        assert_error_limite(error);
+    }
+
+    #[test]
+    fn presupuesto_de_configuracion_no_limita_version_motor_ni_policy_id() {
+        let token = calcular_token_snapshot_con_limites(
+            "CANARY-engine-version",
+            "CANARY-policy-id",
+            b"",
+            b"",
+            &[],
+            limites_prueba(0, 0, 0, 0),
+        );
+
+        assert!(token.is_ok());
+    }
+
+    #[test]
+    fn sumador_de_presupuesto_detecta_overflow_sin_wraparound() {
         assert_eq!(sumar_presupuesto(usize::MAX, 0, usize::MAX), Ok(usize::MAX));
         assert_eq!(
             sumar_presupuesto(usize::MAX, 1, usize::MAX),
