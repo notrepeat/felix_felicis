@@ -49,21 +49,22 @@ cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifest
 
 El comando usa código 0 para `admit`, 1 para `reject` o `error` y 2 para uso
 inválido. En texto, el resultado va por `stdout` y los diagnósticos por
-`stderr`; con `--format json`, emite un objeto JSON v1 en una sola línea por
-`stdout` y deja `stderr` vacío, siempre que no se solicite `--explain`. Sin esa
-opción, un `reject` informa solo cantidades, no contraejemplos, asignaciones ni
-contenido del bundle. `--explain decide|enumerate` solicita una explicación
-redactada en un pase opt-in separado; en JSON, esa salida usa schema v2. Un
-archivo vacío o solo con comentarios se admite con cero invariantes, por lo que
-no equivale a una comprobación sustantiva.
+`stderr`; con `--format json`, el proceso `universo-cli` escribe un objeto JSON
+en una sola línea por `stdout` y deja su propio `stderr` vacío. El schema es v1
+sin `--explain` y v2 cuando se solicita. Al invocarlo mediante `cargo run`,
+Cargo puede emitir sus propios mensajes de compilación, lanzamiento o fallo.
+Sin `--explain`, un `reject` informa solo cantidades, no contraejemplos,
+asignaciones ni contenido del bundle. `--explain decide|enumerate` solicita una
+explicación redactada en un pase opt-in separado. Un archivo vacío o solo con
+comentarios se admite con cero invariantes, por lo que no equivale a una
+comprobación sustantiva.
 
 En el JSON baseline v1, `status` es `admit`, `reject` o `error`. `summary`
 cuenta las fuentes, instancias expandidas, fórmulas evaluadas y fallidas; es
 `null` en errores. `errors` contiene diagnósticos tipados (`data`, `authorship`
 o `resource`) con código y ubicación cuando aplica. Los errores no incluyen
-texto de fórmulas ni contraejemplos, aunque las rutas de diagnóstico pueden
-ser sensibles y revelar rutas locales o identificadores; no publiques salidas
-privadas.
+texto de fórmulas ni contraejemplos, aunque las rutas de diagnóstico del
+baseline v1 pueden ser sensibles y revelar rutas locales o identificadores.
 
 Para el comando `check`, una admisión de este ejemplo tiene la forma:
 
@@ -104,7 +105,11 @@ Las herramientas reciben rutas locales y leen los bundles; `atomos` muestra
 de archivos. No publiques sus salidas cuando se ejecuten sobre una instancia
 privada. `check` separa errores de autoría, datos y recursos de un rechazo
 semántico. El resultado baseline no incluye contraejemplos; para pedir una
-explicación redactada usa `--explain decide` o `--explain enumerate`.
+explicación redactada usa `--explain decide` o `--explain enumerate`. La salida
+`--explain` omite IDs y etiquetas de entidades, texto de fórmula y rutas en
+diagnósticos de error, pero revela predicados, valores y resultados derivados,
+estructura de reglas, posiciones de fuente y contadores. No publiques salidas
+de `--explain` generadas sobre instancias privadas.
 
 ## Licencia
 
