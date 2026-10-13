@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -75,7 +76,7 @@ fn afirmar_misma_semantica(esperado: &Estructura, actual: &Estructura) {
     assert_eq!(anexos(esperado), anexos(actual));
 }
 
-fn ejecutar_universo(args: &[String]) -> Output {
+fn ejecutar_universo(args: &[&OsStr]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_universo"))
         .args(args)
         .output()
@@ -83,15 +84,14 @@ fn ejecutar_universo(args: &[String]) -> Output {
 }
 
 fn validar(root: &Path, manifiesto: &Path) -> Value {
-    let args = [
-        "validate".to_owned(),
-        root.to_string_lossy().into_owned(),
-        "--manifiesto".to_owned(),
-        manifiesto.to_string_lossy().into_owned(),
-        "--format".to_owned(),
-        "json".to_owned(),
-    ];
-    let salida = ejecutar_universo(&args);
+    let salida = ejecutar_universo(&[
+        OsStr::new("validate"),
+        root.as_os_str(),
+        OsStr::new("--manifiesto"),
+        manifiesto.as_os_str(),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
     assert_eq!(
         salida.status.code(),
         Some(0),
@@ -106,17 +106,16 @@ fn validar(root: &Path, manifiesto: &Path) -> Value {
 }
 
 fn check(root: &Path, manifiesto: &Path, invariantes: &Path) -> Value {
-    let args = [
-        "check".to_owned(),
-        root.to_string_lossy().into_owned(),
-        "--manifiesto".to_owned(),
-        manifiesto.to_string_lossy().into_owned(),
-        "--invariantes".to_owned(),
-        invariantes.to_string_lossy().into_owned(),
-        "--format".to_owned(),
-        "json".to_owned(),
-    ];
-    let salida = ejecutar_universo(&args);
+    let salida = ejecutar_universo(&[
+        OsStr::new("check"),
+        root.as_os_str(),
+        OsStr::new("--manifiesto"),
+        manifiesto.as_os_str(),
+        OsStr::new("--invariantes"),
+        invariantes.as_os_str(),
+        OsStr::new("--format"),
+        OsStr::new("json"),
+    ]);
     assert_eq!(
         salida.status.code(),
         Some(0),
@@ -182,6 +181,7 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
             assert_eq!(instancias.len(), 1);
             assert_eq!(instancias[0].source_index, 0);
             assert_eq!(instancias[0].linea, Some(2));
+            assert_eq!(instancias[0].columna, Some(1));
             assert_eq!(instancias[0].instance_index, None);
         }
         otro => panic!("la dependencia domain→adapter debía rechazarse: {otro:?}"),
@@ -195,6 +195,8 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
     let candidato_rechazado = construir_candidato(&base, &delta_prohibido)
         .expect("el delta prohibido es estructuralmente construible")
         .into_estructura();
+    assert_eq!(base.atomos(), atomos_base);
+    assert_eq!(anexos(&base), anexos_base);
     assert!(candidato_rechazado.atomos().contains(&arista_directa));
 
     let [arista_domain_port, etiqueta_domain_port] = arista_depende("n/domain", "n/port");
