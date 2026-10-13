@@ -147,6 +147,10 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
     for atomo in delta_prohibido.agregar() {
         assert!(atomos_candidato_rechazado.contains(atomo));
     }
+    let estado_contradictorio =
+        cargar_bundle(&fixture_path("states/contradictory"), manifiesto.clone())
+            .unwrap_or_else(|errores| panic!("snapshot contradictorio inválido: {errores:?}"));
+    afirmar_misma_semantica(&candidato_rechazado, &estado_contradictorio);
 
     let delta_correctivo = parsear_delta_json_v1(
         &fs::read_to_string(fixture_path("proposals/valid/delta.json")).unwrap(),
@@ -204,6 +208,9 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
     );
     assert!(!atomos_candidato.contains(etiqueta_arista_retirada));
     assert_eq!(anexos_base, anexos(candidato.estructura()));
+    let estado_corregido = cargar_bundle(&fixture_path("states/corrected"), manifiesto.clone())
+        .unwrap_or_else(|errores| panic!("snapshot corregido inválido: {errores:?}"));
+    afirmar_misma_semantica(candidato.estructura(), &estado_corregido);
 
     let salida = tempfile::tempdir().unwrap();
     serializar_bundle(candidato.estructura(), salida.path()).unwrap();

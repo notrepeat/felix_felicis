@@ -24,8 +24,14 @@ both proposal deltas. It rejects the contradictory proposal in core, builds
 that contradictory candidate in memory to evaluate the explicit correction,
 then serializes and reloads only the corrected candidate. The CLI
 `validate`/`check` calls in the test run only on that corrected candidate; the
-test does not reject this proposal through the CLI or persist the contradictory
-candidate.
+test does not reject this proposal through the CLI or serialize the
+reconstructed in-memory contradictory candidate.
+
+`states/contradictory/` and `states/corrected/` are complete, versioned,
+illustrative snapshots for the states after the respective deltas. The test
+loads and compares them with candidates computed from the base and deltas.
+They are checked-in fixture data, not outputs of `apply` or generated
+corrections.
 
 These CLI commands inspect only the base bundle. They do not load or apply the
 proposal files:
