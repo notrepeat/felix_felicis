@@ -42,6 +42,9 @@ contiene fórmulas diseñadas para el bundle ficticio. La
 intencionalmente falsa y está separada del ejemplo normal; al ejecutarla,
 `check` devuelve `reject` y código 1.
 
+`check` evalúa las invariantes estáticamente sobre el bundle: no modifica ni
+repara archivos, no persiste resultados y no ejecuta recovery.
+
 ```powershell
 cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/rejected-invariants.sx --format json
 cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/rejected-invariants.sx --explain decide --format json
@@ -49,10 +52,12 @@ cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifest
 
 El comando usa código 0 para `admit`, 1 para `reject` o `error` y 2 para uso
 inválido. En texto, el resultado va por `stdout` y los diagnósticos por
-`stderr`; con `--format json`, el proceso `universo-cli` escribe un objeto JSON
-en una sola línea por `stdout` y deja su propio `stderr` vacío. El schema es v1
-sin `--explain` y v2 cuando se solicita. Al invocarlo mediante `cargo run`,
-Cargo puede emitir sus propios mensajes de compilación, lanzamiento o fallo.
+`stderr`; con `--format json` y uso válido, el proceso `universo-cli` escribe un
+objeto JSON en una sola línea por `stdout` y deja su propio `stderr` vacío. Los
+errores de uso no producen JSON y escriben el diagnóstico por `stderr`. El
+schema es v1 sin `--explain` y v2 cuando se solicita. Al invocarlo mediante
+`cargo run`, Cargo puede emitir sus propios mensajes de compilación,
+lanzamiento o fallo.
 Sin `--explain`, un `reject` informa solo cantidades, no contraejemplos,
 asignaciones ni contenido del bundle. `--explain decide|enumerate` solicita una
 explicación redactada en un pase opt-in separado. Un archivo vacío o solo con
@@ -88,7 +93,11 @@ cargo test --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 python tools/check_public_boundary.py
+python tools/check_public_cli_demo.py
 ```
+
+El smoke compila el binario y lo ejecuta directamente para comprobar los
+streams propios de la CLI, aislados de los mensajes del wrapper `cargo run`.
 
 El estudio que fundamenta el diseño comienza en
 [`docs/00-indice.md`](docs/00-indice.md).
