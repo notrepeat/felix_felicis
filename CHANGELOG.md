@@ -60,11 +60,32 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   nombres, tipos y bytes del árbol y los bytes externos, no crea un lockfile
   sibling y funciona con el guard del caller retenido (`writer_lock_busy` para
   un segundo escritor). Si cambió la configuración externa, devuelve `stale`
-  redactado antes de parsear, sin cambios de contenido o namespace. La ruta no
-  hace escrituras intencionales de contenido o namespace, pero estas pruebas
-  no cubren atime, permisos, metadatos ni identidad de objetos. Se conserva
-  TOCTOU y no se garantiza atomicidad ante cambios hostiles; el helper sigue
-  privado, sin caller desde apply/CLI ni simulación pública.
+  redactado antes de parsear, sin cambios de contenido o namespace. La prueba
+  añadida en `a3cc3c9` conserva además un journal sibling y compara los
+  inventarios observados de root, configuración y parent, incluidos los bytes
+  del journal, tanto en match como en stale. También compara el
+  `ArtifactFingerprint` del root (identidad del directorio raíz y digest raw),
+  pero no identidades individuales de archivos o siblings. La ruta no hace
+  escrituras intencionales de contenido o namespace; las pruebas no cubren
+  atime, permisos ni otros metadatos. Se conserva TOCTOU y no se garantiza
+  atomicidad ante cambios hostiles; el helper sigue privado, sin caller desde
+  apply/CLI ni simulación pública.
+
+### Evidencia interna de journal y recuperación
+
+- `eef28f5` amplía la regresión privada del dispatcher a seis combinaciones de
+  `KeepOld` y `RestoreOld` en `Prepared`, `BackupReady` e `Installed`, con una
+  observación inicial por ejecución. `51cd5c4` añade una comparación recursiva
+  del parent: rutas, tipos y bytes de archivos normales; para el lock abierto
+  solo comprueba presencia, tipo y longitud. En `RestoreOld`, el inventario
+  esperado mueve el subárbol de backup a root y retira el journal. Esta
+  cobertura no integra el dispatcher en apply/producción ni completa U7, que
+  sigue parcial. El inventario no comprueba atime, permisos ni otros
+  metadatos; no elimina TOCTOU ni demuestra atomicidad ante cambios hostiles.
+- Matriz workspace independiente sobre `51cd5c4`: Windows, 702 passed/0
+  failed/6 ignored en 37 suites; WSL Ubuntu, 710 passed/0 failed/6 ignored en
+  37 suites. `fmt` y `clippy` pasan en ambos entornos. Estos son conteos del
+  workspace, no resultados focales de las pruebas de U7 o U8.
 
 ### Límites y seguridad de carga
 
