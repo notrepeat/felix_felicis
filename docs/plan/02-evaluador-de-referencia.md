@@ -27,7 +27,7 @@ registrados abajo.
 | Resultado | Esta fase decide verdad/falsedad de fórmulas. Enumerar veredictos explicables y extraer testigos corresponde a fase 03. |
 | Programa vacío | Un archivo vacío o solo con comentarios admite cero invariantes, con todos los conteos en cero; eso no equivale a una política sustantiva. |
 | Privacidad | Un `reject` expone conteos, no asignaciones ni átomos testigo. Errores de datos, autoría y recursos son `error`, nunca rechazo lógico. Los campos `path` pueden revelar rutas locales; trata todos los diagnósticos como potencialmente sensibles y no publiques salidas privadas. |
-| Recursos | Límites por defecto: 32 niveles de fórmula, 64 ligaduras por cuantificador, 100.000 instancias expandidas y 1.000.000 de unidades deterministas de trabajo de evaluación. Agotar una cota produce `error` de tipo `resource`. No son SLA de latencia o memoria ni promesas de rendimiento. |
+| Recursos | Límites por defecto: 32 niveles de fórmula, 64 ligaduras por cuantificador y 100.000 instancias expandidas. `evaluar` conserva 1.000.000 de unidades deterministas por llamada; el `check` CLI baseline reinicia ese límite por fórmula. La cuota agregada de 1.000.000 que `proponer` comparte entre todas las fórmulas expandidas pertenece a fase 04 y está documentada desde `09aee6e`. Agotar una cota de esta fase produce `error` de tipo `resource`. Estas cuotas no son SLA de latencia o memoria ni promesas de rendimiento. |
 
 ## Punto de partida
 

@@ -5,6 +5,19 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
 
 ## Unreleased — candidato a 0.2.0
 
+### Presupuesto de evaluación de propuestas
+
+- `proponer` comparte 1.000.000 de unidades deterministas de evaluación entre
+  todas las fórmulas expandidas de una propuesta. El contador empieza después
+  de construir el candidato, detectar conflictos y completar la expansión;
+  esta última conserva su cuota separada de 100.000 instancias.
+- Si se agota el presupuesto, la propuesta falla con
+  `evaluation_budget_exhausted` y no devuelve un candidato ni un resultado
+  parcial. `evaluar` conserva su presupuesto por llamada y el `check` CLI
+  baseline lo reinicia por fórmula.
+- El límite cubre unidades de evaluación, no el trabajo previo, las copias,
+  memoria o tiempo total.
+
 ### Tokens de snapshot
 
 - El endurecimiento pre-release hace que `calcular_token_snapshot` rechace

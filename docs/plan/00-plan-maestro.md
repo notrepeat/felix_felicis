@@ -12,7 +12,7 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. En `4b94261`, la matriz local U8 registra Windows 694/6 y WSL 702/6 (passed/ignored); no hay CI remoto publicado para ese SHA. CI `38232932504` es histórico para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; ninguno acredita el dispatcher final. |
+| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. En HEAD `09aee6e`, la matriz local workspace registra Windows 698/6 y WSL 706/6 (passed/ignored); no hay CI remoto publicado para ese SHA. CI `38232932504` es histórico para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; esos runs no acreditan HEAD `09aee6e`. |
 | Foco actual | Fase 04, Unidad 7: journal, commit y recovery. U7 incluye `KeepOld` y `RestoreOld` acotadas. El preflight compartido se ejecuta una vez; el dispatcher crate-private solo enruta esas dos filas, sin caller desde apply/producción. No limpia stage ni ejecuta `DiscardNewRestoreOld`, validación de `New`, `Committed` o recovery completo. |
 | Última actualización | 2026-10-13 |
 
@@ -85,7 +85,7 @@ flowchart LR
 
 ## Próximo paso
 
-Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. Un preflight compartido inicial alimenta el dispatcher crate-private, que solo enruta `KeepOld` y `RestoreOld`; aún no hay caller desde apply/producción. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false` en `Prepared`/`BackupReady`/`Installed`. No limpia stage, ejecuta `DiscardNewRestoreOld`, valida `New`, maneja `Committed` ni completa recovery. U5 permanece parcial. U6 aporta root anclado y staging. U8 valida la suma de `manifiesto_raw` e `invariantes_raw` en el consumidor antes de abrir root bajo lock y antes de inventariar; si se excede, `snapshot_resource_limit` es redactado, el root/canary queda intacto y el guard se conserva. Si cabe, el CAS aún precede provenance y parseo. Desde `4b94261`, el constructor fallible de `ConfigRawCapturada` también impone esa suma como invariante, contando cada campo lógico incluso cuando comparte el mismo `Arc`; convierte a `Arc` antes de revisar el tamaño, por lo que no limita lectura ni asignaciones previas. Este chequeo no acota RSS ni I/O antes del lock; el preflight consumidor sigue siendo defensa necesaria. La captura privada por ruta conserva su garantía distinta: acota durante la lectura y admite como máximo el remanente más un byte centinela para fuentes externas. Siguen pendientes el proveedor acotado antes del lock, los callers de apply/CLI y las cotas para `version_motor`/`policy_id`; conexión de captura anclada y staging a apply, escritura filesystem y publicación también siguen pendientes. El límite de evaluación sigue siendo por fórmula, sin cota agregada por propuesta, y requiere hardening antes de prometer un costo total.
+Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. Un preflight compartido inicial alimenta el dispatcher crate-private, que solo enruta `KeepOld` y `RestoreOld`; aún no hay caller desde apply/producción. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false` en `Prepared`/`BackupReady`/`Installed`. No limpia stage, ejecuta `DiscardNewRestoreOld`, valida `New`, maneja `Committed` ni completa recovery. U5 permanece parcial. U6 aporta root anclado y staging. U8 valida la suma de `manifiesto_raw` e `invariantes_raw` en el consumidor antes de abrir root bajo lock y antes de inventariar; si se excede, `snapshot_resource_limit` es redactado, el root/canary queda intacto y el guard se conserva. Si cabe, el CAS aún precede provenance y parseo. Desde `4b94261`, el constructor fallible de `ConfigRawCapturada` también impone esa suma como invariante, contando cada campo lógico incluso cuando comparte el mismo `Arc`; convierte a `Arc` antes de revisar el tamaño, por lo que no limita lectura ni asignaciones previas. Este chequeo no acota RSS ni I/O antes del lock; el preflight consumidor sigue siendo defensa necesaria. La captura privada por ruta conserva su garantía distinta: acota durante la lectura y admite como máximo el remanente más un byte centinela para fuentes externas. Siguen pendientes el proveedor acotado antes del lock, los callers de apply/CLI y las cotas para `version_motor`/`policy_id`; conexión de captura anclada y staging a apply, escritura filesystem y publicación también siguen pendientes.
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
@@ -117,10 +117,11 @@ Verificación de fase 02 registrada: `cargo test -p universo-core` (108 unitaria
 integración); `cargo test -p universo-cli` (8 pruebas de `check` y 14 de CLI);
 clippy en ambos crates, `cargo fmt --all -- --check` y los dos ejemplos
 públicos pasan. Límites: 32 niveles, 64 ligaduras por cuantificador,
-100.000 instancias expandidas y 1.000.000 de unidades deterministas de
-evaluación; no constituyen SLA de latencia o memoria. La fase 03 tiene un
-presupuesto explicativo global de 1.000.000 de unidades dentro del pase opt-in,
-separado del check baseline y no representativo del límite total del proceso.
+100.000 instancias expandidas y 1.000.000 de unidades deterministas por llamada
+a `evaluar`; el `check` CLI baseline reinicia el presupuesto por fórmula. No
+constituyen SLA de latencia o memoria. La fase 03 tiene un presupuesto
+explicativo global de 1.000.000 de unidades dentro del pase opt-in, separado
+del check baseline y no representativo del límite total del proceso.
 Verificación final de fase 03 en HEAD `ccd54b5`: `cargo test --workspace`
 pasó 251 pruebas y 0 fallos. En detalle, `cargo test -p universo-core` pasó
 (151 unitarias y 7 complementarias); `cargo test -p universo-cli` pasó
@@ -174,6 +175,7 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `0ac65d8a7f48d1f7f1376c777c3e3ae2db785ed5` | Valida serialización en memoria de candidatos y overrides `Parent`. |
 | `7dc774726fe1ef89e06110af067cc2d2c37bff6e` | Cubre casos límite del serializador de candidatos `Parent`. |
 | `27289a9a14d5fba8bc0e7b61726e58069bf5bd39` | Añade runtime harness; 1.791 ms en `serializar_candidato` para 1.000 cambios. |
+| `09aee6e8567de43d1165e6d140e47f1c72335361` | `proponer` comparte 1.000.000 de unidades de evaluación entre todas las fórmulas expandidas; el límite inicia tras candidato, conflictos y expansión completa. Expansión conserva el límite separado de 100.000 instancias; agotamiento devuelve `evaluation_budget_exhausted` sin propuesta parcial. Matriz local workspace Windows 698/6 y WSL 706/6 (passed/ignored); sin CI remoto para este SHA. |
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
@@ -210,9 +212,11 @@ Unidad 1. La incidencia v1 no es representable.
 
 El runtime del detector ya registrado usa 1.000 conflictos (334/333/333), 3
 clases resumen y dos muestras únicas orientativas; confirma
-`snapshot_unchanged=true` sin emitir hashes. El presupuesto de evaluación es
-por fórmula, no una cota agregada por propuesta: hardening y medición global
-siguen pendientes, sin promesa de costo total. Todos los commits de los dos
+`snapshot_unchanged=true` sin emitir hashes. Esa medición no cubre el costo de
+evaluación. Desde `09aee6e`, `proponer` comparte su cuota de 1.000.000 entre
+todas las fórmulas expandidas, una vez completados candidato, conflictos y
+expansión; no es una cota del trabajo previo, copias, memoria o tiempo total.
+Todos los commits de los dos
 slices recientes se mantuvieron bajo 400 líneas authored/churn.
 
 Fase 04 sigue en curso y el progreso maestro permanece en 3/9. Unidad 3 queda
@@ -286,5 +290,5 @@ conserva como defensa. Esta comprobación es distinta de la captura privada por
 ruta de `2357a82`, que sí limita la lectura mientras la realiza. El proveedor
 acotado y los callers de apply/CLI siguen pendientes. Apply/publicador
 filesystem y cleanup/restart completos, U9–U10 y soporte transaccional de
-`Type` también siguen pendientes. El presupuesto agregado de evaluación aún
-no tiene cota global.
+`Type` también siguen pendientes. La cuota de evaluación agregada de
+`proponer` está registrada en la evidencia de `09aee6e`.
