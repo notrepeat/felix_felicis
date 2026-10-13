@@ -10,6 +10,12 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
 - El endurecimiento pre-release hace que `calcular_token_snapshot` rechace
   rutas lógicas no representables y duplicados exactos; los tokens v1 de
   entradas válidas conservan sus bytes.
+- `calcular_token_snapshot` y `calcular_digest_raw_tree` aplican antes de
+  ordenar cuotas inclusivas al árbol raw: 100.000 entradas, 128 MiB de
+  contenido raw, profundidad 128 y 16 MiB de rutas UTF-8 acumuladas. Exceder
+  una cuota devuelve `snapshot_resource_limit`. Los tokens v1 dentro de cuota
+  conservan sus bytes; `manifiesto_raw`, `invariantes_raw`, `version_motor` y
+  `policy_id` aún no quedan cubiertos por estas cuotas.
 
 ### Límites y seguridad de carga
 

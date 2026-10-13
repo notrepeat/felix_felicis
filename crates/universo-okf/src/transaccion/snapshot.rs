@@ -260,6 +260,14 @@ fn hash_field(hash: &mut Sha256, name: &[u8], value: &[u8]) -> Result<(), ErrorS
 /// una barra inversa o NUL. También rechaza rutas exactamente duplicadas,
 /// comparadas sin normalizar caso ni Unicode; todos esos casos devuelven
 /// [`ErrorSnapshot::RutaNoRepresentable`].
+///
+/// Antes de ordenar las entradas, aplica al árbol raw cuotas inclusivas de
+/// 100.000 entradas, 128 MiB de contenido raw, profundidad 128 y 16 MiB de
+/// rutas UTF-8 acumuladas. Exceder una cuota devuelve
+/// [`ErrorSnapshot::LimiteInventarioExcedido`] (`snapshot_resource_limit`).
+/// Estas cuotas no limitan `manifiesto_raw`, `invariantes_raw`, `version_motor`
+/// ni `policy_id`. Los tokens v1 de árboles admitidos conservan el mismo
+/// framing y bytes.
 pub fn calcular_token_snapshot(
     version_motor: &str,
     policy_id: &str,
@@ -314,7 +322,11 @@ fn calcular_token_snapshot_con_limites(
 ///
 /// El framing es independiente del token de snapshot y ordena por bytes UTF-8
 /// de ruta. Se validan las rutas aquí porque la API recibe una slice que puede
-/// haberse construido fuera del inventario del filesystem.
+/// haberse construido fuera del inventario del filesystem. Antes de ordenar,
+/// aplica las cuotas inclusivas compartidas: 100.000 entradas, 128 MiB de
+/// contenido raw, profundidad 128 y 16 MiB de rutas UTF-8 acumuladas. Exceder
+/// una cuota devuelve [`ErrorSnapshot::LimiteInventarioExcedido`]
+/// (`snapshot_resource_limit`).
 pub(crate) fn calcular_digest_raw_tree(
     entradas: &[EntradaSnapshot],
 ) -> Result<RawTreeDigest, ErrorSnapshot> {
