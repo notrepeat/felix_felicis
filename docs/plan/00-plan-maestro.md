@@ -256,9 +256,10 @@ drift. El workflow invoca el runner en Linux y Windows; aún no hay resultado de
 CI remoto para este SHA.
 
 El runner comprueba `validate` y `check` en los tres estados versionados, pero
-no reproduce la secuencia de deltas. El test Rust separado rechaza la propuesta
-contradictoria con `proponer`, aplica la corrección explícita y hace round-trip
-del candidato corregido; no crea esos estados mediante `apply`. El testigo solo
+no reproduce la secuencia de deltas. El test Rust separado usa `proponer` para
+rechazar la propuesta contradictoria y evaluar la corrección explícita. Después
+hace round-trip del candidato corregido; no crea esos estados mediante `apply`.
+El testigo solo
 incluye posición de fuente y árbol de predicados, sin nombre de archivo ni
 argumentos/IDs de átomos. No hay caso de vacío por ausencia ni medición de
 duración o RSS; tampoco se demuestra `apply`, publicación, atomicidad o
