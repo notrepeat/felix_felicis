@@ -1,60 +1,19 @@
 use std::ffi::OsStr;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde_json::Value;
 use universo_core::{
-    Atomo, BundlePath, Delta, Estructura, Etiqueta, IdArista, ResultadoPropuesta, Sorte, Sujeto,
-    construir_candidato, parsear_programa, proponer,
+    Atomo, BundlePath, Delta, Estructura, ResultadoPropuesta, Sorte, Sujeto, construir_candidato,
+    parsear_programa, proponer,
 };
-use universo_okf::{cargar_bundle, cargar_manifiesto, serializar_bundle};
-use universo_testkit::bundle_sintetico::Constructor;
+use universo_okf::{cargar_bundle, cargar_manifiesto, parsear_delta_json_v1, serializar_bundle};
 
-const MANIFIESTO: &str = r#"
-version = "demo-arquitectura/1"
-[nodos]
-sortes = ["domain", "port", "adapter", "Retirado", "Patrón"]
-[[aristas]]
-clave = "depends"
-simetrica = false
-destino = "to"
-etiqueta = "kind"
-[layout]
-directorios = ["n"]
-"#;
-
-const INVARIANTE: &str = r#"
-(forall ((e E) (x N) (y N))
-  :guarda (Edge e x y depends)
-  (or (not (Type x domain)) (not (Type y adapter))))
-"#;
-
-fn path(texto: &str) -> BundlePath {
-    BundlePath::nuevo(texto).expect("path sintético válido")
-}
-
-fn arista_depende(origen: &str, destino: &str) -> [Atomo; 2] {
-    let origen = path(origen);
-    let destino = path(destino);
-    let sorte = Sorte::nuevo("depends");
-    let id = IdArista {
-        origen: origen.clone(),
-        sorte: sorte.clone(),
-        destino: destino.clone(),
-        ordinal: 0,
-    };
-    [
-        Atomo::Edge {
-            id: id.clone(),
-            origen,
-            destino,
-            sorte,
-        },
-        Atomo::HasLab {
-            sujeto: Sujeto::Arista(id),
-            etiqueta: Etiqueta::nuevo("dependency"),
-        },
-    ]
+fn fixture_path(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/software-architecture")
+        .join(relative)
 }
 
 fn anexos(estructura: &Estructura) -> Vec<(String, Option<universo_core::Anexo>)> {
@@ -132,37 +91,23 @@ fn check(root: &Path, manifiesto: &Path, invariantes: &Path) -> Value {
 
 #[test]
 fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
-    let base_dir = Constructor::nuevo()
-        .archivo(
-            "n/domain.md",
-            "---\ntype: domain\ntitle: Domain\nfixture-note: preserve domain\n---\nCore domain body.\n",
-        )
-        .archivo(
-            "n/port.md",
-            "---\ntype: port\ntitle: Port\nfixture-note: preserve port\n---\nApplication boundary.\n",
-        )
-        .archivo(
-            "n/adapter.md",
-            "---\ntype: adapter\ntitle: Adapter\nfixture-note: preserve adapter\n---\nExternal adapter.\n",
-        )
-        .escribir();
-    let manifiesto_path = base_dir.path().join("manifest.toml");
-    std::fs::write(&manifiesto_path, MANIFIESTO).unwrap();
-    let invariantes_path = base_dir.path().join("invariants.sx");
-    std::fs::write(&invariantes_path, INVARIANTE).unwrap();
-
-    let manifiesto = cargar_manifiesto(&manifiesto_path).expect("manifiesto sintético válido");
-    let base = cargar_bundle(base_dir.path(), manifiesto.clone())
+    let bundle_root = fixture_path("bundle");
+    let manifiesto_path = fixture_path("manifest.toml");
+    let invariantes_path = fixture_path("invariants/architecture.sx");
+    let manifiesto = cargar_manifiesto(&manifiesto_path).expect("manifiesto de fixture válido");
+    let base = cargar_bundle(&bundle_root, manifiesto.clone())
         .unwrap_or_else(|errores| panic!("bundle base inválido: {errores:?}"));
     for (ruta, sorte) in [
         ("n/domain", "domain"),
         ("n/port", "port"),
         ("n/adapter", "adapter"),
     ] {
-        let id = base.por_path(&path(ruta)).expect("nodo base existente");
+        let path = BundlePath::nuevo(ruta).expect("path base válido");
+        let id = base.por_path(&path).expect("nodo base existente");
         assert_eq!(base.nodo(id).unwrap().tipo, Sorte::nuevo(sorte));
     }
-    let invariantes = parsear_programa(INVARIANTE).expect("invariante público válido");
+    let invariantes_texto = fs::read_to_string(&invariantes_path).unwrap();
+    let invariantes = parsear_programa(&invariantes_texto).expect("invariante público válido");
     let delta_vacio = Delta::nuevo([], []).unwrap();
     let atomos_base = base.atomos();
     let anexos_base = anexos(&base);
@@ -173,9 +118,10 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
     assert_eq!(base.atomos(), atomos_base);
     assert_eq!(anexos(&base), anexos_base);
 
-    let [arista_directa, etiqueta_directa] = arista_depende("n/domain", "n/adapter");
-    let delta_prohibido =
-        Delta::nuevo([arista_directa.clone(), etiqueta_directa.clone()], []).unwrap();
+    let delta_prohibido = parsear_delta_json_v1(
+        &fs::read_to_string(fixture_path("proposals/contradictory/delta.json")).unwrap(),
+    )
+    .expect("delta contradictorio felix-delta-v1 válido");
     match proponer(&base, &delta_prohibido, &invariantes).unwrap() {
         ResultadoPropuesta::RechazadaInvariantes(instancias) => {
             assert_eq!(instancias.len(), 1);
@@ -190,43 +136,74 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
     assert_eq!(anexos(&base), anexos_base);
 
     // `proponer` devuelve el rechazo, no un candidato. La prueba reconstruye
-    // esta fixture solo en memoria para aplicar la corrección conocida; nunca
-    // persiste ni vuelve a leer el candidato contradictorio.
+    // solo en memoria el estado descrito por la fixture para situar la
+    // corrección explícita; nunca persiste ni vuelve a leerlo.
     let candidato_rechazado = construir_candidato(&base, &delta_prohibido)
         .expect("el delta prohibido es estructuralmente construible")
         .into_estructura();
     assert_eq!(base.atomos(), atomos_base);
     assert_eq!(anexos(&base), anexos_base);
-    assert!(candidato_rechazado.atomos().contains(&arista_directa));
+    let atomos_candidato_rechazado = candidato_rechazado.atomos();
+    for atomo in delta_prohibido.agregar() {
+        assert!(atomos_candidato_rechazado.contains(atomo));
+    }
 
-    let [arista_domain_port, etiqueta_domain_port] = arista_depende("n/domain", "n/port");
-    let [arista_port_adapter, etiqueta_port_adapter] = arista_depende("n/port", "n/adapter");
-    let delta_correctivo = Delta::nuevo(
-        [
-            arista_domain_port.clone(),
-            etiqueta_domain_port.clone(),
-            arista_port_adapter.clone(),
-            etiqueta_port_adapter.clone(),
-        ],
-        [arista_directa.clone()],
+    let delta_correctivo = parsear_delta_json_v1(
+        &fs::read_to_string(fixture_path("proposals/valid/delta.json")).unwrap(),
     )
-    .unwrap();
+    .expect("delta correctivo felix-delta-v1 válido");
     // La fixture aporta la corrección; Felix evalúa la propuesta recibida.
     let candidato = match proponer(&candidato_rechazado, &delta_correctivo, &invariantes).unwrap() {
         ResultadoPropuesta::Admitida(candidato) => candidato,
         otro => panic!("la corrección explícita debía admitirse: {otro:?}"),
     };
     let atomos_candidato = candidato.estructura().atomos();
-    assert!(!atomos_candidato.contains(&arista_directa));
-    assert!(!atomos_candidato.contains(&etiqueta_directa));
-    for atomo in [
-        &arista_domain_port,
-        &etiqueta_domain_port,
-        &arista_port_adapter,
-        &etiqueta_port_adapter,
-    ] {
+    for atomo in delta_correctivo.agregar() {
         assert!(atomos_candidato.contains(atomo));
     }
+    for atomo in delta_correctivo.retirar() {
+        assert!(!atomos_candidato.contains(atomo));
+    }
+    let arista_retirada = delta_correctivo
+        .retirar()
+        .iter()
+        .find_map(|atomo| match atomo {
+            Atomo::Edge { id, .. } => Some(id),
+            _ => None,
+        })
+        .expect("la corrección retira la arista directa");
+    let etiqueta_arista_retirada = delta_prohibido
+        .agregar()
+        .iter()
+        .find(|atomo| {
+            matches!(
+                *atomo,
+                Atomo::HasLab {
+                    sujeto: Sujeto::Arista(id),
+                    ..
+                } if id == arista_retirada
+            )
+        })
+        .expect("el delta contradictorio etiqueta la arista directa");
+    let mut atomos_esperados = atomos_base.clone();
+    for atomo in delta_prohibido.retirar() {
+        atomos_esperados.retain(|existente| existente != atomo);
+    }
+    atomos_esperados.extend(delta_prohibido.agregar().iter().cloned());
+    for atomo in delta_correctivo.retirar() {
+        atomos_esperados.retain(|existente| existente != atomo);
+    }
+    atomos_esperados.retain(|atomo| atomo != etiqueta_arista_retirada);
+    atomos_esperados.extend(delta_correctivo.agregar().iter().cloned());
+    atomos_esperados.sort_unstable();
+    assert_eq!(atomos_candidato, atomos_esperados);
+    assert!(
+        atomos_candidato
+            .iter()
+            .all(|atomo| { !matches!(atomo, Atomo::Edge { id, .. } if id == arista_retirada) })
+    );
+    assert!(!atomos_candidato.contains(etiqueta_arista_retirada));
+    assert_eq!(anexos_base, anexos(candidato.estructura()));
 
     let salida = tempfile::tempdir().unwrap();
     serializar_bundle(candidato.estructura(), salida.path()).unwrap();
