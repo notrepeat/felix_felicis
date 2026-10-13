@@ -1,0 +1,7 @@
+REJECT: 1 fuentes, 1 instancias, 1 evaluadas, 1 fallidas
+EXPLANATIONS mode=decide objects=1 truncated=false reason=none
+  budget total=272 limit=1000000 semantic=46 evidence=215 aggregator=11
+  object source=0 line=2 column=1 instance=none
+    counterexample: {"instances":[{"body":null,"guard":{"predicate":"edge","rule":"atom","value":false},"value":true},{"body":null,"guard":{"predicate":"edge","rule":"atom","value":false},"value":true},{"body":null,"guard":{"predicate":"edge","rule":"atom","value":false},"value":true},{"body":{"children":[{"inner":{"predicate":"type","rule":"atom","value":true},"rule":"not","value":false},{"inner":{"predicate":"type","rule":"atom","value":true},"rule":"not","value":false}],"rule":"or","value":false},"guard":{"predicate":"edge","rule":"atom","value":true},"value":false}],"rule":"forall","search_exhausted":false,"value":false}
+    presence_core: null
+    gap: null

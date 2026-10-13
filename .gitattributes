@@ -1,0 +1,2 @@
+# Preserve byte-exact CLI stdout goldens across Windows and Unix checkouts.
+examples/software-architecture/expected/* text eol=lf

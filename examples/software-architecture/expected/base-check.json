@@ -1,0 +1,1 @@
+{"command":"check","errors":[],"explanations":{"budget":{"aggregator_units":1,"consumed":23,"evidence_units":2,"limit":1000000,"semantic_units":20},"mode":"decide","objects":[],"reason":null,"truncated":false},"schema_version":2,"status":"admit","summary":{"evaluated":1,"failed":0,"instances":1,"sources":1}}
