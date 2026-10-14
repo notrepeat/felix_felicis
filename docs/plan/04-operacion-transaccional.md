@@ -1161,4 +1161,8 @@ está completa con el subconjunto de propuesta/evaluación que necesitaba. El
 foco vigente sigue en Fase 04, Unidad 7; cerrar el recovery transaccional de
 esta fase no es un requisito pendiente de la demo 05.
 
+La decisión de contexto privado para volver a validar una admisión `New`, y
+los pendientes de su almacenamiento, se documentan en
+[04-contexto-admision.md](04-contexto-admision.md).
+
 [05 — Demo pública](05-demo-publica.md) (completa).

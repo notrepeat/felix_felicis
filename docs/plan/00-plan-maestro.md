@@ -216,6 +216,10 @@ El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
 ni resultados parciales por agotamiento de recurso.
 
+La decisión de replay privado de `New` y sus pendientes se registran en
+[04-contexto-admision.md](04-contexto-admision.md); el codec
+`felix-journal-v1` y el comportamiento del journal v1 permanecen intactos.
+
 ### Auditoría de prerequisitos U7 (2026-10-14)
 
 `752f56e` y `9f48304` implementan una guardia parcial, no la frontera completa
