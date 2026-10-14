@@ -121,8 +121,8 @@ sibling de staging: comprueba el parent del root antes de `mkdir` y el parent
 del stage tras reabrirlo por handle. Linux compara `STATX_MNT_ID`; Windows,
 `VolumeSerialNumber`. Error, dato ausente o mismatch fallan cerrado. Cualquier
 error desde el intento de `mkdir` puede dejar un sibling vacío huérfano
-posible; el error público conserva el código estable `stage_io`, se propaga un
-indicador diagnóstico sin cambiar la API pública; no se devuelve capability
+posible; el error interno conserva el código estable `stage_io` y propaga el
+indicador diagnóstico sin ampliar la API pública; no se devuelve capability
 parcial y no hay cleanup automático. El indicador aún no tiene consumidor
 productivo. Esto no completa la frontera de mounts/volumes ni modifica journal,
 recovery, cleanup o walkers.
