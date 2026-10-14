@@ -50,6 +50,18 @@ recovery, cleanup, paso del runner ni orden de limpieza. La limpieza del
 backup `PartialOld` se pospone porque no hay una frontera segura contra cruce
 de mount, bind mount o FUSE. Es un límite/bloqueo de diseño, no un
 comportamiento probado por el commit.
+
+Desde `bb06df3`, el cleanup explícito de `StageAnclado` con capability tiene
+guardia parcial de scope. Captura el scope del parent; verifica la raíz, los
+handles de archivo/directorio y las reaperturas durante el preflight; y vuelve
+a comprobar parent y objetivo antes de cada unlink/rmdir, reapertura y rmdir
+final. Error, ausencia o mismatch del probe fallan cerrado como
+`stage_cleanup_io`. Si cleanup falla, `ErrorLimpiezaStage` conserva el
+`StageAnclado` para retry; un error posterior a unlink puede dejar borrado
+parcial. Las carreras externas entre check y operación siguen fuera del
+contrato. CI `38576523094`
+pasó para este commit en Linux y Windows. Esto no cubre cleanup de sibling
+huérfano, recovery ni una frontera general de mounts.
 U8 añade captura por ruta acotada y privada para simulación y pruebas y, en
 `63e59d1`, preflight consumidor de la suma de
 configuración antes de abrir el root bajo lock y antes de clonar/inventariar
@@ -113,8 +125,9 @@ de conflictos y expansión; tampoco acota memoria ni tiempo total.
 ## Auditoría de prerequisitos de U7 (2026-10-14)
 
 Este registro separa la evidencia reciente de identidad Windows de las
-condiciones de diseño aún pendientes para cleanup, validación y recovery. U7 y
-la fase 04 siguen en curso; el progreso maestro permanece en 4/9.
+condiciones de diseño aún pendientes para la frontera general de scope,
+validación y recovery. U7 y la fase 04 siguen en curso; el progreso maestro
+permanece en 4/9.
 
 Los commits `752f56e` y `9f48304` añaden una guardia parcial para crear el
 sibling de staging: comprueba el parent del root antes de `mkdir` y el parent
@@ -123,9 +136,10 @@ del stage tras reabrirlo por handle. Linux compara `STATX_MNT_ID`; Windows,
 error desde el intento de `mkdir` puede dejar un sibling vacío huérfano
 posible; el error interno conserva el código estable `stage_io` y propaga el
 indicador diagnóstico sin ampliar la API pública; no se devuelve capability
-parcial y no hay cleanup automático. El indicador aún no tiene consumidor
-productivo. Esto no completa la frontera de mounts/volumes ni modifica journal,
-recovery, cleanup o walkers.
+parcial y no hay cleanup automático del posible sibling. El indicador aún no
+tiene consumidor productivo. Esto no completa la frontera de mounts/volumes ni
+modifica journal, recovery o walkers; el cleanup explícito de un stage con
+capability se aborda parcialmente en `bb06df3`.
 
 Los commits `401a4be` y `316bdb8` hacen que un `FILE_ID_INFO` exitoso con un
 `FileId` de 16 bytes todo cero o todo `0xFF` falle como identidad requerida por
@@ -140,17 +154,20 @@ pasó para `cedc11c` en Linux (`verify`) y Windows (`verify-windows`).
 
 La guardia parcial de `752f56e`/`9f48304` compara por handle el parent del root
 antes de crear el sibling y el parent del stage reabierto después; en Linux
-usa `STATX_MNT_ID` y en Windows `VolumeSerialNumber`. No persiste el mount ID.
-Error, dato ausente o mismatch fallan cerrado, pero esta cobertura de una
-operación no es una frontera completa de mount/volume. La garantía completa
-debe obtenerse de handles y cubrir inventario anclado, captura, staging
-descendente, cleanup y recovery. No hay fallback por ruta ni por `st_dev`; la
-ausencia o error al comprobar scope debe fallar cerrado. El walker de rutas del
-bundle pertenece a otra familia y no queda cubierto por este alcance. La
-cobertura determinista del sentinel `FileId` de Windows ya está registrada
-arriba. Siguen pendientes la prueba de bind mount Linux que comparte `st_dev`,
-los mounts anidados y la integración en esas operaciones. Una prueba aislada
-no demostraría pertenencia general al mismo volume/mount.
+usa `STATX_MNT_ID` y en Windows `VolumeSerialNumber`. `bb06df3` reutiliza esa
+probe en el cleanup explícito de `StageAnclado`: toma scope del parent y
+preflight/revalida por handle la raíz, archivos, directorios y reaperturas
+antes de borrar. No persiste el mount ID. Error, dato ausente o mismatch fallan
+cerrado, pero estas guardias parciales no son una frontera completa de
+mount/volume. Aún falta integrar scope en inventario anclado, captura, staging
+descendente y recovery; tampoco se autoriza cleanup del sibling huérfano sin
+capability ni existe consumidor productivo del indicador. No hay fallback por
+ruta ni por `st_dev`; la ausencia o error al comprobar scope debe fallar
+cerrado. El walker de rutas del bundle pertenece a otra familia y no queda
+cubierto. La cobertura determinista del sentinel `FileId` de Windows ya está
+registrada arriba. Siguen pendientes la prueba de bind mount Linux que comparte
+`st_dev` y los mounts anidados. Ninguna prueba aislada demostraría pertenencia
+general al mismo volume/mount.
 
 Todo error que se produzca desde el intento de `mkdir` puede dejar un sibling
 vacío huérfano posible, incluso si falla la apertura posterior por handle. Se
@@ -174,9 +191,9 @@ La siguiente secuencia se divide en unidades pequeñas, en este orden:
 
 1. Completar y probar la frontera de scope, incluidos bind mount real y mounts
    anidados.
-2. Integrar la frontera en inventario, captura, staging descendente, cleanup y
-   recovery; añadir un consumidor productivo del indicador de sibling huérfano
-   posible.
+2. Integrar la frontera en inventario, captura, staging descendente y recovery;
+   completar los demás caminos de cleanup y añadir un consumidor productivo
+   del indicador de sibling huérfano posible.
 3. Prueba de admisión sellada o revalidación con sus entradas.
 4. Validación de identidad y contenido del root `New`.
 5. Habilitar `Committed` solo después de esa validación.
@@ -967,6 +984,8 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | `752f56e` | Añade guardia parcial de scope a la creación del sibling de staging: compara root-parent antes de `mkdir` y parent-stage después de reabrir por handle; Linux `STATX_MNT_ID`, Windows `VolumeSerialNumber`; error, ausencia o mismatch fallan cerrado. Solo cubre esa operación; no prueba bind mounts ni mounts anidados. | U7/04 siguen parciales. No cubre inventario, captura, staging descendente, cleanup o recovery; no hay consumidor productivo del indicador de sibling huérfano posible. |
 | 2026-10-14 | `9f48304` | Conserva `stage_io` cuando falla `mkdir_at` y propaga el diagnóstico de sibling vacío huérfano posible para cualquier error desde el intento de `mkdir`; no devuelve capability parcial ni ejecuta cleanup automático. | Error/ausencia/mismatch fallan cerrado. El indicador aún no tiene consumidor productivo; no modifica journal, recovery, cleanup o walkers. |
 | 2026-10-14 | CI `38571014167` | Éxito para `9f4830411b4ae5d7964320e1ad87e6eaac9b00a5`: jobs `verify` Linux y `verify-windows` completados; pruebas del workspace, fmt, clippy y frontera pública pasan. | Evidencia del commit; no acredita bind mount real, mounts anidados ni integración de la frontera en las operaciones descendentes. U7/04 siguen parciales y el progreso global continúa en 4/9. |
+| 2026-10-14 | `bb06df3` | El cleanup explícito de `StageAnclado` con capability captura scope del parent, preflight/verifica root y handles por scope, y revalida parent/objeto antes de cada unlink/rmdir/reapertura y rmdir final. Error, ausencia o mismatch fallan con `stage_cleanup_io`; el error conserva la capability para retry. Un fallo tras unlink puede dejar borrado parcial; carreras externas check→operación siguen fuera del contrato. | Cleanup mount-aware parcial, no frontera general: bind mount real, mounts anidados, inventario, captura, staging descendente, recovery y consumidor productivo del indicador de sibling huérfano posible siguen pendientes. U7/04 permanecen parciales; progreso 4/9. |
+| 2026-10-14 | CI `38576523094` | Éxito para `bb06df309c633f25b15f3e3b3bfd74c24b06a076`; jobs `verify` Linux y `verify-windows` completados, con workspace, fmt, clippy y frontera pública aprobados. | Acredita el commit, no bind mount real, mounts anidados ni integración general de scope. U7/04 siguen parciales; progreso 4/9. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
@@ -976,7 +995,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. La captura por ruta conserva TOCTOU; el root anclado de U6 está probado por separado |
 | 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
 | 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
-| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: preflight compartido y dispatcher crate-private para filas exactas `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` con root `Old`, backup `Absent` y validación false en tres fases. Desde `c888347`, `RestoreOld` acepta root `Absent`, backup `Old`, validación false y stage `Absent`/`New`/`PartialNew` en `Prepared`/`BackupReady`/`Installed`; reabre por identidad durable (digest completo para `New`), limpia/reobserva, restaura backup y retira journal al final; cleanup ambiguo continúa solo si la reobservación confirma stage ausente, y los restos parciales conservan journal para retry. Desde `c763f85`, `DiscardNewRestoreOld` acepta exactamente `BackupReady` + root `New` + backup `Old` + stage `Absent` + validación false/true, o `Installed` con validación false; renombra root a stage, reobserva, limpia/reobserva y restaura old. Root `New` junto a cualquier stage sibling falla cerrado. Ocho pruebas/casos de recovery nuevos visibles; CI `38509652854` pasa Linux 723/0/6 y Windows 715/0/6 (38 resúmenes), tools 7/OS, fmt, clippy y frontera pública. No hay caller desde apply/producción. `KeepValidated`, `Committed`, otros estados no soportados y el ciclo completo de recovery siguen pendientes; U7 conserva alcance parcial. |
+| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: preflight compartido y dispatcher crate-private para filas exactas `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` con root `Old`, backup `Absent` y validación false en tres fases. Desde `c888347`, `RestoreOld` acepta root `Absent`, backup `Old`, validación false y stage `Absent`/`New`/`PartialNew` en `Prepared`/`BackupReady`/`Installed`; reabre por identidad durable (digest completo para `New`), limpia/reobserva, restaura backup y retira journal al final; cleanup ambiguo continúa solo si la reobservación confirma stage ausente, y los restos parciales conservan journal para retry. Desde `c763f85`, `DiscardNewRestoreOld` acepta exactamente `BackupReady` + root `New` + backup `Old` + stage `Absent` + validación false/true, o `Installed` con validación false; renombra root a stage, reobserva, limpia/reobserva y restaura old. Desde `bb06df3`, cleanup explícito de `StageAnclado` verifica scope del parent y de cada handle por preflight y antes de las operaciones destructivas; falla cerrado con `stage_cleanup_io` y conserva capability para retry, pero puede dejar borrado parcial tras unlink. Root `New` junto a cualquier stage sibling falla cerrado. Ocho pruebas/casos de recovery nuevos visibles; CI `38509652854` pasa Linux 723/0/6 y Windows 715/0/6 (38 resúmenes), tools 7/OS, fmt, clippy y frontera pública. No hay caller desde apply/producción. `KeepValidated`, `Committed`, otros estados no soportados y el ciclo completo de recovery siguen pendientes; U7 conserva alcance parcial. |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | U8 sigue parcial: helper crate-private de CAS bajo lock (`aa5d496`) abre root desde `lock.ubicacion()` y delega al CAS anclado; pruebas match/stale/lock/no mutación (`8250f0d`) y el caso root dejó de ser directorio → `TipoNoAdmitido` / `snapshot_entry_type_not_allowed`, redactado (`08e4659`). `SnapshotToken::from_hex` público (`885657aa`; pruebas `032668e`) acepta exactamente 64 bytes ASCII `0-9a-f` en minúscula y devuelve el error fijo/redactado `snapshot_token_invalid`. El commit `56a6516` limita con cuotas inclusivas el árbol raw en ambos calculadores antes del ordenamiento; los tokens v1 dentro de cuota conservan sus bytes. `02c7adde` añade al token una cuota combinada e inclusiva de 128 MiB para `manifiesto_raw` + `invariantes_raw`, independiente de la cuota del árbol y comprobada antes de validarlo/ordenarlo y de iniciar el hashing; `version_motor` y `policy_id` siguen sin cota. Esta validación de slices recibidas no promete un límite de memoria total ni del parser. `2357a82` limita durante la lectura la configuración obtenida por la variante privada de captura por ruta: suma los dos campos bajo una cuota inclusiva independiente de 128 MiB; reutiliza buffers del root, y cachea una ruta externa absoluta normalizada para leerla una vez, pero la cobra por cada campo que la usa. La lectura externa admite el remanente más el centinela. `63e59d1` añade el preflight consumidor antes de abrir root bajo lock y antes de clonar/inventariar en la captura anclada; el exceso da `snapshot_resource_limit` redactado, deja root/canary intacto y conserva el guard. Dentro de cuota, el CAS continúa antes de provenance/parseo. `4b94261` hace fallible `ConfigRawCapturada::nueva` y aplica la cuota como invariante después de convertir a `Arc<[u8]>`; cuenta por campo lógico, incluso con un `Arc` compartido. No limita lectura ni materialización previa, RSS o I/O antes del lock, así que el preflight consumidor sigue siendo defensa. Esta invariante se distingue de la captura privada por ruta, que limita la lectura durante su ejecución. El proveedor con lectura acotada antes del lock y los callers de apply/CLI siguen pendientes; `version_motor` y `policy_id` continúan sin cota. No implica cota total de memoria/parser ni atomicidad ante cambios hostiles. Matriz local U8 en `4b94261`: workspace Windows 694/6 y WSL 702/6 (passed/ignored); no hay CI remoto publicado para ese SHA. CI `38246129604` pasó solo para la base `a4d01e5`; CI final del parser sigue pendiente. En `609936a`, las pruebas focales del CAS por ruta con configuración externa pasan 32/0/1; la matriz local es Windows 701/6 y WSL 709/6, sin CI remoto para ese SHA. Match, stale redactado antes del parseo, no creación de lockfile sibling y retención del lock del caller están cubiertos. No se prueban atime, permisos, metadatos de entradas ni identidades individuales; `a3cc3c9` sí compara el `ArtifactFingerprint` del root (identidad del directorio raíz y digest raw), no la identidad de cada archivo o sibling. La ruta conserva TOCTOU/no atomicidad y el helper no integra apply/CLI ni simulación pública. U7 sigue parcial; U9–10 pendientes. |
 
 ## Orden original y foco vigente

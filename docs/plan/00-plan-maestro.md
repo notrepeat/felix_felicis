@@ -36,6 +36,18 @@ diagnóstico aún no tiene consumidor productivo. CI
 `38571014167` pasó en Linux y Windows para `9f48304`; esta evidencia no acredita
 una frontera completa de mounts.
 
+`bb06df3` extiende esa protección de forma parcial al cleanup explícito de un
+`StageAnclado` que ya tiene capability: captura el scope del parent, verifica
+por handle la raíz y las entradas durante el preflight, y revalida parent y
+objetivo antes de cada unlink/rmdir, reapertura y rmdir final. Error, ausencia o
+mismatch del probe fallan cerrado con `stage_cleanup_io`; `ErrorLimpiezaStage`
+conserva la capability para retry. Un error tras unlink puede dejar borrado
+parcial, y las carreras externas entre check y operación quedan fuera del
+contrato. No habilita cleanup del sibling huérfano ni completa la frontera de
+mounts. CI `38576523094`
+pasó para `bb06df3` en Linux y Windows; no acredita bind mounts reales, mounts
+anidados ni integración con inventario, captura, staging descendente o recovery.
+
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
 evidencia reproducible en su registro.
@@ -118,15 +130,16 @@ que U7 requiere antes de cleanup seguro o `Committed`. Para crear el sibling de
 staging, se compara por handle el parent del root antes de `mkdir` y el parent
 del stage recién reabierto después; Linux usa `STATX_MNT_ID` y Windows
 `VolumeSerialNumber`. Error, dato ausente o mismatch fallan cerrado. No se
-persiste mount ID. La guardia no demuestra seguridad ante bind mounts reales ni
-mounts anidados, ni cubre inventario, captura, staging descendente, cleanup o
-recovery. Cualquier error desde el intento de `mkdir` deja posible un sibling
-vacío huérfano; no se otorga capability parcial ni se limpia automáticamente.
-El indicador diagnóstico no tiene aún consumidor productivo. El walker de
-rutas del bundle es una familia separada. La cobertura determinista del
-sentinel `FileId` de Windows sigue siendo evidencia distinta; la prueba de bind
-mount Linux que comparte `st_dev` sigue pendiente. Ninguna prueba disponible
-demuestra todavía pertenencia general al mismo volume/mount.
+persiste mount ID. La guardia de creación no demuestra seguridad ante bind
+mounts reales ni mounts anidados. `bb06df3` añade comprobaciones de scope solo al
+cleanup explícito de un `StageAnclado` con capability: no habilita cleanup del
+sibling huérfano ni integra la frontera en inventario, captura, staging
+descendente o recovery. El indicador diagnóstico del sibling posible sigue sin
+consumidor productivo. El walker de rutas del bundle es una familia separada.
+La cobertura determinista del sentinel `FileId` de Windows es evidencia
+distinta; la prueba de bind mount Linux que comparte `st_dev` y los mounts
+anidados siguen pendientes. Ninguna prueba disponible demuestra todavía
+pertenencia general al mismo volume/mount.
 
 La procedencia también forma parte de `RootNewValidado`: un `Candidato` público
 o comparador de representación no acredita admisión contra base, delta e
@@ -139,13 +152,14 @@ ello, la transición/flujo productivo hacia `Committed` es inalcanzable
 actualmente.
 
 Orden de las unidades pequeñas: 1) completar y probar la frontera de scope,
-incluidos bind mount real y mounts anidados; 2) integrar en inventario,
-captura, staging descendente, cleanup y recovery, y conectar un consumidor
-productivo del indicador de sibling huérfano posible; 3) prueba de admisión
-sellada o revalidación con sus entradas; 4) validación del root `New`; 5)
-habilitar `Committed` solo después de esa validación. La guardia parcial actual
-no satisface estos pendientes. U7 y fase 04 permanecen parciales; el progreso
-maestro sigue en 4/9.
+incluidos bind mount real y mounts anidados; 2) integrar la frontera en
+inventario, captura, staging descendente y recovery, completar los demás caminos
+de cleanup y conectar un consumidor productivo del indicador de sibling
+huérfano posible; 3) prueba de admisión sellada o revalidación con sus entradas;
+4) validación del root `New`; 5) habilitar `Committed` solo después de esa
+validación. El cleanup explícito de `StageAnclado` solo aporta una guardia
+parcial y no satisface estos pendientes. U7 y fase 04 permanecen parciales; el
+progreso maestro sigue en 4/9.
 
 ## Evidencia de las fases cerradas
 
@@ -255,6 +269,8 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `752f56e` | Añade guardia parcial de scope para crear el sibling de staging: comparación root-parent antes de `mkdir` y parent-stage tras reabrir por handle; Linux `STATX_MNT_ID`, Windows `VolumeSerialNumber`; error, ausencia o mismatch fallan cerrado. Solo cubre esa operación. |
 | `9f48304` | Si `mkdir_at` devuelve error, registra que puede existir un sibling vacío huérfano; mantiene `stage_io`, sin capability parcial ni cleanup automático. El indicador queda sin consumidor productivo. |
 | CI `38571014167` | Éxito para `9f48304`: jobs Linux y Windows pasan, junto con pruebas del workspace, fmt, clippy y frontera pública. No acredita bind mounts reales, mounts anidados ni integración completa de la frontera. |
+| `bb06df3` | Añade guardia parcial al cleanup explícito de `StageAnclado`: captura scope del parent, preflight por handle y revalidación antes de unlink/rmdir/reopen y rmdir final. Las incertidumbres fallan como `stage_cleanup_io`; el error conserva capability para retry. Un fallo tras unlink puede dejar borrado parcial y carreras externas check→operación quedan fuera del contrato. No cubre sibling huérfano ni completa la frontera. |
+| CI `38576523094` | Éxito para `bb06df309c633f25b15f3e3b3bfd74c24b06a076`: jobs Linux y Windows, pruebas del workspace, fmt, clippy y frontera pública pasan. U7/04 siguen parciales; bind mount real, mounts anidados e integración en inventario, captura, staging descendente y recovery siguen pendientes. |
 
 ### Evidencia de fase 05 — historial y cierre de la demo pública
 
