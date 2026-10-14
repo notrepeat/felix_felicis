@@ -212,6 +212,8 @@ fn ruta_root<'a>(
 mod tests {
     use super::*;
 
+    mod robustez_tests;
+
     #[derive(Clone, Copy)]
     struct EntradaFixture<'a> {
         tag: u8,
