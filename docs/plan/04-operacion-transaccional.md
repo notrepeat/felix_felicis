@@ -65,6 +65,16 @@ huérfano ni una frontera general de mounts. Los pasos de cleanup de los runners
 de recovery existentes ya invocan `StageAnclado::limpiar` y heredan el probe
 real; siguen pendientes la cobertura end-to-end de recovery que ejercite esa
 frontera y un caller productivo de los runners.
+Desde `a4583c2`, `inventariar_root_anclado` compara el scope del parent con el
+del root antes de enumerar y valida por handle cada directorio y archivo antes
+de descender o leer; error, ausencia o mismatch fallan como `snapshot_io`.
+Captura anclada, `StageAnclado::fingerprint_raw`/recaptura y el observer de
+recovery heredan esta comprobación mediante los wrappers de inventario. Es un
+slice de lectura, no una frontera general: las pruebas son sintéticas (sin
+bind mount real ni mounts anidados), el probe Linux usa `STATX_MNT_ID` y el de
+Windows `VolumeSerialNumber` (volumen, no instancia de montaje), el backend por
+ruta/bundle y las escrituras de staging siguen pendientes, y las carreras
+externas TOCTOU quedan fuera del contrato.
 U8 añade captura por ruta acotada y privada para simulación y pruebas y, en
 `63e59d1`, preflight consumidor de la suma de
 configuración antes de abrir el root bajo lock y antes de clonar/inventariar
@@ -162,15 +172,22 @@ probe en el cleanup explícito de `StageAnclado`: toma scope del parent y
 preflight/revalida por handle la raíz, archivos, directorios y reaperturas
 antes de borrar. No persiste el mount ID. Error, dato ausente o mismatch fallan
 cerrado, pero estas guardias parciales no son una frontera completa de
-mount/volume. Aún falta integrar scope en inventario anclado, captura y staging
-descendente. Los pasos de cleanup de los runners de recovery existentes ya
-invocan `StageAnclado::limpiar` y heredan el probe real; faltan cobertura
-end-to-end de recovery que ejercite esa frontera y un caller productivo de los
-runners. Tampoco se autoriza cleanup del sibling huérfano sin capability ni
-existe consumidor productivo del indicador. No hay fallback por ruta ni por
-`st_dev`; la ausencia o error al comprobar scope debe fallar cerrado. El walker
-de rutas del bundle pertenece a otra familia y no queda cubierto. La cobertura
-determinista del sentinel `FileId` de Windows ya está
+mount/volume. Desde `a4583c2`, el inventario anclado comprueba parent/root
+antes de enumerar y el scope de cada handle de directorio/archivo antes de
+descender o leer; errores, ausencia o mismatch producen `snapshot_io`. Captura
+anclada, `StageAnclado::fingerprint_raw`/recaptura y observer de recovery
+heredan la comprobación mediante los wrappers. Sigue siendo un slice parcial:
+el backend por ruta/bundle y las escrituras de staging no están cubiertos. Las
+pruebas son sintéticas, sin bind mount real ni mounts anidados; en Windows,
+`VolumeSerialNumber` identifica volumen pero no instancia de montaje; TOCTOU
+externo sigue fuera del contrato. Los pasos de cleanup de los runners de
+recovery existentes ya invocan `StageAnclado::limpiar` y heredan el probe real;
+faltan cobertura end-to-end de recovery que ejercite esa frontera y un caller
+productivo de los runners. Tampoco se autoriza cleanup del sibling huérfano sin
+capability ni existe consumidor productivo del indicador. No hay fallback por
+ruta ni por `st_dev`; la ausencia o error al comprobar scope debe fallar
+cerrado. El walker de rutas del bundle pertenece a otra familia y no queda
+cubierto. La cobertura determinista del sentinel `FileId` de Windows ya está
 registrada arriba. Siguen pendientes la prueba de bind mount Linux que comparte
 `st_dev` y los mounts anidados. Ninguna prueba aislada demostraría pertenencia
 general al mismo volume/mount.
@@ -197,11 +214,11 @@ La siguiente secuencia se divide en unidades pequeñas, en este orden:
 
 1. Completar y probar la frontera de scope, incluidos bind mount real y mounts
    anidados.
-2. Integrar la frontera en inventario, captura y staging descendente; añadir
-   cobertura end-to-end de recovery para los pasos que ya delegan cleanup en
-   `StageAnclado::limpiar`, habilitar un caller productivo de los runners,
-   completar los demás caminos de cleanup y añadir un consumidor productivo
-   del indicador de sibling huérfano posible.
+2. Completar los consumidores aún fuera del camino anclado: backend por
+   ruta/bundle y escrituras de staging; añadir cobertura end-to-end de recovery
+   para los pasos que ya delegan cleanup en `StageAnclado::limpiar`, habilitar
+   un caller productivo de los runners, completar los demás caminos de cleanup
+   y añadir un consumidor productivo del indicador de sibling huérfano posible.
 3. Prueba de admisión sellada o revalidación con sus entradas.
 4. Validación de identidad y contenido del root `New`.
 5. Habilitar `Committed` solo después de esa validación.
@@ -992,8 +1009,10 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | `752f56e` | Añade guardia parcial de scope a la creación del sibling de staging: compara root-parent antes de `mkdir` y parent-stage después de reabrir por handle; Linux `STATX_MNT_ID`, Windows `VolumeSerialNumber`; error, ausencia o mismatch fallan cerrado. Solo cubre esa operación; no prueba bind mounts ni mounts anidados. | U7/04 siguen parciales. No cubre inventario, captura, staging descendente, cleanup o recovery; no hay consumidor productivo del indicador de sibling huérfano posible. |
 | 2026-10-14 | `9f48304` | Conserva `stage_io` cuando falla `mkdir_at` y propaga el diagnóstico de sibling vacío huérfano posible para cualquier error desde el intento de `mkdir`; no devuelve capability parcial ni ejecuta cleanup automático. | Error/ausencia/mismatch fallan cerrado. El indicador aún no tiene consumidor productivo; no modifica journal, recovery, cleanup o walkers. |
 | 2026-10-14 | CI `38571014167` | Éxito para `9f4830411b4ae5d7964320e1ad87e6eaac9b00a5`: jobs `verify` Linux y `verify-windows` completados; pruebas del workspace, fmt, clippy y frontera pública pasan. | Evidencia del commit; no acredita bind mount real, mounts anidados ni integración de la frontera en las operaciones descendentes. U7/04 siguen parciales y el progreso global continúa en 4/9. |
-| 2026-10-14 | `bb06df3` | El cleanup explícito de `StageAnclado` con capability captura scope del parent, preflight/verifica root y handles por scope, y revalida parent/objeto antes de cada unlink/rmdir/reapertura y rmdir final. Error, ausencia o mismatch fallan con `stage_cleanup_io`; el error conserva la capability para retry. Un fallo tras unlink puede dejar borrado parcial; carreras externas check→operación siguen fuera del contrato. | Cleanup mount-aware parcial, no frontera general: bind mount real, mounts anidados, inventario, captura y staging descendente siguen pendientes. Los runners existentes ya llaman `StageAnclado::limpiar` y heredan el probe; faltan cobertura end-to-end de recovery que ejercite esa frontera y caller productivo de los runners. También sigue sin consumidor productivo el indicador de sibling huérfano posible. U7/04 permanecen parciales; progreso 4/9. |
+| 2026-10-14 | `bb06df3` | El cleanup explícito de `StageAnclado` con capability captura scope del parent, preflight/verifica root y handles por scope, y revalida parent/objeto antes de cada unlink/rmdir/reapertura y rmdir final. Error, ausencia o mismatch fallan con `stage_cleanup_io`; el error conserva la capability para retry. Un fallo tras unlink puede dejar borrado parcial; carreras externas check→operación siguen fuera del contrato. | En ese corte seguían pendientes bind mount real, mounts anidados, inventario anclado y staging descendente. Los runners existentes ya llamaban `StageAnclado::limpiar` y heredaban el probe; faltaban cobertura end-to-end de recovery que ejercitara esa frontera y caller productivo de los runners. También seguía sin consumidor productivo el indicador de sibling huérfano posible. U7/04 permanecían parciales; progreso 4/9. |
 | 2026-10-14 | CI `38576523094` | Éxito para `bb06df309c633f25b15f3e3b3bfd74c24b06a076`; jobs `verify` Linux y `verify-windows` completados, con workspace, fmt, clippy y frontera pública aprobados. | Acredita el commit, no bind mount real, mounts anidados ni integración general de scope. U7/04 siguen parciales; progreso 4/9. |
+| 2026-10-14 | `a4583c2` | El inventario del root anclado comprueba scope parent/root antes de enumerar y cada handle de directorio/archivo antes de descender/leer; error, ausencia o mismatch producen `snapshot_io`. Captura anclada, `StageAnclado::fingerprint_raw`/recaptura y observer de recovery heredan por los wrappers. | Cobertura sintética, sin bind mount real ni mounts anidados; `VolumeSerialNumber` de Windows no identifica instancia de montaje. Backend por ruta/bundle, escrituras de staging y TOCTOU externo siguen pendientes/fuera de contrato. U7/04 siguen parciales; progreso 4/9. |
+| 2026-10-14 | CI `38582798497` | Éxito para `a4583c24414850b9627bcfdc919d31d0cf502b70`; jobs `verify` Linux y `verify-windows` completados. | Evidencia del commit, no de mounts reales/anidados, cobertura del backend por ruta/bundle o escrituras de staging. U7/04 siguen parciales; progreso 4/9. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
