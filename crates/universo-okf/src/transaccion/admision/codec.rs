@@ -4,6 +4,9 @@
 //! prueba de admisión. El decoder deberá validar el framing y reconstruir las
 //! identidades derivadas antes de evaluar otra vez la propuesta.
 
+#[allow(dead_code)]
+pub(crate) mod cursor;
+
 use std::fmt;
 
 use crate::transaccion::snapshot::TipoEntradaSnapshot;
@@ -184,10 +187,12 @@ fn escribir_ruta_root(salida: &mut Vec<u8>, ruta: Option<&str>) -> Result<(), Er
     Ok(())
 }
 
-/// Fallos fijos y redactados del encoder privado.
+/// Fallos fijos y redactados del codec privado.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCodecAdmision {
     ContextoInvalido,
+    FramingInvalido,
+    LimiteComponenteExcedido,
     TotalExcedeLimite,
     LongitudExcedida,
     ReservaFallida,
@@ -197,6 +202,8 @@ impl ErrorCodecAdmision {
     pub(crate) const fn codigo(self) -> &'static str {
         match self {
             Self::ContextoInvalido => "admission_codec_context_invalid",
+            Self::FramingInvalido => "admission_codec_framing_invalid",
+            Self::LimiteComponenteExcedido => "admission_codec_component_limit",
             Self::TotalExcedeLimite => "admission_codec_limit",
             Self::LongitudExcedida => "admission_codec_length_overflow",
             Self::ReservaFallida => "admission_codec_allocation_failed",
