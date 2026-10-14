@@ -11,6 +11,41 @@ pub(super) fn renombrar_plataforma(
     raiz_conocida: &File,
     identidad_esperada: IdentidadDirectorio,
 ) -> Result<(), ErrorRenombrarAnclado> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let operar = |parent: &File, fuente: &std::ffi::CStr, destino: &std::ffi::CStr| {
+        renombrar_noreplace(parent, fuente, destino, invocar_renameat2)
+    };
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+    let operar = |_: &File, _: &std::ffi::CStr, _: &std::ffi::CStr| {
+        // Other Unix platforms have no verified no-replace primitive in this
+        // work unit. Never emulate it with the racy, replace-capable renameat.
+        Err(ErrorRenombrarAnclado::Io)
+    };
+
+    renombrar_plataforma_con_operacion(
+        parent,
+        fuente,
+        destino,
+        raiz_conocida,
+        identidad_esperada,
+        operar,
+    )
+}
+
+#[cfg(unix)]
+// Production passes the real no-replace operation; tests can insert a sibling
+// after these prechecks and before that operation without global hooks.
+fn renombrar_plataforma_con_operacion<R>(
+    parent: &File,
+    fuente: &OsStr,
+    destino: &OsStr,
+    raiz_conocida: &File,
+    identidad_esperada: IdentidadDirectorio,
+    operar: R,
+) -> Result<(), ErrorRenombrarAnclado>
+where
+    R: FnOnce(&File, &std::ffi::CStr, &std::ffi::CStr) -> Result<(), ErrorRenombrarAnclado>,
+{
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -51,15 +86,35 @@ pub(super) fn renombrar_plataforma(
         return Err(ErrorRenombrarAnclado::FuenteNoHermana);
     }
 
-    renombrar_noreplace(parent, &fuente, &destino)
+    operar(parent, &fuente, &destino)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn renombrar_noreplace(
+fn renombrar_noreplace<I>(
     parent: &File,
     fuente: &std::ffi::CStr,
     destino: &std::ffi::CStr,
-) -> Result<(), ErrorRenombrarAnclado> {
+    invocar: I,
+) -> Result<(), ErrorRenombrarAnclado>
+where
+    I: FnOnce(&File, &std::ffi::CStr, &std::ffi::CStr) -> (libc::c_long, Option<i32>),
+{
+    // Production and tests share this policy point. Unsupported renameat2
+    // must remain fail-closed; never retry or fall back to replace-capable renameat.
+    let (resultado, error) = invocar(parent, fuente, destino);
+    if resultado == 0 {
+        return Ok(());
+    }
+
+    Err(mapear_error_renameat2(error))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn invocar_renameat2(
+    parent: &File,
+    fuente: &std::ffi::CStr,
+    destino: &std::ffi::CStr,
+) -> (libc::c_long, Option<i32>) {
     use std::os::fd::AsRawFd;
 
     // SAFETY: both NUL-terminated names are single components relative to the
@@ -75,29 +130,22 @@ fn renombrar_noreplace(
             libc::RENAME_NOREPLACE,
         )
     };
-    if resultado == 0 {
-        return Ok(());
-    }
-
-    match std::io::Error::last_os_error().raw_os_error() {
-        Some(libc::EEXIST) => Err(ErrorRenombrarAnclado::DestinoExistente),
-        // An unavailable syscall or unsupported flag fails closed. In
-        // particular, neither condition may fall back to replace-capable renameat.
-        Some(libc::ENOSYS | libc::EINVAL) => Err(ErrorRenombrarAnclado::Io),
-        // Preserve conservative recovery for errors whose effect is uncertain.
-        _ => Err(ErrorRenombrarAnclado::OperacionAmbigua),
-    }
+    let error = (resultado != 0)
+        .then(std::io::Error::last_os_error)
+        .and_then(|error| error.raw_os_error());
+    (resultado, error)
 }
 
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
-fn renombrar_noreplace(
-    _parent: &File,
-    _fuente: &std::ffi::CStr,
-    _destino: &std::ffi::CStr,
-) -> Result<(), ErrorRenombrarAnclado> {
-    // Other Unix platforms have no verified no-replace primitive in this
-    // work unit. Never emulate it with the racy, replace-capable renameat.
-    Err(ErrorRenombrarAnclado::Io)
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn mapear_error_renameat2(error: Option<i32>) -> ErrorRenombrarAnclado {
+    match error {
+        Some(libc::EEXIST) => ErrorRenombrarAnclado::DestinoExistente,
+        // An unavailable syscall or unsupported flag fails closed. In
+        // particular, neither condition may fall back to replace-capable renameat.
+        Some(libc::ENOSYS | libc::EINVAL) => ErrorRenombrarAnclado::Io,
+        // Preserve conservative recovery for errors whose effect is uncertain.
+        _ => ErrorRenombrarAnclado::OperacionAmbigua,
+    }
 }
 
 #[cfg(unix)]
@@ -295,8 +343,12 @@ fn windows_not_found(error: &std::io::Error) -> bool {
 
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 mod tests {
-    use super::{ErrorRenombrarAnclado, renombrar_noreplace};
-    use std::ffi::CString;
+    use super::{
+        ErrorRenombrarAnclado, invocar_renameat2, renombrar_noreplace,
+        renombrar_plataforma_con_operacion,
+    };
+    use std::cell::Cell;
+    use std::ffi::{CStr, CString, OsStr};
     use std::fs::File;
 
     #[test]
@@ -314,6 +366,7 @@ mod tests {
             &parent,
             &CString::new("source").unwrap(),
             &CString::new("destination").unwrap(),
+            invocar_renameat2,
         );
 
         assert_eq!(resultado, Err(ErrorRenombrarAnclado::DestinoExistente));
@@ -325,5 +378,87 @@ mod tests {
             std::fs::read(destino.join("marker")).unwrap(),
             b"destination remains"
         );
+    }
+
+    #[test]
+    fn destino_aparecido_despues_de_prechecks_no_es_reemplazado() {
+        let temp = tempfile::tempdir().unwrap();
+        let fuente = temp.path().join("source");
+        let destino = temp.path().join("destination");
+        std::fs::create_dir(&fuente).unwrap();
+        std::fs::write(fuente.join("marker"), b"source remains").unwrap();
+        let parent = File::open(temp.path()).unwrap();
+        let raiz = File::open(&fuente).unwrap();
+        let identidad = super::metadata_directorio(&raiz).unwrap();
+        let llamadas = Cell::new(0);
+        let operar = |parent: &File, fuente: &CStr, destino_nombre: &CStr| {
+            llamadas.set(llamadas.get() + 1);
+            std::fs::create_dir(&destino).unwrap();
+            std::fs::write(destino.join("marker"), b"destination remains").unwrap();
+            renombrar_noreplace(parent, fuente, destino_nombre, invocar_renameat2)
+        };
+
+        let resultado = renombrar_plataforma_con_operacion(
+            &parent,
+            OsStr::new("source"),
+            OsStr::new("destination"),
+            &raiz,
+            identidad,
+            operar,
+        );
+
+        assert_eq!(resultado, Err(ErrorRenombrarAnclado::DestinoExistente));
+        assert_eq!(llamadas.get(), 1);
+        assert_eq!(
+            std::fs::read(fuente.join("marker")).unwrap(),
+            b"source remains"
+        );
+        assert_eq!(
+            std::fs::read(destino.join("marker")).unwrap(),
+            b"destination remains"
+        );
+    }
+
+    #[test]
+    fn renameat2_no_soportado_falla_cerrado_sin_reintento_ni_fallback() {
+        for (errno, esperado) in [
+            (libc::ENOSYS, ErrorRenombrarAnclado::Io),
+            (libc::EINVAL, ErrorRenombrarAnclado::Io),
+            (libc::EIO, ErrorRenombrarAnclado::OperacionAmbigua),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let fuente = temp.path().join("source");
+            let destino = temp.path().join("destination");
+            std::fs::create_dir(&fuente).unwrap();
+            std::fs::write(fuente.join("marker"), b"source remains").unwrap();
+            let parent = File::open(temp.path()).unwrap();
+            let raiz = File::open(&fuente).unwrap();
+            let identidad = super::metadata_directorio(&raiz).unwrap();
+            let llamadas = Cell::new(0);
+            let operar = |parent: &File, fuente: &CStr, destino: &CStr| {
+                renombrar_noreplace(parent, fuente, destino, |_, _, _| {
+                    llamadas.set(llamadas.get() + 1);
+                    (-1, Some(errno))
+                })
+            };
+
+            assert_eq!(
+                renombrar_plataforma_con_operacion(
+                    &parent,
+                    OsStr::new("source"),
+                    OsStr::new("destination"),
+                    &raiz,
+                    identidad,
+                    operar,
+                ),
+                Err(esperado)
+            );
+            assert_eq!(llamadas.get(), 1);
+            assert_eq!(
+                std::fs::read(fuente.join("marker")).unwrap(),
+                b"source remains"
+            );
+            assert!(!destino.exists());
+        }
     }
 }
