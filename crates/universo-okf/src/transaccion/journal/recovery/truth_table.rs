@@ -47,7 +47,7 @@ const KEEP_COMMITTED_NEW: &[RecoveryStep] = &[
 
 #[test]
 fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
-    use ArtifactState::{Absent, New, Old, PartialNew, Unknown};
+    use ArtifactState::{Absent, New, Old, PartialNew, PartialOld, Unknown};
     use JournalState::{BackupReady, Committed, Installed, Prepared};
     use RecoveryDecision::{
         DiscardNewRestoreOld, FailClosed, KeepOld, KeepValidatedCommittedNew,
@@ -186,7 +186,7 @@ fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
         },
     ];
 
-    let artifacts = [Absent, Old, New, PartialNew, Unknown];
+    let artifacts = [Absent, Old, New, PartialNew, PartialOld, Unknown];
     let phases = [Prepared, BackupReady, Installed, Committed];
     for phase in phases {
         for root in artifacts {
@@ -229,6 +229,7 @@ fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
                             {
                                 (row.decision, row.steps)
                             }
+                            (PartialOld, _) => (FailClosed, NO_STEPS),
                             (New, Some(row))
                                 if row.decision == RestoreOld
                                     && root == Absent

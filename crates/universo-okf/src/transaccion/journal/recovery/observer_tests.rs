@@ -1,7 +1,9 @@
 use super::*;
 use crate::transaccion::inventario::LimitesInventario;
-use crate::transaccion::journal::recovery::ArtifactState;
-use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
+use crate::transaccion::journal::recovery::{ArtifactState, RecoveryDecision, decide_recovery};
+use crate::transaccion::journal::{
+    ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
+};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::raiz::UbicacionRaiz;
 use crate::transaccion::snapshot::calcular_digest_raw_tree;
@@ -273,6 +275,104 @@ fn digest_mismatch_with_same_directory_identity_is_unknown() {
 
     assert_eq!(inventory.root, ArtifactState::Unknown);
     assert!(!inventory.root_new_validated);
+}
+
+#[test]
+fn backup_with_old_identity_and_changed_digest_is_partial_old_only_for_backup() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    let lock = LockEscritura::adquirir(&root).unwrap();
+    let backup = backup_path(&lock);
+    crear_arbol(&backup, b"old-tree");
+    let old = fingerprint(&backup);
+    let fixture_new = temp.path().join("new-fixture");
+    crear_arbol(&fixture_new, b"new-tree");
+    let record = journal(&lock, old, fingerprint(&fixture_new));
+    fs::write(backup.join("data.bin"), b"partial-cleanup").unwrap();
+
+    let inventory = observar_inventario_recovery(&lock, &record).unwrap();
+
+    assert_eq!(inventory.root, ArtifactState::Absent);
+    assert_eq!(inventory.backup, ArtifactState::PartialOld);
+    assert_eq!(inventory.stage, ArtifactState::Absent);
+    assert_eq!(
+        decide_recovery(JournalState::Installed, inventory),
+        RecoveryDecision::FailClosed
+    );
+}
+
+#[test]
+fn backup_with_old_bytes_but_wrong_identity_remains_unknown() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    crear_arbol(&root, b"root-tree");
+    let reference_old = temp.path().join("reference-old");
+    crear_arbol(&reference_old, b"old-tree");
+    let lock = LockEscritura::adquirir(&root).unwrap();
+    let backup = backup_path(&lock);
+    crear_arbol(&backup, b"old-tree");
+    let fixture_new = temp.path().join("new-fixture");
+    crear_arbol(&fixture_new, b"new-tree");
+    let record = journal(
+        &lock,
+        fingerprint(&reference_old),
+        fingerprint(&fixture_new),
+    );
+
+    let inventory = observar_inventario_recovery(&lock, &record).unwrap();
+
+    assert_eq!(inventory.backup, ArtifactState::Unknown);
+}
+
+#[test]
+fn classifiers_de_partialold_are_pure_and_limited_to_backup() {
+    let old = fingerprint_prueba(2, 'a');
+    let new = fingerprint_prueba(3, 'b');
+    let changed_old = fingerprint_prueba(2, 'c');
+    let wrong_identity = fingerprint_prueba(4, 'c');
+    let observed_changed_old = ObservedArtifact::new(changed_old.clone());
+    let observed_wrong_identity = ObservedArtifact::new(wrong_identity);
+
+    assert_eq!(
+        classify_backup_artifact(Some(&observed_changed_old), &old, &new),
+        ArtifactState::PartialOld
+    );
+    assert_eq!(
+        classify_backup_artifact(Some(&observed_wrong_identity), &old, &new),
+        ArtifactState::Unknown
+    );
+    assert_eq!(
+        classify_artifact(Some(&observed_changed_old), &old, &new),
+        ArtifactState::Unknown
+    );
+    assert_eq!(
+        classify_stage_artifact(Some(&observed_changed_old), &old, &new),
+        ArtifactState::Unknown
+    );
+
+    let same_identity_new = fingerprint_prueba(2, 'd');
+    assert_eq!(
+        classify_backup_artifact(Some(&observed_changed_old), &old, &same_identity_new),
+        ArtifactState::Unknown
+    );
+}
+
+fn fingerprint_prueba(id: u64, byte: char) -> ArtifactFingerprint {
+    ArtifactFingerprint::new(
+        identidad_prueba(id),
+        RawTreeDigest::from_hex(byte.to_string().repeat(64)).unwrap(),
+    )
+}
+
+fn identidad_prueba(id: u64) -> DirectoryIdentity {
+    #[cfg(unix)]
+    {
+        DirectoryIdentity::unix(7, id)
+    }
+    #[cfg(windows)]
+    {
+        DirectoryIdentity::windows(7, format!("{id:032x}"))
+    }
 }
 
 #[test]

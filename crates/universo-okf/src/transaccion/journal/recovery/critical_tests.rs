@@ -76,6 +76,26 @@ fn partial_stage_requires_the_journal_new_identity_and_never_counts_as_validated
 }
 
 #[test]
+fn partial_old_never_produces_recovery_steps_in_any_inventory_role() {
+    use ArtifactState::{Absent, Old, PartialOld};
+    use JournalState::Installed;
+    use RecoveryDecision::{FailClosed, KeepOld};
+
+    for seen in [
+        inventory(PartialOld, Absent, Absent, false),
+        inventory(Absent, PartialOld, Absent, false),
+        inventory(Absent, Absent, PartialOld, false),
+    ] {
+        assert_eq!(decide_recovery(Installed, seen), FailClosed);
+        assert!(decide_recovery(Installed, seen).steps(seen).is_empty());
+        assert!(KeepOld.steps(seen).is_empty());
+    }
+
+    let exact_old = inventory(Old, Absent, Absent, false);
+    assert_eq!(decide_recovery(Installed, exact_old), KeepOld);
+}
+
+#[test]
 fn installed_new_without_candidate_validation_restores_old_before_journal_removal() {
     use ArtifactState::{Absent, New, Old};
     use JournalState::Installed;

@@ -297,6 +297,7 @@ mod tests {
             ArtifactState::Old,
             ArtifactState::New,
             ArtifactState::PartialNew,
+            ArtifactState::PartialOld,
             ArtifactState::Unknown,
         ];
         let fases = [

@@ -39,6 +39,9 @@ pub(crate) enum ArtifactState {
     /// The new stage identity remains after an interrupted cleanup; this
     /// state authorizes only discarding that transient sibling.
     PartialNew,
+    /// The old backup identity remains after an interrupted cleanup; this
+    /// state is observation only until a backup cleanup row is implemented.
+    PartialOld,
     Unknown,
 }
 
@@ -86,6 +89,28 @@ pub(crate) fn classify_stage_artifact(
     };
     if old.identity() != new.identity() && observed.0.identity() == new.identity() {
         ArtifactState::PartialNew
+    } else {
+        ArtifactState::Unknown
+    }
+}
+
+/// Recognizes an interrupted backup cleanup only when the backup still has
+/// the journal's old identity and the old/new identities are distinct.
+/// Root and stage deliberately use their narrower classifiers above.
+pub(crate) fn classify_backup_artifact(
+    observed: Option<&ObservedArtifact>,
+    old: &ArtifactFingerprint,
+    new: &ArtifactFingerprint,
+) -> ArtifactState {
+    let state = classify_artifact(observed, old, new);
+    if state != ArtifactState::Unknown {
+        return state;
+    }
+    let Some(observed) = observed else {
+        return ArtifactState::Absent;
+    };
+    if old.identity() != new.identity() && observed.0.identity() == old.identity() {
+        ArtifactState::PartialOld
     } else {
         ArtifactState::Unknown
     }
@@ -157,6 +182,12 @@ const KEEP_COMMITTED_NEW_STEPS: &[RecoveryStep] = &[
 
 impl RecoveryDecision {
     pub(crate) fn steps(self, inventory: RecoveryInventory) -> &'static [RecoveryStep] {
+        if inventory.root == ArtifactState::PartialOld
+            || inventory.backup == ArtifactState::PartialOld
+            || inventory.stage == ArtifactState::PartialOld
+        {
+            return NO_STEPS;
+        }
         if self == Self::KeepOld
             && inventory.root == ArtifactState::Old
             && inventory.backup == ArtifactState::Absent
@@ -164,7 +195,7 @@ impl RecoveryDecision {
             return match inventory.stage {
                 ArtifactState::Absent => JOURNAL_ONLY_STEPS,
                 ArtifactState::New | ArtifactState::PartialNew => REMOVE_STAGE_AND_JOURNAL_STEPS,
-                ArtifactState::Old | ArtifactState::Unknown => NO_STEPS,
+                ArtifactState::Old | ArtifactState::PartialOld | ArtifactState::Unknown => NO_STEPS,
             };
         }
         match self {
@@ -183,7 +214,7 @@ pub(crate) fn decide_recovery(
     state: JournalState,
     inventory: RecoveryInventory,
 ) -> RecoveryDecision {
-    use ArtifactState::{Absent, New, Old, PartialNew, Unknown};
+    use ArtifactState::{Absent, New, Old, PartialNew, PartialOld, Unknown};
     use JournalState::{BackupReady, Committed, Installed, Prepared};
     use RecoveryDecision::{
         DiscardNewRestoreOld, FailClosed, KeepOld, KeepValidatedCommittedNew,
@@ -199,6 +230,9 @@ pub(crate) fn decide_recovery(
     if root == Unknown
         || backup == Unknown
         || stage == Unknown
+        || root == PartialOld
+        || backup == PartialOld
+        || stage == PartialOld
         || (root == New && stage != Absent)
         || (root_new_validated && root != New)
         || !matches!(stage, Absent | New | PartialNew)

@@ -10,7 +10,10 @@ use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::raiz::UbicacionRaiz;
 use crate::transaccion::snapshot::{ErrorSnapshot, calcular_digest_raw_tree};
 
-use super::{ObservedArtifact, RecoveryInventory, classify_artifact, classify_stage_artifact};
+use super::{
+    ObservedArtifact, RecoveryInventory, classify_artifact, classify_backup_artifact,
+    classify_stage_artifact,
+};
 
 #[cfg(test)]
 use crate::transaccion::inventario::inventariar_root_anclado;
@@ -104,7 +107,7 @@ fn observar_inventario_recovery_con_limites(
 
     Ok(RecoveryInventory {
         root: classify_artifact(root.as_ref(), journal.old(), journal.new_fingerprint()),
-        backup: classify_artifact(backup.as_ref(), journal.old(), journal.new_fingerprint()),
+        backup: classify_backup_artifact(backup.as_ref(), journal.old(), journal.new_fingerprint()),
         stage: classify_stage_artifact(stage.as_ref(), journal.old(), journal.new_fingerprint()),
         root_new_validated: false,
     })
