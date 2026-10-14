@@ -65,7 +65,7 @@ pub(super) fn renombrar_plataforma(
     if resultado == 0 {
         Ok(())
     } else {
-        Err(mapear_error_io(std::io::Error::last_os_error()))
+        Err(ErrorRenombrarAnclado::OperacionAmbigua)
     }
 }
 
@@ -131,7 +131,6 @@ pub(super) fn renombrar_plataforma(
         FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
     };
     use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Foundation::RtlNtStatusToDosError;
     use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES};
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -205,12 +204,9 @@ pub(super) fn renombrar_plataforma(
         )
     };
     if status < 0 {
-        // NTSTATUS text/status never leaves the primitive; only the stable
-        // redacted error classification is exposed to callers.
-        let dos_code = unsafe { RtlNtStatusToDosError(status) };
-        return Err(mapear_error_io(std::io::Error::from_raw_os_error(
-            dos_code as i32,
-        )));
+        // NTSTATUS never leaves the primitive. A failed rename syscall can
+        // still have moved the directory, so recovery must reconcile it.
+        return Err(ErrorRenombrarAnclado::OperacionAmbigua);
     }
     Ok(())
 }

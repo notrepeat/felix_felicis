@@ -428,7 +428,7 @@ fn restaurar_backup_y_retirar_journal_con_renombrador(
         renombrar(lock, contexto, &destino).map_err(ErrorFilaJournalRestoreOld::Renombrar)?;
 
     if let Err(error) = intento_renombrar {
-        if error.no_reconciliar() {
+        if !error.es_operacion_ambigua() {
             return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
         }
     }
@@ -489,6 +489,7 @@ pub(super) fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto(
         antes_de_renombrar,
         antes_de_eliminar,
         renombrar_root_new_a_stage,
+        observar_inventario_recovery,
     )
 }
 
@@ -501,6 +502,10 @@ fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
         &mut LockEscritura,
         &Journal,
     ) -> Result<Result<(), ErrorRenombrarAnclado>, ErrorRenombrarAnclado>,
+    mut observar: impl FnMut(
+        &LockEscritura,
+        &Journal,
+    ) -> Result<RecoveryInventory, ErrorObservadorRecovery>,
 ) -> Result<ResultadoFilaJournalDiscardNewRestoreOld, ErrorFilaJournalRestoreOld> {
     if clasificar_fila_recovery(&contexto.journal, contexto.inventario)
         != Some(FilaRecoverySoportada::DiscardNewRestoreOld)
@@ -512,12 +517,12 @@ fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
     let intento_renombrar =
         renombrar(lock, &contexto.journal).map_err(ErrorFilaJournalRestoreOld::Renombrar)?;
     if let Err(error) = intento_renombrar {
-        if error.no_reconciliar() {
+        if !error.es_operacion_ambigua() {
             return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
         }
     }
-    let inventario_stage = observar_inventario_recovery(lock, &contexto.journal)
-        .map_err(ErrorFilaJournalRestoreOld::Observacion)?;
+    let inventario_stage =
+        observar(lock, &contexto.journal).map_err(ErrorFilaJournalRestoreOld::Observacion)?;
     reconciliar_intento_renombrado_discard_new(
         intento_renombrar,
         inventario_stage,
@@ -596,6 +601,11 @@ fn reconciliar_intento_renombrado_discard_new(
     inventario_posterior: RecoveryInventory,
     fila_inicial: RecoveryInventory,
 ) -> Result<(), ErrorFilaJournalRestoreOld> {
+    if let Err(error) = intento {
+        if !error.es_operacion_ambigua() {
+            return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
+        }
+    }
     let fila_stage = RecoveryInventory {
         root: ArtifactState::Absent,
         backup: ArtifactState::Old,
@@ -696,6 +706,11 @@ fn reconciliar_intento_renombrado_restore_old(
     inventario_posterior: RecoveryInventory,
     fila_inicial: RecoveryInventory,
 ) -> Result<(), ErrorFilaJournalRestoreOld> {
+    if let Err(error) = intento {
+        if !error.es_operacion_ambigua() {
+            return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
+        }
+    }
     let fila_restaurada = RecoveryInventory {
         root: ArtifactState::Old,
         backup: ArtifactState::Absent,

@@ -103,7 +103,7 @@ fn rename_sibling_syscall_error_conserva_codigo_pero_invalida_capability() {
     let llamadas = Cell::new(0);
     let mut rename = |_: &File, _: &OsStr, _: &OsStr, _: &File, _| {
         llamadas.set(llamadas.get() + 1);
-        Err(ErrorRenombrarAnclado::Io)
+        Err(ErrorRenombrarAnclado::OperacionAmbigua)
     };
 
     assert_eq!(
@@ -113,7 +113,11 @@ fn rename_sibling_syscall_error_conserva_codigo_pero_invalida_capability() {
             &mut probe,
             &mut rename,
         ),
-        Err(ErrorRenombrarAnclado::Io)
+        Err(ErrorRenombrarAnclado::OperacionAmbigua)
+    );
+    assert_eq!(
+        ErrorRenombrarAnclado::OperacionAmbigua.codigo(),
+        "anchored_rename_io"
     );
     assert_eq!(source.nombre(), OsStr::new("bundle"));
     assert!(root.is_dir());

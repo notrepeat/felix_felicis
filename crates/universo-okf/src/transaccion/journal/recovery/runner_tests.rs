@@ -471,7 +471,7 @@ fn dispatcher_no_enmascara_error_restore_old_con_un_intento_keep_old() {
 fn rename_con_error_y_postestado_restaurado_converge() {
     assert_eq!(
         reconciliar_intento_renombrado_restore_old(
-            Err(ErrorRenombrarAnclado::Io),
+            Err(ErrorRenombrarAnclado::OperacionAmbigua),
             inventario_restore_old_restaurado(),
             inventario_restore_old_inicial(),
         ),
@@ -497,7 +497,7 @@ fn rename_con_error_y_estado_inicial_propaga_el_error() {
 fn rename_con_estado_posterior_inesperado_falla_cerrado() {
     assert_eq!(
         reconciliar_intento_renombrado_restore_old(
-            Err(ErrorRenombrarAnclado::Io),
+            Err(ErrorRenombrarAnclado::OperacionAmbigua),
             inventario_restore_old_inesperado(),
             inventario_restore_old_inicial(),
         ),
@@ -830,8 +830,9 @@ fn discard_new_converge_si_el_rename_reporta_error_despues_de_mover_root() {
             },
             |lock, journal| {
                 assert_eq!(renombrar_root_new_a_stage(lock, journal)?, Ok(()));
-                Ok(Err(ErrorRenombrarAnclado::Io))
+                Ok(Err(ErrorRenombrarAnclado::OperacionAmbigua))
             },
+            observar_inventario_recovery,
         ),
         Ok(ResultadoFilaJournalDiscardNewRestoreOld::Eliminado)
     );
@@ -905,6 +906,7 @@ fn discard_new_no_reconcilia_outcome_no_verificado_y_retry_restore_old() {
                 assert_eq!(renombrar_root_new_a_stage(lock, journal)?, Ok(()));
                 Ok(Err(ErrorRenombrarAnclado::ResultadoNoVerificado))
             },
+            observar_inventario_recovery,
         ),
         Err(ErrorFilaJournalRestoreOld::Renombrar(
             ErrorRenombrarAnclado::ResultadoNoVerificado
@@ -949,11 +951,65 @@ fn discard_new_setup_io_no_reconcilia_inventario_objetivo_y_retry() {
                 fs::rename(&root, &stage).unwrap();
                 Err(ErrorRenombrarAnclado::Io)
             },
+            observar_inventario_recovery,
         ),
         Err(ErrorFilaJournalRestoreOld::Renombrar(
             ErrorRenombrarAnclado::Io
         ))
     );
+    assert!(!antes_de_eliminar.get());
+    assert!(canonical.exists());
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert!(!root.exists());
+    assert!(backup.is_dir() && stage.is_dir());
+
+    assert_eq!(
+        ejecutar_recovery_soportado_con(&mut lock, observar_inventario_recovery, |_| {}, |_| {}),
+        Ok(ResultadoRecoverySoportado::RestoreOld(
+            ResultadoFilaJournalRestoreOld::Eliminado
+        ))
+    );
+    assert!(!canonical.exists());
+    assert!(!backup.exists() && !stage.exists());
+    assert_root_intact(&root);
+}
+
+#[test]
+fn discard_new_inner_io_no_observa_ni_limpia_inventario_objetivo_y_retry() {
+    let (_temp, root, mut lock, canonical, _) = preparar_discard_new(JournalState::BackupReady);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    let contexto = match preflight_recovery(&mut lock).unwrap() {
+        ResultadoPreflightRecovery::Contexto(contexto) => *contexto,
+        _ => unreachable!("el journal preparado debe producir contexto"),
+    };
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let antes_de_eliminar = Cell::new(false);
+    let observaciones = Cell::new(0);
+
+    assert_eq!(
+        ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
+            &mut lock,
+            contexto,
+            |_| {},
+            |_| antes_de_eliminar.set(true),
+            |_, _| {
+                // Present an apparent post-rename inventory, but return an
+                // inner pre-syscall error. Only platform syscall errors may
+                // trigger a re-observation and reconciliation.
+                fs::rename(&root, &stage).unwrap();
+                Ok(Err(ErrorRenombrarAnclado::Io))
+            },
+            |lock, journal| {
+                observaciones.set(observaciones.get() + 1);
+                observar_inventario_recovery(lock, journal)
+            },
+        ),
+        Err(ErrorFilaJournalRestoreOld::Renombrar(
+            ErrorRenombrarAnclado::Io
+        ))
+    );
+    assert_eq!(observaciones.get(), 0);
     assert!(!antes_de_eliminar.get());
     assert!(canonical.exists());
     assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
@@ -1036,7 +1092,12 @@ fn restore_old_no_reemplaza_un_root_que_aparece_antes_del_rename() {
         |_| {},
     );
 
-    assert_eq!(result, Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada));
+    assert_eq!(
+        result,
+        Err(ErrorFilaJournalRestoreOld::Renombrar(
+            ErrorRenombrarAnclado::DestinoExistente
+        ))
+    );
     assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
     assert_eq!(
         fs::read(root.join("data.bin")).unwrap(),

@@ -271,6 +271,7 @@ fn rename_sibling_handle_externo_que_nega_share_delete_bloquea_y_luego_permite()
         .renombrar_directorio(&mut source, &backup_name)
         .unwrap_err();
     assert_eq!(error, ErrorRenombrarAnclado::Io);
+    assert_eq!(error.codigo(), "anchored_rename_io");
     assert_eq!(source.nombre(), component.as_os_str());
     assert!(source_path.is_dir());
     drop(externo);

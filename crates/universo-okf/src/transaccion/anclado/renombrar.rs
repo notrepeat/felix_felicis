@@ -16,6 +16,7 @@ use crate::transaccion::lock::LockEscritura;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorRenombrarAnclado {
     Io,
+    OperacionAmbigua,
     ComponenteInvalido,
     EnlaceNoPermitido,
     TipoNoAdmitido,
@@ -30,7 +31,7 @@ pub(crate) enum ErrorRenombrarAnclado {
 impl ErrorRenombrarAnclado {
     pub(crate) const fn codigo(self) -> &'static str {
         match self {
-            Self::Io => "anchored_rename_io",
+            Self::Io | Self::OperacionAmbigua => "anchored_rename_io",
             Self::ComponenteInvalido => "anchored_rename_invalid_component",
             Self::EnlaceNoPermitido => "anchored_rename_reparse_not_allowed",
             Self::TipoNoAdmitido => "anchored_rename_directory_required",
@@ -43,8 +44,8 @@ impl ErrorRenombrarAnclado {
         }
     }
 
-    pub(crate) const fn no_reconciliar(self) -> bool {
-        matches!(self, Self::ScopeNoVerificado | Self::ResultadoNoVerificado)
+    pub(crate) const fn es_operacion_ambigua(self) -> bool {
+        matches!(self, Self::OperacionAmbigua)
     }
 }
 
