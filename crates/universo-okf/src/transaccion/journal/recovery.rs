@@ -270,3 +270,7 @@ mod critical_tests;
 #[cfg(test)]
 #[path = "recovery/truth_table.rs"]
 mod truth_table;
+
+#[cfg(test)]
+#[path = "recovery/restart_identity_tests.rs"]
+mod restart_identity_tests;
