@@ -456,8 +456,22 @@ impl ErrorEscrituraStage {
         self.stage_anclado_parcial.as_deref()
     }
 
-    pub(crate) fn recuperar_stage_anclado(self) -> Option<StageAnclado> {
-        self.stage_anclado_parcial.map(|stage| *stage)
+    pub(crate) fn recuperar_stage_anclado(self) -> Result<StageAnclado, Self> {
+        let Self {
+            codigo,
+            stage_parcial,
+            stage_anclado_parcial,
+            sibling_huerfano_posible,
+        } = self;
+        match stage_anclado_parcial {
+            Some(stage) => Ok(*stage),
+            None => Err(Self {
+                codigo,
+                stage_parcial,
+                stage_anclado_parcial: None,
+                sibling_huerfano_posible,
+            }),
+        }
     }
 
     /// Indica si la creación pudo dejar un sibling sin handle seguro.
@@ -1796,7 +1810,7 @@ ignorados = ["ignored.md"]
     }
 
     #[test]
-    fn error_de_reapertura_deja_stage_huerfano_sin_capacidad() {
+    fn recuperar_stage_anclado_preserva_error_de_sibling_huerfano() {
         let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
         let error_creacion = match ancla
             .crear_stage_sibling_con("open-failure", |_, _, _| Err(ErrorDirectorioAnclado::Io))
@@ -1806,9 +1820,14 @@ ignorados = ["ignored.md"]
         };
         assert!(error_creacion.sibling_huerfano_posible());
         let error = error_escritura_stage_desde_creacion(error_creacion);
+        let error = match error.recuperar_stage_anclado() {
+            Err(error) => error,
+            Ok(_) => panic!("un sibling huérfano no ofrece capability de cleanup"),
+        };
 
         assert_eq!(error.codigo(), "stage_io");
         assert!(error.sibling_huerfano_posible());
+        assert!(error.stage_parcial().is_none());
         assert!(error.stage_anclado_parcial().is_none());
         let ruta_stage = temp.path().join(".bundle.felix.stage.open-failure");
         assert!(ruta_stage.is_dir());
@@ -3566,9 +3585,15 @@ ignorados = ["ignored.md"]
             &candidato,
         )
         .unwrap_err();
+        let error = match error.recuperar_stage_anclado() {
+            Err(error) => error,
+            Ok(_) => panic!("el error de stage path-based no contiene handle anclado"),
+        };
 
         assert_eq!(error.codigo(), "stage_candidate_mismatch");
         assert!(error.stage_parcial().unwrap().recibo().is_none());
+        assert!(error.stage_anclado_parcial().is_none());
+        assert!(!error.sibling_huerfano_posible());
         assert!(!format!("{error:?} {error}").contains("Wrong target"));
         assert_eq!(fs::read(raiz.join("knowledge/index.md")).unwrap(), antes);
     }
