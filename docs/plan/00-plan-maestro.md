@@ -18,8 +18,9 @@ resultado de un agente en escenarios reproducibles.
 
 La evidencia de identidad Windows en `401a4be`, `316bdb8` y `cedc11c` establece
 que los `FileId` sentinel fallan cerrado para identidades requeridas por
-transacciones y journal; solo el marcador exacto permite el fallback canónico
-del recorrido bundle de solo lectura. CI `38517718310`
+transacciones y journal. En el recorrido bundle de solo lectura, el marcador
+exacto de sentinel se suma al fallback canónico ya existente para los errores
+Windows 1/50/87; `Unsupported` genérico no activa fallback. CI `38517718310`
 pasó en Linux y Windows para `cedc11c`. Esto no cierra la barrera mount/volume:
 el bind mount Linux sigue pendiente, U7 y fase 04 siguen en curso y el progreso
 global permanece en 4/9.
