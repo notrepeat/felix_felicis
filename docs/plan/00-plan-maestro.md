@@ -65,15 +65,30 @@ capability y su token de scope no se persisten en el journal. El probe usa
 `STATX_MNT_ID` en Linux y `VolumeSerialNumber` en Windows, que identifica
 volumen pero no instancia de montaje. Las pruebas son sintéticas y no cubren
 bind mounts reales ni mounts anidados.
-TOCTOU externo sigue fuera del contrato. Rename, apply y publicación no están
-cubiertos; el backend por ruta/bundle permanece separado. Los pasos de cleanup
-de los runners existentes ya llaman `StageAnclado::limpiar` y heredan el probe
-real; aún falta cobertura end-to-end de recovery que ejercite esa frontera y no
-hay caller
-productivo de los runners. CI `38576523094` pasó para `bb06df3` en Linux y
-Windows; en ese corte aún no estaba integrado el probe en inventario/captura.
-CI `38582798497` pasó para `a4583c2` en Linux y Windows; no acredita bind mounts
-reales, mounts anidados ni el guard de escrituras añadido después.
+Desde `1bee231`, el rename sibling tiene una guardia parcial: captura scope del
+parent y verifica parent y fuente antes de la operación; tras éxito vuelve a
+verificar parent/fuente, reabre el destino por handle y exige identidad y scope
+antes de actualizar nombre/capability. Cualquier error devuelto por la
+operación o fallo de verificación posterior invalida la capability. `9405919`
+conserva esa invalidación ante error y separa fallos de preparación del
+resultado interno del rename. Desde `0ffaae2`, solo `OperacionAmbigua`, creada
+cuando falla la syscall de rename de plataforma, admite reobservar y reconciliar
+en `RestoreOld`/`DiscardNewRestoreOld`. Setup, `Io` conocido, scope no verificado y outcome no
+verificado retornan inmediatamente: no reobservan, limpian ni retiran el
+journal. El código visible de `OperacionAmbigua` permanece
+`anchored_rename_io`; una nueva invocación de recovery vuelve a clasificar y
+obtiene una capability fresca. Esto no elimina la carrera externa entre
+`fstatat` y `renameat` de Unix ni completa apply/publicación. En Windows,
+`VolumeSerialNumber` identifica volumen, no instancia de montaje; las pruebas
+son sintéticas, sin bind mount real ni mounts anidados. TOCTOU externo sigue
+fuera del contrato y el backend por ruta/bundle permanece separado. Los pasos
+de cleanup de los runners existentes ya llaman `StageAnclado::limpiar` y
+heredan el probe real; aún falta cobertura end-to-end de recovery que ejercite
+esa frontera y no hay caller productivo de los runners. CI `38576523094` pasó
+para `bb06df3` en Linux y Windows; en ese corte aún no estaba integrado el
+probe en inventario/captura. CI `38582798497` pasó para `a4583c2` en Linux y
+Windows; no acredita bind mounts reales, mounts anidados ni el guard de
+escrituras añadido después.
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
@@ -147,8 +162,9 @@ flowchart LR
 Foco actual: avanzar con la Unidad 7 de [04 — Operación transaccional](04-operacion-transaccional.md), journal, commit y recovery. Un preflight compartido inicial alimenta el dispatcher crate-private, que enruta las filas exactas `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`; aún no hay caller desde apply/producción. `RestoreOld` acepta root `Absent`, backup `Old`, `root_new_validated=false` y stage `Absent`/`New`/`PartialNew` en `Prepared`/`BackupReady`/`Installed`, reabre por identidad durable (digest completo si es `New`), limpia/reobserva y solo entonces restaura backup y retira journal. `DiscardNewRestoreOld` acepta solo `BackupReady` con root `New`, backup `Old`, stage `Absent` y validación false/true, o `Installed` con validación false; renombra root al stage, reobserva, limpia y restaura old. Root `New` junto a cualquier stage sibling falla cerrado. Desde `5c11f76`, `PartialOld` ya se observa solo en backup cuando conserva la identidad de `old`, difiere su digest raw y las identidades `old`/`new` son distintas; en cualquier slot produce `FailClosed`/`NO_STEPS`. `KeepOld` también admite stage `New`/`PartialNew` con root `Old`, backup `Absent` y `root_new_validated=false` en esas fases. Retry tras cleanup parcial conserva el journal y usa la identidad durable. `KeepValidated`, `Committed` y el recovery completo siguen pendientes. La limpieza del backup `PartialOld` permanece pospuesta. El siguiente prerrequisito para habilitar la limpieza del backup `PartialOld` o avanzar a `Committed` es definir una frontera segura frente a cruces mount/bind/FUSE y establecer la validación de `New` antes de esos pasos. U5 permanece parcial. U6 aporta root anclado y staging. U8 valida la suma de `manifiesto_raw` e `invariantes_raw` en el consumidor antes de abrir root bajo lock y antes de inventariar; si se excede, `snapshot_resource_limit` es redactado, el root/canary queda intacto y el guard se conserva. Si cabe, el CAS aún precede provenance y parseo. Desde `4b94261`, el constructor fallible de `ConfigRawCapturada` también impone esa suma como invariante, contando cada campo lógico incluso cuando comparte el mismo `Arc`; convierte a `Arc` antes de revisar el tamaño, por lo que no limita lectura ni asignaciones previas. Este chequeo no acota RSS ni I/O antes del lock; el preflight consumidor sigue siendo defensa necesaria. La captura privada por ruta conserva su garantía distinta: acota durante la lectura y admite como máximo el remanente más un byte centinela para fuentes externas. En `609936a`, el CAS por ruta con configuración externa verifica el match sin crear lockfile sibling y conserva el inventario y los bytes externos; el caso stale se redacta y precede parseo sin cambiar contenido o namespace. Las pruebas no cubren atime, permisos ni otros metadatos; `a3cc3c9` compara el `ArtifactFingerprint` del root (identidad del directorio raíz y digest raw), pero no las identidades individuales de archivos o siblings. La ruta conserva TOCTOU y no garantiza atomicidad ante cambios hostiles. El helper sigue privado, sin caller de apply/CLI ni simulación pública. Siguen pendientes el proveedor acotado antes del lock, los callers de apply/CLI y las cotas para `version_motor`/`policy_id`; conexión de captura anclada y staging a apply, escritura filesystem y publicación también siguen pendientes.
 La referencia anterior a escrituras filesystem pendientes no niega la guardia
 parcial de escrituras de `StageAnclado` descrita arriba: esa capacidad aún no
-está integrada a apply; rename, apply transaccional y publicación siguen
-pendientes.
+está integrada a apply. El rename sibling cuenta con la guardia parcial de
+`1bee231`/`9405919`/`0ffaae2`, pero no con una frontera general ante carreras
+externas; apply transaccional y publicación siguen pendientes.
 
 La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
@@ -182,7 +198,9 @@ scope inicial; también se rechaza que ambos cambien juntos a otro scope.
 Error, ausencia o mismatch fallan como `stage_io`; el archivo podría haberse
 creado vacío antes de fallar y la capability queda recuperable para cleanup y
 retry. El token de scope no forma parte del journal. Esta guardia no cubre
-rename, apply, publicación ni el backend por ruta/bundle.
+rename, apply, publicación ni el backend por ruta/bundle; el rename sibling
+recibió una guardia parcial separada en `1bee231`/`9405919`/`0ffaae2`, descrita
+arriba, sin eliminar la carrera externa no-replace de Unix.
 El probe usa `STATX_MNT_ID` en Linux y `VolumeSerialNumber` en Windows, que no
 identifica instancia de montaje; las pruebas son sintéticas y no cubren bind
 mounts reales ni mounts anidados. TOCTOU externo queda fuera del contrato. Los
@@ -209,7 +227,8 @@ actualmente.
 Orden de las unidades pequeñas: 1) completar y probar la frontera de scope,
 incluidos bind mount real y mounts anidados; 2) cubrir los caminos aún fuera de
 la frontera (backend por ruta/bundle), integrar las escrituras parciales de
-`StageAnclado` a apply y completar rename/publicación; añadir cobertura
+`StageAnclado` a apply, cerrar los límites restantes del rename sibling y
+completar publicación; añadir cobertura
 end-to-end de recovery para los pasos que ya delegan cleanup en
 `StageAnclado::limpiar`, habilitar un caller productivo de los runners,
 completar los demás caminos de cleanup y conectar un consumidor productivo del
@@ -334,8 +353,12 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | CI `38582798497` | Éxito para `a4583c24414850b9627bcfdc919d31d0cf502b70`: jobs Linux y Windows pasan. Acredita este snapshot, no la equivalencia de `VolumeSerialNumber` con instancia de montaje ni cobertura del backend por ruta/bundle, staging writes o TOCTOU externo. U7/04 siguen parciales y el progreso global permanece en 4/9. |
 | `3e8ec0a` | Añade recuperación owned de la capability en `ErrorEscrituraStage` mediante `Result<StageAnclado, Self>`, para poder limpiar/reintentar cuando existe stage parcial. |
 | `22494c8` | Si no hay capability, la recuperación devuelve el `ErrorEscrituraStage` intacto en `Err`, preservando código, stage parcial e indicador diagnóstico; no descarta información del error. |
-| `75d223e` | La capability writable conserva scope inicial y lo propaga a descendientes. Verifica parent antes de open/mkdir/create, child handle tras abrir y file handle antes de `write_all`; ambos deben coincidir con el scope inicial, por lo que cambiar parent y stage juntos también se rechaza. Fallos de probe quedan en `stage_io`, pueden dejar archivo vacío y conservan capability para cleanup/retry. No cambia journal ni habilita cleanup automático de sibling huérfano sin capability. Pruebas sintéticas cubren el rechazo conjunto y cleanup/retry; no prueban bind mount real ni mounts anidados. Rename/apply/publicación no están integrados. |
+| `75d223e` | La capability writable conserva scope inicial y lo propaga a descendientes. Verifica parent antes de open/mkdir/create, child handle tras abrir y file handle antes de `write_all`; ambos deben coincidir con el scope inicial, por lo que cambiar parent y stage juntos también se rechaza. Fallos de probe quedan en `stage_io`, pueden dejar archivo vacío y conservan capability para cleanup/retry. No cambia journal ni habilita cleanup automático de sibling huérfano sin capability. Pruebas sintéticas cubren el rechazo conjunto y cleanup/retry; no prueban bind mount real ni mounts anidados. En ese corte aún no existía la guardia parcial de rename sibling añadida después; apply/publicación permanecen pendientes. |
 | CI `38591028005` | Éxito para `75d223e`: jobs Linux y Windows pasan. Acredita este snapshot, no bind mounts reales, mounts anidados, `VolumeSerialNumber` como instancia de montaje, el backend por ruta/bundle ni las carreras TOCTOU externas. U7/fase 04 siguen parciales; progreso 4/9. |
+| `1bee231` | Añade rename sibling con token de scope efímero: comprueba parent y fuente antes de operar y, tras el rename exitoso, verifica parent/fuente y el destino reabierto por handle antes de actualizar nombre/capability. Un error de operación o resultado posterior no verificado invalida la capability. Pruebas sintéticas; no bind mount real. |
+| `9405919` | Conserva la invalidación de capability ante error de operación y separa errores de setup de errores internos del rename, para que fallos de preparación no se reconcilien como si la syscall hubiera podido mover el directorio. |
+| `0ffaae2` | Introduce `OperacionAmbigua` solo cuando la syscall de rename de plataforma retorna error; solo esa variante habilita reobservación/reconciliación de `RestoreOld`/`DiscardNewRestoreOld`. Setup, `Io` conocido, scope y outcome no verificados fallan de inmediato y conservan el journal. El código visible sigue `anchored_rename_io`; el retry vuelve a obtener una capability fresca. Unix conserva carrera externa entre `fstatat` y `renameat`; Windows compara volumen, no instancia de montaje. |
+| CI `38599477655` | Éxito para `0ffaae27dca121926a3f386ca1cdb0a042539412`: jobs Linux y Windows completados; workspace, fmt, clippy y frontera pública pasan. U7/fase 04 permanecen parciales, 4/9; no acredita bind mount real ni mounts anidados. |
 
 ### Evidencia de fase 05 — historial y cierre de la demo pública
 

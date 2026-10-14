@@ -86,8 +86,10 @@ cambio conjunto a otro scope también falla cerrado. Error, ausencia o
 mismatch producen `stage_io`. Si la comprobación falla después de crear el
 archivo puede quedar vacío, mientras la capability recuperable permite cleanup
 explícito y retry. El token de scope no se guarda en el journal. No se habilita
-cleanup automático de sibling huérfano sin capability; rename, integración a
-apply y publicación siguen pendientes.
+cleanup automático de sibling huérfano sin capability. El rename sibling
+cuenta con una guardia parcial separada desde
+`1bee231`/`9405919`/`0ffaae2`; no completa la frontera frente a carreras
+externas ni integra apply/publicación.
 U8 añade captura por ruta acotada y privada para simulación y pruebas y, en
 `63e59d1`, preflight consumidor de la suma de
 configuración antes de abrir el root bajo lock y antes de clonar/inventariar
@@ -221,10 +223,31 @@ de open/mkdir/create, el child después de abrir y el file handle antes de
 también un cambio conjunto de parent y stage a otro scope. Un probe incierto
 falla con `stage_io`; una comprobación posterior a create puede dejar un archivo
 vacío, pero mantiene capability para cleanup explícito/retry. El token de scope
-no va al journal. Esto no cubre rename ni integra staging a apply/publicación;
-no hay caller productivo de los runners. Pruebas sintéticas: no demuestran bind
-mount real ni mounts anidados. En Windows, `VolumeSerialNumber` no identifica
-instancia de montaje; TOCTOU externo sigue fuera del contrato.
+no va al journal. Esta guardia de escritura no cubre por sí sola rename ni
+integra staging a apply/publicación; no hay caller productivo de los runners.
+Pruebas sintéticas: no demuestran bind mount real ni mounts anidados. En
+Windows, `VolumeSerialNumber` no identifica instancia de montaje; TOCTOU
+externo sigue fuera del contrato.
+
+Desde `1bee231`, `EspacioTransaccionalAnclado` captura el scope del parent por
+handle y el rename sibling valida parent y fuente antes de la syscall. Tras
+éxito vuelve a comprobar parent/fuente, reabre el destino por handle y exige
+identidad y scope coincidentes antes de actualizar el nombre/capability. Si la
+operación devuelve error o falla la verificación posterior, invalida la
+capability. `9405919` conserva esa invalidación y distingue errores de setup
+externos al intento. `0ffaae2` hace explícito `OperacionAmbigua`, creado solo
+cuando la syscall de rename de plataforma retorna error; únicamente esa
+variante permite a `RestoreOld`/`DiscardNewRestoreOld` reobservar y reconciliar. Errores de
+setup, `Io` conocido, scope no verificado y outcome no verificado retornan de
+inmediato, sin reobservación, cleanup ni retirada del journal. El código
+visible se mantiene en `anchored_rename_io`; una nueva llamada de recovery
+reclasifica el estado y obtiene una capability fresca. El token de scope es
+efímero y no se serializa en el journal; el observer hereda la comprobación de
+scope a través del inventario anclado. Persisten la carrera externa
+`fstatat`→`renameat` sin no-replace en Unix, el límite de
+`VolumeSerialNumber` de Windows (volumen, no instancia de montaje) y TOCTOU
+externo. Las pruebas son sintéticas, sin bind mount real ni mounts anidados;
+apply y publicación siguen pendientes.
 
 `RootNewValidado` también necesita procedencia de admisión: un `Candidato`
 público o un comparador de representación no demuestra qué base, delta e
@@ -243,8 +266,9 @@ La siguiente secuencia se divide en unidades pequeñas, en este orden:
 1. Completar y probar la frontera de scope, incluidos bind mount real y mounts
    anidados.
 2. Completar los consumidores aún fuera del camino anclado: backend por
-   ruta/bundle, integración a apply de la guardia parcial de escritura y los
-   caminos restantes de rename/publicación; añadir cobertura end-to-end de
+   ruta/bundle, integrar a apply la guardia parcial de escritura y cerrar los
+   límites restantes del rename sibling y completar publicación;
+   añadir cobertura end-to-end de
    recovery para los pasos que ya delegan cleanup en `StageAnclado::limpiar`,
    habilitar un caller productivo de los runners, completar los demás caminos
    de cleanup y añadir un consumidor productivo del indicador de sibling
@@ -1045,8 +1069,12 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | CI `38582798497` | Éxito para `a4583c24414850b9627bcfdc919d31d0cf502b70`; jobs `verify` Linux y `verify-windows` completados. | Evidencia del commit, no de mounts reales/anidados, cobertura del backend por ruta/bundle o escrituras de staging. U7/04 siguen parciales; progreso 4/9. |
 | 2026-10-14 | `3e8ec0a` | Añade recuperación owned de la capability de `ErrorEscrituraStage` como `Result<StageAnclado, Self>`, para cleanup/retry de un stage parcial. |
 | 2026-10-14 | `22494c8` | Si la capability está ausente, `Err(Self)` devuelve intacto el error de escritura; conserva código, stage parcial y diagnóstico en vez de descartarlos. |
-| 2026-10-14 | `75d223e` | La capability writable captura scope inicial y lo propaga a descendientes. Valida parent antes de open/mkdir/create, child handle después de abrir y file handle antes de `write_all`; parent y stage deben coincidir con el scope inicial, por lo que también rechaza un cambio conjunto. Error/ausencia/mismatch producen `stage_io`; puede quedar un archivo vacío, y la capability se recupera para cleanup/retry. Token no persiste en journal. Pruebas sintéticas cubren rechazo conjunto y cleanup/retry, no bind mount real ni mounts anidados. Sin rename/apply/publicación; sibling huérfano ambiguo sigue sin capability ni cleanup automático. |
+| 2026-10-14 | `75d223e` | La capability writable captura scope inicial y lo propaga a descendientes. Valida parent antes de open/mkdir/create, child handle después de abrir y file handle antes de `write_all`; parent y stage deben coincidir con el scope inicial, por lo que también rechaza un cambio conjunto. Error/ausencia/mismatch producen `stage_io`; puede quedar un archivo vacío, y la capability se recupera para cleanup/retry. Token no persiste en journal. Pruebas sintéticas cubren rechazo conjunto y cleanup/retry, no bind mount real ni mounts anidados. En ese corte aún no existía la guardia parcial de rename sibling añadida después; apply/publicación permanecen pendientes. Sibling huérfano ambiguo sigue sin capability ni cleanup automático. |
 | 2026-10-14 | CI `38591028005` | Éxito para `75d223e`; jobs Linux y Windows completados. | Acredita el snapshot, no bind mount real, mounts anidados, `VolumeSerialNumber` como instancia de montaje, backend por ruta/bundle ni TOCTOU. U7/04 siguen parciales; progreso 4/9. |
+| 2026-10-14 | `1bee231` | Añade rename sibling con scope efímero del parent: valida scope de parent/fuente antes de operar y parent/fuente/destino reabierto por handle tras éxito antes de cambiar nombre/capability. Un error operacional o verificación posterior fallida invalida la capability; las pruebas son sintéticas. |
+| 2026-10-14 | `9405919` | Asegura que la capability queda invalidada si la operación devuelve error y separa errores de setup del resultado interno para evitar reconciliar fallos de preparación. No cambia el código estable de rename. |
+| 2026-10-14 | `0ffaae2` | Solo el error interno `OperacionAmbigua`, generado al fallar la syscall de rename de plataforma, permite reobservar/reconciliar `RestoreOld`/`DiscardNewRestoreOld`. Setup, `Io` conocido, scope y outcome no verificados fallan de inmediato y conservan el journal; una nueva invocación obtiene capability fresca. El Display/código permanece `anchored_rename_io`. |
+| 2026-10-14 | CI `38599477655` | Éxito para `0ffaae27dca121926a3f386ca1cdb0a042539412`: `verify` Linux y `verify-windows` completados; workspace, fmt, clippy y frontera pública pasan. U7/04 siguen parciales, 4/9; no prueba bind mount real ni mounts anidados. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
