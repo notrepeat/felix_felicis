@@ -44,9 +44,12 @@ mismatch del probe fallan cerrado con `stage_cleanup_io`; `ErrorLimpiezaStage`
 conserva la capability para retry. Un error tras unlink puede dejar borrado
 parcial, y las carreras externas entre check y operación quedan fuera del
 contrato. No habilita cleanup del sibling huérfano ni completa la frontera de
-mounts. CI `38576523094`
-pasó para `bb06df3` en Linux y Windows; no acredita bind mounts reales, mounts
-anidados ni integración con inventario, captura, staging descendente o recovery.
+mounts. Los pasos de cleanup de los runners existentes ya llaman
+`StageAnclado::limpiar` y heredan el probe real; aún falta cobertura end-to-end
+de recovery que ejercite esa frontera y no hay caller productivo de los
+runners. CI `38576523094` pasó para `bb06df3` en Linux y Windows; no acredita
+bind mounts reales, mounts anidados ni integración con inventario, captura o
+staging descendente.
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
@@ -133,9 +136,12 @@ del stage recién reabierto después; Linux usa `STATX_MNT_ID` y Windows
 persiste mount ID. La guardia de creación no demuestra seguridad ante bind
 mounts reales ni mounts anidados. `bb06df3` añade comprobaciones de scope solo al
 cleanup explícito de un `StageAnclado` con capability: no habilita cleanup del
-sibling huérfano ni integra la frontera en inventario, captura, staging
-descendente o recovery. El indicador diagnóstico del sibling posible sigue sin
-consumidor productivo. El walker de rutas del bundle es una familia separada.
+sibling huérfano ni integra la frontera en inventario, captura o staging
+descendente. Los pasos de cleanup de los runners de recovery existentes llaman
+`StageAnclado::limpiar` y heredan el probe real; falta cobertura end-to-end de
+recovery que ejercite esa frontera y no hay caller productivo de los runners.
+El indicador diagnóstico del sibling posible sigue sin consumidor productivo.
+El walker de rutas del bundle es una familia separada.
 La cobertura determinista del sentinel `FileId` de Windows es evidencia
 distinta; la prueba de bind mount Linux que comparte `st_dev` y los mounts
 anidados siguen pendientes. Ninguna prueba disponible demuestra todavía
@@ -153,9 +159,11 @@ actualmente.
 
 Orden de las unidades pequeñas: 1) completar y probar la frontera de scope,
 incluidos bind mount real y mounts anidados; 2) integrar la frontera en
-inventario, captura, staging descendente y recovery, completar los demás caminos
-de cleanup y conectar un consumidor productivo del indicador de sibling
-huérfano posible; 3) prueba de admisión sellada o revalidación con sus entradas;
+inventario, captura y staging descendente; añadir cobertura end-to-end de
+recovery para los pasos que ya delegan cleanup en `StageAnclado::limpiar`,
+habilitar un caller productivo de los runners, completar los demás caminos de
+cleanup y conectar un consumidor productivo del indicador de sibling huérfano
+posible; 3) prueba de admisión sellada o revalidación con sus entradas;
 4) validación del root `New`; 5) habilitar `Committed` solo después de esa
 validación. El cleanup explícito de `StageAnclado` solo aporta una guardia
 parcial y no satisface estos pendientes. U7 y fase 04 permanecen parciales; el
@@ -270,7 +278,7 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `9f48304` | Si `mkdir_at` devuelve error, registra que puede existir un sibling vacío huérfano; mantiene `stage_io`, sin capability parcial ni cleanup automático. El indicador queda sin consumidor productivo. |
 | CI `38571014167` | Éxito para `9f48304`: jobs Linux y Windows pasan, junto con pruebas del workspace, fmt, clippy y frontera pública. No acredita bind mounts reales, mounts anidados ni integración completa de la frontera. |
 | `bb06df3` | Añade guardia parcial al cleanup explícito de `StageAnclado`: captura scope del parent, preflight por handle y revalidación antes de unlink/rmdir/reopen y rmdir final. Las incertidumbres fallan como `stage_cleanup_io`; el error conserva capability para retry. Un fallo tras unlink puede dejar borrado parcial y carreras externas check→operación quedan fuera del contrato. No cubre sibling huérfano ni completa la frontera. |
-| CI `38576523094` | Éxito para `bb06df309c633f25b15f3e3b3bfd74c24b06a076`: jobs Linux y Windows, pruebas del workspace, fmt, clippy y frontera pública pasan. U7/04 siguen parciales; bind mount real, mounts anidados e integración en inventario, captura, staging descendente y recovery siguen pendientes. |
+| CI `38576523094` | Éxito para `bb06df309c633f25b15f3e3b3bfd74c24b06a076`: jobs Linux y Windows, pruebas del workspace, fmt, clippy y frontera pública pasan. U7/04 siguen parciales; bind mount real, mounts anidados e integración en inventario, captura y staging descendente siguen pendientes. Los runners existentes ya heredan el probe mediante `StageAnclado::limpiar`, pero faltan cobertura end-to-end de recovery que lo ejercite y caller productivo de los runners. |
 
 ### Evidencia de fase 05 — historial y cierre de la demo pública
 
