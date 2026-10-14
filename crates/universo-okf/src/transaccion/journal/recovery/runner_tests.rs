@@ -874,7 +874,7 @@ fn stage_presente_falla_cerrado_y_conserva_journal_y_root() {
         Err(ErrorFilaJournalOld::FilaNoAutorizada)
     );
     assert_eq!(fs::read(&canonical).unwrap(), bytes);
-    assert_eq!(fs::read(&stage.join("data.bin")).unwrap(), b"new-tree");
+    assert_eq!(fs::read(stage.join("data.bin")).unwrap(), b"new-tree");
     assert_eq!(fs::read(&canary).unwrap(), b"untouched");
     assert_eq!(Journal::parse(&bytes).unwrap(), journal);
     assert_root_intact(&root);
@@ -982,7 +982,7 @@ fn txn_invalido_falla_antes_de_mutar_siblings_y_journal() {
         ErrorDirectorioAnclado::ComponenteInvalido
     );
     assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
-    assert_eq!(fs::read(&stage.join("data.bin")).unwrap(), b"new-tree");
+    assert_eq!(fs::read(stage.join("data.bin")).unwrap(), b"new-tree");
     assert_eq!(fs::read(&canary).unwrap(), b"untouched");
     assert_root_intact(&root);
     assert_eq!(
