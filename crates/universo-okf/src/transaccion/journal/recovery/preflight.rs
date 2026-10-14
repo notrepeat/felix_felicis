@@ -11,9 +11,11 @@ use super::{
 
 /// One of the only recovery rows currently implemented by a runner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // The shared Old suffix identifies the artifact each row preserves.
 pub(crate) enum FilaRecoverySoportada {
     KeepOld,
     RestoreOld,
+    DiscardNewRestoreOld,
 }
 
 /// Canonical journal identity and its inventory, observed while holding the same lock.
@@ -145,6 +147,20 @@ pub(crate) fn clasificar_fila_recovery(
                     ] =>
         {
             Some(FilaRecoverySoportada::RestoreOld)
+        }
+        RecoveryDecision::DiscardNewRestoreOld
+            if inventario.root == ArtifactState::New
+                && inventario.backup == ArtifactState::Old
+                && inventario.stage == ArtifactState::Absent
+                && decision.steps(inventario)
+                    == [
+                        RecoveryStep::RemoveKnownStage,
+                        RecoveryStep::RemoveRootNew,
+                        RecoveryStep::RestoreBackupToRoot,
+                        RecoveryStep::RemoveJournal,
+                    ] =>
+        {
+            Some(FilaRecoverySoportada::DiscardNewRestoreOld)
         }
         _ => None,
     }
@@ -313,10 +329,16 @@ mod tests {
                                     | ArtifactState::New
                                     | ArtifactState::PartialNew
                             );
+                        let exact_discard = root == ArtifactState::New
+                            && backup == ArtifactState::Old
+                            && stage == ArtifactState::Absent
+                            && matches!(fase, JournalState::BackupReady | JournalState::Installed);
                         let esperado = if exact_keep {
                             Some(FilaRecoverySoportada::KeepOld)
                         } else if exact_restore {
                             Some(FilaRecoverySoportada::RestoreOld)
+                        } else if exact_discard {
+                            Some(FilaRecoverySoportada::DiscardNewRestoreOld)
                         } else {
                             None
                         };
@@ -387,6 +409,20 @@ mod tests {
                 ..inventario
             };
             assert_eq!(clasificar_fila_recovery(&journal, inventario), None);
+        }
+    }
+
+    #[test]
+    fn discard_new_requiere_stage_ausente_aunque_root_y_backup_coincidan() {
+        let journal = journal(JournalState::BackupReady);
+        for stage in [ArtifactState::New, ArtifactState::PartialNew] {
+            assert_eq!(
+                clasificar_fila_recovery(
+                    &journal,
+                    inventario(ArtifactState::New, ArtifactState::Old, stage),
+                ),
+                None
+            );
         }
     }
 }

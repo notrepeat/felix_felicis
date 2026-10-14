@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use crate::transaccion::anclado::DirectorioAnclado;
 use crate::transaccion::anclado::journal_temporal::{
     ErrorJournalAnclado, ResultadoEliminacionJournal,
 };
@@ -103,6 +104,13 @@ impl ErrorFilaJournalOld {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResultadoFilaJournalRestoreOld {
     NoAplicableJournalAusente,
+    Eliminado,
+    AusenteTrasContexto,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResultadoFilaJournalDiscardNewRestoreOld {
     Eliminado,
     AusenteTrasContexto,
 }
@@ -380,6 +388,15 @@ fn ejecutar_fila_journal_restore_old_desde_contexto_con_limpieza(
         limpiar_stage_restore_old(lock, &contexto.journal, contexto.inventario, limpiar_stage)?;
     antes_de_renombrar(lock);
 
+    restaurar_backup_y_retirar_journal(lock, &contexto, inventario_pre_rename, antes_de_eliminar)
+}
+
+fn restaurar_backup_y_retirar_journal(
+    lock: &mut LockEscritura,
+    contexto: &ContextoPreflightRecovery,
+    inventario_pre_rename: RecoveryInventory,
+    antes_de_eliminar: impl FnOnce(&LockEscritura),
+) -> Result<ResultadoFilaJournalRestoreOld, ErrorFilaJournalRestoreOld> {
     let destino = lock
         .ubicacion()
         .ruta()
@@ -432,6 +449,129 @@ fn ejecutar_fila_journal_restore_old_desde_contexto_con_limpieza(
             Err(ErrorFilaJournalRestoreOld::EliminacionIndeterminada(error))
         }
     }
+}
+
+pub(super) fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto(
+    lock: &mut LockEscritura,
+    contexto: ContextoPreflightRecovery,
+    antes_de_renombrar: impl FnOnce(&LockEscritura),
+    antes_de_eliminar: impl FnOnce(&LockEscritura),
+) -> Result<ResultadoFilaJournalDiscardNewRestoreOld, ErrorFilaJournalRestoreOld> {
+    ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
+        lock,
+        contexto,
+        antes_de_renombrar,
+        antes_de_eliminar,
+        renombrar_root_new_a_stage,
+    )
+}
+
+fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
+    lock: &mut LockEscritura,
+    contexto: ContextoPreflightRecovery,
+    antes_de_renombrar: impl FnOnce(&LockEscritura),
+    antes_de_eliminar: impl FnOnce(&LockEscritura),
+    renombrar: impl FnOnce(&mut LockEscritura, &Journal) -> Result<(), ErrorRenombrarAnclado>,
+) -> Result<ResultadoFilaJournalDiscardNewRestoreOld, ErrorFilaJournalRestoreOld> {
+    if clasificar_fila_recovery(&contexto.journal, contexto.inventario)
+        != Some(FilaRecoverySoportada::DiscardNewRestoreOld)
+    {
+        return Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada);
+    }
+
+    antes_de_renombrar(lock);
+    let intento_renombrar = renombrar(lock, &contexto.journal);
+    let inventario_stage = observar_inventario_recovery(lock, &contexto.journal)
+        .map_err(ErrorFilaJournalRestoreOld::Observacion)?;
+    reconciliar_intento_renombrado_discard_new(
+        intento_renombrar,
+        inventario_stage,
+        contexto.inventario,
+    )?;
+
+    let inventario_pre_rename = limpiar_stage_restore_old(
+        lock,
+        &contexto.journal,
+        inventario_stage,
+        StageAnclado::limpiar,
+    )?;
+    let resultado = restaurar_backup_y_retirar_journal(
+        lock,
+        &contexto,
+        inventario_pre_rename,
+        antes_de_eliminar,
+    )?;
+    match resultado {
+        ResultadoFilaJournalRestoreOld::Eliminado => {
+            Ok(ResultadoFilaJournalDiscardNewRestoreOld::Eliminado)
+        }
+        ResultadoFilaJournalRestoreOld::AusenteTrasContexto => {
+            Ok(ResultadoFilaJournalDiscardNewRestoreOld::AusenteTrasContexto)
+        }
+        ResultadoFilaJournalRestoreOld::NoAplicableJournalAusente => {
+            Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
+        }
+    }
+}
+
+fn renombrar_root_new_a_stage(
+    lock: &mut LockEscritura,
+    journal: &Journal,
+) -> Result<(), ErrorRenombrarAnclado> {
+    let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
+        .map_err(|_| ErrorRenombrarAnclado::Io)?;
+    let identidad_parent = ancla.identidad_parent();
+    let identidad_raiz = ancla
+        .identidad_raiz()
+        .ok_or(ErrorRenombrarAnclado::FuenteAusente)?;
+    if identidad_parent.journal_identity().as_ref() != Some(journal.parent())
+        || identidad_raiz.journal_identity().as_ref() != Some(journal.new_fingerprint().identity())
+    {
+        return Err(ErrorRenombrarAnclado::IdentidadNoCoincide);
+    }
+    let origen = lock
+        .ubicacion()
+        .ruta()
+        .file_name()
+        .ok_or(ErrorRenombrarAnclado::ComponenteInvalido)?
+        .to_os_string();
+    let destino = lock
+        .ubicacion()
+        .stage(journal.transaction_id())
+        .map_err(|_| ErrorRenombrarAnclado::ComponenteInvalido)?;
+    let destino = destino
+        .as_path()
+        .file_name()
+        .ok_or(ErrorRenombrarAnclado::ComponenteInvalido)?
+        .to_os_string();
+
+    let mut espacio = lock
+        .espacio_transaccional_anclado()
+        .map_err(|_| ErrorRenombrarAnclado::Io)?;
+    let mut root = espacio.observar_directorio_sibling(&origen, identidad_raiz)?;
+    espacio.renombrar_directorio(&mut root, &destino)
+}
+
+fn reconciliar_intento_renombrado_discard_new(
+    intento: Result<(), ErrorRenombrarAnclado>,
+    inventario_posterior: RecoveryInventory,
+    fila_inicial: RecoveryInventory,
+) -> Result<(), ErrorFilaJournalRestoreOld> {
+    let fila_stage = RecoveryInventory {
+        root: ArtifactState::Absent,
+        backup: ArtifactState::Old,
+        stage: ArtifactState::New,
+        root_new_validated: false,
+    };
+    if inventario_posterior == fila_stage {
+        return Ok(());
+    }
+    if inventario_posterior == fila_inicial {
+        if let Err(error) = intento {
+            return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
+        }
+    }
+    Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
 }
 
 fn limpiar_stage_restore_old(

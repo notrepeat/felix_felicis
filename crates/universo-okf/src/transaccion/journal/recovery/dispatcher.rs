@@ -6,11 +6,13 @@ use crate::transaccion::stage::StageAnclado;
 
 use super::preflight::preflight_recovery_con_observador;
 use super::runner::{
+    ejecutar_fila_journal_discard_new_restore_old_desde_contexto,
     ejecutar_fila_journal_old_desde_contexto, ejecutar_fila_journal_restore_old_desde_contexto,
 };
 use super::{
     ErrorFilaJournalOld, ErrorFilaJournalRestoreOld, ErrorObservadorRecovery,
-    ErrorPreflightRecovery, FilaRecoverySoportada, RecoveryInventory, ResultadoFilaJournalOld,
+    ErrorPreflightRecovery, FilaRecoverySoportada, RecoveryInventory,
+    ResultadoFilaJournalDiscardNewRestoreOld, ResultadoFilaJournalOld,
     ResultadoFilaJournalRestoreOld, ResultadoPreflightRecovery, clasificar_fila_recovery,
     observar_inventario_recovery,
 };
@@ -22,6 +24,7 @@ pub(crate) enum ResultadoRecoverySoportado {
     JournalAusente,
     KeepOld(ResultadoFilaJournalOld),
     RestoreOld(ResultadoFilaJournalRestoreOld),
+    DiscardNewRestoreOld(ResultadoFilaJournalDiscardNewRestoreOld),
 }
 
 /// Preflight and row-specific errors remain distinguishable to callers.
@@ -33,6 +36,7 @@ pub(crate) enum ErrorRecoverySoportado {
     FilaNoSoportada,
     KeepOld(ErrorFilaJournalOld),
     RestoreOld(ErrorFilaJournalRestoreOld),
+    DiscardNewRestoreOld(ErrorFilaJournalRestoreOld),
 }
 
 impl ErrorRecoverySoportado {
@@ -40,6 +44,7 @@ impl ErrorRecoverySoportado {
         match self {
             Self::KeepOld(error) => error.recuperar_stage_parcial(),
             Self::RestoreOld(error) => error.recuperar_stage_parcial(),
+            Self::DiscardNewRestoreOld(error) => error.recuperar_stage_parcial(),
             _ => None,
         }
     }
@@ -91,5 +96,15 @@ pub(super) fn ejecutar_recovery_soportado_con(
         )
         .map(ResultadoRecoverySoportado::RestoreOld)
         .map_err(ErrorRecoverySoportado::RestoreOld),
+        FilaRecoverySoportada::DiscardNewRestoreOld => {
+            ejecutar_fila_journal_discard_new_restore_old_desde_contexto(
+                lock,
+                *contexto,
+                antes_de_renombrar,
+                antes_de_eliminar,
+            )
+            .map(ResultadoRecoverySoportado::DiscardNewRestoreOld)
+            .map_err(ErrorRecoverySoportado::DiscardNewRestoreOld)
+        }
     }
 }

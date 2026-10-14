@@ -25,8 +25,9 @@ pub(crate) use dispatcher::{
 mod runner;
 #[allow(unused_imports)]
 pub(crate) use runner::{
-    ErrorFilaJournalOld, ErrorFilaJournalRestoreOld, ResultadoFilaJournalOld,
-    ResultadoFilaJournalRestoreOld, ejecutar_fila_journal_old, ejecutar_fila_journal_restore_old,
+    ErrorFilaJournalOld, ErrorFilaJournalRestoreOld, ResultadoFilaJournalDiscardNewRestoreOld,
+    ResultadoFilaJournalOld, ResultadoFilaJournalRestoreOld, ejecutar_fila_journal_old,
+    ejecutar_fila_journal_restore_old,
 };
 
 /// Resultado abstracto de clasificar root, backup o stage.

@@ -68,6 +68,15 @@ fn preparar_fila(state: JournalState) -> (TempDir, PathBuf, LockEscritura, PathB
     (temp, root, lock, canonical, journal)
 }
 
+fn preparar_discard_new(
+    state: JournalState,
+) -> (TempDir, PathBuf, LockEscritura, PathBuf, Journal) {
+    let (temp, root, lock, canonical, journal) = preparar_fila(state);
+    fs::rename(&root, backup_path(&lock)).unwrap();
+    fs::rename(root.with_file_name("new-fixture"), &root).unwrap();
+    (temp, root, lock, canonical, journal)
+}
+
 fn escribir_installed(canonical: &Path, mut journal: Journal) -> Journal {
     journal.advance(JournalState::BackupReady).unwrap();
     journal.advance(JournalState::Installed).unwrap();
@@ -702,6 +711,182 @@ fn restore_old_reconcilia_error_de_limpieza_con_stage_ya_eliminado() {
     assert!(!backup.exists());
     assert!(!canonical.exists());
     assert_root_intact(&root);
+}
+
+#[test]
+fn discard_new_restaura_old_en_filas_admitidas_y_retirando_journal_al_final() {
+    for (state, validated) in [
+        (JournalState::BackupReady, false),
+        (JournalState::BackupReady, true),
+        (JournalState::Installed, false),
+    ] {
+        let (_temp, root, mut lock, canonical, journal) = preparar_discard_new(state);
+        let backup = backup_path(&lock);
+        let stage = stage_path(&lock);
+        let canary = root.with_file_name("keep-canary.bin");
+        fs::write(&canary, b"untouched").unwrap();
+        let parent = canonical.parent().unwrap();
+        let lockfile = lock.ubicacion().lock().as_path().to_path_buf();
+        let antes = inventario_parent_para_assertions(parent, &canonical, &lockfile);
+        let raiz_esperada = root.file_name().unwrap().to_string_lossy().into_owned();
+        let backup_esperado = backup.file_name().unwrap().to_string_lossy().into_owned();
+        let journal_esperado = canonical
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let mut esperado = antes
+            .into_iter()
+            .filter(|(nombre, _)| {
+                nombre != &raiz_esperada
+                    && !nombre.starts_with(&format!("{raiz_esperada}/"))
+                    && nombre != &backup_esperado
+                    && !nombre.starts_with(&format!("{backup_esperado}/"))
+                    && nombre != &journal_esperado
+            })
+            .collect::<Vec<_>>();
+        esperado.extend([
+            (raiz_esperada.clone(), EntradaParentAssertion::Directorio),
+            (
+                format!("{raiz_esperada}/data.bin"),
+                EntradaParentAssertion::Archivo {
+                    longitud: b"old-tree".len() as u64,
+                    bytes: Some(b"old-tree".to_vec()),
+                },
+            ),
+            (
+                format!("{raiz_esperada}/empty-dir"),
+                EntradaParentAssertion::Directorio,
+            ),
+        ]);
+        esperado.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
+        let antes_de_renombrar_visto = Cell::new(false);
+        let antes_de_eliminar_visto = Cell::new(false);
+
+        assert_eq!(
+            ejecutar_recovery_soportado_con(
+                &mut lock,
+                |lock, journal| {
+                    let mut inventario = observar_inventario_recovery(lock, journal)?;
+                    inventario.root_new_validated = validated;
+                    Ok(inventario)
+                },
+                |_| {
+                    antes_de_renombrar_visto.set(true);
+                    assert!(fingerprint(&root) == *journal.new_fingerprint());
+                    assert!(fingerprint(&backup) == *journal.old());
+                    assert!(!stage.exists());
+                    assert!(canonical.exists());
+                },
+                |_| {
+                    antes_de_eliminar_visto.set(true);
+                    assert!(fingerprint(&root) == *journal.old());
+                    assert!(!backup.exists());
+                    assert!(!stage.exists());
+                    assert!(canonical.exists());
+                },
+            ),
+            Ok(ResultadoRecoverySoportado::DiscardNewRestoreOld(
+                ResultadoFilaJournalDiscardNewRestoreOld::Eliminado
+            )),
+            "fase {state:?}, validado={validated}"
+        );
+
+        assert!(antes_de_renombrar_visto.get());
+        assert!(antes_de_eliminar_visto.get());
+        assert!(!canonical.exists());
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert_eq!(fs::read(&canary).unwrap(), b"untouched");
+        assert_root_intact(&root);
+        assert_eq!(
+            inventario_parent_para_assertions(parent, &canonical, &lockfile),
+            esperado
+        );
+    }
+}
+
+#[test]
+fn discard_new_converge_si_el_rename_reporta_error_despues_de_mover_root() {
+    let (_temp, root, mut lock, canonical, journal) =
+        preparar_discard_new(JournalState::BackupReady);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    let contexto = match preflight_recovery(&mut lock).unwrap() {
+        ResultadoPreflightRecovery::Contexto(contexto) => *contexto,
+        _ => unreachable!("el journal preparado debe producir contexto"),
+    };
+
+    assert_eq!(
+        ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
+            &mut lock,
+            contexto,
+            |_| {},
+            |_| {
+                assert!(fingerprint(&root) == *journal.old());
+                assert!(!backup.exists());
+                assert!(!stage.exists());
+                assert!(canonical.exists());
+            },
+            |lock, journal| {
+                renombrar_root_new_a_stage(lock, journal)?;
+                Err(ErrorRenombrarAnclado::Io)
+            },
+        ),
+        Ok(ResultadoFilaJournalDiscardNewRestoreOld::Eliminado)
+    );
+    assert_root_intact(&root);
+    assert!(!canonical.exists());
+}
+
+#[test]
+fn reinicio_despues_de_mover_root_a_stage_reanuda_por_restore_old() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_discard_new(JournalState::Installed);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    renombrar_root_new_a_stage(&mut lock, &journal).unwrap();
+    assert!(!root.exists());
+    assert!(fingerprint(&stage) == *journal.new_fingerprint());
+    assert!(fingerprint(&backup) == *journal.old());
+    drop(lock);
+
+    let mut restarted = LockEscritura::adquirir(&root).unwrap();
+    assert_eq!(
+        ejecutar_dispatcher_contando_observaciones(&mut restarted, &Cell::new(0)),
+        Ok(ResultadoRecoverySoportado::RestoreOld(
+            ResultadoFilaJournalRestoreOld::Eliminado
+        ))
+    );
+    assert!(!stage.exists());
+    assert!(!backup.exists());
+    assert!(!canonical.exists());
+    assert_root_intact(&root);
+}
+
+#[test]
+fn discard_new_conserva_canarios_si_hay_cualquier_stage_junto_a_root_new() {
+    let (_temp, root, mut lock, canonical, journal) =
+        preparar_discard_new(JournalState::BackupReady);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    crear_arbol(&stage, b"stage-canary");
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let parent = canonical.parent().unwrap();
+    let lockfile = lock.ubicacion().lock().as_path().to_path_buf();
+    let antes = inventario_parent_para_assertions(parent, &canonical, &lockfile);
+
+    assert_eq!(
+        ejecutar_dispatcher_contando_observaciones(&mut lock, &Cell::new(0)),
+        Err(ErrorRecoverySoportado::FilaNoSoportada)
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert!(fingerprint(&root) == *journal.new_fingerprint());
+    assert!(fingerprint(&backup) == *journal.old());
+    assert_eq!(fs::read(stage.join("data.bin")).unwrap(), b"stage-canary");
+    assert_eq!(
+        inventario_parent_para_assertions(parent, &canonical, &lockfile),
+        antes
+    );
 }
 
 #[test]
