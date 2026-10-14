@@ -437,7 +437,7 @@ fn sumar_presupuesto(
         .ok_or(ErrorSnapshot::LimiteInventarioExcedido)
 }
 
-fn validar_ruta_snapshot(ruta: &str) -> Result<(), ErrorSnapshot> {
+pub(super) fn validar_ruta_snapshot(ruta: &str) -> Result<(), ErrorSnapshot> {
     if ruta.is_empty() || ruta.contains('\\') || ruta.contains('\0') {
         return Err(ErrorSnapshot::RutaNoRepresentable);
     }

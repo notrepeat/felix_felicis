@@ -6,6 +6,8 @@
 
 #[allow(dead_code)]
 pub(crate) mod cursor;
+#[allow(dead_code)]
+pub(crate) mod lectura;
 
 use std::fmt;
 
@@ -192,6 +194,7 @@ fn escribir_ruta_root(salida: &mut Vec<u8>, ruta: Option<&str>) -> Result<(), Er
 pub(crate) enum ErrorCodecAdmision {
     ContextoInvalido,
     FramingInvalido,
+    VersionNoSoportada,
     LimiteComponenteExcedido,
     TotalExcedeLimite,
     LongitudExcedida,
@@ -203,6 +206,7 @@ impl ErrorCodecAdmision {
         match self {
             Self::ContextoInvalido => "admission_codec_context_invalid",
             Self::FramingInvalido => "admission_codec_framing_invalid",
+            Self::VersionNoSoportada => "admission_codec_version_unsupported",
             Self::LimiteComponenteExcedido => "admission_codec_component_limit",
             Self::TotalExcedeLimite => "admission_codec_limit",
             Self::LongitudExcedida => "admission_codec_length_overflow",
