@@ -86,7 +86,8 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   failed/6 ignored en 37 suites; WSL Ubuntu, 710 passed/0 failed/6 ignored en
   37 suites. `fmt` y `clippy` pasan en ambos entornos. Estos son conteos del
   workspace, no resultados focales de las pruebas de U7 o U8.
-- 2026-10-14: `34b7e0a` clasifica `PartialNew` cuando coincide la identidad
+- En el corte de `86bb79b` (antes de `c888347`/`c763f85`), `34b7e0a`
+  clasifica `PartialNew` cuando coincide la identidad
   durable del fingerprint `New` esperado por el journal y difiere el digest
   raw; una identidad distinta sigue siendo `Unknown`. `428d432` amplía `KeepOld` en `Prepared`,
   `BackupReady` e `Installed` para root `Old`, backup `Absent`, stage `New` o
@@ -109,14 +110,45 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   failed/6 ignored, Windows 708/0/6, 38 resúmenes de suites; el unittest de
   herramientas pasó 7 casos por sistema operativo. `fmt`, clippy y la frontera
   pública también pasaron.
-- U7 permanece parcial y sin caller desde apply/CLI ni publicación completa.
-  `RestoreOld` aún requiere stage `Absent`; `DiscardNewRestoreOld`, validación
-  de `New`, `Committed` y recovery completo siguen pendientes. No se afirma
-  atomicidad ni durabilidad: el lock coordina escritores Felix cooperantes y
-  TOCTOU por mutaciones externas queda fuera del contrato. Esta actualización
-  es documental; prueba focal/runtime: N/A. `git diff --check` y
-  `python tools/check_public_boundary.py` pasan tras editar. Su rollback abarca
-  solo `CHANGELOG.md` y los dos planes.
+- Al cierre de `86bb79b`, U7 seguía parcial y sin caller desde apply/CLI ni
+  publicación completa. `RestoreOld` aún requería stage `Absent`;
+  `DiscardNewRestoreOld`, `KeepValidated`, `Committed` y recovery completo
+  seguían pendientes. No se afirmaba atomicidad ni durabilidad: el lock
+  coordina escritores Felix cooperantes y TOCTOU por mutaciones externas queda
+  fuera del contrato.
+- 2026-10-14, `c888347`: `RestoreOld` acepta en `Prepared`, `BackupReady` e
+  `Installed` root `Absent`, backup `Old`, `root_new_validated=false` y stage
+  `Absent`, `New` o `PartialNew`. Reabre por identidad durable; exige digest
+  completo para `New` y admite `PartialNew` cuando coincide la identidad y el
+  digest raw difiere. Limpia y reobserva antes de restaurar el backup y retirar
+  el journal al final. Si cleanup reporta error, continúa solo cuando la nueva
+  observación confirma que el stage desapareció; si queda parcial, conserva el
+  journal para retry tras reinicio. Foco `cargo test -p universo-okf
+  recovery::`: 60 passed.
+- 2026-10-14, `c763f85`: añade `DiscardNewRestoreOld` solo para `BackupReady`
+  con root `New`, backup `Old`, stage `Absent` y validación false o true, y
+  `Installed` con esa fila y validación false. Renombra root al stage
+  identificado por el journal y reobserva para reconciliar un error ambiguo;
+  luego limpia/reobserva, restaura el backup y retira el journal al final. Un
+  root `New` junto a cualquier stage sibling falla cerrado. Tras cleanup
+  parcial, `RestoreOld` puede reintentar por identidad durable. Foco
+  `cargo test -p universo-okf recovery::`: 65 passed. En conjunto, ocho
+  pruebas/casos de recovery nuevos visibles cubren las filas, la ambigüedad,
+  el retry y el rechazo con canarios intactos.
+- CI run `38509652854` terminó con éxito para
+  `c763f8527d412778e99eb26c81194f96fdc0c545`: Linux 723 passed/0 failed/6
+  ignored, Windows 715/0/6, con 38 resúmenes de suites. El unittest de
+  herramientas pasó 7 pruebas por sistema operativo; `fmt`, clippy y
+  `check_public_boundary.py` también pasaron. U7 permanece parcial, sin caller
+  desde apply/producción ni publicación completa; `KeepValidated`, `Committed`
+  y el recovery completo siguen pendientes. No se afirma atomicidad ni
+  durabilidad: el lock coordina solo escritores Felix cooperantes y TOCTOU
+  por mutaciones externas queda fuera del contrato. Runtime harness: N/A; las
+  pruebas focales ejercitan filesystem real y rename ambiguo inyectado. Esta
+  actualización documental no agrega prueba focal ni runtime harness; ambos
+  son N/A. Solo toca `CHANGELOG.md` y los dos planes, y su rollback queda
+  limitado a esos archivos. `git diff --check` y
+  `python tools/check_public_boundary.py` pasan tras editar.
 
 ### Fase 05 — historial de evidencia y cierre de la demo pública
 

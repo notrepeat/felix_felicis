@@ -26,13 +26,21 @@ implementados.
 
 Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; U5,
 U7 y U8 conservan avance parcial, y U6 está cerrada para root anclado y
-staging. U7 incluye las filas exactas `KeepOld` y `RestoreOld`; su dispatcher
-crate-private limpia también un stage `New` o `PartialNew` cuando root es
+staging. U7 incluye filas exactas `KeepOld`, `RestoreOld` y
+`DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` con root
 `Old`, backup `Absent` y `root_new_validated=false` en `Prepared`,
-`BackupReady` e `Installed`. Reabre el stage por la identidad durable del
-journal, lo limpia y reobserva antes de retirar el journal; no hay caller desde
-apply/producción. `RestoreOld` sigue exigiendo stage `Absent`. U8 añade captura por ruta acotada y privada para
-simulación y pruebas y, en `63e59d1`, preflight consumidor de la suma de
+`BackupReady` e `Installed`. `RestoreOld` acepta root `Absent`, backup `Old`,
+`root_new_validated=false` y stage `Absent`, `New` o `PartialNew` en esas tres
+fases; reabre el stage por la identidad durable del journal (y exige digest
+completo cuando es `New`), lo limpia y reobserva antes de restaurar el backup
+y retirar el journal. `DiscardNewRestoreOld` acepta solo `BackupReady` con
+root `New`, backup `Old`, stage `Absent` y validación false/true, o `Installed`
+con esa misma fila y validación false. Renombra root `New` al stage identificado
+por el journal, reobserva para reconciliar el intento, limpia y reobserva el
+stage, restaura el backup verificado y retira el journal al final. Root `New`
+con cualquier stage sibling presente falla cerrado. Estas funciones siguen
+crate-private y no tienen caller desde apply/producción. U8 añade captura por
+ruta acotada y privada para simulación y pruebas y, en `63e59d1`, preflight consumidor de la suma de
 configuración antes de abrir el root bajo lock y antes de clonar/inventariar
 el root anclado. El exceso devuelve `snapshot_resource_limit` redactado,
 conserva root/canary y retiene el guard; dentro de cuota, el CAS sigue antes
@@ -45,10 +53,11 @@ consumidor sigue siendo una defensa necesaria. Esta garantía es distinta de
 la captura privada por ruta, que limita la lectura en curso y permite como
 máximo el remanente más un byte centinela en fuentes externas. Siguen
 pendientes el proveedor con lectura acotada antes del lock, los callers de
-apply/CLI y las cotas para `version_motor` y `policy_id`. U7 ahora limpia el
-stage conocido solo para la fila `KeepOld` descrita arriba; retry tras cleanup
-parcial se apoya en la identidad durable y el journal se conserva mientras el
-stage siga presente. El recovery sigue incompleto. Fase 04 sigue en curso:
+apply/CLI y las cotas para `version_motor` y `policy_id`. Para `RestoreOld` y
+`DiscardNewRestoreOld`, un error ambiguo de cleanup provoca reobservación: si
+el stage ya desapareció se continúa; si persiste parcial, se conserva el
+journal y el retry tras reinicio reutiliza la identidad durable. El recovery
+sigue incompleto. Fase 04 sigue en curso:
 lock, captura anclada y staging aún no están conectados a apply ni publican
 candidatos.
 
@@ -517,8 +526,9 @@ Chain strategy: feature-branch-chain
   `recovery.rs`. `d1b0ef6` añade cobertura de reconciliación/stage y
   `23e7718` completa la matriz pura. En `1dddce1`/`a4d01e5` se comparte un
   único preflight inicial; `85f7e89`/`7656d15` añaden el dispatcher
-  crate-private y sus pruebas, con ajuste de estilo en `0e8f0d4`. Solo enruta
-  `KeepOld`/`RestoreOld`; ningún caller desde apply/producción existe todavía.
+  crate-private y sus pruebas, con ajuste de estilo en `0e8f0d4`. En ese corte,
+  solo enruta `KeepOld`/`RestoreOld`; ningún caller desde apply/producción
+  existe todavía.
 
   `34b7e0a` clasifica `PartialNew` solo si coincide la identidad durable del
   fingerprint `New` del journal y difiere el digest raw; identidad distinta
@@ -548,15 +558,52 @@ Chain strategy: feature-branch-chain
   `check_public_boundary.py` también pasaron. Esta evidencia CI no afirma una
   verificación focal final en WSL.
 
-  No hay executor `DiscardNewRestoreOld`, validación de `New`, fila `Committed`
-  ni recovery completo. La función sigue crate-private, sin caller desde
-  apply/producción ni publicación completa. No se afirma atomicidad ni
-  durabilidad ante pérdida de energía: el lock coordina escritores Felix
-  cooperantes y TOCTOU por mutaciones externas queda fuera del contrato.
+  Al cierre de `86bb79b`, todavía no existía executor
+  `DiscardNewRestoreOld`; `RestoreOld` requería stage `Absent`. Esa función
+  seguía crate-private, sin caller desde apply/producción ni publicación
+  completa. No se afirmaba atomicidad ni durabilidad ante pérdida de energía:
+  el lock coordina escritores Felix cooperantes y TOCTOU por mutaciones
+  externas queda fuera del contrato.
   CI histórico `38240021138` pasó solo para `701de13`; `38242930608` pasó para
   SHA `db71e3c` con `RestoreOld` previo al dispatcher; `38246129604` aplica
   solo a `a4d01e5`. `a082467` conserva el estado histórico anterior. Objetivo
   por slice: <400 líneas authored.
+
+  `c888347` amplía `RestoreOld` en `Prepared`, `BackupReady` e `Installed` a
+  root `Absent`, backup `Old`, `root_new_validated=false` y stage `Absent`,
+  `New` o `PartialNew`. El stage debe corresponder a la identidad durable del
+  journal; `New` además exige el digest completo esperado, mientras
+  `PartialNew` permite reintentar por identidad aunque el digest haya cambiado
+  durante una limpieza previa. Primero limpia el stage y reobserva; solo con la
+  fila exacta (root ausente, backup old y stage ausente) restaura el backup y
+  retira el journal al final. Si cleanup informa error, reobserva: si el stage
+  ya desapareció continúa; si sigue presente, conserva el journal y devuelve
+  el error para retry tras reinicio. Un estado distinto falla cerrado.
+
+  `c763f85` añade `DiscardNewRestoreOld` únicamente para `BackupReady` con
+  root `New`, backup `Old`, stage `Absent` y `root_new_validated` false o true,
+  y para `Installed` con esa fila y validación false. Renombra root `New` al
+  stage del txn verificado, reobserva y reconcilia el rename incluso si reportó
+  error; solo acepta el postestado exacto. Luego limpia/reobserva el stage,
+  restaura el backup old y retira el journal al final. Si el rename quedó
+  aplicado pese al error, continúa; tras cleanup parcial, el journal permite
+  reintentar `RestoreOld` por la identidad durable. Root `New` con cualquier
+  stage sibling presente y las demás filas no autorizadas fallan cerrado.
+  Ocho pruebas/casos de recovery nuevos visibles cubren las filas, cleanup
+  ambiguo, retry tras reinicio y el rechazo con canarios intactos. Las pruebas
+  focales `cargo test -p universo-okf recovery::` registran 60 passed en
+  `c888347` y 65 passed en `c763f85`; runtime harness: N/A, porque las pruebas
+  focales ejercitan filesystem real y el rename ambiguo inyectado.
+
+  CI run `38509652854` terminó con éxito para `c763f8527d412778e99eb26c81194f96fdc0c545`:
+  Linux 723 passed/0 failed/6 ignored y Windows 715/0/6, con 38 resúmenes de
+  suites; las 8 pruebas de recovery nuevas son visibles. El unittest de
+  herramientas pasó 7 pruebas por sistema operativo; `fmt`, `clippy` y
+  `check_public_boundary.py` también pasaron. U7 sigue parcial: no hay caller
+  desde apply/producción ni publicación completa; quedan `KeepValidated`,
+  `Committed` y el recovery completo. No se afirma atomicidad ni durabilidad;
+  el lock coordina escritores Felix cooperantes y TOCTOU por mutaciones
+  externas queda fuera del contrato.
 
   Contrato de recursos compartido por los inventarios de snapshot/stage/recovery
   y por la carga desde disco con `bundle::cargar_bundle`: 128 MiB raw, 100.000
@@ -823,7 +870,8 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-13 | `eef28f55c4009248d74cc82c2188e310f3ce8e41` | Amplía una prueba existente del dispatcher a seis combinaciones de `KeepOld`/`RestoreOld` en `Prepared`/`BackupReady`/`Installed`, con una observación inicial por ejecución. `KeepOld` comprueba que se retire solo el journal esperado; `RestoreOld` recupera el fingerprint old y retira journal/backup/stage. | U7 sigue parcial; dispatcher crate-private, sin caller de apply/producción. No es un test focal nuevo. |
 | 2026-10-13 | `a3cc3c9c2e5d166f066d6f7bfccf6cdec9214211` | Añade un test privado del CAS por ruta con journal sibling: match/stale comparan inventarios observados de root, configuración y parent, bytes del journal y `ArtifactFingerprint` del root. No invoca el dispatcher ni hay conteo focal registrado para este SHA. | U8 sigue parcial; CAS privado, sin caller de apply/CLI ni simulación pública. No se afirman atime ni atomicidad. |
 | 2026-10-13 | `51cd5c4fbf9607dffac1825a9739cac9e92d97e2` | Extiende la prueba del dispatcher con inventario recursivo: rutas, tipos y bytes de archivos normales; para el lock abierto, solo presencia, tipo y longitud. `RestoreOld` compara contra el modelo backup→root y retiro del journal. Matriz workspace independiente: Windows 702 passed/0 failed/6 ignored (37 suites); WSL Ubuntu 710/0/6 (37 suites); fmt y clippy pasan en ambos. Conteos workspace, no focales. | U7 sigue parcial y sin caller productivo; no se garantiza atime, permisos, metadatos ni atomicidad ante cambios hostiles. |
-| 2026-10-14 | `34b7e0a`, `428d432`, `980a3f0`, `86bb79b` | `KeepOld` ahora autoriza limpiar stage `New`/`PartialNew` con root `Old` y backup `Absent` en tres fases; identidad durable, reobservación antes del journal y retry tras cleanup parcial. Cuatro regresiones recovery visibles; CI `38505451293` pasa en Linux (716/0/6) y Windows (708/0/6), 38 resúmenes de suites, unittest de herramientas 7/OS, fmt, clippy y frontera pública. `38504988001` tenía tests/fmt verdes y fallo clippy por dos préstamos, corregidos en `86bb79b`. | U7 sigue parcial: sin caller apply/producción ni publicación completa; `RestoreOld` requiere stage `Absent`. `DiscardNewRestoreOld`, validación de `New`, `Committed` y recovery completo pendientes. No se afirma atomicidad/durabilidad; writers cooperantes y TOCTOU externo fuera del contrato. |
+| 2026-10-14 | `34b7e0a`, `428d432`, `980a3f0`, `86bb79b` | Corte histórico: `KeepOld` limpia stage `New`/`PartialNew` con root `Old` y backup `Absent` en tres fases; identidad durable, reobservación antes del journal y retry tras cleanup parcial. Cuatro regresiones visibles; CI `38505451293` pasa Linux (716/0/6) y Windows (708/0/6), 38 resúmenes, unittest de herramientas 7/OS, fmt, clippy y frontera pública. `38504988001` tenía tests/fmt verdes y fallo clippy por dos préstamos, corregidos en `86bb79b`. | U7 parcial, sin caller apply/producción ni publicación completa; en ese corte `RestoreOld` requería stage `Absent` y `DiscardNewRestoreOld` seguía pendiente. No se afirma atomicidad/durabilidad; writers cooperantes y TOCTOU externo fuera del contrato. |
+| 2026-10-14 | `c888347`, `c763f85`; CI `38509652854` | `RestoreOld` limpia/reobserva stage identificado como `New`/`PartialNew` antes de restaurar old; `DiscardNewRestoreOld` cubre solo las filas exactas de `BackupReady`/`Installed`, con rename y cleanup reconciliados por reobservación. Ocho pruebas/casos de recovery nuevos visibles; foco `recovery::`: 60 passed en `c888347`, 65 en `c763f85`. CI para `c763f8527d412778e99eb26c81194f96fdc0c545`: Linux 723/0/6, Windows 715/0/6 (38 resúmenes); tools 7/OS, fmt, clippy y frontera pública pasan. | U7 sigue parcial: sin caller apply/producción ni publicación completa; `KeepValidated`, `Committed` y recovery completo pendientes. Runtime harness: N/A, comportamiento filesystem y rename ambiguo cubiertos por las pruebas focales. No se afirma atomicidad/durabilidad; writers Felix cooperantes y TOCTOU externo fuera del contrato. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
@@ -833,7 +881,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. La captura por ruta conserva TOCTOU; el root anclado de U6 está probado por separado |
 | 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
 | 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
-| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: preflight compartido inicial y dispatcher crate-private enrutan solo las filas exactas `KeepOld` y `RestoreOld` en las fases soportadas. `RestoreOld` solo acepta root `Absent`, backup `Old`, stage `Absent` y `root_new_validated=false`, restaura el backup verificado y retira el journal. `34b7e0a`/`428d432` añaden cleanup de stage `New`/`PartialNew` para `KeepOld` con root `Old` y backup `Absent`, con reobservación antes de retirar el journal; `980a3f0` prueba cleanup ambiguo, retry parcial, identidad distinta y txn inválido. `eef28f5` cubre seis combinaciones en tres fases, con una observación inicial por ejecución; `51cd5c4` extiende las aserciones al inventario recursivo; para el lock abierto solo comparan presencia, tipo y longitud. No hay caller desde apply/producción. El cleanup de stage para las demás filas, `DiscardNewRestoreOld`, validación de `New`, `Committed` y el ciclo completo de recovery siguen pendientes. |
+| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: preflight compartido y dispatcher crate-private para filas exactas `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` con root `Old`, backup `Absent` y validación false en tres fases. Desde `c888347`, `RestoreOld` acepta root `Absent`, backup `Old`, validación false y stage `Absent`/`New`/`PartialNew` en `Prepared`/`BackupReady`/`Installed`; reabre por identidad durable (digest completo para `New`), limpia/reobserva, restaura backup y retira journal al final; cleanup ambiguo continúa solo si la reobservación confirma stage ausente, y los restos parciales conservan journal para retry. Desde `c763f85`, `DiscardNewRestoreOld` acepta exactamente `BackupReady` + root `New` + backup `Old` + stage `Absent` + validación false/true, o `Installed` con validación false; renombra root a stage, reobserva, limpia/reobserva y restaura old. Root `New` junto a cualquier stage sibling falla cerrado. Ocho pruebas/casos de recovery nuevos visibles; CI `38509652854` pasa Linux 723/0/6 y Windows 715/0/6 (38 resúmenes), tools 7/OS, fmt, clippy y frontera pública. No hay caller desde apply/producción. `KeepValidated`, `Committed`, otros estados no soportados y el ciclo completo de recovery siguen pendientes; U7 conserva alcance parcial. |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | U8 sigue parcial: helper crate-private de CAS bajo lock (`aa5d496`) abre root desde `lock.ubicacion()` y delega al CAS anclado; pruebas match/stale/lock/no mutación (`8250f0d`) y el caso root dejó de ser directorio → `TipoNoAdmitido` / `snapshot_entry_type_not_allowed`, redactado (`08e4659`). `SnapshotToken::from_hex` público (`885657aa`; pruebas `032668e`) acepta exactamente 64 bytes ASCII `0-9a-f` en minúscula y devuelve el error fijo/redactado `snapshot_token_invalid`. El commit `56a6516` limita con cuotas inclusivas el árbol raw en ambos calculadores antes del ordenamiento; los tokens v1 dentro de cuota conservan sus bytes. `02c7adde` añade al token una cuota combinada e inclusiva de 128 MiB para `manifiesto_raw` + `invariantes_raw`, independiente de la cuota del árbol y comprobada antes de validarlo/ordenarlo y de iniciar el hashing; `version_motor` y `policy_id` siguen sin cota. Esta validación de slices recibidas no promete un límite de memoria total ni del parser. `2357a82` limita durante la lectura la configuración obtenida por la variante privada de captura por ruta: suma los dos campos bajo una cuota inclusiva independiente de 128 MiB; reutiliza buffers del root, y cachea una ruta externa absoluta normalizada para leerla una vez, pero la cobra por cada campo que la usa. La lectura externa admite el remanente más el centinela. `63e59d1` añade el preflight consumidor antes de abrir root bajo lock y antes de clonar/inventariar en la captura anclada; el exceso da `snapshot_resource_limit` redactado, deja root/canary intacto y conserva el guard. Dentro de cuota, el CAS continúa antes de provenance/parseo. `4b94261` hace fallible `ConfigRawCapturada::nueva` y aplica la cuota como invariante después de convertir a `Arc<[u8]>`; cuenta por campo lógico, incluso con un `Arc` compartido. No limita lectura ni materialización previa, RSS o I/O antes del lock, así que el preflight consumidor sigue siendo defensa. Esta invariante se distingue de la captura privada por ruta, que limita la lectura durante su ejecución. El proveedor con lectura acotada antes del lock y los callers de apply/CLI siguen pendientes; `version_motor` y `policy_id` continúan sin cota. No implica cota total de memoria/parser ni atomicidad ante cambios hostiles. Matriz local U8 en `4b94261`: workspace Windows 694/6 y WSL 702/6 (passed/ignored); no hay CI remoto publicado para ese SHA. CI `38246129604` pasó solo para la base `a4d01e5`; CI final del parser sigue pendiente. En `609936a`, las pruebas focales del CAS por ruta con configuración externa pasan 32/0/1; la matriz local es Windows 701/6 y WSL 709/6, sin CI remoto para ese SHA. Match, stale redactado antes del parseo, no creación de lockfile sibling y retención del lock del caller están cubiertos. No se prueban atime, permisos, metadatos de entradas ni identidades individuales; `a3cc3c9` sí compara el `ArtifactFingerprint` del root (identidad del directorio raíz y digest raw), no la identidad de cada archivo o sibling. La ruta conserva TOCTOU/no atomicidad y el helper no integra apply/CLI ni simulación pública. U7 sigue parcial; U9–10 pendientes. |
 
 ## Orden original y foco vigente
