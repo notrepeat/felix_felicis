@@ -228,13 +228,13 @@ fn operaciones_relativas_validan_componentes_y_tipos_de_handle() {
 }
 
 #[test]
-fn fallo_al_reabrir_sibling_conserva_el_handle_creado() {
+fn fallo_al_reabrir_sibling_deja_huerfano_vacio_sin_capacidad() {
     let temp = tempdir().unwrap();
     let ruta = temp.path().join("bundle");
     std::fs::create_dir(&ruta).unwrap();
     let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
 
-    let mut error = match ancla
+    let error = match ancla
         .crear_stage_sibling_con("reopen-failure", |_, _, _| Err(ErrorDirectorioAnclado::Io))
     {
         Ok(_) => panic!("la falla de apertura debe propagarse"),
@@ -242,19 +242,112 @@ fn fallo_al_reabrir_sibling_conserva_el_handle_creado() {
     };
 
     assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
-    let (parcial, componente) = error
-        .tomar_parcial()
-        .unwrap_or_else(|| panic!("el error debe conservar el handle creado"));
-    let ruta_stage = temp.path().join(&componente);
-    let reabierto =
-        DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta_stage).unwrap()).unwrap();
-
-    assert_eq!(parcial.componente(), componente);
-    assert_eq!(parcial.identidad_raiz(), reabierto.identidad_raiz());
-    assert!(!parcial.permite_escritura);
-    assert!(parcial.crear_nuevo("denied.txt").is_err());
+    assert!(error.sibling_huerfano());
+    let ruta_stage = temp.path().join(".bundle.felix.stage.reopen-failure");
     assert!(ruta_stage.is_dir());
-    assert!(!ruta_stage.join("denied.txt").exists());
+    assert_eq!(std::fs::read_dir(ruta_stage).unwrap().count(), 0);
+}
+
+#[test]
+fn scope_filesystem_pre_mismatch_o_error_impiden_mkdir() {
+    for falla_en_parent in [false, true] {
+        let temp = tempdir().unwrap();
+        let ruta = temp.path().join("bundle");
+        std::fs::create_dir(&ruta).unwrap();
+        let ancla =
+            DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+        let stage_id = if falla_en_parent {
+            "pre-error"
+        } else {
+            "pre-mismatch"
+        };
+        let mut llamadas = 0;
+        let error =
+            match ancla.crear_stage_sibling_con_scope(stage_id, abrir_directorio_hijo_stage, |_| {
+                llamadas += 1;
+                match llamadas {
+                    1 => Ok(ScopeFilesystem(11)),
+                    2 if falla_en_parent => Err(ErrorDirectorioAnclado::Io),
+                    2 => Ok(ScopeFilesystem(12)),
+                    _ => panic!("no debe consultar scope después de bloquear antes de mkdir"),
+                }
+            }) {
+                Ok(_) => panic!("scope distinto o ausente debe bloquear mkdir"),
+                Err(error) => error,
+            };
+
+        assert_eq!(llamadas, 2);
+        assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
+        assert!(error.scope_no_verificado());
+        assert!(!error.sibling_huerfano());
+        assert!(
+            !temp
+                .path()
+                .join(format!(".bundle.felix.stage.{stage_id}"))
+                .exists()
+        );
+    }
+}
+
+#[test]
+fn scope_filesystem_post_mismatch_o_error_deja_huerfano_vacio_y_sin_capacidad() {
+    for falla_en_stage in [false, true] {
+        let temp = tempdir().unwrap();
+        let ruta = temp.path().join("bundle");
+        std::fs::create_dir(&ruta).unwrap();
+        let ancla =
+            DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+        let stage_id = if falla_en_stage {
+            "post-error"
+        } else {
+            "post-mismatch"
+        };
+        let mut llamadas = 0;
+        let error =
+            match ancla.crear_stage_sibling_con_scope(stage_id, abrir_directorio_hijo_stage, |_| {
+                llamadas += 1;
+                match llamadas {
+                    1..=3 => Ok(ScopeFilesystem(17)),
+                    4 if falla_en_stage => Err(ErrorDirectorioAnclado::Io),
+                    4 => Ok(ScopeFilesystem(18)),
+                    _ => panic!("se esperaban solo comparaciones root/parent y parent/stage"),
+                }
+            }) {
+                Ok(_) => panic!("scope distinto o ausente debe bloquear la capability"),
+                Err(error) => error,
+            };
+
+        assert_eq!(llamadas, 4);
+        assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
+        assert!(error.scope_no_verificado());
+        assert!(error.sibling_huerfano());
+        let ruta_stage = temp.path().join(format!(".bundle.felix.stage.{stage_id}"));
+        assert!(ruta_stage.is_dir());
+        assert_eq!(std::fs::read_dir(ruta_stage).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn scope_filesystem_igual_permita_crear_y_escribir_stage() {
+    let temp = tempdir().unwrap();
+    let ruta = temp.path().join("bundle");
+    std::fs::create_dir(&ruta).unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+    let mut llamadas = 0;
+    let (stage, componente) = ancla
+        .crear_stage_sibling_con_scope("same-scope", abrir_directorio_hijo_stage, |_| {
+            llamadas += 1;
+            Ok(ScopeFilesystem(23))
+        })
+        .unwrap();
+
+    assert_eq!(llamadas, 4);
+    let mut archivo = stage.crear_nuevo("write.txt").unwrap();
+    archivo.write_all(b"scope verified").unwrap();
+    assert_eq!(
+        std::fs::read(temp.path().join(componente).join("write.txt")).unwrap(),
+        b"scope verified"
+    );
 }
 
 #[test]

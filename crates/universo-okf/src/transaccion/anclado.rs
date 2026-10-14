@@ -46,28 +46,42 @@ pub(crate) enum ErrorLecturaNombres<E> {
     Visitante(E),
 }
 
-/// Conserva la capability del sibling si falla un paso posterior a mkdir.
 pub(crate) struct ErrorCrearStageSibling {
     codigo: ErrorDirectorioAnclado,
-    parcial: Option<Box<(DirectorioAnclado, OsString)>>,
+    scope_no_verificado: bool,
+    sibling_huerfano: bool,
 }
 
 impl ErrorCrearStageSibling {
     fn nuevo(codigo: ErrorDirectorioAnclado) -> Self {
         Self {
             codigo,
-            parcial: None,
+            scope_no_verificado: false,
+            sibling_huerfano: false,
         }
     }
 
-    fn con_parcial(
-        codigo: ErrorDirectorioAnclado,
-        directorio: DirectorioAnclado,
-        componente: OsString,
-    ) -> Self {
+    fn error_scope_no_verificado() -> Self {
+        Self {
+            codigo: ErrorDirectorioAnclado::Io,
+            scope_no_verificado: true,
+            sibling_huerfano: false,
+        }
+    }
+
+    fn error_scope_no_verificado_huerfano() -> Self {
+        Self {
+            codigo: ErrorDirectorioAnclado::Io,
+            scope_no_verificado: true,
+            sibling_huerfano: true,
+        }
+    }
+
+    fn con_sibling_huerfano(codigo: ErrorDirectorioAnclado) -> Self {
         Self {
             codigo,
-            parcial: Some(Box::new((directorio, componente))),
+            scope_no_verificado: false,
+            sibling_huerfano: true,
         }
     }
 
@@ -75,14 +89,23 @@ impl ErrorCrearStageSibling {
         self.codigo
     }
 
-    pub(crate) fn tomar_parcial(&mut self) -> Option<(DirectorioAnclado, OsString)> {
-        self.parcial.take().map(|parcial| *parcial)
+    pub(crate) const fn scope_no_verificado(&self) -> bool {
+        self.scope_no_verificado
+    }
+
+    pub(crate) const fn sibling_huerfano(&self) -> bool {
+        self.sibling_huerfano
     }
 }
 
 impl fmt::Debug for ErrorCrearStageSibling {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ErrorCrearStageSibling([redacted])")
+        formatter
+            .debug_struct("ErrorCrearStageSibling")
+            .field("codigo", &self.codigo)
+            .field("scope_no_verificado", &self.scope_no_verificado())
+            .field("sibling_huerfano", &self.sibling_huerfano())
+            .finish()
     }
 }
 
@@ -127,6 +150,9 @@ impl IdentidadDirectorio {
         }
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ScopeFilesystem(u64);
 
 #[cfg(any(windows, test))]
 fn file_id_hex(bytes: &[u8; 16]) -> String {
@@ -437,10 +463,23 @@ impl DirectorioAnclado {
     pub(super) fn crear_stage_sibling_con<F>(
         &self,
         stage_id: &str,
-        mut abrir: F,
+        abrir: F,
     ) -> Result<(Self, OsString), ErrorCrearStageSibling>
     where
         F: FnMut(&File, &OsStr, &File) -> Result<File, ErrorDirectorioAnclado>,
+    {
+        self.crear_stage_sibling_con_scope(stage_id, abrir, scope_filesystem)
+    }
+
+    fn crear_stage_sibling_con_scope<F, S>(
+        &self,
+        stage_id: &str,
+        mut abrir: F,
+        mut scope: S,
+    ) -> Result<(Self, OsString), ErrorCrearStageSibling>
+    where
+        F: FnMut(&File, &OsStr, &File) -> Result<File, ErrorDirectorioAnclado>,
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
     {
         if !self.puede_crear_stage_sibling {
             return Err(ErrorCrearStageSibling::nuevo(
@@ -473,6 +512,17 @@ impl DirectorioAnclado {
         if identidad_parent != self.identidad_parent {
             return Err(ErrorCrearStageSibling::nuevo(ErrorDirectorioAnclado::Io));
         }
+        let raiz = self
+            .raiz
+            .as_ref()
+            .ok_or_else(|| ErrorCrearStageSibling::nuevo(ErrorDirectorioAnclado::RaizAusente))?;
+        let scope_raiz =
+            scope(raiz).map_err(|_| ErrorCrearStageSibling::error_scope_no_verificado())?;
+        let scope_parent =
+            scope(&self.parent).map_err(|_| ErrorCrearStageSibling::error_scope_no_verificado())?;
+        if scope_raiz != scope_parent {
+            return Err(ErrorCrearStageSibling::error_scope_no_verificado());
+        }
 
         // Clona antes de mkdir para que no haya ninguna operación fallible de
         // ownership del parent después de crear el sibling.
@@ -484,76 +534,27 @@ impl DirectorioAnclado {
             .mkdir_at(&self.parent, Path::new(&componente))
             .map_err(mapear_error_creacion)
             .map_err(ErrorCrearStageSibling::nuevo)?;
-        let identidad_creado = match identidad_handle_creado(&creado) {
-            Ok(identidad) => Some(identidad),
-            Err(error) => {
-                let parcial = Self {
-                    parent: parent_stage,
-                    basename: componente.clone(),
-                    raiz: Some(creado),
-                    identidad_parent,
-                    identidad_raiz: None,
-                    permite_escritura: false,
-                    puede_crear_stage_sibling: false,
-                };
-                return Err(ErrorCrearStageSibling::con_parcial(
-                    error, parcial, componente,
-                ));
-            }
-        };
+        let identidad_creado = identidad_handle_creado(&creado)
+            .map_err(ErrorCrearStageSibling::con_sibling_huerfano)?;
         // `mkdir_at` returns a handle without all directory-add rights needed
         // by nested stage writes. Open the same sibling relative to the held
         // parent and fail closed unless its identity matches the created fd.
-        let directorio = match abrir(&self.parent, &componente, &creado) {
-            Ok(directorio) => directorio,
-            Err(error) => {
-                let parcial = Self {
-                    parent: parent_stage,
-                    basename: componente.clone(),
-                    raiz: Some(creado),
-                    identidad_parent,
-                    identidad_raiz: identidad_creado,
-                    permite_escritura: false,
-                    puede_crear_stage_sibling: false,
-                };
-                return Err(ErrorCrearStageSibling::con_parcial(
-                    error, parcial, componente,
-                ));
-            }
-        };
-        let identidad_raiz = match metadata_directorio(&directorio) {
-            Ok(identidad) if Some(identidad) == identidad_creado => identidad,
-            Ok(_) => {
-                let parcial = Self {
-                    parent: parent_stage,
-                    basename: componente.clone(),
-                    raiz: Some(creado),
-                    identidad_parent,
-                    identidad_raiz: identidad_creado,
-                    permite_escritura: false,
-                    puede_crear_stage_sibling: false,
-                };
-                return Err(ErrorCrearStageSibling::con_parcial(
-                    ErrorDirectorioAnclado::Io,
-                    parcial,
-                    componente,
-                ));
-            }
-            Err(error) => {
-                let parcial = Self {
-                    parent: parent_stage,
-                    basename: componente.clone(),
-                    raiz: Some(creado),
-                    identidad_parent,
-                    identidad_raiz: identidad_creado,
-                    permite_escritura: false,
-                    puede_crear_stage_sibling: false,
-                };
-                return Err(ErrorCrearStageSibling::con_parcial(
-                    error, parcial, componente,
-                ));
-            }
-        };
+        let directorio = abrir(&self.parent, &componente, &creado)
+            .map_err(ErrorCrearStageSibling::con_sibling_huerfano)?;
+        let scope_parent = scope(&self.parent)
+            .map_err(|_| ErrorCrearStageSibling::error_scope_no_verificado_huerfano())?;
+        let scope_stage = scope(&directorio)
+            .map_err(|_| ErrorCrearStageSibling::error_scope_no_verificado_huerfano())?;
+        if scope_parent != scope_stage {
+            return Err(ErrorCrearStageSibling::error_scope_no_verificado_huerfano());
+        }
+        let identidad_raiz = metadata_directorio(&directorio)
+            .map_err(ErrorCrearStageSibling::con_sibling_huerfano)?;
+        if identidad_raiz != identidad_creado {
+            return Err(ErrorCrearStageSibling::con_sibling_huerfano(
+                ErrorDirectorioAnclado::Io,
+            ));
+        }
         let stage = Self {
             parent: parent_stage,
             basename: componente.clone(),
@@ -845,6 +846,45 @@ fn metadata_directorio_validada(
     let metadata = handle.metadata().map_err(mapear_io)?;
     validar_metadata_directorio_por_metadata(&metadata)?;
     Ok(metadata)
+}
+
+#[cfg(target_os = "linux")]
+fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
+    use std::os::fd::AsRawFd;
+
+    metadata_directorio_validada(handle)?;
+    let mut informacion = unsafe { std::mem::zeroed::<libc::statx>() };
+    let ruta_vacia = b"\0";
+    // SAFETY: the descriptor remains open, `ruta_vacia` is NUL-terminated, and
+    // `informacion` is a writable statx buffer for this synchronous syscall.
+    let resultado = unsafe {
+        libc::statx(
+            handle.as_raw_fd(),
+            ruta_vacia.as_ptr().cast(),
+            libc::AT_EMPTY_PATH,
+            libc::STATX_MNT_ID,
+            &mut informacion,
+        )
+    };
+    if resultado != 0
+        || informacion.stx_mask & libc::STATX_MNT_ID == 0
+        || informacion.stx_mnt_id == 0
+    {
+        return Err(ErrorDirectorioAnclado::Io);
+    }
+    Ok(ScopeFilesystem(informacion.stx_mnt_id))
+}
+
+#[cfg(windows)]
+fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
+    metadata_directorio_validada(handle)?;
+    let identidad = identidad_windows(handle).map_err(mapear_io)?;
+    Ok(ScopeFilesystem(identidad.volumen))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn scope_filesystem(_handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
+    Err(ErrorDirectorioAnclado::Io)
 }
 
 /// Obtiene la identidad física del directorio abierto para una deduplicación

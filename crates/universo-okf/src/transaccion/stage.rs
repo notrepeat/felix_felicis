@@ -665,7 +665,7 @@ where
                 return Ok(stage);
             }
             Err(error) if error.codigo() == ErrorDirectorioAnclado::EntradaExistente => {}
-            Err(error) => return Err(error_escritura_stage_desde_creacion(stage_id, error)),
+            Err(error) => return Err(error_escritura_stage_desde_creacion(error)),
         }
     }
     Err(ErrorEscrituraStage::nuevo(
@@ -800,24 +800,12 @@ fn mapear_error_limpieza_stage(error: ErrorLimpiezaAnclado) -> CodigoLimpiezaSta
     }
 }
 
-fn error_escritura_stage_desde_creacion(
-    stage_id: String,
-    mut error: ErrorCrearStageSibling,
-) -> ErrorEscrituraStage {
+fn error_escritura_stage_desde_creacion(error: ErrorCrearStageSibling) -> ErrorEscrituraStage {
     let codigo = mapear_error_directorio_stage(error.codigo());
-    let parcial = error
-        .tomar_parcial()
-        .map(|(directorio, componente)| StageAnclado {
-            identidad: directorio.identidad_raiz(),
-            directorio,
-            componente,
-            stage_id,
-            recibo: None,
-        });
     ErrorEscrituraStage {
         codigo,
         stage_parcial: None,
-        stage_anclado_parcial: parcial.map(Box::new),
+        stage_anclado_parcial: None,
     }
 }
 
@@ -1750,7 +1738,7 @@ ignorados = ["ignored.md"]
     }
 
     #[test]
-    fn error_de_reapertura_conserva_stage_anclado_parcial_sin_recibo() {
+    fn error_de_reapertura_deja_stage_huerfano_sin_capacidad() {
         let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
         let error_creacion = match ancla
             .crear_stage_sibling_con("open-failure", |_, _, _| Err(ErrorDirectorioAnclado::Io))
@@ -1758,19 +1746,15 @@ ignorados = ["ignored.md"]
             Ok(_) => panic!("la falla de apertura debe propagarse"),
             Err(error) => error,
         };
-        let error = error_escritura_stage_desde_creacion("open-failure".to_owned(), error_creacion);
+        assert!(error_creacion.sibling_huerfano());
+        let error = error_escritura_stage_desde_creacion(error_creacion);
 
         assert_eq!(error.codigo(), "stage_io");
-        let parcial = error.stage_anclado_parcial().unwrap();
-        let ruta_stage = temp.path().join(parcial.componente());
-        let reabierto =
-            DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta_stage).unwrap())
-                .unwrap();
-        assert_eq!(parcial.stage_id(), "open-failure");
-        assert_eq!(parcial.identidad(), reabierto.identidad_raiz());
-        assert!(parcial.recibo().is_none());
+        assert!(error.stage_anclado_parcial().is_none());
+        let ruta_stage = temp.path().join(".bundle.felix.stage.open-failure");
         assert!(ruta_stage.is_dir());
-        assert!(!format!("{error:?} {error} {parcial:?}").contains("open-failure"));
+        assert_eq!(fs::read_dir(&ruta_stage).unwrap().count(), 0);
+        assert!(!format!("{error:?} {error}").contains("open-failure"));
     }
 
     #[test]
