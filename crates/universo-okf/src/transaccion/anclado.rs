@@ -862,7 +862,10 @@ pub(crate) fn identidad_directorio_para_recorrido(
     }
     #[cfg(windows)]
     {
-        identidad_opcional(identidad_windows(&handle), filesystem_sin_file_id)
+        identidad_opcional(
+            identidad_windows(&handle),
+            identidad_sin_file_id_para_recorrido,
+        )
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -910,8 +913,13 @@ fn identidad_desde_metadata(
     }
     #[cfg(windows)]
     {
-        identidad_windows(_handle).map_err(mapear_io)
+        identidad_requerida(identidad_windows(_handle))
     }
+}
+
+#[cfg(any(windows, test))]
+fn identidad_requerida<T>(resultado: io::Result<T>) -> Result<T, ErrorDirectorioAnclado> {
+    resultado.map_err(mapear_io)
 }
 
 #[cfg(windows)]
@@ -945,14 +953,35 @@ fn identidad_windows(handle: &File) -> io::Result<IdentidadDirectorio> {
 }
 
 #[cfg(any(windows, test))]
+#[derive(Debug)]
+struct FileIdWindowsSentinel;
+
+#[cfg(any(windows, test))]
+impl fmt::Display for FileIdWindowsSentinel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Windows returned a sentinel FileId")
+    }
+}
+
+#[cfg(any(windows, test))]
+impl std::error::Error for FileIdWindowsSentinel {}
+
+#[cfg(any(windows, test))]
 fn validar_file_id_windows(file_id: [u8; 16]) -> io::Result<[u8; 16]> {
     if file_id.iter().all(|byte| *byte == 0) || file_id.iter().all(|byte| *byte == u8::MAX) {
         return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Windows returned a sentinel FileId",
+            io::ErrorKind::Unsupported,
+            FileIdWindowsSentinel,
         ));
     }
     Ok(file_id)
+}
+
+#[cfg(any(windows, test))]
+fn es_sentinel_file_id(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|causa| causa.is::<FileIdWindowsSentinel>())
 }
 
 #[cfg(any(windows, test))]
@@ -961,6 +990,11 @@ fn filesystem_sin_file_id(error: &io::Error) -> bool {
     // implement FileIdInfo; ERROR_INVALID_PARAMETER also occurs on FAT/SMB.
     // Other failures must remain visible.
     matches!(error.raw_os_error(), Some(1 | 50 | 87))
+}
+
+#[cfg(any(windows, test))]
+fn identidad_sin_file_id_para_recorrido(error: &io::Error) -> bool {
+    filesystem_sin_file_id(error) || es_sentinel_file_id(error)
 }
 
 #[cfg(any(windows, test))]

@@ -54,33 +54,40 @@ fn file_id_no_soportado_usa_fallback_y_otros_errores_fallan_cerrado() {
         assert_eq!(
             identidad_opcional::<()>(
                 Err(std::io::Error::from_raw_os_error(codigo)),
-                filesystem_sin_file_id,
+                identidad_sin_file_id_para_recorrido,
             )
             .unwrap(),
             None
         );
     }
 
-    let error = identidad_opcional::<()>(
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "private",
-        )),
-        filesystem_sin_file_id,
-    )
-    .unwrap_err();
-    assert_eq!(error, ErrorDirectorioAnclado::Io);
+    for error in [
+        std::io::Error::new(std::io::ErrorKind::PermissionDenied, "private"),
+        std::io::Error::new(std::io::ErrorKind::Unsupported, "unrelated"),
+    ] {
+        assert_eq!(
+            identidad_opcional::<()>(Err(error), identidad_sin_file_id_para_recorrido).unwrap_err(),
+            ErrorDirectorioAnclado::Io
+        );
+    }
 }
 
 #[test]
-fn file_id_windows_rechaza_sentinels_y_conserva_un_id_valido() {
+fn file_id_windows_sentinels_solo_fallback_en_identidad_de_solo_lectura() {
     for file_id in [[0; 16], [u8::MAX; 16]] {
         let error = validar_file_id_windows(file_id).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert!(es_sentinel_file_id(&error));
         assert!(!filesystem_sin_file_id(&error));
         assert_eq!(
-            identidad_opcional::<()>(Err(error), filesystem_sin_file_id).unwrap_err(),
-            ErrorDirectorioAnclado::TipoNoAdmitido
+            identidad_opcional::<()>(Err(error), identidad_sin_file_id_para_recorrido).unwrap(),
+            None
+        );
+
+        let error = validar_file_id_windows(file_id).unwrap_err();
+        assert_eq!(
+            identidad_requerida::<()>(Err(error)),
+            Err(ErrorDirectorioAnclado::Io)
         );
     }
 
