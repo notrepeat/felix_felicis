@@ -847,16 +847,148 @@ fn journal_ausente_al_inicio_no_autoriza_observar_ni_reconstruir_contexto() {
 #[test]
 fn stage_presente_falla_cerrado_y_conserva_journal_y_root() {
     let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
-    crear_arbol(&stage_path(&lock), b"stage-canary");
+    let stage = stage_path(&lock);
+    crear_arbol(&stage, b"new-tree");
+    assert!(
+        fingerprint(&stage).identity() != journal.new_fingerprint().identity(),
+        "el basename esperado contiene un árbol con identidad distinta"
+    );
+    let parent = canonical.parent().unwrap();
+    let lockfile = lock.ubicacion().lock().as_path().to_path_buf();
+    let canary = parent.join("keep-canary.bin");
+    fs::write(&canary, b"untouched").unwrap();
     let bytes = fs::read(&canonical).unwrap();
+    let inventario_antes = inventario_parent_para_assertions(parent, &canonical, &lockfile);
+
+    let raiz_anclada = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
+    assert!(
+        raiz_anclada
+            .reabrir_stage_sibling(TXN, journal.parent(), journal.new_fingerprint().identity(),)
+            .unwrap_err()
+            == ErrorDirectorioAnclado::Io,
+        "recovery no debe reabrir el basename esperado con otra identidad"
+    );
 
     assert_eq!(
         ejecutar_fila_journal_old(&mut lock),
         Err(ErrorFilaJournalOld::FilaNoAutorizada)
     );
     assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    assert_eq!(fs::read(&stage.join("data.bin")).unwrap(), b"new-tree");
+    assert_eq!(fs::read(&canary).unwrap(), b"untouched");
     assert_eq!(Journal::parse(&bytes).unwrap(), journal);
     assert_root_intact(&root);
+    assert_eq!(
+        inventario_parent_para_assertions(parent, &canonical, &lockfile),
+        inventario_antes
+    );
+}
+
+#[test]
+fn cleanup_ambiguo_reobserva_y_retira_journal_solo_despues_del_stage() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::BackupReady);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    fs::rename(root.parent().unwrap().join("new-fixture"), &stage).unwrap();
+    let stage_name = stage.file_name().unwrap().to_os_string();
+    let stage_name_text = stage_name.to_string_lossy().into_owned();
+    let parent = canonical.parent().unwrap();
+    let lockfile = lock.ubicacion().lock().as_path().to_path_buf();
+    let journal_name = canonical
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let canary = parent.join("keep-canary.bin");
+    fs::write(&canary, b"untouched").unwrap();
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let fingerprint_old = journal.old().clone();
+    let mut inventario_esperado = inventario_parent_para_assertions(parent, &canonical, &lockfile);
+    inventario_esperado.retain(|(name, _)| {
+        name != &stage_name_text
+            && !name.starts_with(&format!("{stage_name_text}/"))
+            && name != &journal_name
+    });
+    let stage_eliminado_antes_del_error = Cell::new(false);
+    let pre_delete_observado = Cell::new(false);
+
+    assert_eq!(
+        ejecutar_fila_journal_old_con_limpieza(
+            &mut lock,
+            |_| {
+                pre_delete_observado.set(true);
+                assert!(!stage.exists());
+                assert!(canonical.exists());
+                assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+                assert!(!backup.exists());
+                assert!(fingerprint(&root) == fingerprint_old);
+            },
+            |stage| {
+                stage.limpiar_con(|parent, componente, es_directorio| {
+                    let opciones = OpenOptionsAt::default();
+                    let resultado = if es_directorio {
+                        opciones.rmdir_at(parent, Path::new(componente))
+                    } else {
+                        opciones.unlink_at(parent, Path::new(componente))
+                    };
+                    resultado.map_err(|_| ErrorDirectorioAnclado::Io)?;
+                    if es_directorio && componente == stage_name {
+                        stage_eliminado_antes_del_error.set(true);
+                        Err(ErrorDirectorioAnclado::Io)
+                    } else {
+                        Ok(())
+                    }
+                })
+            },
+        ),
+        Ok(ResultadoFilaJournalOld::Eliminado)
+    );
+
+    assert!(stage_eliminado_antes_del_error.get());
+    assert!(pre_delete_observado.get());
+    assert!(!stage.exists());
+    assert!(!backup.exists());
+    assert!(!canonical.exists());
+    assert_eq!(fs::read(&canary).unwrap(), b"untouched");
+    assert!(fingerprint(&root) == fingerprint_old);
+    assert_root_intact(&root);
+    assert_eq!(
+        inventario_parent_para_assertions(parent, &canonical, &lockfile),
+        inventario_esperado
+    );
+}
+
+#[test]
+fn txn_invalido_falla_antes_de_mutar_siblings_y_journal() {
+    let (_temp, root, lock, canonical, journal) = preparar_fila(JournalState::Prepared);
+    let stage = stage_path(&lock);
+    fs::rename(root.parent().unwrap().join("new-fixture"), &stage).unwrap();
+    let parent = canonical.parent().unwrap();
+    let lockfile = lock.ubicacion().lock().as_path().to_path_buf();
+    let canary = parent.join("keep-canary.bin");
+    fs::write(&canary, b"untouched").unwrap();
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let inventario_antes = inventario_parent_para_assertions(parent, &canonical, &lockfile);
+    let raiz_anclada = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
+
+    assert_eq!(
+        raiz_anclada
+            .reabrir_stage_sibling(
+                "../invalid",
+                journal.parent(),
+                journal.new_fingerprint().identity(),
+            )
+            .unwrap_err(),
+        ErrorDirectorioAnclado::ComponenteInvalido
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert_eq!(fs::read(&stage.join("data.bin")).unwrap(), b"new-tree");
+    assert_eq!(fs::read(&canary).unwrap(), b"untouched");
+    assert_root_intact(&root);
+    assert_eq!(
+        inventario_parent_para_assertions(parent, &canonical, &lockfile),
+        inventario_antes
+    );
 }
 
 #[test]
