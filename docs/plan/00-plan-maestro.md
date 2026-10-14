@@ -13,7 +13,7 @@ resultado de un agente en escenarios reproducibles.
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
 | Progreso | 4/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. CI `38512944346` pasó para `5c11f76`: Linux 727 passed/0 failed/6 ignored, Windows 719/0/6, 38 resúmenes de suites, tools 7/OS, fmt, clippy y frontera pública; añade cuatro pruebas de recovery. La matriz local workspace Windows 701/6 y WSL 709/6 pertenece al antecedente `609936a`, que no tiene CI remoto propio. CI `38232932504` es histórico para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; esos runs no acreditan `609936a`. |
-| Foco actual | Fase 04, Unidad 7: journal, commit y recovery. El dispatcher crate-private enruta `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` en su fila exacta; `RestoreOld` acepta stage `Absent`/`New`/`PartialNew` con root ausente y backup old en `Prepared`/`BackupReady`/`Installed`; `DiscardNewRestoreOld` solo acepta root `New`, backup `Old` y stage `Absent` en `BackupReady` (validación false/true) o `Installed` (false). Ambas limpiezas reobservan, conservan journal si queda stage parcial y permiten retry por identidad durable; root `New` con stage sibling presente falla cerrado. Desde `5c11f76`, `PartialOld` solo observa el backup con identidad de `old`, digest distinto y `old`/`new` IDs distintas; identidad de backup distinta o IDs old/new iguales quedan `Unknown`. `PartialOld` en root, backup o stage produce `FailClosed`/`NO_STEPS`, sin capacidad de recovery, cleanup, paso del runner ni orden nuevo. La limpieza del backup `PartialOld` se pospone por falta de frontera segura frente a cruce mount/bind/FUSE; es un bloqueo de diseño, no algo probado por el commit. No hay caller desde apply/producción; `KeepValidated`, `Committed` y recovery completo siguen pendientes. Los retries históricos descritos como reinicio soltaban y readquirían el lock en el mismo proceso. Hay dos cortes de terminación interproceso: en `b990c72`, el hijo sale con código 86 en `RestoreOld` después de restaurar/reobservar `Old` y antes de retirar journal; tras la salida del hijo, el proceso padre permanece vivo, readquiere el lock, ejecuta el dispatcher, clasifica `KeepOld` y retira journal. En `b5e4da8`, desde `Installed`, el hijo renombra root `New` a stage, observa root `Absent`/backup `Old`/stage `New` y sale con código 87 antes de cleanup/reconciliación; después de la salida, el padre permanece vivo, readquiere el lock y el dispatcher clasifica `RestoreOld`, limpia stage, restaura `Old` y retira journal. Ninguno demuestra pérdida de energía, caída del SO ni durabilidad `fsync`, ni cubre una frontera real de scope/bind, otros cortes completos o un caller productivo. La auditoría de prerequisitos de 2026-10-14 no cambia este estado parcial; su secuencia y límites están en «Próximo paso». |
+| Foco actual | Fase 04, Unidad 7: journal, commit y recovery. El dispatcher crate-private enruta `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` en su fila exacta; `RestoreOld` acepta stage `Absent`/`New`/`PartialNew` con root ausente y backup old en `Prepared`/`BackupReady`/`Installed`; `DiscardNewRestoreOld` solo acepta root `New`, backup `Old` y stage `Absent` en `BackupReady` (validación false/true) o `Installed` (false). Ambas limpiezas reobservan, conservan journal si queda stage parcial y permiten retry por identidad durable; root `New` con stage sibling presente falla cerrado. Desde `5c11f76`, `PartialOld` solo observa el backup con identidad de `old`, digest distinto y `old`/`new` IDs distintas; identidad de backup distinta o IDs old/new iguales quedan `Unknown`. `PartialOld` en root, backup o stage produce `FailClosed`/`NO_STEPS`, sin capacidad de recovery, cleanup, paso del runner ni orden nuevo. La limpieza del backup `PartialOld` se pospone por falta de frontera segura frente a cruce mount/bind/FUSE; es un bloqueo de diseño, no algo probado por el commit. No hay caller desde apply/producción; `KeepValidated`, `Committed` y recovery completo siguen pendientes. Los retries históricos descritos como reinicio soltaban y readquirían el lock en el mismo proceso. Hay tres cortes de terminación interproceso: en `b990c72`, el hijo sale con código 86 en `RestoreOld` después de restaurar/reobservar `Old` y antes de retirar journal; tras la salida del hijo, el proceso padre permanece vivo, readquiere el lock, ejecuta el dispatcher, clasifica `KeepOld` y retira journal. En `b5e4da8`, desde `Installed`, el hijo renombra root `New` a stage, observa root `Absent`/backup `Old`/stage `New` y sale con código 87 antes de cleanup/reconciliación; después de la salida, el padre permanece vivo, readquiere el lock y el dispatcher clasifica `RestoreOld`, limpia stage, restaura `Old` y retira journal. En `26eb9c4`, el hijo sale con código 88 después del cleanup real y de reobservar el stage ausente, pero antes de backup→root; el proceso padre permanece vivo, readquiere el lock y el dispatcher clasifica `RestoreOld`, restaura `Old` y retira journal. Ninguno demuestra pérdida de energía, caída del SO ni durabilidad `fsync`, ni cubre una frontera real de scope/bind, todos los cortes/filas o un caller productivo. La auditoría de prerequisitos de 2026-10-14 no cambia este estado parcial; su secuencia y límites están en «Próximo paso». |
 | Última actualización | 2026-10-14 |
 
 La evidencia de identidad Windows en `401a4be`, `316bdb8` y `cedc11c` establece
@@ -100,11 +100,14 @@ proceso padre readquiere el lock, clasifica `KeepOld` y retira el journal.
 y observar root ausente/backup `Old`/stage `New`, el hijo termina antes de
 cleanup; la ejecución posterior en el proceso padre readquiere el lock,
 clasifica `RestoreOld` y completa la restauración. El padre permanece vivo
-durante ambos cortes. Son dos
-cortes interproceso en filesystem de pruebas, no prueban power-loss, caída del
-SO, durabilidad `fsync` ni frontera real de scope/bind. Otros cortes siguen
-pendientes y tampoco hay caller productivo de los runners. Apply y publicación
-siguen pendientes.
+durante los dos primeros cortes y también en el tercero. `26eb9c4` añade este
+corte: tras cleanup real y
+reobservación de stage ausente, el hijo termina con código 88 antes de
+backup→root; la ejecución posterior del padre readquiere el lock y el
+dispatcher completa `RestoreOld`. Son tres cortes interproceso en filesystem
+de pruebas; no prueban power-loss, caída del SO, durabilidad `fsync` ni una
+frontera real de scope/bind. Otros cortes/filas siguen pendientes y tampoco
+hay caller productivo de los runners. Apply y publicación siguen pendientes.
 CI `38576523094` pasó para `bb06df3` en Linux y Windows; en ese corte aún no
 estaba integrado el probe en inventario/captura. CI `38582798497` pasó para
 `a4583c2` en Linux y Windows; no acredita bind mounts reales, mounts anidados
@@ -113,14 +116,20 @@ ni la guardia de escrituras añadida después.
 `21c09d1` añade una prueba sintética de mismatch en el segundo probe del cleanup
 de `RestoreOld`: el fallo ocurre antes de borrar y conserva capability, stage
 `New`, backup `Old` y journal; un retry con probe real restaura `Old`. No prueba
-un bind/mount real ni añade un tercer corte interproceso. CI `38621049587` pasó
+bind/mount real ni añadió un corte interproceso en ese commit. CI `38621049587` pasó
 en Windows; el workspace Linux registró 396 passed, 1 failed y 4 ignored por
 `writer_lock_busy` en esa prueba. La interferencia del harness de tests es una
 causa probable, no demostrada. `1d5a02b` serializa solo tests `cfg(test)` del
 binario lib entre el único spawn y los ciclos drop/reacquire de locks, incluida
 la prueba multiepoca de captura; no cambia producción ni agrega un corte. CI
 `38626804482` pasó en Linux y Windows con tests de workspace, fmt, clippy y
-frontera pública.
+frontera pública. `26eb9c4` añade el tercer corte interproceso de `RestoreOld`:
+el hijo sale con código 88 después del cleanup real y de reobservar el stage
+ausente, antes de backup→root; el padre vivo readquiere el lock y el dispatcher
+restaura `Old` y retira journal. CI `38629690255` pasó en Linux y Windows. La
+prueba demuestra terminación de proceso, no power-loss, caída del SO ni
+durabilidad `fsync`; no hay prueba de scope/bind real, todos los estados de
+recovery ni caller productivo. U7/fase 04 siguen parciales, 4/9.
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
@@ -244,10 +253,13 @@ El probe usa `STATX_MNT_ID` en Linux y `VolumeSerialNumber` en Windows, que no
 identifica instancia de montaje; las pruebas son sintéticas y no cubren bind
 mounts reales ni mounts anidados. TOCTOU externo queda fuera del contrato. Los
 pasos de cleanup de los runners existentes llaman
-`StageAnclado::limpiar` y heredan el probe real. `b990c72` y `b5e4da8`
-ejercitan dos cortes interproceso diferentes (`RestoreOld` antes de retirar
-journal y `DiscardNewRestoreOld` antes de cleanup/reconciliación) en filesystem
-de pruebas. No prueban una frontera real de scope/bind ni los demás cortes o
+`StageAnclado::limpiar` y heredan el probe real. `b990c72`, `b5e4da8` y
+`26eb9c4` ejercitan tres cortes interproceso diferentes en filesystem de
+pruebas: `RestoreOld` antes de retirar journal, `DiscardNewRestoreOld` antes de
+cleanup/reconciliación y `RestoreOld` tras cleanup/reobservación del stage y
+antes de backup→root (código 88). En el último corte, la ejecución posterior
+del padre vivo readquiere el lock y reclasifica `RestoreOld`. No prueban una
+frontera real de scope/bind ni los demás cortes o
 filas; tampoco hay caller productivo de los runners.
 El indicador diagnóstico del sibling posible sigue sin consumidor productivo.
 El walker de rutas del bundle es una familia separada.
@@ -270,9 +282,10 @@ Orden de las unidades pequeñas: 1) completar y probar la frontera de scope,
 incluidos bind mount real y mounts anidados; 2) cubrir los caminos aún fuera de
 la frontera (backend por ruta/bundle), integrar las escrituras parciales de
 `StageAnclado` a apply, cerrar los límites restantes del rename sibling y
-completar publicación; ampliar la cobertura end-to-end de recovery más allá
-de los dos cortes interproceso cubiertos por `b990c72` y `b5e4da8`, incluida
-la frontera real de scope/mount; habilitar un caller productivo de los runners,
+   completar publicación; ampliar la cobertura end-to-end de recovery más allá
+   de los tres cortes interproceso cubiertos por `b990c72`, `b5e4da8` y
+   `26eb9c4`, incluida la frontera real de scope/mount; habilitar un caller
+   productivo de los runners,
 completar los demás caminos de cleanup y conectar un consumidor productivo del
 indicador de sibling huérfano posible; 3) prueba de admisión sellada o
 revalidación con sus entradas;
@@ -405,7 +418,7 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | CI `38604472261` | Éxito para `f109679125985318b71f307a0c162ce992df3e22`: CI Linux y Windows completado. Acredita ese commit; no prueba NFS/filesystems remotos, bind mount real ni mounts anidados. U7/fase 04 siguen parciales, 4/9. |
 | `2627617` | Extrae una política privada compartida por producción y tests. Una prueba crea un destino con canario tras los prechecks y antes del syscall real; verifica que fuente y destino permanezcan intactos. Inyecciones de retorno/errno para `ENOSYS`, `EINVAL` y `EIO` recorren esa política: una invocación, `Io` para los dos primeros y `OperacionAmbigua` para `EIO`; no son errno observados del kernel ni prueban el host adversarial. La no-replace protege el destino, no evita la sustitución hostil de la fuente; la postverificación solo detecta el resultado después de una posible mutación. |
 | CI `38608018290` | Éxito para `262761715a2607450efae1b5b3be9f5775208139`: CI Linux y Windows completado. No acredita NFS/remotos, bind mount real, mounts anidados ni una frontera general frente a TOCTOU. U7/fase 04 siguen parciales, 4/9; apply/publicación permanecen pendientes. |
-| `b990c72` | Añade el primero de dos tests interproceso: en `RestoreOld`, el hijo sale con código 86 en `antes_de_eliminar`, después de renombrar backup→root y reobservar `Old`; root queda `Old`, backup/stage ausentes y journal presente. El proceso padre permanece vivo; después de la salida del hijo readquiere el lock, clasifica `KeepOld` y retira journal. No prueba power-loss, OS-crash ni durabilidad `fsync`, frontera real de scope/bind, otros cortes/filas ni caller productivo. `KeepValidated`, `Committed` y recovery completo siguen pendientes; fase 04/U7 parciales, 4/9. |
+| `b990c72` | Añade el primero de tres tests interproceso: en `RestoreOld`, el hijo sale con código 86 en `antes_de_eliminar`, después de renombrar backup→root y reobservar `Old`; root queda `Old`, backup/stage ausentes y journal presente. El proceso padre permanece vivo; después de la salida del hijo readquiere el lock, clasifica `KeepOld` y retira journal. No prueba power-loss, OS-crash ni durabilidad `fsync`, frontera real de scope/bind, otros cortes/filas ni caller productivo. `KeepValidated`, `Committed` y recovery completo siguen pendientes; fase 04/U7 parciales, 4/9. |
 | CI `38613062605` | Éxito para `b990c72`. Acredita ese corte `RestoreOld`; no demuestra durabilidad ante pérdida de energía o caída del SO. Sin bind mount real/frontera real de scope ni caller productivo. Fase 04/U7 siguen parciales, 4/9. |
 | `b5e4da8` | Añade un segundo corte interproceso, distinto: desde `Installed`, el hijo hace el rename real root `New`→stage, observa root `Absent`/backup `Old`/stage `New` y sale con código 87 antes de cleanup/reconciliación. El padre verifica journal sin cambios, readquiere el lock y ejecuta recovery real: el dispatcher clasifica `RestoreOld`, limpia stage, restaura `Old` y retira journal al final. Prueba terminación de proceso y retry para este corte, no power-loss, caída del SO ni durabilidad `fsync`; no hay frontera real de scope/bind, otros cortes completos ni caller productivo. `KeepValidated`, `Committed` y recovery completo siguen pendientes; fase 04/U7 parciales, 4/9. |
 | CI `38617261125` | Éxito para `b5e4da80901226ff67ce0f95a52e27da992cc73b`. Acredita el test del segundo corte en Linux y Windows; no amplía la prueba a power-loss, caída del SO, `fsync`, scope/bind real ni otros cortes. Fase 04/U7 siguen parciales, 4/9. |
@@ -413,6 +426,8 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | CI `38621049587` | Windows pasó; el workspace Linux falló en la nueva prueba con `writer_lock_busy` (396 passed/1 failed/4 ignored). La interferencia de harness es una hipótesis probable, no causa demostrada. |
 | `1d5a02b` | Serializa únicamente tests `cfg(test)` del binario lib entre el único spawn y los ciclos drop/reacquire de lock, incluida la prueba multiepoca de captura; no modifica producción ni añade un corte interproceso. |
 | CI `38626804482` | Éxito Linux y Windows para `1d5a02b`: tests del workspace, fmt, clippy y frontera pública pasan. U7/fase 04 continúan parciales; progreso 4/9. |
+| `26eb9c4` | Añade el tercer corte interproceso: desde `Installed`, el hijo termina con código 88 después del cleanup real y la reobservación de stage `Absent`, antes de renombrar backup→root; journal permanece intacto. La ejecución posterior del padre vivo readquiere el lock y el dispatcher real clasifica `RestoreOld`, restaura `Old` y retira stage/backup/journal. Solo demuestra terminación de proceso, no power-loss, caída del SO ni durabilidad `fsync`; no scope/bind real, todos los estados/cortes ni caller productivo. U7/fase 04 parciales, 4/9. |
+| CI `38629690255` | Éxito Linux y Windows para `26eb9c4`; acredita este test del tercer corte, no power-loss, caída del SO, `fsync`, scope/bind real, todos los estados de recovery ni caller productivo. U7/fase 04 siguen parciales, 4/9. |
 
 ### Evidencia de fase 05 — historial y cierre de la demo pública
 
