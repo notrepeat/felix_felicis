@@ -39,8 +39,19 @@ con esa misma fila y validación false. Renombra root `New` al stage identificad
 por el journal, reobserva para reconciliar el intento, limpia y reobserva el
 stage, restaura el backup verificado y retira el journal al final. Root `New`
 con cualquier stage sibling presente falla cerrado. Estas funciones siguen
-crate-private y no tienen caller desde apply/producción. U8 añade captura por
-ruta acotada y privada para simulación y pruebas y, en `63e59d1`, preflight consumidor de la suma de
+crate-private y no tienen caller desde apply/producción.
+Desde `5c11f76`, el observer marca `PartialOld` solo en backup cuando conserva
+la identidad durable de `old`, su digest raw difiere y las identidades de
+`old` y `new` son distintas. Si la identidad de backup es otra, o las
+identidades de `old` y `new` coinciden, queda `Unknown`; root y stage conservan
+sus clasificadores más estrechos. `PartialOld` en cualquier slot produce
+`FailClosed` con `NO_STEPS`: es observación y rechazo, sin capacidad nueva de
+recovery, cleanup, paso del runner ni orden de limpieza. La limpieza se
+pospone porque no hay una frontera segura contra cruce de mount, bind mount o
+FUSE. Es un límite/bloqueo de diseño, no un comportamiento probado por el
+commit.
+U8 añade captura por ruta acotada y privada para simulación y pruebas y, en
+`63e59d1`, preflight consumidor de la suma de
 configuración antes de abrir el root bajo lock y antes de clonar/inventariar
 el root anclado. El exceso devuelve `snapshot_resource_limit` redactado,
 conserva root/canary y retiene el guard; dentro de cuota, el CAS sigue antes
@@ -879,6 +890,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-13 | `51cd5c4fbf9607dffac1825a9739cac9e92d97e2` | Extiende la prueba del dispatcher con inventario recursivo: rutas, tipos y bytes de archivos normales; para el lock abierto, solo presencia, tipo y longitud. `RestoreOld` compara contra el modelo backup→root y retiro del journal. Matriz workspace independiente: Windows 702 passed/0 failed/6 ignored (37 suites); WSL Ubuntu 710/0/6 (37 suites); fmt y clippy pasan en ambos. Conteos workspace, no focales. | U7 sigue parcial y sin caller productivo; no se garantiza atime, permisos, metadatos ni atomicidad ante cambios hostiles. |
 | 2026-10-14 | `34b7e0a`, `428d432`, `980a3f0`, `86bb79b` | Corte histórico: `KeepOld` limpia stage `New`/`PartialNew` con root `Old` y backup `Absent` en tres fases; identidad durable, reobservación antes del journal y retry tras cleanup parcial. Cuatro regresiones visibles; CI `38505451293` pasa Linux (716/0/6) y Windows (708/0/6), 38 resúmenes, unittest de herramientas 7/OS, fmt, clippy y frontera pública. `38504988001` tenía tests/fmt verdes y fallo clippy por dos préstamos, corregidos en `86bb79b`. | U7 parcial, sin caller apply/producción ni publicación completa; en ese corte `RestoreOld` requería stage `Absent` y `DiscardNewRestoreOld` seguía pendiente. No se afirma atomicidad/durabilidad; writers cooperantes y TOCTOU externo fuera del contrato. |
 | 2026-10-14 | `c888347`, `c763f85`; CI `38509652854` | `RestoreOld` limpia/reobserva stage identificado como `New`/`PartialNew` antes de restaurar old; `DiscardNewRestoreOld` cubre solo las filas exactas de `BackupReady`/`Installed`, con rename y cleanup reconciliados por reobservación. Ocho pruebas/casos de recovery nuevos visibles; foco `recovery::`: 60 passed en `c888347`, 65 en `c763f85`. Los tests de retry sueltan y readquieren el lock en el mismo proceso, sin kill/restart. CI para `c763f8527d412778e99eb26c81194f96fdc0c545`: Linux 723/0/6, Windows 715/0/6 (38 resúmenes); tools 7/OS, fmt, clippy y frontera pública pasan. | U7 sigue parcial: sin caller apply/producción ni publicación completa; `KeepValidated`, `Committed` y recovery completo pendientes. Runtime harness: N/A; las pruebas focales ejercitan filesystem y rename ambiguo inyectado, pero no prueban crash durability. No se afirma atomicidad/durabilidad; writers Felix cooperantes y TOCTOU externo fuera del contrato. |
+| 2026-10-14 | `5c11f76`; CI `38512944346` | `PartialOld` solo se clasifica en backup cuando coincide la identidad durable de `old`, difiere el digest raw y las identidades de `old`/`new` son distintas; identidad distinta o identidades old/new iguales quedan `Unknown`. En cualquier slot produce `FailClosed`/`NO_STEPS`; cuatro pruebas de recovery nuevas. CI: Linux 727/0/6, Windows 719/0/6 (38 resúmenes), tools 7/OS, fmt, clippy y frontera pública pasan. | U7 sigue parcial y sin caller apply/producción. Es observación y rechazo: no añade capacidad, cleanup, paso del runner ni orden. Cleanup pospuesto por no tener frontera segura ante cruce de mount/bind/FUSE; bloqueo de diseño, no probado por este commit. Los retries previos solo readquieren lock en el mismo proceso; no kill/restart ni crash durability. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |

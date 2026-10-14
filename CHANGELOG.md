@@ -157,6 +157,25 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   limitado a esos archivos. `git diff --check` y
   `python tools/check_public_boundary.py` pasan tras editar.
 
+- `5c11f76` añade `PartialOld` como observación exclusiva del backup: requiere
+  que el backup conserve la identidad durable de `old`, que su digest raw haya
+  cambiado y que las identidades de `old` y `new` sean distintas. Una identidad
+  de backup distinta, o identidades `old`/`new` iguales, queda `Unknown`; root
+  y stage conservan sus clasificadores más estrechos. `PartialOld` en cualquier
+  slot produce `FailClosed` y `NO_STEPS`. El cambio no añade capacidad de
+  recuperación, cleanup, pasos del runner ni orden de cleanup. La limpieza se
+  pospone porque no hay una frontera segura que demuestre que no cruzará un
+  mount, bind mount o FUSE; es un límite/bloqueo de diseño, no algo probado por
+  este commit.
+- CI `38512944346` pasó para `5c11f763c1eef3df30c97c76de43dbbe9dd18fd3`:
+  Linux 727 passed/0 failed/6 ignored, Windows 719/0/6, 38 resúmenes de
+  suites; unittest de herramientas 7 por sistema operativo, `fmt`, clippy y
+  `check_public_boundary.py` pasan. El commit añade cuatro pruebas de recovery.
+  U7 sigue parcial y sin caller desde apply/producción. Los retries anteriores
+  descritos como reinicio solo sueltan y readquieren el lock en el mismo
+  proceso; no simulan kill/restart ni prueban crash durability. Runtime
+  harness: N/A porque no hay un caller de recovery desde apply/producción.
+
 ### Fase 05 — historial de evidencia y cierre de la demo pública
 
 - `ae99906` incorpora un smoke de la CLI sobre las fixtures públicas de
