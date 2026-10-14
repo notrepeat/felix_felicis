@@ -163,10 +163,10 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   de backup distinta, o identidades `old`/`new` iguales, queda `Unknown`; root
   y stage conservan sus clasificadores más estrechos. `PartialOld` en cualquier
   slot produce `FailClosed` y `NO_STEPS`. El cambio no añade capacidad de
-  recuperación, cleanup, pasos del runner ni orden de cleanup. La limpieza se
-  pospone porque no hay una frontera segura que demuestre que no cruzará un
-  mount, bind mount o FUSE; es un límite/bloqueo de diseño, no algo probado por
-  este commit.
+  recuperación, cleanup, pasos del runner ni orden de cleanup. La limpieza del
+  backup `PartialOld` se pospone porque no hay una frontera segura que
+  demuestre que no cruzará un mount, bind mount o FUSE; es un límite/bloqueo
+  de diseño, no algo probado por este commit.
 - CI `38512944346` pasó para `5c11f763c1eef3df30c97c76de43dbbe9dd18fd3`:
   Linux 727 passed/0 failed/6 ignored, Windows 719/0/6, 38 resúmenes de
   suites; unittest de herramientas 7 por sistema operativo, `fmt`, clippy y
