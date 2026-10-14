@@ -126,14 +126,17 @@ familia y no queda cubierto por este alcance. Las pruebas deben incluir el
 sentinel de `FileId` en Windows y un bind mount Linux que comparte `st_dev`,
 casos que no prueban por sí solos pertenencia al mismo volume/mount.
 
-`RootNewValidado` también necesita procedencia de admisión: un `Candidate`
+`RootNewValidado` también necesita procedencia de admisión: un `Candidato`
 público o un comparador de representación no demuestra qué base, delta e
 invariantes se evaluaron ni que la propuesta fuera admitida. El root debe
 respaldarse con una prueba de admisión sellada y no forjable, o recovery debe
 volver a ejecutar `proponer` con la base, el delta y las invariantes y comprobar
 el resultado admitido. Journal v1 no conserva esas entradas; por tanto, hoy un
 restart no puede revalidar `New`. Hasta que exista esa capacidad opaca, el
-observer mantiene `root_new_validated=false` y `Committed` es inalcanzable.
+observer mantiene `root_new_validated=false`. El enum, la tabla pura y las
+pruebas modelan `Committed`, pero el preflight, el dispatcher y el caller
+productivo no lo ejecutan; por eso, la transición/flujo productivo hacia
+`Committed` es inalcanzable actualmente.
 
 La siguiente secuencia se divide en unidades pequeñas, en este orden:
 
@@ -285,7 +288,7 @@ Chain strategy: feature-branch-chain
   (240 líneas añadidas) y
   `a54688ca274fa46f1a6a438df7988c13ef1176de` (247 líneas añadidas), dos
   commits revisables de menos de 400 líneas cada uno y sin cambio de alcance.
-- [x] 1 — Candidate, Edge y Ext: `crates/universo-core/src/transaccion/candidato.rs`,
+- [x] 1 — Candidato, Edge y Ext: `crates/universo-core/src/transaccion/candidato.rs`,
   `crates/universo-core/src/transaccion/aristas.rs`,
   `crates/universo-core/src/transaccion/ext.rs`.
   Cerrada como unidad de construcción de candidatos; la fase 04 sigue en curso.

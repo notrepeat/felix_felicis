@@ -101,12 +101,15 @@ de stage, cleanup y recovery; el walker de rutas del bundle es una familia
 separada. La cobertura debe considerar el sentinel `FileId` de Windows y un
 bind mount Linux con el mismo `st_dev`.
 
-La procedencia también forma parte de `RootNewValidado`: un `Candidate` público
+La procedencia también forma parte de `RootNewValidado`: un `Candidato` público
 o comparador de representación no acredita admisión contra base, delta e
 invariantes. Se necesita una prueba sellada no forjable o volver a ejecutar
 `proponer` con esas entradas. Journal v1 no las conserva, así que restart no
-puede revalidar `New` hoy. La capacidad debe ser opaca; mientras no exista, el
-observer sigue en `root_new_validated=false` y `Committed` no es alcanzable.
+puede revalidar `New` hoy. La capacidad debe ser opaca; el enum, la tabla pura
+y las pruebas modelan `Committed`, pero el preflight, el dispatcher y el caller
+productivo no lo ejecutan. El observer sigue en `root_new_validated=false`; por
+ello, la transición/flujo productivo hacia `Committed` es inalcanzable
+actualmente.
 
 Orden de las unidades pequeñas: 1) abstracción de scope y pruebas inyectadas;
 2) backends Linux/Windows; 3) integrar en inventario anclado, captura,
