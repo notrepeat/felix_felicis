@@ -280,16 +280,29 @@ de SHA-256 por archivo confirma que los 205 archivos de los checkouts Windows
 y WSL son byte-idénticos; los 16 goldens LF permanecieron iguales y pasaron
 las comparaciones exactas. No se comprobó CI remoto para este SHA.
 
-El runner sigue comprobando snapshots, no reproduciendo la secuencia de
-deltas. El test Rust cubre por separado las propuestas y la correspondencia
-concreta; el testigo CLI conserva solo posición de fuente y predicados, sin
-archivos ni átomos concretos. No hay medición de duración o RSS ni evidencia
-de `apply`, publicación, atomicidad o recovery. La demo integral no cumple
-todavía sus criterios, por lo que fase 05 permanece pendiente, sus seis
-casillas siguen abiertas y el progreso maestro continúa en 3/9. El checklist
-maestro 03 permanece cerrado por la explicación abstracta acotada y las
-verificaciones de presupuesto y privacidad. Véase el registro completo en
-[05 — Demo pública](05-demo-publica.md).
+En `f15af52`, el comando Python del runner ejecuta primero
+`cargo test --locked -p universo-cli --test demo_arquitectura --quiet`; después
+compila la CLI y compara cuatro estados y 16 salidas golden. La matriz local
+aislada pasa en Windows y WSL Ubuntu: prueba focal 1/1 y runner 16/16 en ambos;
+el workspace registra Windows 703 passed/0 failed/6 ignored y WSL 711/0/6
+(38 suites en ambos). El smoke CLI, `cargo fmt --all -- --check`,
+`cargo clippy --locked --workspace --all-targets -- -D warnings` y
+`python tools/check_public_boundary.py` pasan en ambos. Los 205 archivos
+comparados son byte-idénticos y los 16 goldens LF no presentan drift; WSL
+invoca el runner con `python3`. El workflow ya ejecuta el runner en Linux y
+Windows, pero no hay CI remoto para este SHA.
+
+La ruta compuesta aporta cobertura técnica para los criterios 1, 2 y 4, y el
+workflow ya cablea el criterio 5. Aun así, bajo la política integral las seis
+casillas de fase 05 permanecen abiertas hasta exponer un testigo público con
+archivos y átomos concretos (criterio 3), medir duración y RSS (criterio 6) y
+obtener CI remoto para este SHA. La prueba recorre propuestas con APIs Rust y
+reconstruye candidatos en memoria; no usa CLI `apply` ni genera la corrección.
+Snapshots y goldens siguen versionados, y no hay evidencia de publicación,
+atomicidad o recovery. Fase 05 permanece pendiente y el progreso maestro
+continúa en 3/9. El checklist maestro 03 sigue cerrado por la explicación
+abstracta acotada y las verificaciones de presupuesto y privacidad. Véase el
+registro completo en [05 — Demo pública](05-demo-publica.md).
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed

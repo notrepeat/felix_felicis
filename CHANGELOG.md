@@ -192,11 +192,34 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   checkouts Windows y WSL son byte-idénticos; los 16 goldens LF permanecieron
   iguales y pasaron las comparaciones exactas. No se comprobó CI remoto para
   este SHA.
-- La fase 05 sigue pendiente bajo su política integral: el runner compara
-  snapshots, pero no reproduce los deltas; el test verifica la correspondencia
-  concreta solo internamente, mientras el testigo público no señala archivos
-  ni átomos concretos. No hay medición de duración o RSS ni demostración de
-  `apply`, publicación, atomicidad o recovery.
+- Al cierre de `fab86f8`, la fase 05 seguía pendiente bajo su política
+  integral: el runner comparaba snapshots, pero no reproducía los deltas; el
+  test verificaba la correspondencia concreta solo internamente, mientras el
+  testigo público no señalaba archivos ni átomos concretos. No había medición
+  de duración o RSS ni demostración de `apply`, publicación, atomicidad o
+  recovery.
+- `f15af52` compone el runner en un solo comando: primero ejecuta
+  `cargo test --locked -p universo-cli --test demo_arquitectura --quiet` y,
+  si pasa, compila la CLI y compara cuatro estados (base, contradictorio,
+  corregido y gap) con 16 salidas `validate`/`check` en JSON y texto. La prueba
+  de integración recorre rechazo, corrección y gap con APIs Rust; reconstruye
+  candidatos en memoria y los compara con snapshots versionados. No usa CLI
+  `apply` ni genera la corrección.
+- Matriz local aislada sobre `f15af52`: Windows y WSL Ubuntu pasan el runner
+  (16/16), la prueba focal (1 passed/0 failed/0 ignored) y el smoke CLI. El
+  workspace registra Windows 703 passed/0 failed/6 ignored y WSL Ubuntu
+  711/0/6 (38 suites en ambos). `cargo fmt --all -- --check`,
+  `cargo clippy --locked --workspace --all-targets -- -D warnings` y
+  `python tools/check_public_boundary.py` pasan en ambos. Los 205 archivos
+  comparados son byte-idénticos; los 16 goldens LF no presentan drift. WSL
+  Ubuntu invoca el runner con `python3`. El workflow ya ejecuta el runner en
+  Linux y Windows, pero no hay CI remoto para este SHA.
+- La ruta compuesta aporta cobertura técnica para los criterios 1, 2 y 4, y el
+  workflow ya cablea el criterio 5. Bajo la política integral, las seis
+  casillas siguen abiertas hasta publicar un testigo con archivos y átomos
+  concretos (criterio 3), medir duración y RSS de la demo completa (criterio 6)
+  y obtener CI remoto para este SHA. La fase 05 permanece pendiente; el progreso
+  maestro continúa en 3/9.
 
 ### Límites y seguridad de carga
 
