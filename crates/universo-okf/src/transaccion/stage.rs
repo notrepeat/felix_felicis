@@ -456,6 +456,10 @@ impl ErrorEscrituraStage {
         self.stage_anclado_parcial.as_deref()
     }
 
+    pub(crate) fn recuperar_stage_anclado(self) -> Option<StageAnclado> {
+        self.stage_anclado_parcial.map(|stage| *stage)
+    }
+
     /// Indica si la creación pudo dejar un sibling sin handle seguro.
     pub(crate) const fn sibling_huerfano_posible(&self) -> bool {
         self.sibling_huerfano_posible
@@ -2508,7 +2512,7 @@ ignorados = ["ignored.md"]
     }
 
     #[test]
-    fn candidato_semantico_distinto_no_emite_recibo_en_stage_anclado() {
+    fn error_staging_recupera_capability_y_permite_retry_de_cleanup() {
         let (temp, ancla, snapshot, manifiesto, invariantes) = snapshot_anclado_con_auxiliares();
         let raiz = temp.path().join("bundle");
         let token_raiz = snapshot.token();
@@ -2529,8 +2533,11 @@ ignorados = ["ignored.md"]
         let error = materializar_staging_anclado(&ancla, &snapshot, &plan, &candidato).unwrap_err();
 
         assert_eq!(error.codigo(), "stage_candidate_mismatch");
-        let parcial = error.stage_anclado_parcial().unwrap();
-        assert!(parcial.recibo().is_none());
+        let componente = {
+            let parcial = error.stage_anclado_parcial().unwrap();
+            assert!(parcial.recibo().is_none());
+            parcial.componente().to_os_string()
+        };
         assert!(!format!("{error:?} {error}").contains("Wrong candidate"));
         assert_eq!(
             capturar_snapshot(&raiz, &manifiesto, &invariantes, "engine/1", "policy/1")
@@ -2538,6 +2545,31 @@ ignorados = ["ignored.md"]
                 .token(),
             token_raiz
         );
+
+        let ruta_stage = temp.path().join(componente);
+        assert!(ruta_stage.is_dir());
+        let stage = error
+            .recuperar_stage_anclado()
+            .expect("error de staging conserva la capability anclada");
+        let mut eliminaciones = 0;
+        let error_cleanup = stage
+            .limpiar_con_scope(
+                |_| Ok(ScopeFilesystem(29)),
+                |parent, componente, es_directorio| {
+                    eliminaciones += 1;
+                    if eliminaciones == 2 {
+                        return Err(ErrorDirectorioAnclado::Io);
+                    }
+                    eliminar_at_test(parent, componente, es_directorio)
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error_cleanup.codigo(), "stage_cleanup_io");
+        assert!(ruta_stage.is_dir());
+        let retry = error_cleanup.recuperar_stage();
+        retry.limpiar().unwrap();
+        assert!(!ruta_stage.exists());
     }
 
     #[cfg(unix)]
