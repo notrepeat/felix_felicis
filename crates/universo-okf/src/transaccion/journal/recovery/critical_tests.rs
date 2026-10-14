@@ -58,6 +58,24 @@ fn classification_requires_the_entire_identity_and_raw_tree_digest() {
 }
 
 #[test]
+fn partial_stage_requires_the_journal_new_identity_and_never_counts_as_validated_new() {
+    use ArtifactState::{PartialNew, Unknown};
+    let old = fingerprint(2, 'a');
+    let new = fingerprint(3, 'b');
+    let changed_new = fingerprint(3, 'c');
+    let changed_other = fingerprint(4, 'c');
+
+    assert_eq!(
+        classify_stage_artifact(Some(&ObservedArtifact::new(changed_new)), &old, &new),
+        PartialNew
+    );
+    assert_eq!(
+        classify_stage_artifact(Some(&ObservedArtifact::new(changed_other)), &old, &new),
+        Unknown
+    );
+}
+
+#[test]
 fn installed_new_without_candidate_validation_restores_old_before_journal_removal() {
     use ArtifactState::{Absent, New, Old};
     use JournalState::Installed;

@@ -35,6 +35,9 @@ pub(crate) enum ArtifactState {
     Absent,
     Old,
     New,
+    /// The new stage identity remains after an interrupted cleanup; this
+    /// state authorizes only discarding that transient sibling.
+    PartialNew,
     Unknown,
 }
 
@@ -61,6 +64,27 @@ pub(crate) fn classify_artifact(
         ArtifactState::Old
     } else if observed.0 == *new {
         ArtifactState::New
+    } else {
+        ArtifactState::Unknown
+    }
+}
+
+/// Recognizes an interrupted cleanup only when the stage still has the
+/// journal's new identity. The digest mismatch never authorizes publication.
+pub(crate) fn classify_stage_artifact(
+    observed: Option<&ObservedArtifact>,
+    old: &ArtifactFingerprint,
+    new: &ArtifactFingerprint,
+) -> ArtifactState {
+    let state = classify_artifact(observed, old, new);
+    if state != ArtifactState::Unknown {
+        return state;
+    }
+    let Some(observed) = observed else {
+        return ArtifactState::Absent;
+    };
+    if old.identity() != new.identity() && observed.0.identity() == new.identity() {
+        ArtifactState::PartialNew
     } else {
         ArtifactState::Unknown
     }
@@ -138,7 +162,7 @@ impl RecoveryDecision {
         {
             return match inventory.stage {
                 ArtifactState::Absent => JOURNAL_ONLY_STEPS,
-                ArtifactState::New => REMOVE_STAGE_AND_JOURNAL_STEPS,
+                ArtifactState::New | ArtifactState::PartialNew => REMOVE_STAGE_AND_JOURNAL_STEPS,
                 ArtifactState::Old | ArtifactState::Unknown => NO_STEPS,
             };
         }
@@ -158,7 +182,7 @@ pub(crate) fn decide_recovery(
     state: JournalState,
     inventory: RecoveryInventory,
 ) -> RecoveryDecision {
-    use ArtifactState::{Absent, New, Old, Unknown};
+    use ArtifactState::{Absent, New, Old, PartialNew, Unknown};
     use JournalState::{BackupReady, Committed, Installed, Prepared};
     use RecoveryDecision::{
         DiscardNewRestoreOld, FailClosed, KeepOld, KeepValidatedCommittedNew,
@@ -175,7 +199,16 @@ pub(crate) fn decide_recovery(
         || backup == Unknown
         || stage == Unknown
         || (root_new_validated && root != New)
-        || !matches!(stage, Absent | New)
+        || !matches!(stage, Absent | New | PartialNew)
+    {
+        return FailClosed;
+    }
+
+    if stage == PartialNew
+        && !(matches!(state, Prepared | BackupReady | Installed)
+            && root == Old
+            && backup == Absent
+            && !root_new_validated)
     {
         return FailClosed;
     }

@@ -15,6 +15,7 @@ use std::path::{Component, Path};
 
 use fs_at::OpenOptions as OpenOptionsAt;
 
+use super::journal::DirectoryIdentity;
 use super::raiz::{UbicacionRaiz, validar_basename_prospectivo};
 
 mod abrir;
@@ -332,6 +333,59 @@ impl DirectorioAnclado {
 
     pub(crate) fn identidad_raiz(&self) -> Option<IdentidadDirectorio> {
         self.identidad_raiz
+    }
+
+    /// Reopens the journal-derived stage name through the write-capable parent
+    /// retained under the writer lock. Both journal parent and stage identity
+    /// must match before cleanup gets a capability.
+    pub(crate) fn reabrir_stage_sibling(
+        &self,
+        transaction_id: &str,
+        identidad_parent_esperada: &DirectoryIdentity,
+        identidad_stage_esperada: &DirectoryIdentity,
+    ) -> Result<super::stage::StageAnclado, ErrorDirectorioAnclado> {
+        if transaction_id.len() != 32
+            || !transaction_id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ErrorDirectorioAnclado::ComponenteInvalido);
+        }
+        let identidad_parent = metadata_directorio(&self.parent)?;
+        if identidad_parent != self.identidad_parent
+            || identidad_parent.journal_identity().as_ref() != Some(identidad_parent_esperada)
+        {
+            return Err(ErrorDirectorioAnclado::Io);
+        }
+
+        let mut componente = OsString::from(".");
+        componente.push(&self.basename);
+        componente.push(".felix.stage.");
+        componente.push(transaction_id);
+        validar_componente(&componente)?;
+
+        let parent_stage = clonar_handle(&self.parent)?;
+        let raiz_stage = abrir_directorio_hijo_stage_existente(&self.parent, &componente)?;
+        let identidad_stage = metadata_directorio(&raiz_stage)?;
+        if identidad_stage.journal_identity().as_ref() != Some(identidad_stage_esperada) {
+            return Err(ErrorDirectorioAnclado::Io);
+        }
+
+        let directorio = Self {
+            parent: parent_stage,
+            basename: componente.clone(),
+            raiz: Some(raiz_stage),
+            identidad_parent,
+            identidad_raiz: Some(identidad_stage),
+            permite_escritura: false,
+            puede_crear_stage_sibling: false,
+        };
+        Ok(super::stage::StageAnclado::reabierto(
+            directorio,
+            componente,
+            transaction_id.to_owned(),
+            identidad_stage,
+        ))
     }
 
     /// Duplica los handles sin resolver nuevamente la ubicación por ruta.

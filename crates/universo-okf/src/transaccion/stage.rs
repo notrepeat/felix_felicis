@@ -23,9 +23,12 @@ use super::inventario::{
     LimitesInventario, inventariar_root_anclado, inventariar_root_con_lector_limitado,
     leer_archivo_regular_limitado,
 };
-use super::journal::{DirectoryIdentity, RawTreeDigest};
+use super::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
+use super::lock::LockEscritura;
 use super::raiz::{UbicacionRaiz, metadata_es_enlace_o_reparse};
-use super::snapshot::{EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot};
+use super::snapshot::{
+    EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_digest_raw_tree,
+};
 
 #[cfg(test)]
 mod stage_bundle_transaccional;
@@ -245,6 +248,57 @@ impl fmt::Display for ReciboStage {
 
 #[allow(dead_code)] // Apply/recovery integran staging en la siguiente unidad.
 impl StageAnclado {
+    pub(crate) fn reabierto(
+        directorio: DirectorioAnclado,
+        componente: OsString,
+        stage_id: String,
+        identidad: IdentidadDirectorio,
+    ) -> Self {
+        Self {
+            directorio,
+            componente,
+            stage_id,
+            identidad: Some(identidad),
+            recibo: None,
+        }
+    }
+
+    /// Reopens the one sibling named by the journal, checks its durable
+    /// identity, and scans it without following links before cleanup. The
+    /// digest is required on first cleanup; a retry after partial removal may
+    /// keep the same identity with a shorter safe tree.
+    pub(crate) fn reabrir_para_limpieza(
+        lock: &LockEscritura,
+        journal: &Journal,
+        exigir_digest_new: bool,
+    ) -> Result<Self, ErrorSnapshot> {
+        let raiz = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
+            .map_err(mapear_error_reapertura_stage)?;
+        let stage = raiz
+            .reabrir_stage_sibling(
+                journal.transaction_id(),
+                journal.parent(),
+                journal.new_fingerprint().identity(),
+            )
+            .map_err(mapear_error_reapertura_stage)?;
+        let fingerprint = stage.fingerprint_raw()?;
+        if exigir_digest_new && fingerprint != *journal.new_fingerprint() {
+            return Err(ErrorSnapshot::Stale);
+        }
+        Ok(stage)
+    }
+
+    pub(crate) fn fingerprint_raw(&self) -> Result<ArtifactFingerprint, ErrorSnapshot> {
+        let identidad = self
+            .identidad
+            .and_then(IdentidadDirectorio::journal_identity)
+            .ok_or(ErrorSnapshot::Io)?;
+        let directorio = self.directorio.clonar().map_err(|_| ErrorSnapshot::Io)?;
+        let entradas = inventariar_root_anclado(directorio)?;
+        let digest = calcular_digest_raw_tree(&entradas)?;
+        Ok(ArtifactFingerprint::new(identidad, digest))
+    }
+
     pub(super) fn partes_cleanup(
         &self,
     ) -> (&DirectorioAnclado, &OsStr, Option<IdentidadDirectorio>) {
@@ -713,6 +767,19 @@ fn mapear_error_directorio_stage(error: ErrorDirectorioAnclado) -> CodigoEscritu
         ErrorDirectorioAnclado::Io
         | ErrorDirectorioAnclado::RaizAusente
         | ErrorDirectorioAnclado::EntradaAusente => CodigoEscrituraStage::Io,
+    }
+}
+
+fn mapear_error_reapertura_stage(error: ErrorDirectorioAnclado) -> ErrorSnapshot {
+    match error {
+        ErrorDirectorioAnclado::EnlaceNoPermitido => ErrorSnapshot::EnlaceNoPermitido,
+        ErrorDirectorioAnclado::TipoNoAdmitido | ErrorDirectorioAnclado::ComponenteInvalido => {
+            ErrorSnapshot::TipoNoAdmitido
+        }
+        ErrorDirectorioAnclado::Io
+        | ErrorDirectorioAnclado::RaizAusente
+        | ErrorDirectorioAnclado::EntradaAusente
+        | ErrorDirectorioAnclado::EntradaExistente => ErrorSnapshot::Io,
     }
 }
 

@@ -219,6 +219,25 @@ fn old_absent_new_inventory_is_read_only_and_unvalidated() {
 }
 
 #[test]
+fn stage_with_journal_identity_and_changed_digest_is_cleanup_retry_only() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    crear_arbol(&root, b"old-tree");
+    let lock = LockEscritura::adquirir(&root).unwrap();
+    let stage = stage_path(&lock);
+    crear_arbol(&stage, b"new-tree");
+    let record = journal(&lock, fingerprint(&root), fingerprint(&stage));
+    fs::write(stage.join("data.bin"), b"partial-cleanup").unwrap();
+
+    let inventory = observar_inventario_recovery(&lock, &record).unwrap();
+
+    assert_eq!(inventory.root, ArtifactState::Old);
+    assert_eq!(inventory.backup, ArtifactState::Absent);
+    assert_eq!(inventory.stage, ArtifactState::PartialNew);
+    assert!(!inventory.root_new_validated);
+}
+
+#[test]
 fn absent_root_old_backup_and_absent_stage_use_anchored_not_found() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("bundle");
