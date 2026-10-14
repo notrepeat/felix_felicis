@@ -198,18 +198,17 @@ pub(crate) fn decide_recovery(
     if root == Unknown
         || backup == Unknown
         || stage == Unknown
+        || (root == New && stage != Absent)
         || (root_new_validated && root != New)
         || !matches!(stage, Absent | New | PartialNew)
     {
         return FailClosed;
     }
 
-    if stage == PartialNew
-        && !(matches!(state, Prepared | BackupReady | Installed)
-            && root == Old
-            && backup == Absent
-            && !root_new_validated)
-    {
+    let partial_cleanup_row = matches!(state, Prepared | BackupReady | Installed)
+        && !root_new_validated
+        && ((root == Old && backup == Absent) || (root == Absent && backup == Old));
+    if stage == PartialNew && !partial_cleanup_row {
         return FailClosed;
     }
 

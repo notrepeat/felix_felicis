@@ -39,6 +39,7 @@ impl ErrorRecoverySoportado {
     pub(crate) fn recuperar_stage_parcial(self) -> Option<StageAnclado> {
         match self {
             Self::KeepOld(error) => error.recuperar_stage_parcial(),
+            Self::RestoreOld(error) => error.recuperar_stage_parcial(),
             _ => None,
         }
     }

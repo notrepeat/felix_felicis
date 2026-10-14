@@ -130,13 +130,13 @@ pub(crate) fn clasificar_fila_recovery(
             Some(FilaRecoverySoportada::KeepOld)
         }
         RecoveryDecision::RestoreOld
-            if inventario
-                == (RecoveryInventory {
-                    root: ArtifactState::Absent,
-                    backup: ArtifactState::Old,
-                    stage: ArtifactState::Absent,
-                    root_new_validated: false,
-                })
+            if inventario.root == ArtifactState::Absent
+                && inventario.backup == ArtifactState::Old
+                && matches!(
+                    inventario.stage,
+                    ArtifactState::Absent | ArtifactState::New | ArtifactState::PartialNew
+                )
+                && !inventario.root_new_validated
                 && decision.steps(inventario)
                     == [
                         RecoveryStep::RemoveKnownStage,
@@ -307,7 +307,12 @@ mod tests {
                         let exact_restore = fase != JournalState::Committed
                             && root == ArtifactState::Absent
                             && backup == ArtifactState::Old
-                            && stage == ArtifactState::Absent;
+                            && matches!(
+                                stage,
+                                ArtifactState::Absent
+                                    | ArtifactState::New
+                                    | ArtifactState::PartialNew
+                            );
                         let esperado = if exact_keep {
                             Some(FilaRecoverySoportada::KeepOld)
                         } else if exact_restore {
@@ -329,11 +334,7 @@ mod tests {
     #[test]
     fn stage_presente_o_desconocido_falla_cerrado() {
         let journal = journal(JournalState::Installed);
-        for stage in [
-            ArtifactState::Old,
-            ArtifactState::PartialNew,
-            ArtifactState::Unknown,
-        ] {
+        for stage in [ArtifactState::Old, ArtifactState::Unknown] {
             let keep_like = inventario(ArtifactState::Old, ArtifactState::Absent, stage);
             let restore_like = inventario(ArtifactState::Absent, ArtifactState::Old, stage);
             assert_eq!(
@@ -342,6 +343,18 @@ mod tests {
             );
             assert_eq!(clasificar_fila_recovery(&journal, restore_like), None);
         }
+
+        assert_eq!(
+            clasificar_fila_recovery(
+                &journal,
+                inventario(
+                    ArtifactState::Absent,
+                    ArtifactState::Old,
+                    ArtifactState::PartialNew,
+                ),
+            ),
+            Some(FilaRecoverySoportada::RestoreOld)
+        );
 
         let new_stage = inventario(
             ArtifactState::Old,

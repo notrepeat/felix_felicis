@@ -205,8 +205,13 @@ fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
                         });
                         let expected = match (stage, row) {
                             (Absent, Some(row)) => (row.decision, row.steps),
-                            (New, Some(row)) if row.decision == KeepOld && row.backup == Absent => {
+                            (New, Some(row))
+                                if row.decision == KeepOld && root == Old && backup == Absent =>
+                            {
                                 (row.decision, REMOVE_STAGE_AND_JOURNAL)
+                            }
+                            (New, Some(row)) if row.decision == KeepOld && root == Old => {
+                                (row.decision, row.steps)
                             }
                             (PartialNew, Some(row))
                                 if row.decision == KeepOld
@@ -216,7 +221,22 @@ fn explicit_valid_rows_and_their_complement_cover_every_inventory() {
                             {
                                 (row.decision, REMOVE_STAGE_AND_JOURNAL)
                             }
-                            (New, Some(row)) => (row.decision, row.steps),
+                            (PartialNew, Some(row))
+                                if row.decision == RestoreOld
+                                    && root == Absent
+                                    && backup == Old
+                                    && !validated =>
+                            {
+                                (row.decision, row.steps)
+                            }
+                            (New, Some(row))
+                                if row.decision == RestoreOld
+                                    && root == Absent
+                                    && backup == Old
+                                    && !validated =>
+                            {
+                                (row.decision, row.steps)
+                            }
                             _ => (FailClosed, NO_STEPS),
                         };
                         let actual = decide_recovery(phase, inventory);

@@ -583,38 +583,125 @@ fn restore_old_sin_journal_no_autoriza_mover_el_backup() {
 }
 
 #[test]
-fn restore_old_rechaza_y_preserva_stage_new_valido() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("bundle");
-    let new_fixture = temp.path().join("new-fixture");
-    crear_arbol(&root, b"old-tree");
-    crear_arbol(&new_fixture, b"new-tree");
-    let mut lock = LockEscritura::adquirir(&root).unwrap();
-    let journal = Journal::new(
-        TXN,
-        identidad_parent(&lock),
-        fingerprint(&root),
-        fingerprint(&new_fixture),
-    )
-    .unwrap();
-    let canonical = lock.ubicacion().journal().as_path().to_path_buf();
-    let journal_bytes = journal.encode().unwrap();
-    fs::write(&canonical, &journal_bytes).unwrap();
+fn restore_old_limpia_stage_new_y_restaura_backup() {
+    for state in [
+        JournalState::Prepared,
+        JournalState::BackupReady,
+        JournalState::Installed,
+    ] {
+        let (_temp, root, mut lock, canonical, journal) = preparar_fila(state);
+        let backup = backup_path(&lock);
+        let stage = stage_path(&lock);
+        fs::rename(&root, &backup).unwrap();
+        fs::rename(root.with_file_name("new-fixture"), &stage).unwrap();
+        assert!(fingerprint(&stage) == *journal.new_fingerprint());
 
+        assert_eq!(
+            ejecutar_fila_journal_restore_old(&mut lock),
+            Ok(ResultadoFilaJournalRestoreOld::Eliminado),
+            "fase {state:?}"
+        );
+        assert!(!canonical.exists());
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert_root_intact(&root);
+        assert!(fingerprint(&root) == *journal.old());
+    }
+}
+
+#[test]
+fn restore_old_reintenta_limpieza_parcial_del_stage_tras_reinicio() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Installed);
     let backup = backup_path(&lock);
     let stage = stage_path(&lock);
     fs::rename(&root, &backup).unwrap();
-    fs::rename(&new_fixture, &stage).unwrap();
-    assert!(fingerprint(&stage) == *journal.new_fingerprint());
+    fs::rename(root.with_file_name("new-fixture"), &stage).unwrap();
+    let journal_bytes = fs::read(&canonical).unwrap();
+
+    let error = ejecutar_fila_journal_restore_old_con_limpieza(
+        &mut lock,
+        |_| {},
+        |_| {},
+        |stage_anclado| {
+            let mut eliminaciones = 0;
+            stage_anclado.limpiar_con(|parent, componente, es_directorio| {
+                let opciones = OpenOptionsAt::default();
+                let resultado = if es_directorio {
+                    opciones.rmdir_at(parent, Path::new(componente))
+                } else {
+                    opciones.unlink_at(parent, Path::new(componente))
+                };
+                resultado.map_err(|_| ErrorDirectorioAnclado::Io)?;
+                eliminaciones += 1;
+                if eliminaciones == 1 {
+                    Err(ErrorDirectorioAnclado::Io)
+                } else {
+                    Ok(())
+                }
+            })
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.codigo(), "stage_cleanup_io");
+    assert!(stage.exists());
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert!(fingerprint(&stage).identity() == journal.new_fingerprint().identity());
+    assert!(!(fingerprint(&stage) == *journal.new_fingerprint()));
+    assert_root_intact(&backup);
+    assert!(!root.exists());
+    drop(error);
+    drop(lock);
+
+    let mut restarted = LockEscritura::adquirir(&root).unwrap();
+    assert_eq!(
+        ejecutar_fila_journal_restore_old(&mut restarted),
+        Ok(ResultadoFilaJournalRestoreOld::Eliminado)
+    );
+    assert!(!stage.exists());
+    assert!(!backup.exists());
+    assert!(!canonical.exists());
+    assert_root_intact(&root);
+    assert!(fingerprint(&root) == *journal.old());
+}
+
+#[test]
+fn restore_old_reconcilia_error_de_limpieza_con_stage_ya_eliminado() {
+    let (_temp, root, mut lock, canonical, _journal) = preparar_fila(JournalState::BackupReady);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    let stage_name = stage.file_name().unwrap().to_os_string();
+    fs::rename(&root, &backup).unwrap();
+    fs::rename(root.with_file_name("new-fixture"), &stage).unwrap();
 
     assert_eq!(
-        ejecutar_fila_journal_restore_old(&mut lock),
-        Err(ErrorFilaJournalRestoreOld::FilaNoAutorizada)
+        ejecutar_fila_journal_restore_old_con_limpieza(
+            &mut lock,
+            |_| {},
+            |_| {},
+            |stage_anclado| {
+                stage_anclado.limpiar_con(|parent, componente, es_directorio| {
+                    let opciones = OpenOptionsAt::default();
+                    let resultado = if es_directorio {
+                        opciones.rmdir_at(parent, Path::new(componente))
+                    } else {
+                        opciones.unlink_at(parent, Path::new(componente))
+                    };
+                    resultado.map_err(|_| ErrorDirectorioAnclado::Io)?;
+                    if es_directorio && componente == stage_name {
+                        Err(ErrorDirectorioAnclado::Io)
+                    } else {
+                        Ok(())
+                    }
+                })
+            },
+        ),
+        Ok(ResultadoFilaJournalRestoreOld::Eliminado)
     );
-    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
-    assert!(!root.exists());
-    assert_root_intact(&backup);
-    assert_eq!(fs::read(stage.join("data.bin")).unwrap(), b"new-tree");
+    assert!(!stage.exists());
+    assert!(!backup.exists());
+    assert!(!canonical.exists());
+    assert_root_intact(&root);
 }
 
 #[test]
