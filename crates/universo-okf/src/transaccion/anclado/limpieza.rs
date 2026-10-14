@@ -5,8 +5,9 @@ use super::super::inventario::LimitesInventario;
 use super::super::stage::StageAnclado;
 use super::abrir::abrir_entrada_relativa;
 use super::{
-    ErrorDirectorioAnclado, IdentidadDirectorio, TipoEntradaAnclada, clasificar_entrada_sin_seguir,
-    mapear_io, metadata_directorio, metadata_es_reparse, validar_componente,
+    ErrorDirectorioAnclado, IdentidadDirectorio, ScopeFilesystem, TipoEntradaAnclada,
+    clasificar_entrada_sin_seguir, mapear_io, metadata_directorio, metadata_es_reparse,
+    scope_filesystem, validar_componente,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +90,20 @@ pub(in crate::transaccion) fn limpiar_stage_anclado_con_limites<F>(
 where
     F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
 {
+    let mut sonda_scope = scope_filesystem;
+    limpiar_stage_anclado_con_probe(stage, limites, &mut sonda_scope, eliminar)
+}
+
+pub(in crate::transaccion) fn limpiar_stage_anclado_con_probe<F, S>(
+    stage: &StageAnclado,
+    limites: LimitesInventario,
+    sonda_scope: &mut S,
+    eliminar: &mut F,
+) -> Result<(), ErrorLimpiezaAnclado>
+where
+    F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
+    S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+{
     let (directorio, componente, identidad_stage) = stage.partes_cleanup();
     let Some(identidad_stage) = identidad_stage else {
         return Err(ErrorLimpiezaAnclado::IdentidadInconsistente);
@@ -101,6 +116,7 @@ where
 
     let parent = &directorio.parent;
     validar_identidad(parent, identidad_parent)?;
+    let scope_parent = scope_no_verificado(sonda_scope(parent))?;
     let raiz_abierta = directorio
         .raiz
         .as_ref()
@@ -111,35 +127,73 @@ where
         return Err(ErrorLimpiezaAnclado::IdentidadInconsistente);
     }
     validar_identidad(raiz_abierta, identidad_stage)?;
+    validar_scope(sonda_scope, raiz_abierta, scope_parent)?;
 
     // Reopen the one stage basename from the anchored parent before inspecting
     // or deleting anything. LockEscritura coordinates Felix writers; this
     // check does not make name-based unlink atomic against hostile processes.
+    validar_scope(sonda_scope, parent, scope_parent)?;
     let mut raiz = abrir_directorio_sin_seguir(parent, componente)?;
     validar_identidad(&raiz, identidad_stage)?;
+    validar_scope(sonda_scope, &raiz, scope_parent)?;
 
     // Reject the whole tree before the first unlink/rmdir. In particular,
     // links, reparse points, special files, and invalid names leave every
     // staged entry untouched.
     let mut presupuesto = PresupuestoLimpieza::nuevo(limites);
-    let entradas = preflight_directorio(&mut raiz, 0, 0, &mut presupuesto)?;
-    eliminar_entradas(&raiz, &entradas, eliminar)?;
+    let entradas =
+        preflight_directorio(&mut raiz, 0, 0, &mut presupuesto, scope_parent, sonda_scope)?;
+    eliminar_entradas(&raiz, &entradas, scope_parent, sonda_scope, eliminar)?;
 
     validar_identidad(parent, identidad_parent)?;
     validar_identidad(raiz_abierta, identidad_stage)?;
+    validar_scope(sonda_scope, parent, scope_parent)?;
+    validar_scope(sonda_scope, raiz_abierta, scope_parent)?;
+    validar_scope(sonda_scope, parent, scope_parent)?;
     let raiz_final = abrir_directorio_sin_seguir(parent, componente)?;
+    validar_identidad(&raiz_final, identidad_stage)?;
+    validar_scope(sonda_scope, &raiz_final, scope_parent)?;
+    validar_scope(sonda_scope, parent, scope_parent)?;
+    validar_scope(sonda_scope, &raiz_final, scope_parent)?;
+    validar_identidad(parent, identidad_parent)?;
     validar_identidad(&raiz_final, identidad_stage)?;
     drop(raiz_final);
     drop(raiz);
     eliminar(parent, componente, true).map_err(ErrorLimpiezaAnclado::Directorio)
 }
 
-fn preflight_directorio(
+fn scope_no_verificado(
+    resultado: Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+) -> Result<ScopeFilesystem, ErrorLimpiezaAnclado> {
+    resultado.map_err(|_| ErrorLimpiezaAnclado::Directorio(ErrorDirectorioAnclado::Io))
+}
+
+fn validar_scope<F>(
+    sonda_scope: &mut F,
+    handle: &File,
+    esperado: ScopeFilesystem,
+) -> Result<(), ErrorLimpiezaAnclado>
+where
+    F: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+{
+    if scope_no_verificado(sonda_scope(handle))? != esperado {
+        return Err(ErrorLimpiezaAnclado::Directorio(ErrorDirectorioAnclado::Io));
+    }
+    Ok(())
+}
+
+fn preflight_directorio<F>(
     directorio: &mut File,
     profundidad: usize,
     bytes_ruta: usize,
     presupuesto: &mut PresupuestoLimpieza,
-) -> Result<Vec<EntradaLimpieza>, ErrorLimpiezaAnclado> {
+    scope_esperado: ScopeFilesystem,
+    sonda_scope: &mut F,
+) -> Result<Vec<EntradaLimpieza>, ErrorLimpiezaAnclado>
+where
+    F: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+{
+    validar_scope(sonda_scope, directorio, scope_esperado)?;
     let nombres = nombres_hijos(directorio, profundidad, bytes_ruta, presupuesto)?;
     let mut entradas = Vec::new();
     for hijo in nombres {
@@ -148,11 +202,14 @@ fn preflight_directorio(
             profundidad,
             bytes_ruta,
         } = hijo;
+        validar_scope(sonda_scope, directorio, scope_esperado)?;
         match clasificar_entrada_sin_seguir(directorio, &nombre)
             .map_err(ErrorLimpiezaAnclado::Directorio)?
         {
             TipoEntradaAnclada::Archivo => {
+                validar_scope(sonda_scope, directorio, scope_esperado)?;
                 let entrada = abrir_entrada_sin_seguir(directorio, &nombre)?;
+                validar_scope(sonda_scope, &entrada, scope_esperado)?;
                 let metadata = entrada
                     .metadata()
                     .map_err(mapear_io)
@@ -168,12 +225,23 @@ fn preflight_directorio(
                 entradas.push(EntradaLimpieza::Archivo(nombre));
             }
             TipoEntradaAnclada::Directorio => {
+                validar_scope(sonda_scope, directorio, scope_esperado)?;
                 let mut entrada = abrir_directorio_sin_seguir(directorio, &nombre)?;
+                validar_scope(sonda_scope, &entrada, scope_esperado)?;
                 let identidad =
                     metadata_directorio(&entrada).map_err(ErrorLimpiezaAnclado::Directorio)?;
-                let hijos =
-                    preflight_directorio(&mut entrada, profundidad, bytes_ruta, presupuesto)?;
+                let hijos = preflight_directorio(
+                    &mut entrada,
+                    profundidad,
+                    bytes_ruta,
+                    presupuesto,
+                    scope_esperado,
+                    sonda_scope,
+                )?;
+                validar_scope(sonda_scope, directorio, scope_esperado)?;
+                validar_scope(sonda_scope, &entrada, scope_esperado)?;
                 let reabierta = abrir_directorio_sin_seguir(directorio, &nombre)?;
+                validar_scope(sonda_scope, &reabierta, scope_esperado)?;
                 validar_identidad(&reabierta, identidad)?;
                 entradas.push(EntradaLimpieza::Directorio {
                     nombre,
@@ -186,18 +254,23 @@ fn preflight_directorio(
     Ok(entradas)
 }
 
-fn eliminar_entradas<F>(
+fn eliminar_entradas<F, S>(
     directorio: &File,
     entradas: &[EntradaLimpieza],
+    scope_esperado: ScopeFilesystem,
+    sonda_scope: &mut S,
     eliminar: &mut F,
 ) -> Result<(), ErrorLimpiezaAnclado>
 where
     F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
+    S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
 {
     for entrada in entradas {
         match entrada {
             EntradaLimpieza::Archivo(nombre) => {
+                validar_scope(sonda_scope, directorio, scope_esperado)?;
                 let archivo = abrir_entrada_sin_seguir(directorio, nombre)?;
+                validar_scope(sonda_scope, &archivo, scope_esperado)?;
                 let metadata = archivo
                     .metadata()
                     .map_err(mapear_io)
@@ -210,6 +283,8 @@ where
                         ErrorDirectorioAnclado::TipoNoAdmitido,
                     ));
                 }
+                validar_scope(sonda_scope, directorio, scope_esperado)?;
+                validar_scope(sonda_scope, &archivo, scope_esperado)?;
                 drop(archivo);
                 eliminar(directorio, nombre, false).map_err(ErrorLimpiezaAnclado::Directorio)?;
             }
@@ -218,11 +293,18 @@ where
                 identidad,
                 hijos,
             } => {
+                validar_scope(sonda_scope, directorio, scope_esperado)?;
                 let hijo = abrir_directorio_sin_seguir(directorio, nombre)?;
+                validar_scope(sonda_scope, &hijo, scope_esperado)?;
                 validar_identidad(&hijo, *identidad)?;
-                eliminar_entradas(&hijo, hijos, eliminar)?;
+                eliminar_entradas(&hijo, hijos, scope_esperado, sonda_scope, eliminar)?;
+                validar_scope(sonda_scope, directorio, scope_esperado)?;
+                validar_scope(sonda_scope, &hijo, scope_esperado)?;
                 let reabierto = abrir_directorio_sin_seguir(directorio, nombre)?;
+                validar_scope(sonda_scope, &reabierto, scope_esperado)?;
                 validar_identidad(&reabierto, *identidad)?;
+                validar_scope(sonda_scope, directorio, scope_esperado)?;
+                validar_scope(sonda_scope, &reabierto, scope_esperado)?;
                 drop(reabierto);
                 drop(hijo);
                 eliminar(directorio, nombre, true).map_err(ErrorLimpiezaAnclado::Directorio)?;

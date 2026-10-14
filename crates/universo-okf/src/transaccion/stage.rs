@@ -14,6 +14,8 @@ use universo_core::{Anexo, BundlePath, Candidato, Estructura};
 
 use crate::serializar::DocumentoCandidato;
 
+#[cfg(test)]
+use super::anclado::ScopeFilesystem;
 use super::anclado::{
     DirectorioAnclado, ErrorCrearStageSibling, ErrorDirectorioAnclado, ErrorLimpiezaAnclado,
     IdentidadDirectorio,
@@ -332,10 +334,10 @@ impl StageAnclado {
     /// coordina solo writers Felix cooperantes, no procesos externos. Un
     /// proceso externo puede mover un subdirectorio ya validado fuera del
     /// stage; operaciones relativas a su handle podrían mutarlo antes de que
-    /// la revalidación detecte el cambio. Ese escenario queda fuera del
-    /// contrato.
-    /// Un error conserva el stage, incluso si hubo borrado parcial, dentro del
-    /// error para que el llamador pueda reintentar.
+    /// la revalidación detecte el cambio. Las carreras externas entre una
+    /// comprobación y `unlink`/`rmdir` quedan fuera del contrato. Un error tras
+    /// un `unlink` puede dejar el stage parcialmente borrado; el error conserva
+    /// su capability para que el llamador pueda reintentar.
     pub(crate) fn limpiar(self) -> Result<(), ErrorLimpiezaStage> {
         self.limpiar_con(|parent, componente, es_directorio| {
             let opciones = OpenOptionsAt::default();
@@ -366,6 +368,25 @@ impl StageAnclado {
     {
         let resultado =
             super::anclado::limpiar_stage_anclado_con_limites(&self, limites, &mut eliminar);
+        self.terminar_limpieza(resultado)
+    }
+
+    #[cfg(test)]
+    fn limpiar_con_scope<F, S>(
+        self,
+        mut sonda_scope: S,
+        mut eliminar: F,
+    ) -> Result<(), ErrorLimpiezaStage>
+    where
+        F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        let resultado = super::anclado::limpiar_stage_anclado_con_probe(
+            &self,
+            LimitesInventario::CONTRATO,
+            &mut sonda_scope,
+            &mut eliminar,
+        );
         self.terminar_limpieza(resultado)
     }
 
@@ -1618,6 +1639,7 @@ mod tests {
         ConfigRawCapturada, capturar_snapshot, capturar_snapshot_con_cas_anclado,
         materializar_desde_entradas,
     };
+    use std::cell::Cell;
     use std::fs;
     use tempfile::{TempDir, tempdir};
     use universo_core::{Atomo, Delta, Etiqueta, Sujeto, construir_candidato};
@@ -1737,6 +1759,20 @@ ignorados = ["ignored.md"]
         let stage =
             crear_stage_anclado_unico(&ancla, &mut || Ok("cleanup-stage".to_owned())).unwrap();
         (temp, stage)
+    }
+
+    fn eliminar_at_test(
+        parent: &File,
+        componente: &OsStr,
+        es_directorio: bool,
+    ) -> Result<(), ErrorDirectorioAnclado> {
+        let opciones = OpenOptionsAt::default();
+        let resultado = if es_directorio {
+            opciones.rmdir_at(parent, Path::new(componente))
+        } else {
+            opciones.unlink_at(parent, Path::new(componente))
+        };
+        resultado.map_err(|_| ErrorDirectorioAnclado::Io)
     }
 
     #[test]
@@ -1874,7 +1910,17 @@ ignorados = ["ignored.md"]
         assert!(ruta_stage.join("empty").is_dir());
         assert!(ruta_stage.join("knowledge/a.md").is_file());
 
-        stage.limpiar().unwrap();
+        let mut llamadas_scope = 0;
+        stage
+            .limpiar_con_scope(
+                |_| {
+                    llamadas_scope += 1;
+                    Ok(ScopeFilesystem(29))
+                },
+                eliminar_at_test,
+            )
+            .unwrap();
+        assert!(llamadas_scope > 10);
 
         assert!(!ruta_stage.exists());
         assert_eq!(
@@ -1983,19 +2029,16 @@ ignorados = ["ignored.md"]
         let mut eliminaciones = 0;
 
         let error = stage
-            .limpiar_con(|parent, componente, es_directorio| {
-                eliminaciones += 1;
-                if eliminaciones == 2 {
-                    return Err(ErrorDirectorioAnclado::Io);
-                }
-                let opciones = OpenOptionsAt::default();
-                let resultado = if es_directorio {
-                    opciones.rmdir_at(parent, Path::new(componente))
-                } else {
-                    opciones.unlink_at(parent, Path::new(componente))
-                };
-                resultado.map_err(|_| ErrorDirectorioAnclado::Io)
-            })
+            .limpiar_con_scope(
+                |_| Ok(ScopeFilesystem(29)),
+                |parent, componente, es_directorio| {
+                    eliminaciones += 1;
+                    if eliminaciones == 2 {
+                        return Err(ErrorDirectorioAnclado::Io);
+                    }
+                    eliminar_at_test(parent, componente, es_directorio)
+                },
+            )
             .unwrap_err();
 
         assert_eq!(error.codigo(), "stage_cleanup_io");
@@ -2007,6 +2050,91 @@ ignorados = ["ignored.md"]
         );
         let stage = error.recuperar_stage();
         stage.limpiar().unwrap();
+        assert!(!ruta_stage.exists());
+    }
+
+    #[test]
+    fn cleanup_scope_error_o_mismatch_en_preflight_no_borra_entradas() {
+        for mismatch in [false, true] {
+            let (temp, stage) = stage_anclado_vacio();
+            let ruta_stage = temp.path().join(stage.componente());
+            let archivo = ruta_stage.join("keep.bin");
+            fs::write(&archivo, b"keep before preflight").unwrap();
+            let mut eliminaciones = 0;
+
+            let error = stage
+                .limpiar_con_scope(
+                    |handle| {
+                        let metadata = handle.metadata().map_err(|_| ErrorDirectorioAnclado::Io)?;
+                        if metadata.is_file() {
+                            if mismatch {
+                                Ok(ScopeFilesystem(2))
+                            } else {
+                                Err(ErrorDirectorioAnclado::Io)
+                            }
+                        } else {
+                            Ok(ScopeFilesystem(1))
+                        }
+                    },
+                    |_, _, _| {
+                        eliminaciones += 1;
+                        Ok(())
+                    },
+                )
+                .unwrap_err();
+
+            assert_eq!(error.codigo(), "stage_cleanup_io");
+            assert!(error.stage_parcial().identidad().is_some());
+            assert_eq!(eliminaciones, 0);
+            assert_eq!(fs::read(&archivo).unwrap(), b"keep before preflight");
+            error.recuperar_stage().limpiar().unwrap();
+            assert!(!ruta_stage.exists());
+        }
+    }
+
+    #[test]
+    fn cleanup_revalida_scope_antes_del_rmdir_final() {
+        let (temp, stage) = stage_anclado_vacio();
+        let ruta_stage = temp.path().join(stage.componente());
+        let archivo = ruta_stage.join("first.bin");
+        fs::write(&archivo, b"remove before final check").unwrap();
+        let eliminaciones = Cell::new(0);
+        let comprobaciones_posteriores = Cell::new(0);
+        let rmdirs = Cell::new(0);
+
+        let error = stage
+            .limpiar_con_scope(
+                |_| {
+                    if eliminaciones.get() > 0 {
+                        let siguiente = comprobaciones_posteriores.get() + 1;
+                        comprobaciones_posteriores.set(siguiente);
+                        if siguiente == 6 {
+                            return Err(ErrorDirectorioAnclado::Io);
+                        }
+                    }
+                    Ok(ScopeFilesystem(1))
+                },
+                |parent, componente, es_directorio| {
+                    if es_directorio {
+                        rmdirs.set(rmdirs.get() + 1);
+                    }
+                    eliminar_at_test(parent, componente, es_directorio)?;
+                    if !es_directorio {
+                        eliminaciones.set(eliminaciones.get() + 1);
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.codigo(), "stage_cleanup_io");
+        assert!(error.stage_parcial().identidad().is_some());
+        assert_eq!(eliminaciones.get(), 1);
+        assert_eq!(comprobaciones_posteriores.get(), 6);
+        assert_eq!(rmdirs.get(), 0);
+        assert!(!archivo.exists());
+        assert!(ruta_stage.is_dir());
+        error.recuperar_stage().limpiar().unwrap();
         assert!(!ruta_stage.exists());
     }
 

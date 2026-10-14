@@ -26,6 +26,8 @@ mod operaciones;
 pub(crate) mod renombrar;
 
 pub(super) use clasificar::{TipoEntradaAnclada, clasificar_entrada_sin_seguir};
+#[cfg(test)]
+pub(super) use limpieza::limpiar_stage_anclado_con_probe;
 pub(super) use limpieza::{
     ErrorLimpiezaAnclado, limpiar_stage_anclado, limpiar_stage_anclado_con_limites,
 };
@@ -152,7 +154,7 @@ impl IdentidadDirectorio {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct ScopeFilesystem(u64);
+pub(super) struct ScopeFilesystem(pub(super) u64);
 
 #[cfg(any(windows, test))]
 fn file_id_hex(bytes: &[u8; 16]) -> String {
@@ -886,7 +888,7 @@ fn metadata_directorio_validada(
 fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
     use std::os::fd::AsRawFd;
 
-    metadata_directorio_validada(handle)?;
+    handle.metadata().map_err(mapear_io)?;
     let mut informacion = unsafe { std::mem::zeroed::<libc::statx>() };
     let ruta_vacia = b"\0";
     // SAFETY: the descriptor remains open, `ruta_vacia` is NUL-terminated, and
@@ -911,7 +913,7 @@ fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnc
 
 #[cfg(windows)]
 fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
-    metadata_directorio_validada(handle)?;
+    handle.metadata().map_err(mapear_io)?;
     let identidad = identidad_windows(handle).map_err(mapear_io)?;
     Ok(ScopeFilesystem(identidad.volumen))
 }
