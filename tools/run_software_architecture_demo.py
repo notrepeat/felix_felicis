@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -68,19 +69,11 @@ PRIVATE_FIXTURE_MARKERS = (
     '"domain"',
     '"port"',
     '"adapter"',
-    "domain",
-    "port",
-    "adapter",
-    "depends",
     '"dependency"',
-    "dependency",
     "type: domain",
     "type: port",
     "type: adapter",
     "kind: dependency",
-    "Domain",
-    "Port",
-    "Adapter",
     "Core domain body.",
     "Application boundary.",
     "External adapter.",
@@ -88,6 +81,7 @@ PRIVATE_FIXTURE_MARKERS = (
     "fixture-note: preserve port",
     "fixture-note: preserve adapter",
 )
+PRIVATE_FIXTURE_TOKENS = ("domain", "port", "adapter", "depends", "dependency")
 
 
 class DemoFailure(Exception):
@@ -471,6 +465,12 @@ def verify_redaction(state: State, output_name: str, raw: bytes) -> None:
         for marker in markers
     ):
         raise DemoFailure(f"{state.name} {output_name}: se expuso un marcador concreto de la fixture.")
+    normalized_text = normalized.decode("utf-8", errors="replace")
+    if any(
+        re.search(rf"(?<!\w){re.escape(token)}(?!\w)", normalized_text)
+        for token in PRIVATE_FIXTURE_TOKENS
+    ):
+        raise DemoFailure(f"{state.name} {output_name}: se expuso un token concreto de la fixture.")
 
 
 def build_cli() -> Path:

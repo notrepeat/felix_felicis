@@ -9,6 +9,15 @@ import unittest
 import run_software_architecture_demo as demo
 
 
+class PrivateFixtureRedactionTests(unittest.TestCase):
+    def test_short_token_substrings_do_not_cause_false_positives(self) -> None:
+        demo.verify_redaction(demo.STATES[0], "stdout", b"report support")
+
+    def test_short_private_token_is_still_detected(self) -> None:
+        with self.assertRaises(demo.DemoFailure):
+            demo.verify_redaction(demo.STATES[0], "stdout", b"result: port")
+
+
 class ProcessTreeMetricsTests(unittest.TestCase):
     def test_aggregate_includes_root_and_descendants_but_not_siblings(self) -> None:
         snapshot = {
