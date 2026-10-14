@@ -12,7 +12,7 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 3/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. El punto de partida de este cambio es `cd48cf5`: incluye pruebas y documentación, y el CI `38350298565` pasó en Linux y Windows. La matriz local workspace Windows 701/6 y WSL 709/6 pertenece al antecedente `609936a`, que no tiene CI remoto propio. CI `38232932504` es histórico para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; esos runs no acreditan `609936a`. |
+| Progreso | 4/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. El punto de partida de este cambio es `cd48cf5`: incluye pruebas y documentación, y el CI `38350298565` pasó en Linux y Windows. La matriz local workspace Windows 701/6 y WSL 709/6 pertenece al antecedente `609936a`, que no tiene CI remoto propio. CI `38232932504` es histórico para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; esos runs no acreditan `609936a`. |
 | Foco actual | Fase 04, Unidad 7: journal, commit y recovery. U7 incluye `KeepOld` y `RestoreOld` acotadas. El preflight compartido se ejecuta una vez; el dispatcher crate-private solo enruta esas dos filas, sin caller desde apply/producción. No limpia stage ni ejecuta `DiscardNewRestoreOld`, validación de `New`, `Committed` o recovery completo. |
 | Última actualización | 2026-10-13 |
 
@@ -53,7 +53,7 @@ flowchart LR
 | [02](02-evaluador-de-referencia.md) | Evaluador de referencia | completo | 01 | Parser, validación estática, expansión, Tarski, oráculo y `check` verificados; commits `2b5f721`–`a9e1983`. |
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
 | [04](04-operacion-transaccional.md) | Operación transaccional | en curso | 03 | U0–U4 y U6 cerradas en sus límites; U5, U7 y U8 conservan avance parcial. U7 ejecuta solo `KeepOld` y `RestoreOld` tras un preflight inicial compartido; `eef28f5` cubre seis combinaciones; `51cd5c4` extiende las aserciones al inventario recursivo, sin caller de apply/producción. U8 mantiene el preflight consumidor antes de abrir root bajo lock/inventariar; desde `4b94261`, `ConfigRawCapturada::nueva` también rechaza sumas combinadas fuera de cuota después de convertir a `Arc`, sin limitar la materialización previa. En `609936a` y `a3cc3c9`, pruebas privadas por ruta cubren CAS match/stale con configuración externa y journal sibling, sin caller de apply/CLI ni simulación pública. Siguen pendientes el proveedor acotado antes del lock, los callers de apply/CLI y las cotas de `version_motor`/`policy_id`; también cleanup de stage, `DiscardNewRestoreOld`, validación de `New`, `Committed`, recovery completo, U9–U10, `Type` y publicación filesystem. |
-| [05](05-demo-publica.md) | Demo pública | pendiente | 01–04 | Una contradicción y su reparación se reproducen con un comando. |
+| [05](05-demo-publica.md) | Demo pública | completo | 01–04 | La historia de contradicción, corrección y readmisión se reproduce con un comando; CI `38500576872` pasó en Linux y Windows. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
 | [08](08-integracion-privada.md) | Integración privada | pendiente | 04 | El bundle real valida el motor sin filtrarse al repositorio público. |
@@ -77,7 +77,7 @@ flowchart LR
 - [x] 02 — El evaluador de referencia ejecuta todo el AST soportado, con pruebas por variante, oráculo y límites de recursos documentados.
 - [x] 03 — Los veredictos explican contradicciones y vacíos mediante árboles testigo abstractos y acotados; los tests los relacionan con casos concretos sin exponer sus átomos, y verifican privacidad y presupuesto.
 - [ ] 04 — Las propuestas son transaccionales.
-- [ ] 05 — La demo pública corre en CI.
+- [x] 05 — La demo pública se reproduce con un comando, compara goldens y CI pasa en Linux y Windows; el criterio 3 correlaciona el testigo con la fixture solo dentro del test y conserva redactada la salida pública.
 - [ ] 06 — El loop MCP funciona de extremo a extremo.
 - [ ] 07 — La evaluación comparativa tiene resultados publicados.
 - [ ] 08 — La integración privada pasa sin exponer datos.
@@ -181,7 +181,7 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | `a3cc3c9c2e5d166f066d6f7bfccf6cdec9214211` | Añade una prueba privada de CAS por ruta para match/stale con journal sibling: compara inventarios observados de root, configuración y parent, bytes de journal y `ArtifactFingerprint` del root; no aparecen backup, stage ni lockfile. No invoca el dispatcher. No hay conteo focal registrado para este commit. |
 | `51cd5c4fbf9607dffac1825a9739cac9e92d97e2` | Extiende esa matriz de recovery con inventario recursivo: rutas/tipos/bytes de archivos normales; el lock abierto se compara solo por presencia, tipo y longitud. `RestoreOld` compara contra el modelo backup→root y retiro de journal. Matriz workspace independiente sobre este SHA: Windows 702 passed/0 failed/6 ignored (37 suites), WSL Ubuntu 710/0/6 (37 suites); fmt y clippy pasan en ambos. Son conteos workspace, no focales. U7 sigue parcial y sin caller productivo; el inventario no observa atime/permisos/metadatos y no elimina TOCTOU ni demuestra atomicidad ante cambios hostiles. |
 
-### Evidencia parcial de fase 05 — smoke CLI, fixture y runner de arquitectura
+### Evidencia de fase 05 — historial y cierre de la demo pública
 
 `ae99906` añade `tools/check_public_cli_demo.py` y lo incorpora a los jobs de
 CI; `c76e292` precisa en README que `check` realiza evaluación estática y
@@ -292,17 +292,22 @@ comparados son byte-idénticos y los 16 goldens LF no presentan drift; WSL
 invoca el runner con `python3`. El workflow ya ejecuta el runner en Linux y
 Windows, pero no hay CI remoto para este SHA.
 
-La ruta compuesta aporta cobertura técnica para los criterios 1, 2 y 4, y el
-workflow ya cablea el criterio 5. Aun así, bajo la política integral las seis
-casillas de fase 05 permanecen abiertas hasta exponer un testigo público con
-archivos y átomos concretos (criterio 3), medir duración y RSS (criterio 6) y
-obtener CI remoto para este SHA. La prueba recorre propuestas con APIs Rust y
-reconstruye candidatos en memoria; no usa CLI `apply` ni genera la corrección.
-Snapshots y goldens siguen versionados, y no hay evidencia de publicación,
-atomicidad o recovery. Fase 05 permanece pendiente y el progreso maestro
-continúa en 3/9. El checklist maestro 03 sigue cerrado por la explicación
-abstracta acotada y las verificaciones de presupuesto y privacidad. Véase el
-registro completo en [05 — Demo pública](05-demo-publica.md).
+La evidencia anterior a `3f20723` conserva los estados históricos de sus
+respectivos commits, incluida la evaluación de `f15af52` cuando fase 05 seguía
+pendiente. Al cierre, `68353e0`, `1043b1b`, `be3641a` y `3f20723` completan el
+runner medido y la correlación test-only entre los testigos redactados y los
+archivos/átomos concretos de la fixture. El CI `38500576872` pasó en Linux y
+Windows; las mediciones de duración y RSS y sus límites están en
+[05 — Demo pública](05-demo-publica.md). El progreso maestro queda en 4/9.
+
+La prueba recorre propuestas con APIs Rust y reconstruye candidatos en memoria;
+la corrección procede del delta explícito de la fixture. No usa CLI `apply` ni
+genera la corrección. Solo el candidato corregido se serializa y recarga;
+snapshots y goldens son datos versionados, no salidas de `apply`. La demo no
+demuestra publicación, atomicidad ni recovery. El checklist maestro 03 sigue
+cerrado por la explicación abstracta acotada y las verificaciones de
+presupuesto y privacidad. Véase el registro completo en
+[05 — Demo pública](05-demo-publica.md).
 
 El JSON v1 tiene la forma exacta
 `{"schema":"felix-delta-v1","add":[...],"remove":[...]}`. La API typed
@@ -346,8 +351,9 @@ expansión; no es una cota del trabajo previo, copias, memoria o tiempo total.
 Todos los commits de los dos
 slices recientes se mantuvieron bajo 400 líneas authored/churn.
 
-Fase 04 sigue en curso y el progreso maestro permanece en 3/9. Unidad 3 queda
-cerrada en carga y serialización en memoria de `Parent`; el harness release
+En el corte histórico descrito por esta nota, fase 04 seguía en curso y el
+progreso maestro era 3/9. Unidad 3 queda cerrada en carga y serialización en
+memoria de `Parent`; el harness release
 anterior midió 1.791 ms para 1.000 cambios y overrides, sin medir escritura ni
 publicación filesystem.
 

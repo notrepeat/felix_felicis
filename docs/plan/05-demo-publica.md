@@ -7,7 +7,7 @@ contradicción, su testigo, una corrección y la readmisión del candidato.
 
 | Campo | Valor |
 |---|---|
-| Estado | pendiente |
+| Estado | completo |
 | Depende de | 01–04 |
 | Desbloquea | 06, 07 |
 
@@ -54,18 +54,18 @@ con goldens. Desde `f15af52`, el runner de un comando ejecuta primero
 compila la CLI y compara cuatro estados durables y sus 16 salidas. La prueba
 Rust cubre el rechazo y la corrección con APIs Rust, reconstruye los candidatos
 en memoria y compara sus snapshots; no ejecuta `apply` ni genera la corrección
-por CLI. La ruta compuesta aporta cobertura técnica para los criterios 1, 2 y 4,
-y el workflow ya ejecuta el runner para el criterio 5. Aun así, por la política
-integral, las seis casillas permanecen abiertas hasta disponer de un testigo
-público con archivos y átomos concretos (criterio 3), medir duración y RSS de
-la demo completa (criterio 6) y obtener CI remoto para este SHA.
+por CLI. Dentro de la prueba, los testigos redactados se correlacionan con los
+archivos y átomos concretos de la fixture; `stdout`, `stderr` y los goldens
+públicos permanecen redactados. El run de CI `38500576872` acredita el runner
+en Linux y Windows y registra las mediciones descritas abajo.
 
-- [ ] Un clon limpio reproduce la demo sin configuración privada.
-- [ ] El caso contradictorio falla por la razón esperada.
-- [ ] El testigo señala archivos y átomos concretos.
-- [ ] La reparación pasa `validate`, `check` y round-trip.
-- [ ] CI compara la salida con los goldens.
-- [ ] La demo completa tarda y consume memoria medidos, no prometidos.
+- [x] Un clon limpio reproduce la demo sin configuración privada.
+- [x] El caso contradictorio falla por la razón esperada.
+- [x] La prueba correlaciona los testigos redactados con archivos y átomos
+  concretos; la salida pública y los goldens permanecen redactados.
+- [x] La reparación pasa `validate`, `check` y round-trip.
+- [x] CI compara la salida con los goldens en Linux y Windows.
+- [x] La demo completa tiene mediciones de duración y memoria registradas.
 
 ## Comandos de verificación
 
@@ -78,7 +78,8 @@ las propuestas contradictoria, correctiva y gap con APIs Rust; compara los
 candidatos reconstruidos en memoria con los snapshots y hace round-trip del
 candidato corregido. Los snapshots y goldens siguen siendo datos versionados,
 no salidas de `apply`. El workflow de CI ejecuta el runner y la suite workspace
-en Linux y Windows; todavía no hay resultado de CI remoto para `f15af52`.
+en Linux y Windows. No había resultado de CI remoto para `f15af52`; el run
+`38500576872` acredita `3f20723` en ambos sistemas.
 
 En una ejecución satisfactoria, el runner conserva su resumen estable en
 `stdout` y escribe una línea `METRICS` variable en `stderr`. `elapsed_ns` es el
@@ -90,6 +91,17 @@ descendientes observados. La muestra puede perder picos entre intervalos y la
 suma puede contar páginas compartidas más de una vez; es una estimación, no un
 pico exacto ni memoria física única. Las métricas no forman parte de los
 goldens ni se usan como umbrales de CI.
+
+Mediciones del run `38500576872` (bytes para ambas columnas de memoria):
+
+| Sistema | `elapsed_ns` | `rss_tree_peak_sampled_bytes` |
+|---|---:|---:|
+| Linux | 5689835724 | 1357873152 B |
+| Windows | 15457254600 | 919347200 B |
+
+El RSS de Linux y el working set de Windows proceden de mecanismos distintos;
+son estimaciones muestreadas y no se deben tratar como valores exactos ni como
+magnitudes directamente comparables. No hay umbrales de aceptación asociados.
 
 ```text
 # Windows
@@ -112,19 +124,17 @@ python3 -m unittest discover -s tools -p "test_run_software_architecture_demo.py
 | 2026-10-13 | `71784b0`, `179b5f7`, `e857d1c` | `71784b0` añade 12 goldens JSON/texto; `179b5f7` añade `tools/run_software_architecture_demo.py`; `e857d1c` valida los esquemas JSON y el testigo esperado. La matriz local aislada sobre `e857d1c` pasa en Windows y WSL Ubuntu: runner, 12/12 salidas exactas; prueba focal `demo_arquitectura`, 1 passed/0 failed/0 ignored; `cargo test --locked --workspace`, Windows 703 passed/0 failed/6 ignored y WSL 711/0/6 (38 suites en ambos); `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` y `python tools/check_public_boundary.py` pasan en ambos. La comparación incluyó 196 archivos; los 12 goldens permanecieron byte por byte iguales, sin drift. `.github/workflows/ci.yml` invoca el runner en ambos jobs; no se comprobó CI remoto para este SHA. El runner evalúa `validate` y `check` en los estados base, contradictorio y corregido; no reproduce los deltas. El test Rust separado cubre el rechazo con `proponer`, la corrección explícita y el round-trip/CLI del corregido. | Parcial: hay ejecución local reproducible del runner y comparación con goldens, pero la demo integral sigue incompleta. El testigo expone posición de fuente y árbol de predicados, no nombre de archivo ni IDs/argumentos concretos de átomos; falta el caso de vacío por ausencia; no hay métricas de duración o RSS. No demuestra `apply`, publicación, atomicidad ni recovery. La fase 05 permanece pendiente. |
 | 2026-10-13 | `3b05f42`, `fab86f8` | Matriz local aislada sobre `fab86f8`: Windows y WSL Ubuntu pasan el smoke CLI público, el runner (4 estados × `validate`/`check` × JSON/texto = 16/16 salidas exactas), `demo_arquitectura` (1 passed/0 failed/0 ignored), `cargo test --locked --workspace` (Windows 703/0/6; WSL 711/0/6; 38 suites en ambos), `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` y `python tools/check_public_boundary.py`. La comparación de SHA-256 por archivo confirma que los 205 archivos de los checkouts Windows y WSL son byte-idénticos; los 16 goldens LF permanecieron iguales y pasaron las comparaciones exactas. El test Rust verifica que el delta retira la arista `domain→port` y su `HasLab` y que el snapshot coincide con el candidato; el testigo público sigue abstracto. No hay CI remoto registrado para este SHA. | Parcial: el caso de ausencia existe como obligación existencial sin testigo en un bundle no vacío, y hay checks locales reproducibles. La secuencia de deltas todavía se reparte entre el runner y el test; no se exponen archivos ni átomos concretos al público, ni se miden duración o RSS, ni se demuestra `apply`, publicación, atomicidad o recovery. Bajo la política integral, las seis casillas de fase 05 siguen abiertas. |
 | 2026-10-13 | `f15af52` | El runner ahora ejecuta primero `cargo test --locked -p universo-cli --test demo_arquitectura --quiet` y después compara los cuatro estados y las 16 salidas golden. Matriz local aislada: Windows y WSL Ubuntu pasan el runner 16/16, la prueba focal 1/1 y el smoke CLI; el workspace registra Windows 703 passed/0 failed/6 ignored y WSL 711/0/6 (38 suites en ambos). `cargo fmt --all -- --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings` y `python tools/check_public_boundary.py` pasan en ambos. Los 205 archivos comparados son byte-idénticos y los 16 goldens LF no presentan drift. En WSL Ubuntu se invoca con `python3`. El workflow ya ejecuta el runner en Linux y Windows; no hay CI remoto para este SHA. | Parcial: la ruta compuesta aporta cobertura técnica para los criterios 1, 2 y 4, y el workflow ya cablea el criterio 5. Las seis casillas permanecen abiertas bajo la política integral hasta exponer un testigo público concreto (criterio 3), medir duración y RSS (criterio 6) y obtener CI remoto para este SHA. La prueba usa APIs Rust, no CLI `apply` ni generación de corrección; snapshots y goldens siguen versionados y no se afirma publicación, atomicidad o recovery. |
+| 2026-10-13 | `68353e0`, `1043b1b`, `be3641a`, `3f20723`; CI `38500576872` | El run terminó correctamente en Linux y Windows. `be3641a` correlaciona dentro del test los testigos redactados con archivos y átomos concretos de la fixture, y comprueba que la salida pública siga redactada; `3f20723` acota coincidencias de tokens en la comprobación de redacción. Duración y memoria muestreadas: valores detallados arriba. | Completa: las seis casillas están respaldadas por el runner de un comando, sus comparaciones golden, la integración y CI en ambos sistemas. La prueba no usa CLI `apply`; solo el candidato corregido se serializa y recarga, y snapshots/goldens no son salidas de `apply`. No demuestra publicación, atomicidad ni recovery. |
 
-Las matrices sobre `e0fc2e6`, `434f4fc`, `55103297`, `e857d1c`, `fab86f8` y
-`f15af52` son locales; todavía no hay CI remoto que acredite este último SHA.
-El workflow ejecuta el runner en Linux y Windows. En `f15af52`, un solo comando
-Python corre primero la prueba focal y después valida cuatro estados y 16
-goldens; esto aporta cobertura técnica para los criterios 1, 2 y 4, mientras
-el criterio 5 ya está cableado en CI. El test Rust verifica la secuencia con
-APIs Rust y reconstrucciones en memoria, no con CLI `apply` ni generación de la
-corrección; snapshots y goldens siguen versionados. El testigo público continúa
-sin archivos ni átomos concretos y no hay medición de duración o RSS. Bajo la
-política integral, las seis casillas permanecen abiertas hasta resolver esos
-dos límites y obtener CI remoto para este SHA. Fase 05 sigue pendiente y el
-progreso global continúa en 3/9.
+Las filas anteriores al cierre conservan el estado histórico de cada SHA; en
+particular, la evidencia de `f15af52` era local y entonces fase 05 seguía
+pendiente. El cierre actual registra la correlación test-only con la fixture,
+las mediciones del runner y el CI remoto de `3f20723`. La prueba recorre las
+propuestas con APIs Rust y reconstruye candidatos en memoria; la corrección
+procede del delta explícito de la fixture. No usa CLI `apply` ni genera la
+corrección. Solo el candidato corregido se serializa y
+recarga; snapshots y goldens siguen siendo datos versionados, no salidas de
+`apply`. La demo no demuestra publicación, atomicidad ni recovery.
 
 ## Siguiente fase
 

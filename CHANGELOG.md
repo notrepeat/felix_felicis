@@ -87,7 +87,7 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   37 suites. `fmt` y `clippy` pasan en ambos entornos. Estos son conteos del
   workspace, no resultados focales de las pruebas de U7 o U8.
 
-### Evidencia parcial de fase 05: smoke CLI, fixture y runner de arquitectura
+### Fase 05 — historial de evidencia y cierre de la demo pública
 
 - `ae99906` incorpora un smoke de la CLI sobre las fixtures públicas de
   admisión y rechazo; `c76e292` aclara que `check` es evaluación estática y
@@ -214,12 +214,36 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   comparados son byte-idénticos; los 16 goldens LF no presentan drift. WSL
   Ubuntu invoca el runner con `python3`. El workflow ya ejecuta el runner en
   Linux y Windows, pero no hay CI remoto para este SHA.
-- La ruta compuesta aporta cobertura técnica para los criterios 1, 2 y 4, y el
-  workflow ya cablea el criterio 5. Bajo la política integral, las seis
-  casillas siguen abiertas hasta publicar un testigo con archivos y átomos
-  concretos (criterio 3), medir duración y RSS de la demo completa (criterio 6)
-  y obtener CI remoto para este SHA. La fase 05 permanece pendiente; el progreso
-  maestro continúa en 3/9.
+- Al cierre histórico de `f15af52`, la ruta compuesta aportaba cobertura
+  técnica para los criterios 1, 2 y 4 y el workflow cableaba el criterio 5,
+  pero las seis casillas seguían abiertas por falta de correlación test-only
+  del testigo con archivos/átomos concretos, mediciones y CI remoto para ese
+  SHA. Entonces el progreso maestro era 3/9.
+- `68353e0` registra duración monotónica y RSS muestreado; `1043b1b` mantiene
+  compatible el tipado de métricas con Python 3.7. `be3641a` correlaciona
+  dentro del test los testigos redactados con los archivos y átomos concretos
+  de la fixture y comprueba la redacción de la salida pública. `3f20723`
+  acota las coincidencias de tokens de fixture en la comprobación de redacción.
+- El CI remoto `38500576872` terminó correctamente en Linux y Windows para el
+  cierre en `3f20723`. Sus métricas reportadas son:
+
+  | Sistema | `elapsed_ns` | `rss_tree_peak_sampled_bytes` |
+  |---|---:|---:|
+  | Linux | 5689835724 | 1357873152 B |
+  | Windows | 15457254600 | 919347200 B |
+
+  La memoria es una estimación muestreada cada 100 ms: puede perder picos entre
+  muestras y sumar páginas compartidas más de una vez. Linux reporta RSS y
+  Windows working set; no son valores exactos ni directamente comparables.
+  Las métricas no son umbrales de CI.
+- Fase 05 queda completa y el progreso maestro pasa a 4/9. Las seis casillas
+  se cierran con el runner de un comando, sus 16 comparaciones golden, el test
+  de integración, las mediciones y CI en ambos sistemas. La correlación con
+  fixture concreta ocurre solo dentro del test; `stdout`, `stderr` y los
+  goldens permanecen redactados. La prueba no usa CLI `apply` ni genera la
+  corrección: esta procede del delta explícito de la fixture. Solo el candidato
+  corregido se serializa y recarga, y snapshots y goldens no son salidas de
+  `apply`. No se demuestra publicación, atomicidad ni recovery.
 
 ### Límites y seguridad de carga
 
