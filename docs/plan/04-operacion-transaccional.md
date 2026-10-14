@@ -40,6 +40,13 @@ por el journal, reobserva para reconciliar el intento, limpia y reobserva el
 stage, restaura el backup verificado y retira el journal al final. Root `New`
 con cualquier stage sibling presente falla cerrado. Estas funciones siguen
 crate-private y no tienen caller desde apply/producción.
+`b990c72` añade un test interproceso de un único corte `RestoreOld`: el hijo
+termina con código 86 después de restaurar y reobservar `Old`, con backup/stage
+ausentes y journal presente, pero antes de retirarlo. Una segunda ejecución
+readquiere el lock, clasifica `KeepOld` y retira el journal al final. Es
+terminación real de proceso, no una
+prueba de power-loss, caída del SO o durabilidad `fsync`; tampoco cubre una
+frontera real de scope/bind, otros cortes de recovery ni un caller productivo.
 Desde `5c11f76`, el observer marca `PartialOld` solo en backup cuando conserva
 la identidad durable de `old`, su digest raw difiere y las identidades de
 `old` y `new` son distintas. Si la identidad de backup es otra, o las
@@ -63,8 +70,9 @@ contrato. CI `38576523094`
 pasó para este commit en Linux y Windows. Esto no cubre cleanup de sibling
 huérfano ni una frontera general de mounts. Los pasos de cleanup de los runners
 de recovery existentes ya invocan `StageAnclado::limpiar` y heredan el probe
-real; siguen pendientes la cobertura end-to-end de recovery que ejercite esa
-frontera y un caller productivo de los runners.
+real. `b990c72` cubre un solo corte interproceso `RestoreOld` en filesystem de
+pruebas; sigue pendiente la frontera real de scope/mount y otros cortes/filas
+de recovery. No hay caller productivo de los runners.
 Desde `a4583c2`, `inventariar_root_anclado` compara el scope del parent con el
 del root antes de enumerar y valida por handle cada directorio y archivo antes
 de descender o leer; error, ausencia o mismatch fallan como `snapshot_io`.
@@ -114,10 +122,16 @@ pendientes el proveedor con lectura acotada antes del lock, los callers de
 apply/CLI y las cotas para `version_motor` y `policy_id`. Para `RestoreOld` y
 `DiscardNewRestoreOld`, un error ambiguo de cleanup provoca reobservación: si
 el stage ya desapareció se continúa; si persiste parcial, se conserva el
-journal y un siguiente intento puede reutilizar la identidad durable. Las
-pruebas de retry sueltan y readquieren el lock en el mismo proceso; no simulan
-kill/restart ni prueban crash durability. El recovery
-sigue incompleto. Fase 04 sigue en curso: la guardia parcial de scope para
+journal y un siguiente intento puede reutilizar la identidad durable. Los
+retries históricos previos soltaban y readquirían el lock en el mismo proceso.
+Desde `b990c72`, un test ejecuta `RestoreOld` en un proceso hijo y lo termina
+con código 86 después del rename backup→root y la reobservación de `Old`, antes
+de retirar el journal; una segunda ejecución readquiere el lock, clasifica
+`KeepOld` y completa el retiro del journal. Es un único corte de terminación de
+proceso: no simula pérdida de energía ni caída del SO, y no verifica
+durabilidad `fsync`. `KeepValidated`, `Committed` y el recovery completo siguen
+pendientes; tampoco hay caller productivo ni prueba de la frontera real de
+scope/bind. Fase 04 sigue en curso: la guardia parcial de scope para
 escrituras de staging, el lock y la captura anclada aún no están conectados a
 apply ni publican candidatos.
 
@@ -205,8 +219,9 @@ bind mount real ni mounts anidados; en Windows,
 `VolumeSerialNumber` identifica volumen pero no instancia de montaje; TOCTOU
 externo sigue fuera del contrato. Los pasos de cleanup de los runners de
 recovery existentes ya invocan `StageAnclado::limpiar` y heredan el probe real;
-faltan cobertura end-to-end de recovery que ejercite esa frontera y un caller
-productivo de los runners. Tampoco se autoriza cleanup del sibling huérfano sin
+`b990c72` cubre un corte interproceso `RestoreOld` en filesystem de pruebas,
+pero no una frontera real de scope/bind ni otros cortes/filas. Sigue faltando
+un caller productivo de los runners. Tampoco se autoriza cleanup del sibling huérfano sin
 capability ni existe consumidor productivo del indicador. No hay fallback por
 ruta ni por `st_dev`; la ausencia o error al comprobar scope debe fallar
 cerrado. El walker de rutas del bundle pertenece a otra familia y no queda
@@ -282,9 +297,9 @@ La siguiente secuencia se divide en unidades pequeñas, en este orden:
 2. Completar los consumidores aún fuera del camino anclado: backend por
    ruta/bundle, integrar a apply la guardia parcial de escritura y cerrar los
    límites restantes del rename sibling y completar publicación;
-   añadir cobertura end-to-end de
-   recovery para los pasos que ya delegan cleanup en `StageAnclado::limpiar`,
-   habilitar un caller productivo de los runners, completar los demás caminos
+   ampliar la cobertura end-to-end de recovery más allá del único corte
+   interproceso `RestoreOld` de `b990c72`, incluida una frontera real de
+   scope/mount; habilitar un caller productivo de los runners, completar los demás caminos
    de cleanup y añadir un consumidor productivo del indicador de sibling
    huérfano posible.
 3. Prueba de admisión sellada o revalidación con sus entradas.
@@ -1093,6 +1108,8 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | CI `38604472261` | Éxito para `f109679125985318b71f307a0c162ce992df3e22`: CI Linux y Windows completado. Acredita el commit; no bind mount real ni mounts anidados. U7/04 siguen parciales, 4/9. |
 | 2026-10-14 | `2627617` | Comparte la política privada de syscall entre producción y tests. Una prueba crea un destino-canario tras los prechecks y antes del syscall real y comprueba que ambos canarios queden intactos. Los tests inyectan retorno/errno `ENOSYS`/`EINVAL`/`EIO` —no errno del kernel— y verifican una llamada, `Io` para los dos primeros y `OperacionAmbigua` para `EIO`. La protección es para el destino: no impide sustitución hostil de la fuente, y la postverificación solo puede detectar después de una posible mutación. Sin prueba de NFS/remotos, bind mount real ni mounts anidados; apply/publicación siguen pendientes. |
 | 2026-10-14 | CI `38608018290` | Éxito para `262761715a2607450efae1b5b3be9f5775208139`: CI Linux y Windows completado. No acredita una frontera general de TOCTOU ni NFS/remotos, bind mount real o mounts anidados. U7/04 siguen parciales; progreso global 4/9. |
+| 2026-10-14 | `b990c72` | Test interproceso de un único corte `RestoreOld`: el hijo ejecuta recovery real y sale con código 86 en `antes_de_eliminar`, después del rename backup→root y la reobservación de `Old`; verifica root `Old`, backup/stage ausentes y journal presente. La segunda ejecución readquiere lock, clasifica `KeepOld` y retira journal al final. Prueba terminación real de proceso y retry en ese corte; no prueba power-loss, caída del SO ni durabilidad `fsync`, ni otros cortes/filas, un caller productivo o una frontera real de scope/bind. `KeepValidated`, `Committed` y recovery completo pendientes; U7/04 parciales, 4/9. |
+| 2026-10-14 | CI `38613062605` | Éxito para `b990c72`. Acredita ese cambio; no extiende la evidencia más allá del corte `RestoreOld` descrito ni demuestra durabilidad ante pérdida de energía o caída del SO. Bind/scope real y caller productivo pendientes; U7/04 parciales, progreso global 4/9. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
@@ -1102,7 +1119,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 4 | OKF snapshot: framing estable, replay, captura raw y CAS antes del parseo | Cerrada como primitiva interna; no escribe, publica ni conecta apply. La captura por ruta conserva TOCTOU; el root anclado de U6 está probado por separado |
 | 5 | `writer_lock_transaccional` y validación de raíz | Avance parcial; lock probado en 2/8 writers, pero aún no se integra a apply/recovery. Solo serializa escritores Felix cooperantes |
 | 6 | Root anclado y `stage_bundle_transaccional` privado | Cerrada; aliases, root reparse, staging byte a byte, recarga/comparación y cleanup/root intacto tienen evidencia focal. No está conectada a apply |
-| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: preflight compartido y dispatcher crate-private para filas exactas `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` con root `Old`, backup `Absent` y validación false en tres fases. Desde `c888347`, `RestoreOld` acepta root `Absent`, backup `Old`, validación false y stage `Absent`/`New`/`PartialNew` en `Prepared`/`BackupReady`/`Installed`; reabre por identidad durable (digest completo para `New`), limpia/reobserva, restaura backup y retira journal al final; cleanup ambiguo continúa solo si la reobservación confirma stage ausente, y los restos parciales conservan journal para retry. Desde `c763f85`, `DiscardNewRestoreOld` acepta exactamente `BackupReady` + root `New` + backup `Old` + stage `Absent` + validación false/true, o `Installed` con validación false; renombra root a stage, reobserva, limpia/reobserva y restaura old. Desde `bb06df3`, cleanup explícito de `StageAnclado` verifica scope del parent y de cada handle por preflight y antes de las operaciones destructivas; falla cerrado con `stage_cleanup_io` y conserva capability para retry, pero puede dejar borrado parcial tras unlink. Los pasos de cleanup de los runners existentes ya invocan `StageAnclado::limpiar` y heredan el probe real; faltan cobertura end-to-end de recovery que ejercite esa frontera y caller productivo de los runners. Root `New` junto a cualquier stage sibling falla cerrado. Ocho pruebas/casos de recovery nuevos visibles; CI `38509652854` pasa Linux 723/0/6 y Windows 715/0/6 (38 resúmenes), tools 7/OS, fmt, clippy y frontera pública. `KeepValidated`, `Committed`, otros estados no soportados y el ciclo completo de recovery siguen pendientes; U7 conserva alcance parcial. |
+| 7 | `journal_temporal::eliminar` + `journal::recovery::runner` | Avance parcial: preflight compartido y dispatcher crate-private para filas exactas `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` con root `Old`, backup `Absent` y validación false en tres fases. Desde `c888347`, `RestoreOld` acepta root `Absent`, backup `Old`, validación false y stage `Absent`/`New`/`PartialNew` en `Prepared`/`BackupReady`/`Installed`; reabre por identidad durable (digest completo para `New`), limpia/reobserva, restaura backup y retira journal al final; cleanup ambiguo continúa solo si la reobservación confirma stage ausente, y los restos parciales conservan journal para retry. Desde `c763f85`, `DiscardNewRestoreOld` acepta exactamente `BackupReady` + root `New` + backup `Old` + stage `Absent` + validación false/true, o `Installed` con validación false; renombra root a stage, reobserva, limpia/reobserva y restaura old. Desde `bb06df3`, cleanup explícito de `StageAnclado` verifica scope del parent y de cada handle por preflight y antes de las operaciones destructivas; falla cerrado con `stage_cleanup_io` y conserva capability para retry, pero puede dejar borrado parcial tras unlink. Los pasos de cleanup de los runners existentes invocan `StageAnclado::limpiar` y heredan el probe real. `b990c72` añade un único test interproceso de `RestoreOld`: el hijo termina con código 86 después de restaurar y reobservar `Old`, antes de retirar journal; la segunda ejecución readquiere lock, clasifica `KeepOld` y retira journal al final. Esto no prueba power-loss, caída del SO ni durabilidad `fsync`, ni una frontera real de scope/bind u otros cortes/filas. Root `New` junto a cualquier stage sibling falla cerrado. No hay caller productivo; `KeepValidated`, `Committed`, otros estados no soportados y el ciclo completo de recovery siguen pendientes. CI `38613062605` pasa para `b990c72`; U7 conserva alcance parcial, fase 04 en curso, progreso global 4/9. |
 | 8–10 | `propose_transaccional`, `apply_transaccional`, `docs_transaccional` y métricas | U8 sigue parcial: helper crate-private de CAS bajo lock (`aa5d496`) abre root desde `lock.ubicacion()` y delega al CAS anclado; pruebas match/stale/lock/no mutación (`8250f0d`) y el caso root dejó de ser directorio → `TipoNoAdmitido` / `snapshot_entry_type_not_allowed`, redactado (`08e4659`). `SnapshotToken::from_hex` público (`885657aa`; pruebas `032668e`) acepta exactamente 64 bytes ASCII `0-9a-f` en minúscula y devuelve el error fijo/redactado `snapshot_token_invalid`. El commit `56a6516` limita con cuotas inclusivas el árbol raw en ambos calculadores antes del ordenamiento; los tokens v1 dentro de cuota conservan sus bytes. `02c7adde` añade al token una cuota combinada e inclusiva de 128 MiB para `manifiesto_raw` + `invariantes_raw`, independiente de la cuota del árbol y comprobada antes de validarlo/ordenarlo y de iniciar el hashing; `version_motor` y `policy_id` siguen sin cota. Esta validación de slices recibidas no promete un límite de memoria total ni del parser. `2357a82` limita durante la lectura la configuración obtenida por la variante privada de captura por ruta: suma los dos campos bajo una cuota inclusiva independiente de 128 MiB; reutiliza buffers del root, y cachea una ruta externa absoluta normalizada para leerla una vez, pero la cobra por cada campo que la usa. La lectura externa admite el remanente más el centinela. `63e59d1` añade el preflight consumidor antes de abrir root bajo lock y antes de clonar/inventariar en la captura anclada; el exceso da `snapshot_resource_limit` redactado, deja root/canary intacto y conserva el guard. Dentro de cuota, el CAS continúa antes de provenance/parseo. `4b94261` hace fallible `ConfigRawCapturada::nueva` y aplica la cuota como invariante después de convertir a `Arc<[u8]>`; cuenta por campo lógico, incluso con un `Arc` compartido. No limita lectura ni materialización previa, RSS o I/O antes del lock, así que el preflight consumidor sigue siendo defensa. Esta invariante se distingue de la captura privada por ruta, que limita la lectura durante su ejecución. El proveedor con lectura acotada antes del lock y los callers de apply/CLI siguen pendientes; `version_motor` y `policy_id` continúan sin cota. No implica cota total de memoria/parser ni atomicidad ante cambios hostiles. Matriz local U8 en `4b94261`: workspace Windows 694/6 y WSL 702/6 (passed/ignored); no hay CI remoto publicado para ese SHA. CI `38246129604` pasó solo para la base `a4d01e5`; CI final del parser sigue pendiente. En `609936a`, las pruebas focales del CAS por ruta con configuración externa pasan 32/0/1; la matriz local es Windows 701/6 y WSL 709/6, sin CI remoto para ese SHA. Match, stale redactado antes del parseo, no creación de lockfile sibling y retención del lock del caller están cubiertos. No se prueban atime, permisos, metadatos de entradas ni identidades individuales; `a3cc3c9` sí compara el `ArtifactFingerprint` del root (identidad del directorio raíz y digest raw), no la identidad de cada archivo o sibling. La ruta conserva TOCTOU/no atomicidad y el helper no integra apply/CLI ni simulación pública. U7 sigue parcial; U9–10 pendientes. |
 
 ## Orden original y foco vigente
