@@ -929,7 +929,9 @@ fn contiene_nombre_ordenado(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaccion::lock::{ErrorLockEscritura, LockEscritura};
+    use crate::transaccion::lock::{
+        ErrorLockEscritura, LockEscritura, serializar_forks_y_reacquisiciones_test,
+    };
     use crate::transaccion::raiz::UbicacionRaiz;
     use std::collections::HashMap;
     use std::fs;
@@ -2447,6 +2449,7 @@ ignorados = ["ignored.md"]
 
     #[test]
     fn cas_bajo_lock_rechaza_snapshot_stale_tras_otra_epoca_de_escritura() {
+        let _serializacion = serializar_forks_y_reacquisiciones_test();
         let root = tempdir().unwrap();
         fs::create_dir(root.path().join("knowledge")).unwrap();
         fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();

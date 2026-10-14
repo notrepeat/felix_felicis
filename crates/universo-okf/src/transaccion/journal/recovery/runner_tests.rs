@@ -6,6 +6,7 @@ use super::super::dispatcher::{
 use crate::transaccion::anclado::{DirectorioAnclado, ErrorDirectorioAnclado, ScopeFilesystem};
 use crate::transaccion::inventario::inventariar_root_anclado;
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal};
+use crate::transaccion::lock::serializar_forks_y_reacquisiciones_test;
 use crate::transaccion::raiz::UbicacionRaiz;
 use crate::transaccion::snapshot::calcular_digest_raw_tree;
 use fs_at::OpenOptions as OpenOptionsAt;
@@ -105,6 +106,7 @@ fn ejecutar_hijo_interproceso(
     nonce_env: &str,
     codigo_esperado: i32,
 ) {
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let nonce = root
         .parent()
         .unwrap()
@@ -882,6 +884,7 @@ fn discard_new_child_exits_after_rename_before_cleanup() {
 
 #[test]
 fn restore_old_reintenta_limpieza_parcial_del_stage_tras_reinicio() {
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Installed);
     let backup = backup_path(&lock);
     let stage = stage_path(&lock);
@@ -938,6 +941,7 @@ fn restore_old_reintenta_limpieza_parcial_del_stage_tras_reinicio() {
 
 #[test]
 fn restore_old_scope_mismatch_durante_cleanup_preserva_stage_y_journal_para_retry() {
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Installed);
     let backup = backup_path(&lock);
     let stage = stage_path(&lock);
@@ -1361,6 +1365,7 @@ fn discard_new_inner_io_no_observa_ni_limpia_inventario_objetivo_y_retry() {
 
 #[test]
 fn reinicio_despues_de_mover_root_a_stage_reanuda_por_restore_old() {
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let (_temp, root, mut lock, canonical, journal) = preparar_discard_new(JournalState::Installed);
     let backup = backup_path(&lock);
     let stage = stage_path(&lock);
@@ -1479,6 +1484,7 @@ fn restore_old_rechaza_backup_con_digest_distinto_y_conserva_canarios() {
 
 #[test]
 fn reinicio_despues_de_restore_old_converge_con_la_fila_keep_old_existente() {
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let (_temp, root, lock, canonical, journal) = preparar_fila(JournalState::Installed);
     let backup = backup_path(&lock);
     fs::rename(&root, &backup).unwrap();
@@ -1598,6 +1604,7 @@ fn committed_rechaza_antes_de_observar_un_backup_que_fallaria_cerrado() {
 
 #[test]
 fn repeticion_tras_reinicio_sin_journal_es_no_aplicable_y_no_toca_root() {
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Prepared);
     escribir_installed(&canonical, journal);
     assert_eq!(
@@ -1792,6 +1799,7 @@ fn txn_invalido_falla_antes_de_mutar_siblings_y_journal() {
 
 #[test]
 fn keep_old_reintenta_limpieza_parcial_del_stage_tras_reinicio() {
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Installed);
     let stage = stage_path(&lock);
     fs::rename(root.parent().unwrap().join("new-fixture"), &stage).unwrap();

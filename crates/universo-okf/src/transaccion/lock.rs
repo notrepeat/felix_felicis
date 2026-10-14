@@ -10,12 +10,26 @@
 //! garantía distribuida entre hosts. La prueba de proceso hijo cubre sistemas
 //! de archivos locales.
 
+use super::raiz::{ErrorRaiz, UbicacionRaiz, metadata_es_enlace_o_reparse};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 
-use super::raiz::{ErrorRaiz, UbicacionRaiz, metadata_es_enlace_o_reparse};
+// `flock` follows the open file description. On Linux, a fork briefly inherits
+// a live lock FD until exec applies O_CLOEXEC, so serialize test-only forks
+// with tests that drop and reacquire the same writer lock.
+#[cfg(test)]
+static SERIALIZAR_FORKS_Y_REACQUISICIONES_TEST: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn serializar_forks_y_reacquisiciones_test() -> MutexGuard<'static, ()> {
+    SERIALIZAR_FORKS_Y_REACQUISICIONES_TEST
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Resultado redactado de adquirir el lock de escritor.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -164,6 +178,7 @@ mod tests {
 
     #[test]
     fn guard_sostiene_y_libera_lock_sin_modificar_lockfile() {
+        let _serializacion = serializar_forks_y_reacquisiciones_test();
         let temp = tempdir().unwrap();
         let raiz = temp.path().join("bundle");
         fs::create_dir(&raiz).unwrap();
@@ -193,6 +208,7 @@ mod tests {
 
     #[test]
     fn lock_se_adquiere_con_root_ausente_despues_de_root_a_backup() {
+        let _serializacion = serializar_forks_y_reacquisiciones_test();
         let temp = tempdir().unwrap();
         let raiz = temp.path().join("bundle");
         fs::create_dir(&raiz).unwrap();
