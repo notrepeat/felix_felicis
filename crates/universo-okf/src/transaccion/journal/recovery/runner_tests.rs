@@ -3,7 +3,7 @@ use super::*;
 use super::super::dispatcher::{
     ErrorRecoverySoportado, ResultadoRecoverySoportado, ejecutar_recovery_soportado_con,
 };
-use crate::transaccion::anclado::{DirectorioAnclado, ErrorDirectorioAnclado};
+use crate::transaccion::anclado::{DirectorioAnclado, ErrorDirectorioAnclado, ScopeFilesystem};
 use crate::transaccion::inventario::inventariar_root_anclado;
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal};
 use crate::transaccion::raiz::UbicacionRaiz;
@@ -928,6 +928,76 @@ fn restore_old_reintenta_limpieza_parcial_del_stage_tras_reinicio() {
     assert_eq!(
         ejecutar_fila_journal_restore_old(&mut restarted),
         Ok(ResultadoFilaJournalRestoreOld::Eliminado)
+    );
+    assert!(!stage.exists());
+    assert!(!backup.exists());
+    assert!(!canonical.exists());
+    assert_root_intact(&root);
+    assert!(fingerprint(&root) == *journal.old());
+}
+
+#[test]
+fn restore_old_scope_mismatch_durante_cleanup_preserva_stage_y_journal_para_retry() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Installed);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+    fs::rename(root.with_file_name("new-fixture"), &stage).unwrap();
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let sondas_scope = Cell::new(0);
+    let eliminaciones = Cell::new(0);
+
+    let error = ejecutar_fila_journal_restore_old_con_limpieza(
+        &mut lock,
+        |_| {},
+        |_| {},
+        |stage_anclado| {
+            stage_anclado.limpiar_con_scope(
+                |_| {
+                    let llamada = sondas_scope.get() + 1;
+                    sondas_scope.set(llamada);
+                    Ok(ScopeFilesystem(if llamada == 2 { 2 } else { 1 }))
+                },
+                |parent, componente, es_directorio| {
+                    eliminaciones.set(eliminaciones.get() + 1);
+                    let opciones = OpenOptionsAt::default();
+                    let resultado = if es_directorio {
+                        opciones.rmdir_at(parent, Path::new(componente))
+                    } else {
+                        opciones.unlink_at(parent, Path::new(componente))
+                    };
+                    resultado.map_err(|_| ErrorDirectorioAnclado::Io)
+                },
+            )
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.codigo(), "stage_cleanup_io");
+    assert_eq!(sondas_scope.get(), 2);
+    assert_eq!(eliminaciones.get(), 0);
+    assert!(!root.exists());
+    assert_root_intact(&backup);
+    assert!(fingerprint(&stage) == *journal.new_fingerprint());
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    let stage_anclado = error.recuperar_stage_parcial().unwrap();
+    assert_eq!(stage_anclado.stage_id(), journal.transaction_id());
+    assert_eq!(stage_anclado.componente(), stage.file_name().unwrap());
+    assert!(stage_anclado.fingerprint_raw().unwrap() == *journal.new_fingerprint());
+    drop(stage_anclado);
+    drop(lock);
+
+    let mut restarted = LockEscritura::adquirir(&root).unwrap();
+    assert_eq!(
+        ejecutar_recovery_soportado_con(
+            &mut restarted,
+            observar_inventario_recovery,
+            |_| {},
+            |_| {}
+        ),
+        Ok(ResultadoRecoverySoportado::RestoreOld(
+            ResultadoFilaJournalRestoreOld::Eliminado
+        ))
     );
     assert!(!stage.exists());
     assert!(!backup.exists());

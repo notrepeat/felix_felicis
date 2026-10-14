@@ -370,7 +370,7 @@ impl StageAnclado {
     }
 
     #[cfg(test)]
-    fn limpiar_con_scope<F, S>(
+    pub(super) fn limpiar_con_scope<F, S>(
         self,
         mut sonda_scope: S,
         mut eliminar: F,
