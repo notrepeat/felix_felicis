@@ -56,7 +56,9 @@ pendientes el proveedor con lectura acotada antes del lock, los callers de
 apply/CLI y las cotas para `version_motor` y `policy_id`. Para `RestoreOld` y
 `DiscardNewRestoreOld`, un error ambiguo de cleanup provoca reobservación: si
 el stage ya desapareció se continúa; si persiste parcial, se conserva el
-journal y el retry tras reinicio reutiliza la identidad durable. El recovery
+journal y un siguiente intento puede reutilizar la identidad durable. Las
+pruebas de retry sueltan y readquieren el lock en el mismo proceso; no simulan
+kill/restart ni prueban crash durability. El recovery
 sigue incompleto. Fase 04 sigue en curso:
 lock, captura anclada y staging aún no están conectados a apply ni publican
 candidatos.
@@ -539,13 +541,13 @@ Chain strategy: feature-branch-chain
   limpia el stage, reobserva el inventario y solo entonces retira el journal.
   Si la limpieza devuelve un error ambiguo, reobserva: si el stage ya no está,
   puede retirar el journal; si queda un stage parcial, conserva el journal y
-  reporta el error. Tras reinicio, `PartialNew` permite reintentar por identidad
-  durable aunque el digest ya sea menor. Un txn inválido o una identidad
-  distinta fallan antes de mutar los siblings.
+  reporta el error. `PartialNew` permite que una nueva ejecución reintente por
+  identidad durable aunque el digest ya sea menor. Un txn inválido o una
+  identidad distinta fallan antes de mutar los siblings.
 
   `980a3f0` cubre cleanup ambiguo y reobservación, retry de limpieza parcial
-  tras reinicio, identidad distinta y txn inválido; `86bb79b` corrige dos
-  préstamos señalados por clippy. CI run `38504988001` pasó tests y fmt, pero
+  tras readquirir el lock, identidad distinta y txn inválido; `86bb79b` corrige
+  dos préstamos señalados por clippy. CI run `38504988001` pasó tests y fmt, pero
   clippy falló por esos dos préstamos. CI final `38505451293`, sobre
   `86bb79b809625847ed4835385a31068fc97e363e`, pasó en Linux y Windows: Linux
   716 passed/0 failed/6 ignored y Windows 708/0/6, con 38 resúmenes de suites;
@@ -556,7 +558,9 @@ Chain strategy: feature-branch-chain
   `txn_invalido_falla_antes_de_mutar_siblings_y_journal` y
   `keep_old_reintenta_limpieza_parcial_del_stage_tras_reinicio`; fmt, clippy y
   `check_public_boundary.py` también pasaron. Esta evidencia CI no afirma una
-  verificación focal final en WSL.
+  verificación focal final en WSL. El test de retry suelta y readquiere el lock
+  en el mismo proceso: no mata ni relanza el proceso ni demuestra crash
+  durability.
 
   Al cierre de `86bb79b`, todavía no existía executor
   `DiscardNewRestoreOld`; `RestoreOld` requería stage `Absent`. Esa función
@@ -578,7 +582,8 @@ Chain strategy: feature-branch-chain
   fila exacta (root ausente, backup old y stage ausente) restaura el backup y
   retira el journal al final. Si cleanup informa error, reobserva: si el stage
   ya desapareció continúa; si sigue presente, conserva el journal y devuelve
-  el error para retry tras reinicio. Un estado distinto falla cerrado.
+  el error para un nuevo intento después de readquirir el lock. Un estado
+  distinto falla cerrado.
 
   `c763f85` añade `DiscardNewRestoreOld` únicamente para `BackupReady` con
   root `New`, backup `Old`, stage `Absent` y `root_new_validated` false o true,
@@ -590,7 +595,9 @@ Chain strategy: feature-branch-chain
   reintentar `RestoreOld` por la identidad durable. Root `New` con cualquier
   stage sibling presente y las demás filas no autorizadas fallan cerrado.
   Ocho pruebas/casos de recovery nuevos visibles cubren las filas, cleanup
-  ambiguo, retry tras reinicio y el rechazo con canarios intactos. Las pruebas
+  ambiguo, retry con una nueva adquisición del lock y el rechazo con canarios
+  intactos. Los tests de retry sueltan y readquieren el lock en el mismo
+  proceso; no simulan kill/restart ni prueban crash durability. Las pruebas
   focales `cargo test -p universo-okf recovery::` registran 60 passed en
   `c888347` y 65 passed en `c763f85`; runtime harness: N/A, porque las pruebas
   focales ejercitan filesystem real y el rename ambiguo inyectado.
@@ -871,7 +878,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-13 | `a3cc3c9c2e5d166f066d6f7bfccf6cdec9214211` | Añade un test privado del CAS por ruta con journal sibling: match/stale comparan inventarios observados de root, configuración y parent, bytes del journal y `ArtifactFingerprint` del root. No invoca el dispatcher ni hay conteo focal registrado para este SHA. | U8 sigue parcial; CAS privado, sin caller de apply/CLI ni simulación pública. No se afirman atime ni atomicidad. |
 | 2026-10-13 | `51cd5c4fbf9607dffac1825a9739cac9e92d97e2` | Extiende la prueba del dispatcher con inventario recursivo: rutas, tipos y bytes de archivos normales; para el lock abierto, solo presencia, tipo y longitud. `RestoreOld` compara contra el modelo backup→root y retiro del journal. Matriz workspace independiente: Windows 702 passed/0 failed/6 ignored (37 suites); WSL Ubuntu 710/0/6 (37 suites); fmt y clippy pasan en ambos. Conteos workspace, no focales. | U7 sigue parcial y sin caller productivo; no se garantiza atime, permisos, metadatos ni atomicidad ante cambios hostiles. |
 | 2026-10-14 | `34b7e0a`, `428d432`, `980a3f0`, `86bb79b` | Corte histórico: `KeepOld` limpia stage `New`/`PartialNew` con root `Old` y backup `Absent` en tres fases; identidad durable, reobservación antes del journal y retry tras cleanup parcial. Cuatro regresiones visibles; CI `38505451293` pasa Linux (716/0/6) y Windows (708/0/6), 38 resúmenes, unittest de herramientas 7/OS, fmt, clippy y frontera pública. `38504988001` tenía tests/fmt verdes y fallo clippy por dos préstamos, corregidos en `86bb79b`. | U7 parcial, sin caller apply/producción ni publicación completa; en ese corte `RestoreOld` requería stage `Absent` y `DiscardNewRestoreOld` seguía pendiente. No se afirma atomicidad/durabilidad; writers cooperantes y TOCTOU externo fuera del contrato. |
-| 2026-10-14 | `c888347`, `c763f85`; CI `38509652854` | `RestoreOld` limpia/reobserva stage identificado como `New`/`PartialNew` antes de restaurar old; `DiscardNewRestoreOld` cubre solo las filas exactas de `BackupReady`/`Installed`, con rename y cleanup reconciliados por reobservación. Ocho pruebas/casos de recovery nuevos visibles; foco `recovery::`: 60 passed en `c888347`, 65 en `c763f85`. CI para `c763f8527d412778e99eb26c81194f96fdc0c545`: Linux 723/0/6, Windows 715/0/6 (38 resúmenes); tools 7/OS, fmt, clippy y frontera pública pasan. | U7 sigue parcial: sin caller apply/producción ni publicación completa; `KeepValidated`, `Committed` y recovery completo pendientes. Runtime harness: N/A, comportamiento filesystem y rename ambiguo cubiertos por las pruebas focales. No se afirma atomicidad/durabilidad; writers Felix cooperantes y TOCTOU externo fuera del contrato. |
+| 2026-10-14 | `c888347`, `c763f85`; CI `38509652854` | `RestoreOld` limpia/reobserva stage identificado como `New`/`PartialNew` antes de restaurar old; `DiscardNewRestoreOld` cubre solo las filas exactas de `BackupReady`/`Installed`, con rename y cleanup reconciliados por reobservación. Ocho pruebas/casos de recovery nuevos visibles; foco `recovery::`: 60 passed en `c888347`, 65 en `c763f85`. Los tests de retry sueltan y readquieren el lock en el mismo proceso, sin kill/restart. CI para `c763f8527d412778e99eb26c81194f96fdc0c545`: Linux 723/0/6, Windows 715/0/6 (38 resúmenes); tools 7/OS, fmt, clippy y frontera pública pasan. | U7 sigue parcial: sin caller apply/producción ni publicación completa; `KeepValidated`, `Committed` y recovery completo pendientes. Runtime harness: N/A; las pruebas focales ejercitan filesystem y rename ambiguo inyectado, pero no prueban crash durability. No se afirma atomicidad/durabilidad; writers Felix cooperantes y TOCTOU externo fuera del contrato. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |

@@ -95,15 +95,18 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   identidad durable, exige digest completo para `New`, limpia y reobserva antes
   de retirar el journal. Ante cleanup ambiguo, la reobservación permite retirar
   el journal si el stage ya desapareció; si queda parcial, se conserva el
-  journal. Tras reinicio, `PartialNew` permite reintentar con la misma identidad
-  aunque el digest haya cambiado por la limpieza parcial.
-- `980a3f0` agrega cobertura para cleanup ambiguo, retry parcial tras reinicio,
+  journal. En un intento posterior, `PartialNew` permite reintentar con la
+  misma identidad aunque el digest haya cambiado por la limpieza parcial.
+- `980a3f0` agrega cobertura para cleanup ambiguo, reintento parcial después
+  de soltar y readquirir el lock,
   identidad distinta y txn inválido; `86bb79b` corrige dos préstamos en las
   aserciones de recovery. Los cuatro tests visibles son
   `stage_presente_falla_cerrado_y_conserva_journal_y_root`,
   `cleanup_ambiguo_reobserva_y_retira_journal_solo_despues_del_stage`,
   `txn_invalido_falla_antes_de_mutar_siblings_y_journal` y
-  `keep_old_reintenta_limpieza_parcial_del_stage_tras_reinicio`.
+  `keep_old_reintenta_limpieza_parcial_del_stage_tras_reinicio`. Los tests cuyo
+  nombre alude a reinicio sueltan y readquieren el lock en el mismo proceso; no
+  matan ni relanzan el proceso y no prueban crash durability.
 - CI run `38504988001` pasó tests y fmt, pero clippy falló por los dos
   préstamos corregidos en `86bb79b`. El CI final `38505451293` terminó con
   éxito en `86bb79b809625847ed4835385a31068fc97e363e`: Linux 716 passed/0
@@ -123,18 +126,22 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   digest raw difiere. Limpia y reobserva antes de restaurar el backup y retirar
   el journal al final. Si cleanup reporta error, continúa solo cuando la nueva
   observación confirma que el stage desapareció; si queda parcial, conserva el
-  journal para retry tras reinicio. Foco `cargo test -p universo-okf
-  recovery::`: 60 passed.
+  journal para un nuevo intento tras readquirir el lock. Prueba focal
+  `cargo test -p universo-okf recovery::`: 60 passed.
 - 2026-10-14, `c763f85`: añade `DiscardNewRestoreOld` solo para `BackupReady`
   con root `New`, backup `Old`, stage `Absent` y validación false o true, y
   `Installed` con esa fila y validación false. Renombra root al stage
   identificado por el journal y reobserva para reconciliar un error ambiguo;
   luego limpia/reobserva, restaura el backup y retira el journal al final. Un
   root `New` junto a cualquier stage sibling falla cerrado. Tras cleanup
-  parcial, `RestoreOld` puede reintentar por identidad durable. Foco
+  parcial, una nueva invocación de `RestoreOld` puede reintentar por identidad
+  durable. Foco
   `cargo test -p universo-okf recovery::`: 65 passed. En conjunto, ocho
   pruebas/casos de recovery nuevos visibles cubren las filas, la ambigüedad,
   el retry y el rechazo con canarios intactos.
+  Los retries descritos como "tras reinicio" se simulan soltando y readquiriendo
+  el lock en el mismo proceso; no incluyen kill/restart ni prueban crash
+  durability.
 - CI run `38509652854` terminó con éxito para
   `c763f8527d412778e99eb26c81194f96fdc0c545`: Linux 723 passed/0 failed/6
   ignored, Windows 715/0/6, con 38 resúmenes de suites. El unittest de
