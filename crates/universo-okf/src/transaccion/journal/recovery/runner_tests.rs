@@ -3,11 +3,12 @@ use super::*;
 use super::super::dispatcher::{
     ErrorRecoverySoportado, ResultadoRecoverySoportado, ejecutar_recovery_soportado_con,
 };
-use crate::transaccion::anclado::DirectorioAnclado;
+use crate::transaccion::anclado::{DirectorioAnclado, ErrorDirectorioAnclado};
 use crate::transaccion::inventario::inventariar_root_anclado;
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal};
 use crate::transaccion::raiz::UbicacionRaiz;
 use crate::transaccion::snapshot::calcular_digest_raw_tree;
+use fs_at::OpenOptions as OpenOptionsAt;
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -208,33 +209,42 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
         assert!(fingerprint_before == fingerprint_old);
         let backup = backup_path(&lock);
         let stage = stage_path(&lock);
+        fs::rename(root.parent().unwrap().join("new-fixture"), &stage).unwrap();
         let journal_bytes = fs::read(&canonical).unwrap();
         let parent = canonical.parent().unwrap();
         let lockfile = lock.ubicacion().lock().as_path().to_path_buf();
-        let mut parent_after_keep_old =
-            inventario_parent_para_assertions(parent, &canonical, &lockfile);
         let journal_name = canonical
             .file_name()
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        let journal_index = parent_after_keep_old
-            .iter()
-            .position(|(name, _)| name == &journal_name)
-            .unwrap();
-        let (removed_name, removed_entry) = parent_after_keep_old.remove(journal_index);
-        assert_eq!(removed_name, journal_name);
-        assert_eq!(
-            removed_entry,
-            EntradaParentAssertion::Archivo {
-                longitud: journal_bytes.len() as u64,
-                bytes: Some(journal_bytes),
-            }
-        );
+        let stage_name = stage.file_name().unwrap().to_string_lossy().into_owned();
+        let canary = parent.join("keep-canary.bin");
+        fs::write(&canary, b"untouched").unwrap();
+        let mut parent_after_keep_old =
+            inventario_parent_para_assertions(parent, &canonical, &lockfile);
+        parent_after_keep_old.retain(|(name, _)| {
+            name != &stage_name
+                && !name.starts_with(&format!("{stage_name}/"))
+                && name != &journal_name
+        });
         let observaciones = Cell::new(0);
 
         assert_eq!(
-            ejecutar_dispatcher_contando_observaciones(&mut lock, &observaciones),
+            ejecutar_recovery_soportado_con(
+                &mut lock,
+                |lock, journal| {
+                    observaciones.set(observaciones.get() + 1);
+                    observar_inventario_recovery(lock, journal)
+                },
+                |_| {},
+                |_| {
+                    assert!(!stage.exists());
+                    assert!(canonical.exists());
+                    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+                    assert!(fingerprint(&root) == fingerprint_before);
+                },
+            ),
             Ok(ResultadoRecoverySoportado::KeepOld(
                 ResultadoFilaJournalOld::Eliminado
             )),
@@ -247,6 +257,7 @@ fn dispatcher_ejecuta_ambas_filas_en_las_tres_fases_con_una_observacion_inicial(
         assert!(root.is_dir());
         assert!(fingerprint(&root) == fingerprint_before);
         assert!(fingerprint(&root) == fingerprint_old);
+        assert_eq!(fs::read(&canary).unwrap(), b"untouched");
         assert_root_intact(&root);
         assert_eq!(
             inventario_parent_para_assertions(parent, &canonical, &lockfile),
@@ -846,6 +857,50 @@ fn stage_presente_falla_cerrado_y_conserva_journal_y_root() {
     assert_eq!(fs::read(&canonical).unwrap(), bytes);
     assert_eq!(Journal::parse(&bytes).unwrap(), journal);
     assert_root_intact(&root);
+}
+
+#[test]
+fn keep_old_reintenta_limpieza_parcial_del_stage_tras_reinicio() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::Installed);
+    let stage = stage_path(&lock);
+    fs::rename(root.parent().unwrap().join("new-fixture"), &stage).unwrap();
+    let mut eliminaciones = 0;
+    let error = ejecutar_fila_journal_old_con_limpieza(
+        &mut lock,
+        |_| {},
+        |stage| {
+            stage.limpiar_con(|parent, componente, es_directorio| {
+                if eliminaciones == 1 {
+                    return Err(ErrorDirectorioAnclado::Io);
+                }
+                eliminaciones += 1;
+                let opciones = OpenOptionsAt::default();
+                let resultado = if es_directorio {
+                    opciones.rmdir_at(parent, Path::new(componente))
+                } else {
+                    opciones.unlink_at(parent, Path::new(componente))
+                };
+                resultado.map_err(|_| ErrorDirectorioAnclado::Io)
+            })
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.codigo(), "stage_cleanup_io");
+    assert!(!stage.join("data.bin").exists());
+    assert!(canonical.exists());
+    assert_root_intact(&root);
+    drop(error);
+    drop(lock);
+
+    let mut restarted = LockEscritura::adquirir(&root).unwrap();
+    assert_eq!(
+        ejecutar_fila_journal_old(&mut restarted),
+        Ok(ResultadoFilaJournalOld::Eliminado)
+    );
+    assert!(!stage.exists());
+    assert!(!canonical.exists());
+    assert_root_intact(&root);
+    assert!(fingerprint(&root) == *journal.old());
 }
 
 #[test]

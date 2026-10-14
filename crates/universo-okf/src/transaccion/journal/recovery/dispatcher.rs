@@ -2,6 +2,7 @@
 
 use crate::transaccion::journal::Journal;
 use crate::transaccion::lock::LockEscritura;
+use crate::transaccion::stage::StageAnclado;
 
 use super::preflight::preflight_recovery_con_observador;
 use super::runner::{
@@ -25,13 +26,22 @@ pub(crate) enum ResultadoRecoverySoportado {
 
 /// Preflight and row-specific errors remain distinguishable to callers.
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ErrorRecoverySoportado {
     Preflight(ErrorPreflightRecovery),
     FaseNoSoportada,
     FilaNoSoportada,
     KeepOld(ErrorFilaJournalOld),
     RestoreOld(ErrorFilaJournalRestoreOld),
+}
+
+impl ErrorRecoverySoportado {
+    pub(crate) fn recuperar_stage_parcial(self) -> Option<StageAnclado> {
+        match self {
+            Self::KeepOld(error) => error.recuperar_stage_parcial(),
+            _ => None,
+        }
+    }
 }
 
 /// Performs one initial preflight load/observation, then runs only the exact supported row

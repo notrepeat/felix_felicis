@@ -348,7 +348,7 @@ impl StageAnclado {
         })
     }
 
-    fn limpiar_con<F>(self, mut eliminar: F) -> Result<(), ErrorLimpiezaStage>
+    pub(super) fn limpiar_con<F>(self, mut eliminar: F) -> Result<(), ErrorLimpiezaStage>
     where
         F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
     {

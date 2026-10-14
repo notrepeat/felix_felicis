@@ -113,14 +113,19 @@ pub(crate) fn clasificar_fila_recovery(
     let decision = decide_recovery(journal.state(), inventario);
     match decision {
         RecoveryDecision::KeepOld
-            if inventario
-                == (RecoveryInventory {
-                    root: ArtifactState::Old,
-                    backup: ArtifactState::Absent,
-                    stage: ArtifactState::Absent,
-                    root_new_validated: false,
-                })
-                && decision.steps(inventario) == [RecoveryStep::RemoveJournal] =>
+            if inventario.root == ArtifactState::Old
+                && inventario.backup == ArtifactState::Absent
+                && matches!(
+                    inventario.stage,
+                    ArtifactState::Absent | ArtifactState::New | ArtifactState::PartialNew
+                )
+                && !inventario.root_new_validated
+                && decision.steps(inventario)
+                    == if inventario.stage == ArtifactState::Absent {
+                        &[RecoveryStep::RemoveJournal][..]
+                    } else {
+                        &[RecoveryStep::RemoveKnownStage, RecoveryStep::RemoveJournal][..]
+                    } =>
         {
             Some(FilaRecoverySoportada::KeepOld)
         }
@@ -275,6 +280,7 @@ mod tests {
             ArtifactState::Absent,
             ArtifactState::Old,
             ArtifactState::New,
+            ArtifactState::PartialNew,
             ArtifactState::Unknown,
         ];
         let fases = [
@@ -292,7 +298,12 @@ mod tests {
                         let exact_keep = fase != JournalState::Committed
                             && root == ArtifactState::Old
                             && backup == ArtifactState::Absent
-                            && stage == ArtifactState::Absent;
+                            && matches!(
+                                stage,
+                                ArtifactState::Absent
+                                    | ArtifactState::New
+                                    | ArtifactState::PartialNew
+                            );
                         let exact_restore = fase != JournalState::Committed
                             && root == ArtifactState::Absent
                             && backup == ArtifactState::Old
@@ -320,14 +331,27 @@ mod tests {
         let journal = journal(JournalState::Installed);
         for stage in [
             ArtifactState::Old,
-            ArtifactState::New,
+            ArtifactState::PartialNew,
             ArtifactState::Unknown,
         ] {
             let keep_like = inventario(ArtifactState::Old, ArtifactState::Absent, stage);
             let restore_like = inventario(ArtifactState::Absent, ArtifactState::Old, stage);
-            assert_eq!(clasificar_fila_recovery(&journal, keep_like), None);
+            assert_eq!(
+                clasificar_fila_recovery(&journal, keep_like),
+                (stage == ArtifactState::PartialNew).then_some(FilaRecoverySoportada::KeepOld)
+            );
             assert_eq!(clasificar_fila_recovery(&journal, restore_like), None);
         }
+
+        let new_stage = inventario(
+            ArtifactState::Old,
+            ArtifactState::Absent,
+            ArtifactState::New,
+        );
+        assert_eq!(
+            clasificar_fila_recovery(&journal, new_stage),
+            Some(FilaRecoverySoportada::KeepOld)
+        );
     }
 
     #[test]

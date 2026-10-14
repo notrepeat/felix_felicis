@@ -9,6 +9,8 @@ use crate::transaccion::anclado::renombrar::ErrorRenombrarAnclado;
 #[cfg(test)]
 use crate::transaccion::journal::JournalState;
 use crate::transaccion::lock::LockEscritura;
+use crate::transaccion::snapshot::ErrorSnapshot;
+use crate::transaccion::stage::{ErrorLimpiezaStage, StageAnclado};
 
 use super::{
     ArtifactState, ContextoPreflightRecovery, ErrorObservadorRecovery, FilaRecoverySoportada,
@@ -28,26 +30,46 @@ pub(crate) enum ResultadoFilaJournalOld {
 }
 
 /// Fallo cerrado al cargar, observar, decidir o retirar el journal de la fila.
-#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorFilaJournalOld {
     Journal(ErrorJournalAnclado),
     Observacion(ErrorObservadorRecovery),
+    StageReapertura(ErrorSnapshot),
+    StageLimpieza(ErrorLimpiezaStage),
     FilaNoAutorizada,
     ConflictoAlEliminar(ErrorJournalAnclado),
     EliminacionIndeterminada(ErrorJournalAnclado),
 }
 
 impl ErrorFilaJournalOld {
-    const fn codigo(self) -> &'static str {
+    const fn codigo(&self) -> &'static str {
         match self {
             Self::Journal(error) => error.codigo(),
             Self::Observacion(error) => error.codigo(),
+            Self::StageReapertura(error) => error.codigo(),
+            Self::StageLimpieza(error) => error.codigo(),
             Self::FilaNoAutorizada => "recovery_row_not_authorized",
             Self::ConflictoAlEliminar(error) => error.codigo(),
             Self::EliminacionIndeterminada(error) => error.codigo(),
         }
     }
 }
+
+impl PartialEq for ErrorFilaJournalOld {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Journal(a), Self::Journal(b)) => a == b,
+            (Self::Observacion(a), Self::Observacion(b)) => a == b,
+            (Self::StageReapertura(a), Self::StageReapertura(b)) => a == b,
+            (Self::StageLimpieza(a), Self::StageLimpieza(b)) => a.codigo() == b.codigo(),
+            (Self::FilaNoAutorizada, Self::FilaNoAutorizada) => true,
+            (Self::ConflictoAlEliminar(a), Self::ConflictoAlEliminar(b)) => a == b,
+            (Self::EliminacionIndeterminada(a), Self::EliminacionIndeterminada(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ErrorFilaJournalOld {}
 
 impl fmt::Debug for ErrorFilaJournalOld {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -65,6 +87,15 @@ impl fmt::Display for ErrorFilaJournalOld {
 }
 
 impl std::error::Error for ErrorFilaJournalOld {}
+
+impl ErrorFilaJournalOld {
+    pub(crate) fn recuperar_stage_parcial(self) -> Option<StageAnclado> {
+        match self {
+            Self::StageLimpieza(error) => Some(error.recuperar_stage()),
+            _ => None,
+        }
+    }
+}
 
 /// Resultado explícito de intentar restaurar el backup validado como root.
 #[allow(dead_code)]
@@ -129,6 +160,14 @@ fn ejecutar_fila_journal_old_con(
     lock: &mut LockEscritura,
     antes_de_eliminar: impl FnOnce(&LockEscritura),
 ) -> Result<ResultadoFilaJournalOld, ErrorFilaJournalOld> {
+    ejecutar_fila_journal_old_con_limpieza(lock, antes_de_eliminar, StageAnclado::limpiar)
+}
+
+fn ejecutar_fila_journal_old_con_limpieza(
+    lock: &mut LockEscritura,
+    antes_de_eliminar: impl FnOnce(&LockEscritura),
+    limpiar_stage: impl FnOnce(StageAnclado) -> Result<(), ErrorLimpiezaStage>,
+) -> Result<ResultadoFilaJournalOld, ErrorFilaJournalOld> {
     let contexto = match preflight_recovery(lock).map_err(mapear_error_preflight_old)? {
         ResultadoPreflightRecovery::JournalAusente => {
             return Ok(ResultadoFilaJournalOld::NoAplicableJournalAusente);
@@ -144,7 +183,12 @@ fn ejecutar_fila_journal_old_con(
         return Err(ErrorFilaJournalOld::FilaNoAutorizada);
     }
 
-    ejecutar_fila_journal_old_desde_contexto(lock, *contexto, antes_de_eliminar)
+    ejecutar_fila_journal_old_desde_contexto_con_limpieza(
+        lock,
+        *contexto,
+        antes_de_eliminar,
+        limpiar_stage,
+    )
 }
 
 pub(super) fn ejecutar_fila_journal_old_desde_contexto(
@@ -152,6 +196,54 @@ pub(super) fn ejecutar_fila_journal_old_desde_contexto(
     contexto: ContextoPreflightRecovery,
     antes_de_eliminar: impl FnOnce(&LockEscritura),
 ) -> Result<ResultadoFilaJournalOld, ErrorFilaJournalOld> {
+    ejecutar_fila_journal_old_desde_contexto_con_limpieza(
+        lock,
+        contexto,
+        antes_de_eliminar,
+        StageAnclado::limpiar,
+    )
+}
+
+fn ejecutar_fila_journal_old_desde_contexto_con_limpieza(
+    lock: &mut LockEscritura,
+    contexto: ContextoPreflightRecovery,
+    antes_de_eliminar: impl FnOnce(&LockEscritura),
+    limpiar_stage: impl FnOnce(StageAnclado) -> Result<(), ErrorLimpiezaStage>,
+) -> Result<ResultadoFilaJournalOld, ErrorFilaJournalOld> {
+    if matches!(
+        contexto.inventario.stage,
+        ArtifactState::New | ArtifactState::PartialNew
+    ) {
+        let exigir_digest_new = contexto.inventario.stage == ArtifactState::New;
+        let stage = StageAnclado::reabrir_para_limpieza(lock, &contexto.journal, exigir_digest_new)
+            .map_err(ErrorFilaJournalOld::StageReapertura)?;
+        let inventario_posterior = match limpiar_stage(stage) {
+            Ok(()) => observar_inventario_recovery(lock, &contexto.journal)
+                .map_err(ErrorFilaJournalOld::Observacion)?,
+            Err(error) => {
+                let inventario = observar_inventario_recovery(lock, &contexto.journal)
+                    .map_err(ErrorFilaJournalOld::Observacion)?;
+                if fila_keep_old_limpia(inventario) {
+                    inventario
+                } else if inventario.root == ArtifactState::Old
+                    && inventario.backup == ArtifactState::Absent
+                    && matches!(
+                        inventario.stage,
+                        ArtifactState::New | ArtifactState::PartialNew
+                    )
+                    && !inventario.root_new_validated
+                {
+                    return Err(ErrorFilaJournalOld::StageLimpieza(error));
+                } else {
+                    return Err(ErrorFilaJournalOld::FilaNoAutorizada);
+                }
+            }
+        };
+        if !fila_keep_old_limpia(inventario_posterior) {
+            return Err(ErrorFilaJournalOld::FilaNoAutorizada);
+        }
+    }
+
     antes_de_eliminar(lock);
 
     let temporal = lock
@@ -167,6 +259,16 @@ pub(super) fn ejecutar_fila_journal_old_desde_contexto(
             Err(ErrorFilaJournalOld::EliminacionIndeterminada(error))
         }
     }
+}
+
+fn fila_keep_old_limpia(inventario: RecoveryInventory) -> bool {
+    inventario
+        == (RecoveryInventory {
+            root: ArtifactState::Old,
+            backup: ArtifactState::Absent,
+            stage: ArtifactState::Absent,
+            root_new_validated: false,
+        })
 }
 
 /// Restaura únicamente la fila root=absent + backup=old, con stage ausente y
