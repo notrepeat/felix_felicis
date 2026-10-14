@@ -116,6 +116,17 @@ Este registro separa la evidencia reciente de identidad Windows de las
 condiciones de diseño aún pendientes para cleanup, validación y recovery. U7 y
 la fase 04 siguen en curso; el progreso maestro permanece en 4/9.
 
+Los commits `752f56e` y `9f48304` añaden una guardia parcial para crear el
+sibling de staging: comprueba el parent del root antes de `mkdir` y el parent
+del stage tras reabrirlo por handle. Linux compara `STATX_MNT_ID`; Windows,
+`VolumeSerialNumber`. Error, dato ausente o mismatch fallan cerrado. Cualquier
+error desde el intento de `mkdir` puede dejar un sibling vacío huérfano
+posible; el error público conserva el código estable `stage_io`, se propaga un
+indicador diagnóstico sin cambiar la API pública; no se devuelve capability
+parcial y no hay cleanup automático. El indicador aún no tiene consumidor
+productivo. Esto no completa la frontera de mounts/volumes ni modifica journal,
+recovery, cleanup o walkers.
+
 Los commits `401a4be` y `316bdb8` hacen que un `FILE_ID_INFO` exitoso con un
 `FileId` de 16 bytes todo cero o todo `0xFF` falle como identidad requerida por
 transacciones y journal. Solo el marcador exacto de sentinel puede degradarse a
@@ -127,17 +138,25 @@ preflights de pruebas omitan ese sentinel exacto, sin cambiar producción.
 CI `38517718310`
 pasó para `cedc11c` en Linux (`verify`) y Windows (`verify-windows`).
 
-La frontera de mount/volume debe obtenerse de handles y fallar cerrado si no
-puede comprobarse. En Linux, usar `openat2` con `RESOLVE_NO_XDEV` o comparar
-`statx` `MNT_ID`; si la primitiva elegida no está disponible o falla, no hay
-fallback por ruta ni por `st_dev`. En Windows, rechazar reparse points y
-comprobar el volumen desde los handles abiertos. No persistir el mount ID en el
-journal. Esa frontera debe proteger inventario anclado, captura, validación de
-stage, cleanup y recovery. El walker de rutas del bundle pertenece a otra
-familia y no queda cubierto por este alcance. La cobertura determinista del
-sentinel `FileId` de Windows ya está registrada arriba; la prueba de bind mount
-Linux que comparte `st_dev` sigue pendiente. Las pruebas de sentinel y bind
-mount, por sí solas, no demuestran pertenencia al mismo volume/mount.
+La guardia parcial de `752f56e`/`9f48304` compara por handle el parent del root
+antes de crear el sibling y el parent del stage reabierto después; en Linux
+usa `STATX_MNT_ID` y en Windows `VolumeSerialNumber`. No persiste el mount ID.
+Error, dato ausente o mismatch fallan cerrado, pero esta cobertura de una
+operación no es una frontera completa de mount/volume. La garantía completa
+debe obtenerse de handles y cubrir inventario anclado, captura, staging
+descendente, cleanup y recovery. No hay fallback por ruta ni por `st_dev`; la
+ausencia o error al comprobar scope debe fallar cerrado. El walker de rutas del
+bundle pertenece a otra familia y no queda cubierto por este alcance. La
+cobertura determinista del sentinel `FileId` de Windows ya está registrada
+arriba. Siguen pendientes la prueba de bind mount Linux que comparte `st_dev`,
+los mounts anidados y la integración en esas operaciones. Una prueba aislada
+no demostraría pertenencia general al mismo volume/mount.
+
+Todo error que se produzca desde el intento de `mkdir` puede dejar un sibling
+vacío huérfano posible, incluso si falla la apertura posterior por handle. Se
+mantiene el código estable `stage_io` y no cambia la API pública; el indicador
+aditivo es diagnóstico interno, no capability ni autorización de cleanup. No
+hay cleanup automático, y todavía falta un consumidor productivo del indicador.
 
 `RootNewValidado` también necesita procedencia de admisión: un `Candidato`
 público o un comparador de representación no demuestra qué base, delta e
@@ -153,13 +172,14 @@ productivo no lo ejecutan; por eso, la transición/flujo productivo hacia
 
 La siguiente secuencia se divide en unidades pequeñas, en este orden:
 
-1. Abstracción de scope y pruebas inyectadas.
-2. Backends de plataforma para Linux y Windows.
-3. Integración con inventario anclado, captura, validación de stage, cleanup y
-   recovery.
-4. Prueba de admisión sellada o revalidación con sus entradas.
-5. Validación de identidad y contenido del root `New`.
-6. Habilitar `Committed` solo después de esa validación.
+1. Completar y probar la frontera de scope, incluidos bind mount real y mounts
+   anidados.
+2. Integrar la frontera en inventario, captura, staging descendente, cleanup y
+   recovery; añadir un consumidor productivo del indicador de sibling huérfano
+   posible.
+3. Prueba de admisión sellada o revalidación con sus entradas.
+4. Validación de identidad y contenido del root `New`.
+5. Habilitar `Committed` solo después de esa validación.
 
 ## Decisiones de contrato v1
 
@@ -944,6 +964,9 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | `5c11f76`; CI `38512944346` | `PartialOld` solo se clasifica en backup cuando coincide la identidad durable de `old`, difiere el digest raw y las identidades de `old`/`new` son distintas; identidad distinta o identidades old/new iguales quedan `Unknown`. En cualquier slot produce `FailClosed`/`NO_STEPS`; cuatro pruebas de recovery nuevas. CI: Linux 727/0/6, Windows 719/0/6 (38 resúmenes), tools 7/OS, fmt, clippy y frontera pública pasan. | U7 sigue parcial y sin caller apply/producción. Es observación y rechazo: no añade capacidad, cleanup, paso del runner ni orden. La limpieza del backup `PartialOld` se pospone por no tener frontera segura ante cruce de mount/bind/FUSE; bloqueo de diseño, no probado por este commit. Los retries previos solo readquieren lock en el mismo proceso; no kill/restart ni crash durability. |
 | 2026-10-14 | `401a4be`, `316bdb8`, `cedc11c` | Rechaza `FileId` Windows todo cero/todo `0xFF` para identidad requerida; el marcador exacto solo permite fallback canónico en el recorrido bundle de solo lectura, y `Unsupported` genérico no hace fallback. Los preflights Windows omiten el sentinel exacto solo en tests. | U7/fase 04 siguen parciales. La barrera mount/volume y la prueba de bind mount Linux con `st_dev` compartido siguen pendientes; estos commits no afirman cobertura total ni cleanup seguro. |
 | 2026-10-14 | CI `38517718310` | Éxito para `cedc11c3414d4f704fc8344eb5c6d562a02ec2aa`: jobs `verify` Linux y `verify-windows` completados; `cargo test --workspace`, fmt, clippy y frontera pública pasan. | Evidencia del snapshot enviado, no del límite mount/volume; U7 sigue en curso y el progreso global permanece en 4/9. |
+| 2026-10-14 | `752f56e` | Añade guardia parcial de scope a la creación del sibling de staging: compara root-parent antes de `mkdir` y parent-stage después de reabrir por handle; Linux `STATX_MNT_ID`, Windows `VolumeSerialNumber`; error, ausencia o mismatch fallan cerrado. Solo cubre esa operación; no prueba bind mounts ni mounts anidados. | U7/04 siguen parciales. No cubre inventario, captura, staging descendente, cleanup o recovery; no hay consumidor productivo del indicador de sibling huérfano posible. |
+| 2026-10-14 | `9f48304` | Conserva `stage_io` cuando falla `mkdir_at` y propaga el diagnóstico de sibling vacío huérfano posible para cualquier error desde el intento de `mkdir`; no devuelve capability parcial ni ejecuta cleanup automático. | Error/ausencia/mismatch fallan cerrado. El indicador aún no tiene consumidor productivo; no modifica journal, recovery, cleanup o walkers. |
+| 2026-10-14 | CI `38571014167` | Éxito para `9f4830411b4ae5d7964320e1ad87e6eaac9b00a5`: jobs `verify` Linux y `verify-windows` completados; pruebas del workspace, fmt, clippy y frontera pública pasan. | Evidencia del commit; no acredita bind mount real, mounts anidados ni integración de la frontera en las operaciones descendentes. U7/04 siguen parciales y el progreso global continúa en 4/9. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
