@@ -937,10 +937,22 @@ fn identidad_windows(handle: &File) -> io::Result<IdentidadDirectorio> {
     if exito == 0 {
         return Err(io::Error::last_os_error());
     }
+    let id_archivo = validar_file_id_windows(informacion.FileId.Identifier)?;
     Ok(IdentidadDirectorio {
         volumen: informacion.VolumeSerialNumber,
-        id_archivo: informacion.FileId.Identifier,
+        id_archivo,
     })
+}
+
+#[cfg(any(windows, test))]
+fn validar_file_id_windows(file_id: [u8; 16]) -> io::Result<[u8; 16]> {
+    if file_id.iter().all(|byte| *byte == 0) || file_id.iter().all(|byte| *byte == u8::MAX) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned a sentinel FileId",
+        ));
+    }
+    Ok(file_id)
 }
 
 #[cfg(any(windows, test))]

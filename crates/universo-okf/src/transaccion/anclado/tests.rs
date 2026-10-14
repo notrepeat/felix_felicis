@@ -72,6 +72,22 @@ fn file_id_no_soportado_usa_fallback_y_otros_errores_fallan_cerrado() {
     assert_eq!(error, ErrorDirectorioAnclado::Io);
 }
 
+#[test]
+fn file_id_windows_rechaza_sentinels_y_conserva_un_id_valido() {
+    for file_id in [[0; 16], [u8::MAX; 16]] {
+        let error = validar_file_id_windows(file_id).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(!filesystem_sin_file_id(&error));
+        assert_eq!(
+            identidad_opcional::<()>(Err(error), filesystem_sin_file_id).unwrap_err(),
+            ErrorDirectorioAnclado::TipoNoAdmitido
+        );
+    }
+
+    let file_id = [0x2a; 16];
+    assert_eq!(validar_file_id_windows(file_id).unwrap(), file_id);
+}
+
 #[cfg(unix)]
 #[test]
 fn identidad_unix_se_convierte_a_device_e_inode_del_journal() {
