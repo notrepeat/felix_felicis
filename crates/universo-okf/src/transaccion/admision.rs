@@ -5,6 +5,8 @@
 //! otra unidad; quien reconstruya un contexto debe volver a llamar
 //! [`ContextoAdmision::validar_base`] y evaluar de nuevo la propuesta.
 
+pub(crate) mod codec;
+
 use std::fmt;
 use std::sync::Arc;
 
