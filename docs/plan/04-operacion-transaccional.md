@@ -88,8 +88,15 @@ archivo puede quedar vacío, mientras la capability recuperable permite cleanup
 explícito y retry. El token de scope no se guarda en el journal. No se habilita
 cleanup automático de sibling huérfano sin capability. El rename sibling
 cuenta con una guardia parcial separada desde
-`1bee231`/`9405919`/`0ffaae2`; no completa la frontera frente a carreras
-externas ni integra apply/publicación.
+`1bee231`/`9405919`/`0ffaae2`. Desde `f109679`, Linux usa
+`renameat2(RENAME_NOREPLACE)` sin fallback a `renameat`; `2627617` prueba con
+el syscall real que un destino aparecido después de los prechecks no se
+reemplaza. Esto no evita la sustitución hostil de la fuente y la
+postverificación solo detecta el estado después de una posible mutación. Otros
+Unix fallan cerrado; Android no llega a la syscall porque el probe de scope
+falla antes; Windows no cambia. No se probaron NFS/filesystems remotos, bind
+mounts reales ni mounts anidados. La guardia no integra apply/publicación ni
+forma una frontera general frente a TOCTOU.
 U8 añade captura por ruta acotada y privada para simulación y pruebas y, en
 `63e59d1`, preflight consumidor de la suma de
 configuración antes de abrir el root bajo lock y antes de clonar/inventariar
@@ -243,11 +250,18 @@ inmediato, sin reobservación, cleanup ni retirada del journal. El código
 visible se mantiene en `anchored_rename_io`; una nueva llamada de recovery
 reclasifica el estado y obtiene una capability fresca. El token de scope es
 efímero y no se serializa en el journal; el observer hereda la comprobación de
-scope a través del inventario anclado. Persisten la carrera externa
-`fstatat`→`renameat` sin no-replace en Unix, el límite de
-`VolumeSerialNumber` de Windows (volumen, no instancia de montaje) y TOCTOU
-externo. Las pruebas son sintéticas, sin bind mount real ni mounts anidados;
-apply y publicación siguen pendientes.
+scope a través del inventario anclado. La carrera de destino descrita para
+`0ffaae2` era histórica: desde `f109679`, Linux ejecuta
+`renameat2(RENAME_NOREPLACE)` sin fallback, y
+`2627617` prueba la aparición del destino tras prechecks antes del syscall
+real, preservando ambos canarios. En esa política, `EEXIST` se clasifica como
+`DestinoExistente`, `ENOSYS`/`EINVAL` como `Io` y otros errores como
+`OperacionAmbigua`; las pruebas inyectan retorno y errno, no registran errno
+del kernel. Otros Unix fallan cerrado; Android no alcanza la syscall porque
+el probe de scope falla antes; Windows no cambia. La prueba no evita la
+sustitución hostil de la fuente: la postverificación solo puede detectarla
+tras una posible mutación. No se probaron NFS/filesystems remotos, bind mount
+real ni mounts anidados. Apply y publicación siguen pendientes.
 
 `RootNewValidado` también necesita procedencia de admisión: un `Candidato`
 público o un comparador de representación no demuestra qué base, delta e
@@ -1073,8 +1087,12 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | CI `38591028005` | Éxito para `75d223e`; jobs Linux y Windows completados. | Acredita el snapshot, no bind mount real, mounts anidados, `VolumeSerialNumber` como instancia de montaje, backend por ruta/bundle ni TOCTOU. U7/04 siguen parciales; progreso 4/9. |
 | 2026-10-14 | `1bee231` | Añade rename sibling con scope efímero del parent: valida scope de parent/fuente antes de operar y parent/fuente/destino reabierto por handle tras éxito antes de cambiar nombre/capability. Un error operacional o verificación posterior fallida invalida la capability; las pruebas son sintéticas. |
 | 2026-10-14 | `9405919` | Asegura que la capability queda invalidada si la operación devuelve error y separa errores de setup del resultado interno para evitar reconciliar fallos de preparación. No cambia el código estable de rename. |
-| 2026-10-14 | `0ffaae2` | Solo el error interno `OperacionAmbigua`, generado al fallar la syscall de rename de plataforma, permite reobservar/reconciliar `RestoreOld`/`DiscardNewRestoreOld`. Setup, `Io` conocido, scope y outcome no verificados fallan de inmediato y conservan el journal; una nueva invocación obtiene capability fresca. El Display/código permanece `anchored_rename_io`. |
+| 2026-10-14 | `0ffaae2` | Estado histórico de ese corte: solo `OperacionAmbigua`, generado al fallar la syscall de rename de plataforma, permite reobservar/reconciliar `RestoreOld`/`DiscardNewRestoreOld`. Setup, `Io` conocido, scope y outcome no verificados fallan de inmediato y conservan el journal; una nueva invocación obtiene capability fresca. El Display/código permanece `anchored_rename_io`. En ese momento Linux aún permitía el reemplazo de un destino que apareciera tras el precheck; se corrige en `f109679`. |
 | 2026-10-14 | CI `38599477655` | Éxito para `0ffaae27dca121926a3f386ca1cdb0a042539412`: `verify` Linux y `verify-windows` completados; workspace, fmt, clippy y frontera pública pasan. U7/04 siguen parciales, 4/9; no prueba bind mount real ni mounts anidados. |
+| 2026-10-14 | `f109679` | En Linux, ejecuta `renameat2(RENAME_NOREPLACE)` por syscall, sin fallback a `renameat`. `EEXIST` → `DestinoExistente`; `ENOSYS`/`EINVAL` → `Io`; otros errores de syscall → `OperacionAmbigua`. Otros Unix fallan cerrado; Android no alcanza el syscall porque el probe de scope falla antes; Windows permanece sin cambios. No se prueba NFS/filesystem remoto. |
+| 2026-10-14 | CI `38604472261` | Éxito para `f109679125985318b71f307a0c162ce992df3e22`: CI Linux y Windows completado. Acredita el commit; no bind mount real ni mounts anidados. U7/04 siguen parciales, 4/9. |
+| 2026-10-14 | `2627617` | Comparte la política privada de syscall entre producción y tests. Una prueba crea un destino-canario tras los prechecks y antes del syscall real y comprueba que ambos canarios queden intactos. Los tests inyectan retorno/errno `ENOSYS`/`EINVAL`/`EIO` —no errno del kernel— y verifican una llamada, `Io` para los dos primeros y `OperacionAmbigua` para `EIO`. La protección es para el destino: no impide sustitución hostil de la fuente, y la postverificación solo puede detectar después de una posible mutación. Sin prueba de NFS/remotos, bind mount real ni mounts anidados; apply/publicación siguen pendientes. |
+| 2026-10-14 | CI `38608018290` | Éxito para `262761715a2607450efae1b5b3be9f5775208139`: CI Linux y Windows completado. No acredita una frontera general de TOCTOU ni NFS/remotos, bind mount real o mounts anidados. U7/04 siguen parciales; progreso global 4/9. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
