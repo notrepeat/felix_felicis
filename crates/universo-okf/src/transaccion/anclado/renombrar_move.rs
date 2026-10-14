@@ -101,13 +101,19 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
         }
         validar_scope(&fuente.raiz, self.scope_parent, probe)?;
 
-        renombrar(
+        if let Err(error) = renombrar(
             &self.parent,
             &fuente.nombre,
             destino,
             &fuente.raiz,
             fuente.identidad_raiz,
-        )?;
+        ) {
+            // An OS error can be reported after the move happened. Keep the
+            // original error for runner reconciliation, but never reuse this
+            // capability with its possibly stale basename.
+            fuente.utilizable = false;
+            return Err(error);
+        }
 
         let confirmado = (|| {
             if metadata_directorio(&self.parent).ok() != Some(self.identidad_parent)

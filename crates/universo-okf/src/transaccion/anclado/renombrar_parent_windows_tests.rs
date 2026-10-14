@@ -255,8 +255,9 @@ fn rename_sibling_handle_externo_que_nega_share_delete_bloquea_y_luego_permite()
     let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&root).unwrap()).unwrap();
     let (stage_anchor, component) = ancla.crear_stage_sibling("share-delete").unwrap();
     let source_path = temp.path().join(&component);
+    let identidad = stage_anchor.identidad_raiz().unwrap();
     let mut source = espacio
-        .observar_directorio_sibling(&component, stage_anchor.identidad_raiz().unwrap())
+        .observar_directorio_sibling(&component, identidad)
         .unwrap();
 
     let mut opciones = std::fs::OpenOptions::new();
@@ -274,6 +275,14 @@ fn rename_sibling_handle_externo_que_nega_share_delete_bloquea_y_luego_permite()
     assert!(source_path.is_dir());
     drop(externo);
 
+    assert_eq!(
+        espacio.renombrar_directorio(&mut source, &backup_name),
+        Err(ErrorRenombrarAnclado::ResultadoNoVerificado)
+    );
+    assert_eq!(source.nombre(), component.as_os_str());
+    let mut source = espacio
+        .observar_directorio_sibling(&component, identidad)
+        .unwrap();
     espacio
         .renombrar_directorio(&mut source, &backup_name)
         .unwrap();

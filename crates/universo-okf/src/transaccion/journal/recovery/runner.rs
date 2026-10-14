@@ -497,7 +497,10 @@ fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
     contexto: ContextoPreflightRecovery,
     antes_de_renombrar: impl FnOnce(&LockEscritura),
     antes_de_eliminar: impl FnOnce(&LockEscritura),
-    renombrar: impl FnOnce(&mut LockEscritura, &Journal) -> Result<(), ErrorRenombrarAnclado>,
+    renombrar: impl FnOnce(
+        &mut LockEscritura,
+        &Journal,
+    ) -> Result<Result<(), ErrorRenombrarAnclado>, ErrorRenombrarAnclado>,
 ) -> Result<ResultadoFilaJournalDiscardNewRestoreOld, ErrorFilaJournalRestoreOld> {
     if clasificar_fila_recovery(&contexto.journal, contexto.inventario)
         != Some(FilaRecoverySoportada::DiscardNewRestoreOld)
@@ -506,7 +509,8 @@ fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
     }
 
     antes_de_renombrar(lock);
-    let intento_renombrar = renombrar(lock, &contexto.journal);
+    let intento_renombrar =
+        renombrar(lock, &contexto.journal).map_err(ErrorFilaJournalRestoreOld::Renombrar)?;
     if let Err(error) = intento_renombrar {
         if error.no_reconciliar() {
             return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
@@ -548,7 +552,7 @@ fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
 fn renombrar_root_new_a_stage(
     lock: &mut LockEscritura,
     journal: &Journal,
-) -> Result<(), ErrorRenombrarAnclado> {
+) -> Result<Result<(), ErrorRenombrarAnclado>, ErrorRenombrarAnclado> {
     let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
         .map_err(|_| ErrorRenombrarAnclado::Io)?;
     let identidad_parent = ancla.identidad_parent();
@@ -584,7 +588,7 @@ fn renombrar_root_new_a_stage(
         }
     })?;
     let mut root = espacio.observar_directorio_sibling(&origen, identidad_raiz)?;
-    espacio.renombrar_directorio(&mut root, &destino)
+    Ok(espacio.renombrar_directorio(&mut root, &destino))
 }
 
 fn reconciliar_intento_renombrado_discard_new(

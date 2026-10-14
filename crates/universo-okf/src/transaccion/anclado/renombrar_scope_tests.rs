@@ -83,6 +83,54 @@ fn rename_sibling_scope_pre_y_post_falla_cerrado() {
 }
 
 #[test]
+fn rename_sibling_syscall_error_conserva_codigo_pero_invalida_capability() {
+    use crate::transaccion::lock::LockEscritura;
+
+    let temp = tempdir().unwrap();
+    if saltar_sin_file_id(temp.path()) {
+        return;
+    }
+    let root = temp.path().join("bundle");
+    std::fs::create_dir(&root).unwrap();
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut espacio = lock.espacio_transaccional_anclado().unwrap();
+    let identidad = rename_identity(&root);
+    let mut source = espacio
+        .observar_directorio_sibling(OsStr::new("bundle"), identidad)
+        .unwrap();
+    let destino = rename_backup_name(&root);
+    let mut probe = |_handle: &File| Ok(true);
+    let llamadas = Cell::new(0);
+    let mut rename = |_: &File, _: &OsStr, _: &OsStr, _: &File, _| {
+        llamadas.set(llamadas.get() + 1);
+        Err(ErrorRenombrarAnclado::Io)
+    };
+
+    assert_eq!(
+        espacio.renombrar_directorio_con_probe_y_operacion(
+            &mut source,
+            &destino,
+            &mut probe,
+            &mut rename,
+        ),
+        Err(ErrorRenombrarAnclado::Io)
+    );
+    assert_eq!(source.nombre(), OsStr::new("bundle"));
+    assert!(root.is_dir());
+    assert!(!temp.path().join(&destino).exists());
+    assert_eq!(
+        espacio.renombrar_directorio_con_probe_y_operacion(
+            &mut source,
+            &destino,
+            &mut probe,
+            &mut rename,
+        ),
+        Err(ErrorRenombrarAnclado::ResultadoNoVerificado)
+    );
+    assert_eq!(llamadas.get(), 1);
+}
+
+#[test]
 fn rename_sibling_rechaza_capability_de_otro_lock_en_el_mismo_parent() {
     use crate::transaccion::lock::LockEscritura;
 
