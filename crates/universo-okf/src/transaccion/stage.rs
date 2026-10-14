@@ -412,11 +412,13 @@ impl fmt::Debug for StagePropio {
 
 /// Error estable/redactado. Si `stage_parcial` existe, el llamador posee el
 /// sibling creado y puede conservarlo para cleanup posterior verificable.
+/// `sibling_huerfano_posible` no concede handle ni capacidad de cleanup.
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
 pub(crate) struct ErrorEscrituraStage {
     codigo: CodigoEscrituraStage,
     stage_parcial: Option<Box<StagePropio>>,
     stage_anclado_parcial: Option<Box<StageAnclado>>,
+    sibling_huerfano_posible: bool,
 }
 
 #[allow(dead_code)] // Se consume desde apply/recovery en unidades posteriores.
@@ -433,11 +435,17 @@ impl ErrorEscrituraStage {
         self.stage_anclado_parcial.as_deref()
     }
 
+    /// Indica si la creación pudo dejar un sibling sin handle seguro.
+    pub(crate) const fn sibling_huerfano_posible(&self) -> bool {
+        self.sibling_huerfano_posible
+    }
+
     fn nuevo(codigo: CodigoEscrituraStage) -> Self {
         Self {
             codigo,
             stage_parcial: None,
             stage_anclado_parcial: None,
+            sibling_huerfano_posible: false,
         }
     }
 }
@@ -534,6 +542,7 @@ pub(crate) fn materializar_staging(
             codigo: CodigoEscrituraStage::CandidatoInconsistente,
             stage_parcial: Some(Box::new(stage)),
             stage_anclado_parcial: None,
+            sibling_huerfano_posible: false,
         });
     }
     stage.recibo = Some(ReciboStage {
@@ -568,6 +577,7 @@ pub(crate) fn materializar_staging_anclado(
             codigo: CodigoEscrituraStage::CandidatoInconsistente,
             stage_parcial: None,
             stage_anclado_parcial: Some(Box::new(stage)),
+            sibling_huerfano_posible: false,
         });
     }
     let Some(identidad) = stage.identidad else {
@@ -575,6 +585,7 @@ pub(crate) fn materializar_staging_anclado(
             codigo: CodigoEscrituraStage::Io,
             stage_parcial: None,
             stage_anclado_parcial: Some(Box::new(stage)),
+            sibling_huerfano_posible: false,
         });
     };
     stage.recibo = Some(ReciboStage {
@@ -604,6 +615,7 @@ where
             codigo,
             stage_parcial: None,
             stage_anclado_parcial: Some(Box::new(stage)),
+            sibling_huerfano_posible: false,
         }),
     }
 }
@@ -631,6 +643,7 @@ where
             codigo,
             stage_parcial: None,
             stage_anclado_parcial: Some(Box::new(stage)),
+            sibling_huerfano_posible: false,
         });
     }
     Ok(stage)
@@ -660,6 +673,7 @@ where
                         codigo: CodigoEscrituraStage::Io,
                         stage_parcial: None,
                         stage_anclado_parcial: Some(Box::new(stage)),
+                        sibling_huerfano_posible: false,
                     });
                 }
                 return Ok(stage);
@@ -806,6 +820,7 @@ fn error_escritura_stage_desde_creacion(error: ErrorCrearStageSibling) -> ErrorE
         codigo,
         stage_parcial: None,
         stage_anclado_parcial: None,
+        sibling_huerfano_posible: error.sibling_huerfano_posible(),
     }
 }
 
@@ -914,6 +929,7 @@ where
             codigo,
             stage_parcial: Some(Box::new(stage)),
             stage_anclado_parcial: None,
+            sibling_huerfano_posible: false,
         }),
     }
 }
@@ -1044,6 +1060,7 @@ where
             codigo,
             stage_parcial: Some(Box::new(stage)),
             stage_anclado_parcial: None,
+            sibling_huerfano_posible: false,
         });
     }
     Ok(stage)
@@ -1074,6 +1091,7 @@ where
                         codigo,
                         stage_parcial: Some(Box::new(stage)),
                         stage_anclado_parcial: None,
+                        sibling_huerfano_posible: false,
                     });
                 }
                 return Ok(stage);
@@ -1746,15 +1764,42 @@ ignorados = ["ignored.md"]
             Ok(_) => panic!("la falla de apertura debe propagarse"),
             Err(error) => error,
         };
-        assert!(error_creacion.sibling_huerfano());
+        assert!(error_creacion.sibling_huerfano_posible());
         let error = error_escritura_stage_desde_creacion(error_creacion);
 
         assert_eq!(error.codigo(), "stage_io");
+        assert!(error.sibling_huerfano_posible());
         assert!(error.stage_anclado_parcial().is_none());
         let ruta_stage = temp.path().join(".bundle.felix.stage.open-failure");
         assert!(ruta_stage.is_dir());
         assert_eq!(fs::read_dir(&ruta_stage).unwrap().count(), 0);
         assert!(!format!("{error:?} {error}").contains("open-failure"));
+    }
+
+    #[test]
+    fn stage_conserva_diagnostico_de_mkdir_ambiguo_sin_capacidad_parcial() {
+        let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let error_creacion = match ancla.crear_stage_sibling_con_mkdir(
+            "mkdir-ambiguous",
+            |_, _, _| Err(ErrorDirectorioAnclado::Io),
+            |_, componente| {
+                // Simula creación exitosa seguida de error al obtener el handle.
+                fs::create_dir(temp.path().join(componente)).unwrap();
+                Err(ErrorDirectorioAnclado::Io)
+            },
+        ) {
+            Ok(_) => panic!("el error ambiguo de mkdir debe propagarse"),
+            Err(error) => error,
+        };
+
+        let error = error_escritura_stage_desde_creacion(error_creacion);
+        assert_eq!(error.codigo(), "stage_io");
+        assert!(error.sibling_huerfano_posible());
+        assert!(error.stage_parcial().is_none());
+        assert!(error.stage_anclado_parcial().is_none());
+        let ruta_stage = temp.path().join(".bundle.felix.stage.mkdir-ambiguous");
+        assert!(ruta_stage.is_dir());
+        assert_eq!(fs::read_dir(ruta_stage).unwrap().count(), 0);
     }
 
     #[test]

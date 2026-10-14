@@ -49,7 +49,7 @@ pub(crate) enum ErrorLecturaNombres<E> {
 pub(crate) struct ErrorCrearStageSibling {
     codigo: ErrorDirectorioAnclado,
     scope_no_verificado: bool,
-    sibling_huerfano: bool,
+    sibling_huerfano_posible: bool,
 }
 
 impl ErrorCrearStageSibling {
@@ -57,7 +57,7 @@ impl ErrorCrearStageSibling {
         Self {
             codigo,
             scope_no_verificado: false,
-            sibling_huerfano: false,
+            sibling_huerfano_posible: false,
         }
     }
 
@@ -65,7 +65,7 @@ impl ErrorCrearStageSibling {
         Self {
             codigo: ErrorDirectorioAnclado::Io,
             scope_no_verificado: true,
-            sibling_huerfano: false,
+            sibling_huerfano_posible: false,
         }
     }
 
@@ -73,15 +73,15 @@ impl ErrorCrearStageSibling {
         Self {
             codigo: ErrorDirectorioAnclado::Io,
             scope_no_verificado: true,
-            sibling_huerfano: true,
+            sibling_huerfano_posible: true,
         }
     }
 
-    fn con_sibling_huerfano(codigo: ErrorDirectorioAnclado) -> Self {
+    fn con_sibling_huerfano_posible(codigo: ErrorDirectorioAnclado) -> Self {
         Self {
             codigo,
             scope_no_verificado: false,
-            sibling_huerfano: true,
+            sibling_huerfano_posible: true,
         }
     }
 
@@ -93,8 +93,8 @@ impl ErrorCrearStageSibling {
         self.scope_no_verificado
     }
 
-    pub(crate) const fn sibling_huerfano(&self) -> bool {
-        self.sibling_huerfano
+    pub(crate) const fn sibling_huerfano_posible(&self) -> bool {
+        self.sibling_huerfano_posible
     }
 }
 
@@ -104,7 +104,7 @@ impl fmt::Debug for ErrorCrearStageSibling {
             .debug_struct("ErrorCrearStageSibling")
             .field("codigo", &self.codigo)
             .field("scope_no_verificado", &self.scope_no_verificado())
-            .field("sibling_huerfano", &self.sibling_huerfano())
+            .field("sibling_huerfano_posible", &self.sibling_huerfano_posible())
             .finish()
     }
 }
@@ -474,12 +474,47 @@ impl DirectorioAnclado {
     fn crear_stage_sibling_con_scope<F, S>(
         &self,
         stage_id: &str,
-        mut abrir: F,
-        mut scope: S,
+        abrir: F,
+        scope: S,
     ) -> Result<(Self, OsString), ErrorCrearStageSibling>
     where
         F: FnMut(&File, &OsStr, &File) -> Result<File, ErrorDirectorioAnclado>,
         S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        self.crear_stage_sibling_con_scope_y_mkdir(stage_id, abrir, scope, |parent, componente| {
+            let mut opciones = OpenOptionsAt::default();
+            opciones.create_new(true);
+            opciones
+                .mkdir_at(parent, Path::new(componente))
+                .map_err(mapear_error_creacion)
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn crear_stage_sibling_con_mkdir<F, M>(
+        &self,
+        stage_id: &str,
+        abrir: F,
+        mkdir: M,
+    ) -> Result<(Self, OsString), ErrorCrearStageSibling>
+    where
+        F: FnMut(&File, &OsStr, &File) -> Result<File, ErrorDirectorioAnclado>,
+        M: FnMut(&File, &OsStr) -> Result<File, ErrorDirectorioAnclado>,
+    {
+        self.crear_stage_sibling_con_scope_y_mkdir(stage_id, abrir, scope_filesystem, mkdir)
+    }
+
+    fn crear_stage_sibling_con_scope_y_mkdir<F, S, M>(
+        &self,
+        stage_id: &str,
+        mut abrir: F,
+        mut scope: S,
+        mut mkdir: M,
+    ) -> Result<(Self, OsString), ErrorCrearStageSibling>
+    where
+        F: FnMut(&File, &OsStr, &File) -> Result<File, ErrorDirectorioAnclado>,
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+        M: FnMut(&File, &OsStr) -> Result<File, ErrorDirectorioAnclado>,
     {
         if !self.puede_crear_stage_sibling {
             return Err(ErrorCrearStageSibling::nuevo(
@@ -528,19 +563,18 @@ impl DirectorioAnclado {
         // ownership del parent después de crear el sibling.
         let parent_stage = clonar_handle(&self.parent).map_err(ErrorCrearStageSibling::nuevo)?;
 
-        let mut opciones = OpenOptionsAt::default();
-        opciones.create_new(true);
-        let creado = opciones
-            .mkdir_at(&self.parent, Path::new(&componente))
-            .map_err(mapear_error_creacion)
-            .map_err(ErrorCrearStageSibling::nuevo)?;
+        // `mkdir_at` puede crear el directorio y fallar al abrirlo después.
+        // Todo error en este límite deja un sibling posiblemente huérfano;
+        // esta ruta no devuelve handle ni capability parcial.
+        let creado = mkdir(&self.parent, &componente)
+            .map_err(ErrorCrearStageSibling::con_sibling_huerfano_posible)?;
         let identidad_creado = identidad_handle_creado(&creado)
-            .map_err(ErrorCrearStageSibling::con_sibling_huerfano)?;
+            .map_err(ErrorCrearStageSibling::con_sibling_huerfano_posible)?;
         // `mkdir_at` returns a handle without all directory-add rights needed
         // by nested stage writes. Open the same sibling relative to the held
         // parent and fail closed unless its identity matches the created fd.
         let directorio = abrir(&self.parent, &componente, &creado)
-            .map_err(ErrorCrearStageSibling::con_sibling_huerfano)?;
+            .map_err(ErrorCrearStageSibling::con_sibling_huerfano_posible)?;
         let scope_parent = scope(&self.parent)
             .map_err(|_| ErrorCrearStageSibling::error_scope_no_verificado_huerfano())?;
         let scope_stage = scope(&directorio)
@@ -549,9 +583,9 @@ impl DirectorioAnclado {
             return Err(ErrorCrearStageSibling::error_scope_no_verificado_huerfano());
         }
         let identidad_raiz = metadata_directorio(&directorio)
-            .map_err(ErrorCrearStageSibling::con_sibling_huerfano)?;
+            .map_err(ErrorCrearStageSibling::con_sibling_huerfano_posible)?;
         if identidad_raiz != identidad_creado {
-            return Err(ErrorCrearStageSibling::con_sibling_huerfano(
+            return Err(ErrorCrearStageSibling::con_sibling_huerfano_posible(
                 ErrorDirectorioAnclado::Io,
             ));
         }

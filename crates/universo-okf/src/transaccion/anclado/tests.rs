@@ -242,8 +242,35 @@ fn fallo_al_reabrir_sibling_deja_huerfano_vacio_sin_capacidad() {
     };
 
     assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
-    assert!(error.sibling_huerfano());
+    assert!(error.sibling_huerfano_posible());
     let ruta_stage = temp.path().join(".bundle.felix.stage.reopen-failure");
+    assert!(ruta_stage.is_dir());
+    assert_eq!(std::fs::read_dir(ruta_stage).unwrap().count(), 0);
+}
+
+#[test]
+fn error_ambiguo_de_mkdir_marca_sibling_posible_sin_handle() {
+    let temp = tempdir().unwrap();
+    let ruta = temp.path().join("bundle");
+    std::fs::create_dir(&ruta).unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+
+    let error = match ancla.crear_stage_sibling_con_mkdir(
+        "mkdir-ambiguous",
+        abrir_directorio_hijo_stage,
+        |_, componente| {
+            // Modela mkdirat completado y openat fallido dentro de mkdir_at.
+            std::fs::create_dir(temp.path().join(componente)).unwrap();
+            Err(ErrorDirectorioAnclado::Io)
+        },
+    ) {
+        Ok(_) => panic!("el error posterior al mkdir debe propagarse"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
+    assert!(error.sibling_huerfano_posible());
+    let ruta_stage = temp.path().join(".bundle.felix.stage.mkdir-ambiguous");
     assert!(ruta_stage.is_dir());
     assert_eq!(std::fs::read_dir(ruta_stage).unwrap().count(), 0);
 }
@@ -279,7 +306,7 @@ fn scope_filesystem_pre_mismatch_o_error_impiden_mkdir() {
         assert_eq!(llamadas, 2);
         assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
         assert!(error.scope_no_verificado());
-        assert!(!error.sibling_huerfano());
+        assert!(!error.sibling_huerfano_posible());
         assert!(
             !temp
                 .path()
@@ -320,7 +347,7 @@ fn scope_filesystem_post_mismatch_o_error_deja_huerfano_vacio_y_sin_capacidad() 
         assert_eq!(llamadas, 4);
         assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
         assert!(error.scope_no_verificado());
-        assert!(error.sibling_huerfano());
+        assert!(error.sibling_huerfano_posible());
         let ruta_stage = temp.path().join(format!(".bundle.felix.stage.{stage_id}"));
         assert!(ruta_stage.is_dir());
         assert_eq!(std::fs::read_dir(ruta_stage).unwrap().count(), 0);
