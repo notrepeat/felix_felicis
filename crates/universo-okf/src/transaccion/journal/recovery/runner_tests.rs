@@ -19,6 +19,8 @@ use tempfile::TempDir;
 const TXN: &str = "0123456789abcdef0123456789abcdef";
 const RESTORE_OLD_CHILD_ROOT_ENV: &str = "FELIX_TEST_RESTORE_OLD_CHILD_ROOT";
 const RESTORE_OLD_CHILD_NONCE_ENV: &str = "FELIX_TEST_RESTORE_OLD_CHILD_NONCE";
+const DISCARD_NEW_CHILD_ROOT_ENV: &str = "FELIX_TEST_DISCARD_NEW_CHILD_ROOT";
+const DISCARD_NEW_CHILD_NONCE_ENV: &str = "FELIX_TEST_DISCARD_NEW_CHILD_NONCE";
 
 fn crear_arbol(root: &Path, bytes: &[u8]) {
     fs::create_dir_all(root.join("empty-dir")).unwrap();
@@ -94,6 +96,88 @@ fn backup_path(lock: &LockEscritura) -> PathBuf {
 
 fn stage_path(lock: &LockEscritura) -> PathBuf {
     lock.ubicacion().stage(TXN).unwrap().as_path().to_path_buf()
+}
+
+fn ejecutar_hijo_interproceso(
+    filtro: &str,
+    root: &Path,
+    root_env: &str,
+    nonce_env: &str,
+    codigo_esperado: i32,
+) {
+    let nonce = root
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .arg("--ignored")
+        .arg("--test-threads=1")
+        .arg("--nocapture")
+        .arg(filtro)
+        .env(root_env, root)
+        .env(nonce_env, &nonce)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn recovery child test");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                timed_out = true;
+                let _ = child.kill();
+                break;
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let output = child.wait_with_output().expect("collect child diagnostics");
+                panic!(
+                    "could not poll recovery child {filtro}: {error}; stdout: {}; stderr: {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+    let output = child.wait_with_output().expect("collect child diagnostics");
+    assert!(
+        !timed_out,
+        "recovery child {filtro} timed out; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(codigo_esperado),
+        "recovery child {filtro} exited unexpectedly; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn root_hijo_interproceso(root_env: &str, nonce_env: &str) -> Option<PathBuf> {
+    match (std::env::var_os(root_env), std::env::var_os(nonce_env)) {
+        (None, None) => None,
+        (Some(root), Some(nonce)) => {
+            let root = PathBuf::from(root);
+            let nonce = nonce.into_string().expect("child nonce must be UTF-8");
+            assert_eq!(
+                root.parent().unwrap().file_name().unwrap(),
+                std::ffi::OsStr::new(&nonce),
+                "nonce must identify the parent's unique temporary fixture"
+            );
+            Some(root)
+        }
+        _ => panic!("child root and nonce must be set together"),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -630,63 +714,13 @@ fn restore_old_se_recupera_tras_salida_del_hijo_antes_de_eliminar_journal() {
     fs::rename(&root, &backup).unwrap();
     fs::rename(root.with_file_name("new-fixture"), &stage).unwrap();
     let journal_bytes = fs::read(&canonical).unwrap();
-    let nonce = root
-        .parent()
-        .unwrap()
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
     drop(lock);
-
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .arg("--ignored")
-        .arg("--test-threads=1")
-        .arg("--nocapture")
-        .arg("restore_old_child_exits_before_journal_removal")
-        .env(RESTORE_OLD_CHILD_ROOT_ENV, &root)
-        .env(RESTORE_OLD_CHILD_NONCE_ENV, &nonce)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn RestoreOld child test");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut timed_out = false;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Ok(None) => {
-                timed_out = true;
-                let _ = child.kill();
-                break;
-            }
-            Err(error) => {
-                let _ = child.kill();
-                let output = child.wait_with_output().expect("collect child diagnostics");
-                panic!(
-                    "could not poll RestoreOld child: {error}; stdout: {}; stderr: {}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-        }
-    }
-    let output = child.wait_with_output().expect("collect child diagnostics");
-    assert!(
-        !timed_out,
-        "RestoreOld child timed out; stdout: {}; stderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(86),
-        "child must exit at the requested recovery cut; stdout: {}; stderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+    ejecutar_hijo_interproceso(
+        "restore_old_child_exits_before_journal_removal",
+        &root,
+        RESTORE_OLD_CHILD_ROOT_ENV,
+        RESTORE_OLD_CHILD_NONCE_ENV,
+        86,
     );
 
     assert!(!backup.exists() && !stage.exists());
@@ -716,22 +750,11 @@ fn restore_old_se_recupera_tras_salida_del_hijo_antes_de_eliminar_journal() {
 #[test]
 #[ignore = "la ejecuta el padre interproceso para cortar RestoreOld antes del journal unlink"]
 fn restore_old_child_exits_before_journal_removal() {
-    let (root, nonce) = match (
-        std::env::var_os(RESTORE_OLD_CHILD_ROOT_ENV),
-        std::env::var_os(RESTORE_OLD_CHILD_NONCE_ENV),
-    ) {
-        (None, None) => return,
-        (Some(root), Some(nonce)) => (
-            PathBuf::from(root),
-            nonce.into_string().expect("child nonce must be UTF-8"),
-        ),
-        _ => panic!("child root and nonce must be set together"),
+    let Some(root) =
+        root_hijo_interproceso(RESTORE_OLD_CHILD_ROOT_ENV, RESTORE_OLD_CHILD_NONCE_ENV)
+    else {
+        return;
     };
-    assert_eq!(
-        root.parent().unwrap().file_name().unwrap(),
-        std::ffi::OsStr::new(&nonce),
-        "nonce must identify the parent's unique temporary fixture"
-    );
     assert!(!root.exists(), "RestoreOld precondition: root absent");
 
     let mut lock = LockEscritura::adquirir(&root).unwrap();
@@ -760,6 +783,98 @@ fn restore_old_child_exits_before_journal_removal() {
             assert!(canonical.is_file(), "journal removal has not started");
             assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
             std::process::exit(86);
+        },
+    );
+    panic!("recovery returned instead of exiting at the cut: {result:?}");
+}
+
+#[test]
+fn discard_new_restore_old_reanuda_tras_salida_del_hijo_despues_del_rename() {
+    let (_temp, root, lock, canonical, journal) = preparar_discard_new(JournalState::Installed);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    let journal_bytes = fs::read(&canonical).unwrap();
+    assert!(fingerprint(&root) == *journal.new_fingerprint());
+    assert!(fingerprint(&backup) == *journal.old());
+    assert!(!stage.exists());
+    drop(lock);
+
+    ejecutar_hijo_interproceso(
+        "discard_new_child_exits_after_rename_before_cleanup",
+        &root,
+        DISCARD_NEW_CHILD_ROOT_ENV,
+        DISCARD_NEW_CHILD_NONCE_ENV,
+        87,
+    );
+
+    assert!(!root.exists());
+    assert!(fingerprint(&backup) == *journal.old());
+    assert!(fingerprint(&stage) == *journal.new_fingerprint());
+    assert!(canonical.is_file());
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+
+    let mut restarted = LockEscritura::adquirir(&root).unwrap();
+    assert_eq!(
+        ejecutar_recovery_soportado_con(
+            &mut restarted,
+            observar_inventario_recovery,
+            |_| {},
+            |_| {}
+        ),
+        Ok(ResultadoRecoverySoportado::RestoreOld(
+            ResultadoFilaJournalRestoreOld::Eliminado
+        ))
+    );
+    assert!(!backup.exists() && !stage.exists() && !canonical.exists());
+    assert_root_intact(&root);
+    assert!(fingerprint(&root) == *journal.old());
+}
+
+#[test]
+#[ignore = "la ejecuta el padre interproceso para cortar DiscardNewRestoreOld tras el rename"]
+fn discard_new_child_exits_after_rename_before_cleanup() {
+    let Some(root) =
+        root_hijo_interproceso(DISCARD_NEW_CHILD_ROOT_ENV, DISCARD_NEW_CHILD_NONCE_ENV)
+    else {
+        return;
+    };
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    let canonical = lock.ubicacion().journal().as_path().to_path_buf();
+    assert!(root.is_dir(), "DiscardNew precondition: root New exists");
+    assert!(
+        backup.is_dir(),
+        "DiscardNew precondition: old backup exists"
+    );
+    assert!(!stage.exists(), "DiscardNew precondition: stage absent");
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let journal = Journal::parse(&journal_bytes).unwrap();
+    assert_eq!(journal.state(), JournalState::Installed);
+    assert!(fingerprint(&root) == *journal.new_fingerprint());
+    assert!(fingerprint(&backup) == *journal.old());
+
+    let contexto = match preflight_recovery(&mut lock).unwrap() {
+        ResultadoPreflightRecovery::Contexto(contexto) => *contexto,
+        _ => unreachable!("DiscardNew fixture must produce an Installed context"),
+    };
+    let result = ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
+        &mut lock,
+        contexto,
+        |_| {},
+        |_| {},
+        renombrar_root_new_a_stage,
+        |lock, journal| {
+            let inventory = observar_inventario_recovery(lock, journal).unwrap();
+            assert_eq!(inventory.root, ArtifactState::Absent);
+            assert_eq!(inventory.backup, ArtifactState::Old);
+            assert_eq!(inventory.stage, ArtifactState::New);
+            assert!(!root.exists(), "root→stage rename completed before cut");
+            assert!(fingerprint(&backup) == *journal.old());
+            assert!(fingerprint(&stage) == *journal.new_fingerprint());
+            assert!(canonical.is_file(), "journal removal has not started");
+            assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+            std::process::exit(87);
         },
     );
     panic!("recovery returned instead of exiting at the cut: {result:?}");
