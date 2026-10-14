@@ -1,13 +1,18 @@
 //! Encoder binario privado del contexto de admisión.
 //!
 //! `FELIX-ADMCTX` v1 es framing interno experimental, no contrato público ni
-//! prueba de admisión. El decoder deberá validar el framing y reconstruir las
-//! identidades derivadas antes de evaluar otra vez la propuesta.
+//! prueba de admisión. El decoder preflighta el framing y reconstruye la base
+//! para recalcular identidades derivadas antes de que replay proponga de nuevo.
 
 #[allow(dead_code)]
 pub(crate) mod cursor;
 #[allow(dead_code)]
+pub(crate) mod decodificar;
+#[allow(dead_code)]
 pub(crate) mod lectura;
+#[allow(dead_code)]
+#[allow(unused_imports)]
+pub(crate) use decodificar::decodificar;
 
 use std::fmt;
 
@@ -232,7 +237,7 @@ impl fmt::Display for ErrorCodecAdmision {
 impl std::error::Error for ErrorCodecAdmision {}
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::transaccion::captura::{ConfigRawCapturada, materializar_snapshot_desde_entradas};
     use crate::transaccion::snapshot::EntradaSnapshot;
@@ -253,6 +258,13 @@ ignorados = []
 "#;
 
     fn contexto(reverso: bool) -> ContextoAdmision {
+        contexto_con_rutas(reverso, true)
+    }
+
+    pub(super) fn contexto_con_rutas(
+        reverso: bool,
+        config_root_relative: bool,
+    ) -> ContextoAdmision {
         let manifiesto = MANIFIESTO.as_bytes();
         let invariantes = b"\n";
         let mut entradas = vec![
@@ -270,11 +282,19 @@ ignorados = []
         if reverso {
             entradas.reverse();
         }
+        let (ruta_manifiesto, ruta_invariantes) = if config_root_relative {
+            (
+                Some("manifest.toml".to_owned()),
+                Some("invariants.smt2".to_owned()),
+            )
+        } else {
+            (None, None)
+        };
         let configuracion = ConfigRawCapturada::nueva(
             manifiesto,
             invariantes.as_slice(),
-            Some("manifest.toml".to_owned()),
-            Some("invariants.smt2".to_owned()),
+            ruta_manifiesto,
+            ruta_invariantes,
         )
         .unwrap();
         let snapshot = materializar_snapshot_desde_entradas(
