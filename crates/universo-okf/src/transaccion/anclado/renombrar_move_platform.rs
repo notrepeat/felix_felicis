@@ -51,22 +51,53 @@ pub(super) fn renombrar_plataforma(
         return Err(ErrorRenombrarAnclado::FuenteNoHermana);
     }
 
-    // SAFETY: ambos nombres son componentes bajo el mismo parent abierto.
-    // renameat puede reemplazar un destino creado externamente tras fstatat;
-    // esa carrera sin no-replace queda fuera del contrato.
+    renombrar_noreplace(parent, &fuente, &destino)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn renombrar_noreplace(
+    parent: &File,
+    fuente: &std::ffi::CStr,
+    destino: &std::ffi::CStr,
+) -> Result<(), ErrorRenombrarAnclado> {
+    use std::os::fd::AsRawFd;
+
+    // SAFETY: both NUL-terminated names are single components relative to the
+    // retained parent descriptor. The kernel performs the no-replace check and
+    // rename atomically; there is deliberately no renameat fallback.
     let resultado = unsafe {
-        libc::renameat(
+        libc::syscall(
+            libc::SYS_renameat2,
             parent.as_raw_fd(),
             fuente.as_ptr(),
             parent.as_raw_fd(),
             destino.as_ptr(),
+            libc::RENAME_NOREPLACE,
         )
     };
     if resultado == 0 {
-        Ok(())
-    } else {
-        Err(ErrorRenombrarAnclado::OperacionAmbigua)
+        return Ok(());
     }
+
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::EEXIST) => Err(ErrorRenombrarAnclado::DestinoExistente),
+        // An unavailable syscall or unsupported flag fails closed. In
+        // particular, neither condition may fall back to replace-capable renameat.
+        Some(libc::ENOSYS | libc::EINVAL) => Err(ErrorRenombrarAnclado::Io),
+        // Preserve conservative recovery for errors whose effect is uncertain.
+        _ => Err(ErrorRenombrarAnclado::OperacionAmbigua),
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn renombrar_noreplace(
+    _parent: &File,
+    _fuente: &std::ffi::CStr,
+    _destino: &std::ffi::CStr,
+) -> Result<(), ErrorRenombrarAnclado> {
+    // Other Unix platforms have no verified no-replace primitive in this
+    // work unit. Never emulate it with the racy, replace-capable renameat.
+    Err(ErrorRenombrarAnclado::Io)
 }
 
 #[cfg(unix)]
@@ -260,4 +291,39 @@ fn windows_not_found(error: &std::io::Error) -> bool {
         error.raw_os_error().map(|code| code as u32),
         Some(ERROR_FILE_NOT_FOUND) | Some(ERROR_PATH_NOT_FOUND)
     ) || error.kind() == std::io::ErrorKind::NotFound
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+mod tests {
+    use super::{ErrorRenombrarAnclado, renombrar_noreplace};
+    use std::ffi::CString;
+    use std::fs::File;
+
+    #[test]
+    fn renameat2_noreplace_preserva_fuente_y_destino_existente() {
+        let temp = tempfile::tempdir().unwrap();
+        let fuente = temp.path().join("source");
+        let destino = temp.path().join("destination");
+        std::fs::create_dir(&fuente).unwrap();
+        std::fs::create_dir(&destino).unwrap();
+        std::fs::write(fuente.join("marker"), b"source remains").unwrap();
+        std::fs::write(destino.join("marker"), b"destination remains").unwrap();
+        let parent = File::open(temp.path()).unwrap();
+
+        let resultado = renombrar_noreplace(
+            &parent,
+            &CString::new("source").unwrap(),
+            &CString::new("destination").unwrap(),
+        );
+
+        assert_eq!(resultado, Err(ErrorRenombrarAnclado::DestinoExistente));
+        assert_eq!(
+            std::fs::read(fuente.join("marker")).unwrap(),
+            b"source remains"
+        );
+        assert_eq!(
+            std::fs::read(destino.join("marker")).unwrap(),
+            b"destination remains"
+        );
+    }
 }
