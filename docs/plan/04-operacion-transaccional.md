@@ -26,9 +26,12 @@ implementados.
 
 Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; U5,
 U7 y U8 conservan avance parcial, y U6 está cerrada para root anclado y
-staging. U7 incluye las filas exactas `KeepOld` y `RestoreOld`; un preflight
-compartido inicial y un dispatcher crate-private las enrutan, pero no hay
-caller desde apply/producción. U8 añade captura por ruta acotada y privada para
+staging. U7 incluye las filas exactas `KeepOld` y `RestoreOld`; su dispatcher
+crate-private limpia también un stage `New` o `PartialNew` cuando root es
+`Old`, backup `Absent` y `root_new_validated=false` en `Prepared`,
+`BackupReady` e `Installed`. Reabre el stage por la identidad durable del
+journal, lo limpia y reobserva antes de retirar el journal; no hay caller desde
+apply/producción. `RestoreOld` sigue exigiendo stage `Absent`. U8 añade captura por ruta acotada y privada para
 simulación y pruebas y, en `63e59d1`, preflight consumidor de la suma de
 configuración antes de abrir el root bajo lock y antes de clonar/inventariar
 el root anclado. El exceso devuelve `snapshot_resource_limit` redactado,
@@ -42,9 +45,12 @@ consumidor sigue siendo una defensa necesaria. Esta garantía es distinta de
 la captura privada por ruta, que limita la lectura en curso y permite como
 máximo el remanente más un byte centinela en fuentes externas. Siguen
 pendientes el proveedor con lectura acotada antes del lock, los callers de
-apply/CLI y las cotas para `version_motor` y `policy_id`. El recovery U7 aún no
-limpia stage ni está completo. Fase 04 sigue en curso: lock, captura anclada y
-staging aún no están conectados a apply ni publican candidatos.
+apply/CLI y las cotas para `version_motor` y `policy_id`. U7 ahora limpia el
+stage conocido solo para la fila `KeepOld` descrita arriba; retry tras cleanup
+parcial se apoya en la identidad durable y el journal se conserva mientras el
+stage siga presente. El recovery sigue incompleto. Fase 04 sigue en curso:
+lock, captura anclada y staging aún no están conectados a apply ni publican
+candidatos.
 
 En `609936a`, las regresiones del CAS privado por ruta verifican que un match
 con configuración externa conserva los nombres, tipos y bytes del árbol y los
@@ -514,17 +520,43 @@ Chain strategy: feature-branch-chain
   crate-private y sus pruebas, con ajuste de estilo en `0e8f0d4`. Solo enruta
   `KeepOld`/`RestoreOld`; ningún caller desde apply/producción existe todavía.
 
-  No hay cleanup de stage, executor `DiscardNewRestoreOld`, validación de
-  `New`, fila `Committed` ni recovery completo. CI run `38240021138` pasó solo
-  para `701de13`; `38242930608` pasó para SHA `db71e3c` con el runner
-  `RestoreOld` previo al dispatcher; `38246129604` aplica solo a `a4d01e5`.
-  El dispatcher final aún no tiene CI verde.
-  `a082467` conserva el estado histórico anterior. El lock coordina
-  escritores Felix cooperantes; en POSIX
-  `unlinkat` opera por nombre y conserva una carrera residual ante mutaciones
-  externas del namespace. No se promete durabilidad ante pérdida de energía ni
-  recuperación frente a concurrencia hostil. Objetivo por slice: <400 líneas
-  authored.
+  `34b7e0a` clasifica `PartialNew` solo si coincide la identidad durable del
+  fingerprint `New` del journal y difiere el digest raw; identidad distinta
+  sigue siendo `Unknown`. `428d432` amplía `KeepOld` en `Prepared`,
+  `BackupReady` e `Installed` a root `Old`, backup `Absent`, stage `New` o
+  `PartialNew` y `root_new_validated=false`. El executor reabre el sibling
+  anclado con la identidad del journal (y exige el digest esperado para `New`),
+  limpia el stage, reobserva el inventario y solo entonces retira el journal.
+  Si la limpieza devuelve un error ambiguo, reobserva: si el stage ya no está,
+  puede retirar el journal; si queda un stage parcial, conserva el journal y
+  reporta el error. Tras reinicio, `PartialNew` permite reintentar por identidad
+  durable aunque el digest ya sea menor. Un txn inválido o una identidad
+  distinta fallan antes de mutar los siblings.
+
+  `980a3f0` cubre cleanup ambiguo y reobservación, retry de limpieza parcial
+  tras reinicio, identidad distinta y txn inválido; `86bb79b` corrige dos
+  préstamos señalados por clippy. CI run `38504988001` pasó tests y fmt, pero
+  clippy falló por esos dos préstamos. CI final `38505451293`, sobre
+  `86bb79b809625847ed4835385a31068fc97e363e`, pasó en Linux y Windows: Linux
+  716 passed/0 failed/6 ignored y Windows 708/0/6, con 38 resúmenes de suites;
+  `python -m unittest discover -s tools -p "test_run_software_architecture_demo.py" -v`
+  pasó 7 pruebas por sistema operativo. Se vieron las cuatro regresiones
+  `stage_presente_falla_cerrado_y_conserva_journal_y_root`,
+  `cleanup_ambiguo_reobserva_y_retira_journal_solo_despues_del_stage`,
+  `txn_invalido_falla_antes_de_mutar_siblings_y_journal` y
+  `keep_old_reintenta_limpieza_parcial_del_stage_tras_reinicio`; fmt, clippy y
+  `check_public_boundary.py` también pasaron. Esta evidencia CI no afirma una
+  verificación focal final en WSL.
+
+  No hay executor `DiscardNewRestoreOld`, validación de `New`, fila `Committed`
+  ni recovery completo. La función sigue crate-private, sin caller desde
+  apply/producción ni publicación completa. No se afirma atomicidad ni
+  durabilidad ante pérdida de energía: el lock coordina escritores Felix
+  cooperantes y TOCTOU por mutaciones externas queda fuera del contrato.
+  CI histórico `38240021138` pasó solo para `701de13`; `38242930608` pasó para
+  SHA `db71e3c` con `RestoreOld` previo al dispatcher; `38246129604` aplica
+  solo a `a4d01e5`. `a082467` conserva el estado histórico anterior. Objetivo
+  por slice: <400 líneas authored.
 
   Contrato de recursos compartido por los inventarios de snapshot/stage/recovery
   y por la carga desde disco con `bundle::cargar_bundle`: 128 MiB raw, 100.000
@@ -791,6 +823,7 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-13 | `eef28f55c4009248d74cc82c2188e310f3ce8e41` | Amplía una prueba existente del dispatcher a seis combinaciones de `KeepOld`/`RestoreOld` en `Prepared`/`BackupReady`/`Installed`, con una observación inicial por ejecución. `KeepOld` comprueba que se retire solo el journal esperado; `RestoreOld` recupera el fingerprint old y retira journal/backup/stage. | U7 sigue parcial; dispatcher crate-private, sin caller de apply/producción. No es un test focal nuevo. |
 | 2026-10-13 | `a3cc3c9c2e5d166f066d6f7bfccf6cdec9214211` | Añade un test privado del CAS por ruta con journal sibling: match/stale comparan inventarios observados de root, configuración y parent, bytes del journal y `ArtifactFingerprint` del root. No invoca el dispatcher ni hay conteo focal registrado para este SHA. | U8 sigue parcial; CAS privado, sin caller de apply/CLI ni simulación pública. No se afirman atime ni atomicidad. |
 | 2026-10-13 | `51cd5c4fbf9607dffac1825a9739cac9e92d97e2` | Extiende la prueba del dispatcher con inventario recursivo: rutas, tipos y bytes de archivos normales; para el lock abierto, solo presencia, tipo y longitud. `RestoreOld` compara contra el modelo backup→root y retiro del journal. Matriz workspace independiente: Windows 702 passed/0 failed/6 ignored (37 suites); WSL Ubuntu 710/0/6 (37 suites); fmt y clippy pasan en ambos. Conteos workspace, no focales. | U7 sigue parcial y sin caller productivo; no se garantiza atime, permisos, metadatos ni atomicidad ante cambios hostiles. |
+| 2026-10-14 | `34b7e0a`, `428d432`, `980a3f0`, `86bb79b` | `KeepOld` ahora autoriza limpiar stage `New`/`PartialNew` con root `Old` y backup `Absent` en tres fases; identidad durable, reobservación antes del journal y retry tras cleanup parcial. Cuatro regresiones recovery visibles; CI `38505451293` pasa en Linux (716/0/6) y Windows (708/0/6), 38 resúmenes de suites, unittest de herramientas 7/OS, fmt, clippy y frontera pública. `38504988001` tenía tests/fmt verdes y fallo clippy por dos préstamos, corregidos en `86bb79b`. | U7 sigue parcial: sin caller apply/producción ni publicación completa; `RestoreOld` requiere stage `Absent`. `DiscardNewRestoreOld`, validación de `New`, `Committed` y recovery completo pendientes. No se afirma atomicidad/durabilidad; writers cooperantes y TOCTOU externo fuera del contrato. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |

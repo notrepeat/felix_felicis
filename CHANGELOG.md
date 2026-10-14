@@ -86,6 +86,37 @@ para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
   failed/6 ignored en 37 suites; WSL Ubuntu, 710 passed/0 failed/6 ignored en
   37 suites. `fmt` y `clippy` pasan en ambos entornos. Estos son conteos del
   workspace, no resultados focales de las pruebas de U7 o U8.
+- 2026-10-14: `34b7e0a` clasifica `PartialNew` cuando coincide la identidad
+  durable del fingerprint `New` esperado por el journal y difiere el digest
+  raw; una identidad distinta sigue siendo `Unknown`. `428d432` amplía `KeepOld` en `Prepared`,
+  `BackupReady` e `Installed` para root `Old`, backup `Absent`, stage `New` o
+  `PartialNew` y `root_new_validated=false`. Reabre el stage anclado por
+  identidad durable, exige digest completo para `New`, limpia y reobserva antes
+  de retirar el journal. Ante cleanup ambiguo, la reobservación permite retirar
+  el journal si el stage ya desapareció; si queda parcial, se conserva el
+  journal. Tras reinicio, `PartialNew` permite reintentar con la misma identidad
+  aunque el digest haya cambiado por la limpieza parcial.
+- `980a3f0` agrega cobertura para cleanup ambiguo, retry parcial tras reinicio,
+  identidad distinta y txn inválido; `86bb79b` corrige dos préstamos en las
+  aserciones de recovery. Los cuatro tests visibles son
+  `stage_presente_falla_cerrado_y_conserva_journal_y_root`,
+  `cleanup_ambiguo_reobserva_y_retira_journal_solo_despues_del_stage`,
+  `txn_invalido_falla_antes_de_mutar_siblings_y_journal` y
+  `keep_old_reintenta_limpieza_parcial_del_stage_tras_reinicio`.
+- CI run `38504988001` pasó tests y fmt, pero clippy falló por los dos
+  préstamos corregidos en `86bb79b`. El CI final `38505451293` terminó con
+  éxito en `86bb79b809625847ed4835385a31068fc97e363e`: Linux 716 passed/0
+  failed/6 ignored, Windows 708/0/6, 38 resúmenes de suites; el unittest de
+  herramientas pasó 7 casos por sistema operativo. `fmt`, clippy y la frontera
+  pública también pasaron.
+- U7 permanece parcial y sin caller desde apply/CLI ni publicación completa.
+  `RestoreOld` aún requiere stage `Absent`; `DiscardNewRestoreOld`, validación
+  de `New`, `Committed` y recovery completo siguen pendientes. No se afirma
+  atomicidad ni durabilidad: el lock coordina escritores Felix cooperantes y
+  TOCTOU por mutaciones externas queda fuera del contrato. Esta actualización
+  es documental; prueba focal/runtime: N/A. `git diff --check` y
+  `python tools/check_public_boundary.py` pasan tras editar. Su rollback abarca
+  solo `CHANGELOG.md` y los dos planes.
 
 ### Fase 05 — historial de evidencia y cierre de la demo pública
 
