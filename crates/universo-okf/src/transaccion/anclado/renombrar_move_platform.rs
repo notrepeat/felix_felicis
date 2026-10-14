@@ -51,9 +51,9 @@ pub(super) fn renombrar_plataforma(
         return Err(ErrorRenombrarAnclado::FuenteNoHermana);
     }
 
-    // SAFETY: source and destination are single components relative to this
-    // same live parent dirfd. The cooperative lock serializes precheck+rename;
-    // external processes are outside that contract and can still race.
+    // SAFETY: ambos nombres son componentes bajo el mismo parent abierto.
+    // renameat puede reemplazar un destino creado externamente tras fstatat;
+    // esa carrera sin no-replace queda fuera del contrato.
     let resultado = unsafe {
         libc::renameat(
             parent.as_raw_fd(),

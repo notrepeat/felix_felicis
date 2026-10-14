@@ -1,5 +1,6 @@
 //! Ejecución acotada de la fila root-old sin backup, stage ni validación new.
 
+use std::ffi::OsStr;
 use std::fmt;
 
 use crate::transaccion::anclado::DirectorioAnclado;
@@ -397,30 +398,40 @@ fn restaurar_backup_y_retirar_journal(
     inventario_pre_rename: RecoveryInventory,
     antes_de_eliminar: impl FnOnce(&LockEscritura),
 ) -> Result<ResultadoFilaJournalRestoreOld, ErrorFilaJournalRestoreOld> {
+    restaurar_backup_y_retirar_journal_con_renombrador(
+        lock,
+        contexto,
+        inventario_pre_rename,
+        antes_de_eliminar,
+        renombrar_backup_a_root,
+    )
+}
+
+fn restaurar_backup_y_retirar_journal_con_renombrador(
+    lock: &mut LockEscritura,
+    contexto: &ContextoPreflightRecovery,
+    inventario_pre_rename: RecoveryInventory,
+    antes_de_eliminar: impl FnOnce(&LockEscritura),
+    renombrar: impl FnOnce(
+        &mut LockEscritura,
+        &ContextoPreflightRecovery,
+        &OsStr,
+    ) -> Result<Result<(), ErrorRenombrarAnclado>, ErrorRenombrarAnclado>,
+) -> Result<ResultadoFilaJournalRestoreOld, ErrorFilaJournalRestoreOld> {
     let destino = lock
         .ubicacion()
         .ruta()
         .file_name()
         .ok_or(ErrorFilaJournalRestoreOld::FilaNoAutorizada)?
         .to_os_string();
-    let intento_renombrar = {
-        let mut espacio = lock
-            .espacio_transaccional_anclado()
-            .map_err(ErrorFilaJournalRestoreOld::Renombrar)?;
-        let mut backup = espacio
-            .reabrir_backup_sibling(
-                |identidad| {
-                    identidad.journal_identity().as_ref() == Some(contexto.journal.parent())
-                },
-                |identidad| {
-                    identidad.journal_identity().as_ref() == Some(contexto.journal.old().identity())
-                },
-            )
-            .map_err(ErrorFilaJournalRestoreOld::Renombrar)?;
-        let intento = espacio.renombrar_directorio(&mut backup, &destino);
-        drop(backup);
-        intento
-    };
+    let intento_renombrar =
+        renombrar(lock, contexto, &destino).map_err(ErrorFilaJournalRestoreOld::Renombrar)?;
+
+    if let Err(error) = intento_renombrar {
+        if error.no_reconciliar() {
+            return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
+        }
+    }
 
     // Reobservar incluso tras error: algunas plataformas pueden completar el
     // rename y reportar un fallo al caller.
@@ -449,6 +460,21 @@ fn restaurar_backup_y_retirar_journal(
             Err(ErrorFilaJournalRestoreOld::EliminacionIndeterminada(error))
         }
     }
+}
+
+fn renombrar_backup_a_root(
+    lock: &mut LockEscritura,
+    contexto: &ContextoPreflightRecovery,
+    destino: &OsStr,
+) -> Result<Result<(), ErrorRenombrarAnclado>, ErrorRenombrarAnclado> {
+    let mut espacio = lock.espacio_transaccional_anclado()?;
+    let mut backup = espacio.reabrir_backup_sibling(
+        |identidad| identidad.journal_identity().as_ref() == Some(contexto.journal.parent()),
+        |identidad| {
+            identidad.journal_identity().as_ref() == Some(contexto.journal.old().identity())
+        },
+    )?;
+    Ok(espacio.renombrar_directorio(&mut backup, destino))
 }
 
 pub(super) fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto(
@@ -481,6 +507,11 @@ fn ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
 
     antes_de_renombrar(lock);
     let intento_renombrar = renombrar(lock, &contexto.journal);
+    if let Err(error) = intento_renombrar {
+        if error.no_reconciliar() {
+            return Err(ErrorFilaJournalRestoreOld::Renombrar(error));
+        }
+    }
     let inventario_stage = observar_inventario_recovery(lock, &contexto.journal)
         .map_err(ErrorFilaJournalRestoreOld::Observacion)?;
     reconciliar_intento_renombrado_discard_new(
@@ -545,9 +576,13 @@ fn renombrar_root_new_a_stage(
         .ok_or(ErrorRenombrarAnclado::ComponenteInvalido)?
         .to_os_string();
 
-    let mut espacio = lock
-        .espacio_transaccional_anclado()
-        .map_err(|_| ErrorRenombrarAnclado::Io)?;
+    let mut espacio = lock.espacio_transaccional_anclado().map_err(|error| {
+        if error == ErrorRenombrarAnclado::ScopeNoVerificado {
+            error
+        } else {
+            ErrorRenombrarAnclado::Io
+        }
+    })?;
     let mut root = espacio.observar_directorio_sibling(&origen, identidad_raiz)?;
     espacio.renombrar_directorio(&mut root, &destino)
 }

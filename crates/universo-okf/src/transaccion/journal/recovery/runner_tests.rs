@@ -840,6 +840,94 @@ fn discard_new_converge_si_el_rename_reporta_error_despues_de_mover_root() {
 }
 
 #[test]
+fn restore_old_no_reconcilia_scope_no_verificado_y_retry_reclasifica() {
+    let (_temp, root, mut lock, canonical, journal) = preparar_fila(JournalState::BackupReady);
+    let backup = backup_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+    let contexto = match preflight_recovery(&mut lock).unwrap() {
+        ResultadoPreflightRecovery::Contexto(contexto) => *contexto,
+        _ => unreachable!("el journal debe producir contexto"),
+    };
+    let observacion_previa = contexto.inventario;
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let antes_de_eliminar = Cell::new(false);
+
+    assert_eq!(
+        restaurar_backup_y_retirar_journal_con_renombrador(
+            &mut lock,
+            &contexto,
+            observacion_previa,
+            |_| antes_de_eliminar.set(true),
+            |_, _, _| {
+                fs::rename(&backup, &root).unwrap();
+                Ok(Err(ErrorRenombrarAnclado::ResultadoNoVerificado))
+            },
+        ),
+        Err(ErrorFilaJournalRestoreOld::Renombrar(
+            ErrorRenombrarAnclado::ResultadoNoVerificado
+        ))
+    );
+    assert!(!antes_de_eliminar.get());
+    assert!(canonical.exists());
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert!(fingerprint(&root) == *journal.old());
+    assert!(!backup.exists());
+
+    assert_eq!(
+        ejecutar_recovery_soportado_con(&mut lock, observar_inventario_recovery, |_| {}, |_| {}),
+        Ok(ResultadoRecoverySoportado::KeepOld(
+            ResultadoFilaJournalOld::Eliminado
+        ))
+    );
+    assert!(!canonical.exists());
+}
+
+#[test]
+fn discard_new_no_reconcilia_outcome_no_verificado_y_retry_restore_old() {
+    let (_temp, root, mut lock, canonical, _journal) =
+        preparar_discard_new(JournalState::BackupReady);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    let contexto = match preflight_recovery(&mut lock).unwrap() {
+        ResultadoPreflightRecovery::Contexto(contexto) => *contexto,
+        _ => unreachable!("el journal debe producir contexto"),
+    };
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let antes_de_eliminar = Cell::new(false);
+
+    assert_eq!(
+        ejecutar_fila_journal_discard_new_restore_old_desde_contexto_con_renombrador(
+            &mut lock,
+            contexto,
+            |_| {},
+            |_| antes_de_eliminar.set(true),
+            |lock, journal| {
+                renombrar_root_new_a_stage(lock, journal)?;
+                Err(ErrorRenombrarAnclado::ResultadoNoVerificado)
+            },
+        ),
+        Err(ErrorFilaJournalRestoreOld::Renombrar(
+            ErrorRenombrarAnclado::ResultadoNoVerificado
+        ))
+    );
+    assert!(!antes_de_eliminar.get());
+    assert!(canonical.exists());
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+    assert!(!root.exists());
+    assert!(backup.is_dir() && stage.is_dir());
+
+    assert_eq!(
+        ejecutar_recovery_soportado_con(&mut lock, observar_inventario_recovery, |_| {}, |_| {}),
+        Ok(ResultadoRecoverySoportado::RestoreOld(
+            ResultadoFilaJournalRestoreOld::Eliminado
+        ))
+    );
+    assert!(!canonical.exists());
+    assert!(!backup.exists() && !stage.exists());
+    assert_root_intact(&root);
+}
+
+#[test]
 fn reinicio_despues_de_mover_root_a_stage_reanuda_por_restore_old() {
     let (_temp, root, mut lock, canonical, journal) = preparar_discard_new(JournalState::Installed);
     let backup = backup_path(&lock);

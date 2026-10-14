@@ -6,7 +6,10 @@ use std::fs::File;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use super::{DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, metadata_directorio};
+use super::{
+    DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, ScopeFilesystem,
+    metadata_directorio, scope_filesystem,
+};
 use crate::transaccion::lock::LockEscritura;
 
 /// Error estable y redactado del renombre sibling.
@@ -20,6 +23,8 @@ pub(crate) enum ErrorRenombrarAnclado {
     DestinoExistente,
     IdentidadNoCoincide,
     FuenteNoHermana,
+    ScopeNoVerificado,
+    ResultadoNoVerificado,
 }
 
 impl ErrorRenombrarAnclado {
@@ -33,7 +38,13 @@ impl ErrorRenombrarAnclado {
             Self::DestinoExistente => "anchored_rename_destination_exists",
             Self::IdentidadNoCoincide => "anchored_rename_identity_mismatch",
             Self::FuenteNoHermana => "anchored_rename_source_not_sibling",
+            Self::ScopeNoVerificado => "anchored_rename_scope_unverified",
+            Self::ResultadoNoVerificado => "anchored_rename_outcome_unverified",
         }
+    }
+
+    pub(crate) const fn no_reconciliar(self) -> bool {
+        matches!(self, Self::ScopeNoVerificado | Self::ResultadoNoVerificado)
     }
 }
 
@@ -63,6 +74,7 @@ pub(crate) struct EspacioTransaccionalAnclado<'lock> {
     _lock: &'lock mut LockEscritura,
     parent: File,
     identidad_parent: IdentidadDirectorio,
+    scope_parent: ScopeFilesystem,
     autoridad: Arc<()>,
 }
 
@@ -77,6 +89,7 @@ pub(crate) struct DirectorioSiblingAnclado<'lock> {
     identidad_parent: IdentidadDirectorio,
     identidad_raiz: IdentidadDirectorio,
     autoridad: Arc<()>,
+    utilizable: bool,
     _lock: PhantomData<&'lock LockEscritura>,
 }
 
@@ -97,11 +110,16 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
         let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
             .map_err(mapear_error_directorio)?;
         let identidad_parent = ancla.identidad_parent;
+        // The token is handle-derived and deliberately ephemeral: it is not
+        // journal state. Windows identifies a volume, not a mount instance.
+        let scope_parent = scope_filesystem(&ancla.parent)
+            .map_err(|_| ErrorRenombrarAnclado::ScopeNoVerificado)?;
         let autoridad = lock.autoridad();
         Ok(EspacioTransaccionalAnclado {
             _lock: lock,
             parent: ancla.parent,
             identidad_parent,
+            scope_parent,
             autoridad,
         })
     }
@@ -134,6 +152,7 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
             identidad_parent: self.identidad_parent,
             identidad_raiz,
             autoridad: Arc::clone(&self.autoridad),
+            utilizable: true,
             _lock: PhantomData,
         })
     }
@@ -182,6 +201,7 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
             identidad_parent,
             identidad_raiz,
             autoridad: Arc::clone(&self.autoridad),
+            utilizable: true,
             _lock: PhantomData,
         })
     }
