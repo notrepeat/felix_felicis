@@ -73,8 +73,21 @@ recovery heredan esta comprobación mediante los wrappers de inventario. Es un
 slice de lectura, no una frontera general: las pruebas son sintéticas (sin
 bind mount real ni mounts anidados), el probe Linux usa `STATX_MNT_ID` y el de
 Windows `VolumeSerialNumber` (volumen, no instancia de montaje), el backend por
-ruta/bundle y las escrituras de staging siguen pendientes, y las carreras
-externas TOCTOU quedan fuera del contrato.
+ruta/bundle sigue pendiente y las carreras externas TOCTOU quedan fuera del
+contrato.
+Desde `3e8ec0a` y `22494c8`, `ErrorEscrituraStage` recupera ownership de la
+capability como `Result<StageAnclado, Self>`; si no hay capability, devuelve el
+error intacto para conservar código, estado parcial e indicador diagnóstico.
+Desde `75d223e`, la capability writable guarda el scope inicial y lo propaga a
+descendientes. Las escrituras comprueban el parent antes de abrir/crear
+directorios o archivos, el child handle tras abrir y el file handle justo antes
+de `write_all`; parent y stage deben coincidir con el scope inicial, así que un
+cambio conjunto a otro scope también falla cerrado. Error, ausencia o
+mismatch producen `stage_io`. Si la comprobación falla después de crear el
+archivo puede quedar vacío, mientras la capability recuperable permite cleanup
+explícito y retry. El token de scope no se guarda en el journal. No se habilita
+cleanup automático de sibling huérfano sin capability; rename, integración a
+apply y publicación siguen pendientes.
 U8 añade captura por ruta acotada y privada para simulación y pruebas y, en
 `63e59d1`, preflight consumidor de la suma de
 configuración antes de abrir el root bajo lock y antes de clonar/inventariar
@@ -95,9 +108,9 @@ el stage ya desapareció se continúa; si persiste parcial, se conserva el
 journal y un siguiente intento puede reutilizar la identidad durable. Las
 pruebas de retry sueltan y readquieren el lock en el mismo proceso; no simulan
 kill/restart ni prueban crash durability. El recovery
-sigue incompleto. Fase 04 sigue en curso:
-lock, captura anclada y staging aún no están conectados a apply ni publican
-candidatos.
+sigue incompleto. Fase 04 sigue en curso: la guardia parcial de scope para
+escrituras de staging, el lock y la captura anclada aún no están conectados a
+apply ni publican candidatos.
 
 En `609936a`, las regresiones del CAS privado por ruta verifican que un match
 con configuración externa conserva los nombres, tipos y bytes del árbol y los
@@ -177,8 +190,9 @@ antes de enumerar y el scope de cada handle de directorio/archivo antes de
 descender o leer; errores, ausencia o mismatch producen `snapshot_io`. Captura
 anclada, `StageAnclado::fingerprint_raw`/recaptura y observer de recovery
 heredan la comprobación mediante los wrappers. Sigue siendo un slice parcial:
-el backend por ruta/bundle y las escrituras de staging no están cubiertos. Las
-pruebas son sintéticas, sin bind mount real ni mounts anidados; en Windows,
+el backend por ruta/bundle queda fuera, mientras las escrituras de staging
+tienen solo la guardia parcial descrita abajo. Las pruebas son sintéticas, sin
+bind mount real ni mounts anidados; en Windows,
 `VolumeSerialNumber` identifica volumen pero no instancia de montaje; TOCTOU
 externo sigue fuera del contrato. Los pasos de cleanup de los runners de
 recovery existentes ya invocan `StageAnclado::limpiar` y heredan el probe real;
@@ -198,6 +212,20 @@ mantiene el código estable `stage_io` y no cambia la API pública; el indicador
 aditivo es diagnóstico interno, no capability ni autorización de cleanup. No
 hay cleanup automático, y todavía falta un consumidor productivo del indicador.
 
+Los commits `3e8ec0a`/`22494c8` hacen que la recuperación de capability de
+`ErrorEscrituraStage` sea owned (`Result<StageAnclado, Self>`): `Ok` transfiere
+el stage y `Err` devuelve el error intacto. `75d223e` captura el scope inicial
+en la capability writable y lo propaga a descendientes; verifica parent antes
+de open/mkdir/create, el child después de abrir y el file handle antes de
+`write_all`. Ambos deben coincidir con el scope inicial, así que se rechaza
+también un cambio conjunto de parent y stage a otro scope. Un probe incierto
+falla con `stage_io`; una comprobación posterior a create puede dejar un archivo
+vacío, pero mantiene capability para cleanup explícito/retry. El token de scope
+no va al journal. Esto no cubre rename ni integra staging a apply/publicación;
+no hay caller productivo de los runners. Pruebas sintéticas: no demuestran bind
+mount real ni mounts anidados. En Windows, `VolumeSerialNumber` no identifica
+instancia de montaje; TOCTOU externo sigue fuera del contrato.
+
 `RootNewValidado` también necesita procedencia de admisión: un `Candidato`
 público o un comparador de representación no demuestra qué base, delta e
 invariantes se evaluaron ni que la propuesta fuera admitida. El root debe
@@ -215,10 +243,12 @@ La siguiente secuencia se divide en unidades pequeñas, en este orden:
 1. Completar y probar la frontera de scope, incluidos bind mount real y mounts
    anidados.
 2. Completar los consumidores aún fuera del camino anclado: backend por
-   ruta/bundle y escrituras de staging; añadir cobertura end-to-end de recovery
-   para los pasos que ya delegan cleanup en `StageAnclado::limpiar`, habilitar
-   un caller productivo de los runners, completar los demás caminos de cleanup
-   y añadir un consumidor productivo del indicador de sibling huérfano posible.
+   ruta/bundle, integración a apply de la guardia parcial de escritura y los
+   caminos restantes de rename/publicación; añadir cobertura end-to-end de
+   recovery para los pasos que ya delegan cleanup en `StageAnclado::limpiar`,
+   habilitar un caller productivo de los runners, completar los demás caminos
+   de cleanup y añadir un consumidor productivo del indicador de sibling
+   huérfano posible.
 3. Prueba de admisión sellada o revalidación con sus entradas.
 4. Validación de identidad y contenido del root `New`.
 5. Habilitar `Committed` solo después de esa validación.
@@ -1013,6 +1043,10 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | CI `38576523094` | Éxito para `bb06df309c633f25b15f3e3b3bfd74c24b06a076`; jobs `verify` Linux y `verify-windows` completados, con workspace, fmt, clippy y frontera pública aprobados. | Acredita el commit, no bind mount real, mounts anidados ni integración general de scope. U7/04 siguen parciales; progreso 4/9. |
 | 2026-10-14 | `a4583c2` | El inventario del root anclado comprueba scope parent/root antes de enumerar y cada handle de directorio/archivo antes de descender/leer; error, ausencia o mismatch producen `snapshot_io`. Captura anclada, `StageAnclado::fingerprint_raw`/recaptura y observer de recovery heredan por los wrappers. | Cobertura sintética, sin bind mount real ni mounts anidados; `VolumeSerialNumber` de Windows no identifica instancia de montaje. Backend por ruta/bundle, escrituras de staging y TOCTOU externo siguen pendientes/fuera de contrato. U7/04 siguen parciales; progreso 4/9. |
 | 2026-10-14 | CI `38582798497` | Éxito para `a4583c24414850b9627bcfdc919d31d0cf502b70`; jobs `verify` Linux y `verify-windows` completados. | Evidencia del commit, no de mounts reales/anidados, cobertura del backend por ruta/bundle o escrituras de staging. U7/04 siguen parciales; progreso 4/9. |
+| 2026-10-14 | `3e8ec0a` | Añade recuperación owned de la capability de `ErrorEscrituraStage` como `Result<StageAnclado, Self>`, para cleanup/retry de un stage parcial. |
+| 2026-10-14 | `22494c8` | Si la capability está ausente, `Err(Self)` devuelve intacto el error de escritura; conserva código, stage parcial y diagnóstico en vez de descartarlos. |
+| 2026-10-14 | `75d223e` | La capability writable captura scope inicial y lo propaga a descendientes. Valida parent antes de open/mkdir/create, child handle después de abrir y file handle antes de `write_all`; parent y stage deben coincidir con el scope inicial, por lo que también rechaza un cambio conjunto. Error/ausencia/mismatch producen `stage_io`; puede quedar un archivo vacío, y la capability se recupera para cleanup/retry. Token no persiste en journal. Pruebas sintéticas cubren rechazo conjunto y cleanup/retry, no bind mount real ni mounts anidados. Sin rename/apply/publicación; sibling huérfano ambiguo sigue sin capability ni cleanup automático. |
+| 2026-10-14 | CI `38591028005` | Éxito para `75d223e`; jobs Linux y Windows completados. | Acredita el snapshot, no bind mount real, mounts anidados, `VolumeSerialNumber` como instancia de montaje, backend por ruta/bundle ni TOCTOU. U7/04 siguen parciales; progreso 4/9. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
