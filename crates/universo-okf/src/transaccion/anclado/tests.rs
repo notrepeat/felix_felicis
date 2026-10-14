@@ -355,6 +355,35 @@ fn scope_filesystem_post_mismatch_o_error_deja_huerfano_vacio_y_sin_capacidad() 
 }
 
 #[test]
+fn scope_post_rechaza_parent_y_stage_que_cambian_juntos() {
+    let temp = tempdir().unwrap();
+    let ruta = temp.path().join("bundle");
+    std::fs::create_dir(&ruta).unwrap();
+    let ancla = DirectorioAnclado::desde_ubicacion(&UbicacionRaiz::nueva(&ruta).unwrap()).unwrap();
+    let mut llamadas = 0;
+
+    let error = match ancla.crear_stage_sibling_con_scope(
+        "both-changed",
+        abrir_directorio_hijo_stage,
+        |_| {
+            llamadas += 1;
+            Ok(ScopeFilesystem(if llamadas <= 2 { 31 } else { 32 }))
+        },
+    ) {
+        Ok(_) => panic!("el cambio conjunto de scope debe rechazarse"),
+        Err(error) => error,
+    };
+
+    assert_eq!(llamadas, 4);
+    assert_eq!(error.codigo(), ErrorDirectorioAnclado::Io);
+    assert!(error.scope_no_verificado());
+    assert!(error.sibling_huerfano_posible());
+    let ruta_stage = temp.path().join(".bundle.felix.stage.both-changed");
+    assert!(ruta_stage.is_dir());
+    assert_eq!(std::fs::read_dir(ruta_stage).unwrap().count(), 0);
+}
+
+#[test]
 fn scope_filesystem_igual_permita_crear_y_escribir_stage() {
     let temp = tempdir().unwrap();
     let ruta = temp.path().join("bundle");
@@ -369,7 +398,10 @@ fn scope_filesystem_igual_permita_crear_y_escribir_stage() {
         .unwrap();
 
     assert_eq!(llamadas, 4);
-    let mut archivo = stage.crear_nuevo("write.txt").unwrap();
+    let mut probe = |_: &std::fs::File| Ok(ScopeFilesystem(23));
+    let mut archivo = stage
+        .crear_nuevo_con_probe("write.txt", &mut probe)
+        .unwrap();
     archivo.write_all(b"scope verified").unwrap();
     assert_eq!(
         std::fs::read(temp.path().join(componente).join("write.txt")).unwrap(),

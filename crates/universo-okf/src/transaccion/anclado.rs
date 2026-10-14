@@ -159,6 +159,21 @@ impl IdentidadDirectorio {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct ScopeFilesystem(pub(super) u64);
 
+pub(super) fn validar_scope_con<S>(
+    handle: &File,
+    esperado: ScopeFilesystem,
+    scope: &mut S,
+) -> Result<(), ErrorDirectorioAnclado>
+where
+    S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+{
+    if scope(handle).map_err(|_| ErrorDirectorioAnclado::Io)? == esperado {
+        Ok(())
+    } else {
+        Err(ErrorDirectorioAnclado::Io)
+    }
+}
+
 #[cfg(any(windows, test))]
 fn file_id_hex(bytes: &[u8; 16]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -182,6 +197,7 @@ pub(crate) struct DirectorioAnclado {
     identidad_raiz: Option<IdentidadDirectorio>,
     permite_escritura: bool,
     puede_crear_stage_sibling: bool,
+    scope_validado: Option<ScopeFilesystem>,
 }
 
 /// Entrada de lectura clasificada desde el handle devuelto por fs_at.
@@ -327,6 +343,7 @@ impl DirectorioAnclado {
             identidad_raiz,
             permite_escritura: false,
             puede_crear_stage_sibling: true,
+            scope_validado: None,
         })
     }
 
@@ -355,6 +372,7 @@ impl DirectorioAnclado {
             identidad_raiz: None,
             permite_escritura: false,
             puede_crear_stage_sibling: false,
+            scope_validado: None,
         })
     }
 
@@ -429,6 +447,7 @@ impl DirectorioAnclado {
             identidad_raiz: Some(identidad_stage),
             permite_escritura: false,
             puede_crear_stage_sibling: false,
+            scope_validado: None,
         };
         Ok(super::stage::StageAnclado::reabierto(
             directorio,
@@ -452,6 +471,7 @@ impl DirectorioAnclado {
             identidad_raiz: self.identidad_raiz,
             permite_escritura: self.permite_escritura,
             puede_crear_stage_sibling: self.puede_crear_stage_sibling,
+            scope_validado: self.scope_validado,
         })
     }
 
@@ -467,6 +487,7 @@ impl DirectorioAnclado {
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: false,
             puede_crear_stage_sibling: self.puede_crear_stage_sibling,
+            scope_validado: None,
         })
     }
 
@@ -495,7 +516,7 @@ impl DirectorioAnclado {
         self.crear_stage_sibling_con_scope(stage_id, abrir, scope_filesystem)
     }
 
-    fn crear_stage_sibling_con_scope<F, S>(
+    pub(super) fn crear_stage_sibling_con_scope<F, S>(
         &self,
         stage_id: &str,
         abrir: F,
@@ -582,6 +603,7 @@ impl DirectorioAnclado {
         if scope_raiz != scope_parent {
             return Err(ErrorCrearStageSibling::error_scope_no_verificado());
         }
+        let scope_inicial = scope_parent;
 
         // Clona antes de mkdir para que no haya ninguna operación fallible de
         // ownership del parent después de crear el sibling.
@@ -599,11 +621,11 @@ impl DirectorioAnclado {
         // parent and fail closed unless its identity matches the created fd.
         let directorio = abrir(&self.parent, &componente, &creado)
             .map_err(ErrorCrearStageSibling::con_sibling_huerfano_posible)?;
-        let scope_parent = scope(&self.parent)
+        let scope_parent_post = scope(&self.parent)
             .map_err(|_| ErrorCrearStageSibling::error_scope_no_verificado_huerfano())?;
         let scope_stage = scope(&directorio)
             .map_err(|_| ErrorCrearStageSibling::error_scope_no_verificado_huerfano())?;
-        if scope_parent != scope_stage {
+        if scope_parent_post != scope_inicial || scope_stage != scope_inicial {
             return Err(ErrorCrearStageSibling::error_scope_no_verificado_huerfano());
         }
         let identidad_raiz = metadata_directorio(&directorio)
@@ -621,6 +643,7 @@ impl DirectorioAnclado {
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: true,
             puede_crear_stage_sibling: false,
+            scope_validado: Some(scope_inicial),
         };
         Ok((stage, componente))
     }

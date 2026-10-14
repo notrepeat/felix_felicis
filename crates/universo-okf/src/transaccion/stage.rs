@@ -14,11 +14,9 @@ use universo_core::{Anexo, BundlePath, Candidato, Estructura};
 
 use crate::serializar::DocumentoCandidato;
 
-#[cfg(test)]
-use super::anclado::ScopeFilesystem;
 use super::anclado::{
     DirectorioAnclado, ErrorCrearStageSibling, ErrorDirectorioAnclado, ErrorLimpiezaAnclado,
-    IdentidadDirectorio,
+    IdentidadDirectorio, ScopeFilesystem,
 };
 use super::captura::{Snapshot, materializar_desde_entradas};
 use super::inventario::{
@@ -664,10 +662,30 @@ fn crear_staging_anclado_con<G>(
     raiz: &DirectorioAnclado,
     snapshot: &Snapshot,
     plan: &PlanStaging,
-    mut siguiente_id: G,
+    siguiente_id: G,
 ) -> Result<StageAnclado, ErrorEscrituraStage>
 where
     G: FnMut() -> Result<String, CodigoEscrituraStage>,
+{
+    crear_staging_anclado_con_probe(
+        raiz,
+        snapshot,
+        plan,
+        siguiente_id,
+        &mut super::anclado::scope_filesystem,
+    )
+}
+
+fn crear_staging_anclado_con_probe<G, S>(
+    raiz: &DirectorioAnclado,
+    snapshot: &Snapshot,
+    plan: &PlanStaging,
+    mut siguiente_id: G,
+    scope: &mut S,
+) -> Result<StageAnclado, ErrorEscrituraStage>
+where
+    G: FnMut() -> Result<String, CodigoEscrituraStage>,
+    S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
 {
     validar_plan_para_escritura(plan).map_err(ErrorEscrituraStage::nuevo)?;
     if raiz.identidad_raiz().is_none() || snapshot.identidad_root() != raiz.identidad_raiz() {
@@ -676,8 +694,8 @@ where
         ));
     }
 
-    let stage = crear_stage_anclado_unico(raiz, &mut siguiente_id)?;
-    if let Err(codigo) = escribir_plan_en_stage_anclado(&stage, plan) {
+    let stage = crear_stage_anclado_unico_con_probe(raiz, &mut siguiente_id, scope)?;
+    if let Err(codigo) = escribir_plan_en_stage_anclado_con_probe(&stage, plan, scope) {
         return Err(ErrorEscrituraStage {
             codigo,
             stage_parcial: None,
@@ -696,9 +714,25 @@ fn crear_stage_anclado_unico<G>(
 where
     G: FnMut() -> Result<String, CodigoEscrituraStage>,
 {
+    crear_stage_anclado_unico_con_probe(raiz, siguiente_id, &mut super::anclado::scope_filesystem)
+}
+
+fn crear_stage_anclado_unico_con_probe<G, S>(
+    raiz: &DirectorioAnclado,
+    siguiente_id: &mut G,
+    scope: &mut S,
+) -> Result<StageAnclado, ErrorEscrituraStage>
+where
+    G: FnMut() -> Result<String, CodigoEscrituraStage>,
+    S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+{
     for _ in 0..INTENTOS_STAGE {
         let stage_id = siguiente_id().map_err(ErrorEscrituraStage::nuevo)?;
-        match raiz.crear_stage_sibling(&stage_id) {
+        match raiz.crear_stage_sibling_con_scope(
+            &stage_id,
+            super::anclado::abrir_directorio_hijo_stage,
+            &mut *scope,
+        ) {
             Ok((directorio, componente)) => {
                 let stage = StageAnclado {
                     identidad: directorio.identidad_raiz(),
@@ -731,6 +765,17 @@ fn escribir_plan_en_stage_anclado(
     stage: &StageAnclado,
     plan: &PlanStaging,
 ) -> Result<(), CodigoEscrituraStage> {
+    escribir_plan_en_stage_anclado_con_probe(stage, plan, &mut super::anclado::scope_filesystem)
+}
+
+fn escribir_plan_en_stage_anclado_con_probe<S>(
+    stage: &StageAnclado,
+    plan: &PlanStaging,
+    scope: &mut S,
+) -> Result<(), CodigoEscrituraStage>
+where
+    S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+{
     let mut directorios = plan.directorios.iter().collect::<Vec<_>>();
     directorios.sort_by(|a, b| {
         a.matches('/')
@@ -743,9 +788,9 @@ fn escribir_plan_en_stage_anclado(
         let mut componentes = ruta.split('/').peekable();
         while let Some(componente) = componentes.next() {
             actual = if componentes.peek().is_some() {
-                actual.abrir_directorio_stage(componente)
+                actual.abrir_directorio_stage_con_probe(componente, scope)
             } else {
-                actual.crear_directorio(componente)
+                actual.crear_directorio_con_probe(componente, scope)
             }
             .map_err(mapear_error_directorio_stage)?;
         }
@@ -780,12 +825,15 @@ fn escribir_plan_en_stage_anclado(
         if let Some(padres) = padres {
             for componente in padres.split('/') {
                 directorio = directorio
-                    .abrir_directorio_stage(componente)
+                    .abrir_directorio_stage_con_probe(componente, scope)
                     .map_err(mapear_error_directorio_stage)?;
             }
         }
         let mut archivo = directorio
-            .crear_nuevo(nombre)
+            .crear_nuevo_con_probe(nombre, scope)
+            .map_err(mapear_error_directorio_stage)?;
+        directorio
+            .validar_scope_handle_con(&archivo, scope)
             .map_err(mapear_error_directorio_stage)?;
         archivo
             .write_all(bytes)
@@ -1791,6 +1839,115 @@ ignorados = ["ignored.md"]
             opciones.unlink_at(parent, Path::new(componente))
         };
         resultado.map_err(|_| ErrorDirectorioAnclado::Io)
+    }
+
+    #[test]
+    fn stage_writer_exige_scope_parent_antes_de_abrir_o_crear() {
+        let (temp, ancla, _, _, _) = snapshot_anclado_con_auxiliares();
+        let stage = crear_stage_anclado_unico_con_probe(
+            &ancla,
+            &mut || Ok("pre-parent".to_owned()),
+            &mut |_| Ok(ScopeFilesystem(1)),
+        )
+        .unwrap();
+        let ruta_stage = temp.path().join(stage.componente());
+        fs::create_dir(ruta_stage.join("existing")).unwrap();
+        let directorio = stage.directorio.clonar().unwrap();
+
+        for operacion in ["open", "mkdir", "create"] {
+            let mut llamadas = 0;
+            let mut scope = |_: &File| {
+                llamadas += 1;
+                Ok(ScopeFilesystem(2))
+            };
+            let resultado = match operacion {
+                "open" => directorio
+                    .abrir_directorio_stage_con_probe("existing", &mut scope)
+                    .map(|_| ()),
+                "mkdir" => directorio
+                    .crear_directorio_con_probe("new-directory", &mut scope)
+                    .map(|_| ()),
+                _ => directorio
+                    .crear_nuevo_con_probe("new-file", &mut scope)
+                    .map(|_| ()),
+            };
+            assert_eq!(resultado.unwrap_err(), ErrorDirectorioAnclado::Io);
+            assert_eq!(llamadas, 1, "{operacion} debe parar en el probe del parent");
+        }
+
+        assert!(ruta_stage.join("existing").is_dir());
+        assert!(!ruta_stage.join("new-directory").exists());
+        assert!(!ruta_stage.join("new-file").exists());
+        stage
+            .limpiar_con_scope(|_| Ok(ScopeFilesystem(1)), eliminar_at_test)
+            .unwrap();
+    }
+
+    #[test]
+    fn stage_writer_falla_cerrado_y_conserva_capability_para_retry() {
+        let plan = plan(
+            &[directorio("nested"), archivo("nested/data.bin", b"payload")],
+            &[],
+            &[],
+        )
+        .unwrap();
+        for (fallo_en, error_sonda) in [(6, false), (10, true), (11, false)] {
+            let (temp, ancla, snapshot, _, _) = snapshot_anclado_con_auxiliares();
+            let mut llamadas = 0;
+            let mut scope = |_: &File| {
+                llamadas += 1;
+                if llamadas == fallo_en && error_sonda {
+                    Err(ErrorDirectorioAnclado::Io)
+                } else {
+                    Ok(ScopeFilesystem(if llamadas == fallo_en { 2 } else { 1 }))
+                }
+            };
+            let error = crear_staging_anclado_con_probe(
+                &ancla,
+                &snapshot,
+                &plan,
+                || Ok(format!("writer-failure-{fallo_en}")),
+                &mut scope,
+            )
+            .unwrap_err();
+
+            assert_eq!(error.codigo(), "stage_io");
+            assert!(!error.sibling_huerfano_posible());
+            assert!(error.stage_anclado_parcial().is_some());
+            let stage = error.recuperar_stage_anclado().unwrap();
+            let ruta_stage = temp.path().join(stage.componente());
+            let archivo = ruta_stage.join("nested/data.bin");
+            assert!(ruta_stage.join("nested").is_dir());
+            if fallo_en == 6 {
+                assert!(!archivo.exists());
+            } else {
+                assert_eq!(fs::metadata(&archivo).unwrap().len(), 0);
+            }
+
+            let mut eliminaciones = 0;
+            let error_limpieza = stage
+                .limpiar_con_scope(
+                    |_| Ok(ScopeFilesystem(1)),
+                    |parent, componente, es_directorio| {
+                        eliminaciones += 1;
+                        eliminar_at_test(parent, componente, es_directorio)?;
+                        if eliminaciones == 1 {
+                            Err(ErrorDirectorioAnclado::Io)
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(error_limpieza.codigo(), "stage_cleanup_io");
+            assert!(!archivo.exists());
+            assert!(ruta_stage.is_dir());
+            error_limpieza
+                .recuperar_stage()
+                .limpiar_con_scope(|_| Ok(ScopeFilesystem(1)), eliminar_at_test)
+                .unwrap();
+            assert!(!ruta_stage.exists());
+        }
     }
 
     #[test]

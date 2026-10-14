@@ -7,7 +7,8 @@ use super::abrir::abrir_entrada_relativa;
 use super::{
     DirectorioAnclado, EntradaLecturaAnclada, ErrorDirectorioAnclado, ErrorLecturaNombres,
     TipoEntradaAnclada, clasificar_entrada_sin_seguir, clonar_handle, mapear_error_creacion,
-    mapear_io, metadata_directorio, metadata_es_reparse, validar_componente,
+    mapear_io, metadata_directorio, metadata_es_reparse, scope_filesystem, validar_componente,
+    validar_scope_con,
 };
 use crate::transaccion::raiz::UbicacionRaiz;
 
@@ -58,6 +59,7 @@ impl DirectorioAnclado {
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: false,
             puede_crear_stage_sibling: false,
+            scope_validado: None,
         }))
     }
 
@@ -113,6 +115,7 @@ impl DirectorioAnclado {
                     identidad_raiz: Some(identidad_raiz),
                     permite_escritura: false,
                     puede_crear_stage_sibling: false,
+                    scope_validado: None,
                 }))
             }
             TipoEntradaAnclada::Archivo => {
@@ -144,6 +147,7 @@ impl DirectorioAnclado {
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: false,
             puede_crear_stage_sibling: false,
+            scope_validado: None,
         })
     }
 
@@ -151,6 +155,17 @@ impl DirectorioAnclado {
         &self,
         componente: &str,
     ) -> Result<DirectorioAnclado, ErrorDirectorioAnclado> {
+        self.abrir_directorio_stage_con_probe(componente, &mut scope_filesystem)
+    }
+
+    pub(in crate::transaccion) fn abrir_directorio_stage_con_probe<S>(
+        &self,
+        componente: &str,
+        scope: &mut S,
+    ) -> Result<DirectorioAnclado, ErrorDirectorioAnclado>
+    where
+        S: FnMut(&File) -> Result<super::ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
         if !self.permite_escritura {
             return Err(ErrorDirectorioAnclado::Io);
         }
@@ -159,7 +174,10 @@ impl DirectorioAnclado {
             .raiz
             .as_ref()
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
+        let scope_validado = self.scope_validado.ok_or(ErrorDirectorioAnclado::Io)?;
+        validar_scope_con(raiz, scope_validado, scope)?;
         let directorio = super::abrir_directorio_hijo_stage_existente(raiz, componente)?;
+        validar_scope_con(&directorio, scope_validado, scope)?;
         let identidad_parent = metadata_directorio(raiz)?;
         let identidad_raiz = metadata_directorio(&directorio)?;
         Ok(DirectorioAnclado {
@@ -170,6 +188,7 @@ impl DirectorioAnclado {
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: true,
             puede_crear_stage_sibling: false,
+            scope_validado: Some(scope_validado),
         })
     }
 
@@ -177,6 +196,17 @@ impl DirectorioAnclado {
         &self,
         componente: &str,
     ) -> Result<DirectorioAnclado, ErrorDirectorioAnclado> {
+        self.crear_directorio_con_probe(componente, &mut scope_filesystem)
+    }
+
+    pub(in crate::transaccion) fn crear_directorio_con_probe<S>(
+        &self,
+        componente: &str,
+        scope: &mut S,
+    ) -> Result<DirectorioAnclado, ErrorDirectorioAnclado>
+    where
+        S: FnMut(&File) -> Result<super::ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
         if !self.permite_escritura {
             return Err(ErrorDirectorioAnclado::Io);
         }
@@ -185,12 +215,18 @@ impl DirectorioAnclado {
             .raiz
             .as_ref()
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
+        let scope_validado = self.scope_validado.ok_or(ErrorDirectorioAnclado::Io)?;
+        validar_scope_con(raiz, scope_validado, scope)?;
         let mut opciones = OpenOptionsAt::default();
         opciones.create_new(true);
         let creado = opciones
             .mkdir_at(raiz, componente)
             .map_err(mapear_error_creacion)?;
+        // `mkdir_at`'s Windows handle lacks FILE_READ_ATTRIBUTES. Reopen it
+        // relative to the held parent, bind that handle to the created object
+        // by identity, then probe the scope on the reopened handle.
         let directorio = super::abrir_directorio_hijo_stage(raiz, componente, &creado)?;
+        validar_scope_con(&directorio, scope_validado, scope)?;
         let identidad_parent = metadata_directorio(raiz)?;
         let identidad_raiz = metadata_directorio(&directorio)?;
         Ok(DirectorioAnclado {
@@ -201,6 +237,7 @@ impl DirectorioAnclado {
             identidad_raiz: Some(identidad_raiz),
             permite_escritura: true,
             puede_crear_stage_sibling: false,
+            scope_validado: Some(scope_validado),
         })
     }
 
@@ -222,6 +259,17 @@ impl DirectorioAnclado {
     }
 
     pub(crate) fn crear_nuevo(&self, componente: &str) -> Result<File, ErrorDirectorioAnclado> {
+        self.crear_nuevo_con_probe(componente, &mut scope_filesystem)
+    }
+
+    pub(in crate::transaccion) fn crear_nuevo_con_probe<S>(
+        &self,
+        componente: &str,
+        scope: &mut S,
+    ) -> Result<File, ErrorDirectorioAnclado>
+    where
+        S: FnMut(&File) -> Result<super::ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
         if !self.permite_escritura {
             return Err(ErrorDirectorioAnclado::Io);
         }
@@ -230,6 +278,8 @@ impl DirectorioAnclado {
             .raiz
             .as_ref()
             .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
+        let scope_validado = self.scope_validado.ok_or(ErrorDirectorioAnclado::Io)?;
+        validar_scope_con(raiz, scope_validado, scope)?;
         let mut opciones = OpenOptionsAt::default();
         opciones
             .read(true)
@@ -238,7 +288,20 @@ impl DirectorioAnclado {
             .follow(false);
         let archivo = opciones.open_at(raiz, componente).map_err(mapear_io)?;
         metadata_archivo_regular(&archivo)?;
+        validar_scope_con(&archivo, scope_validado, scope)?;
         Ok(archivo)
+    }
+
+    pub(in crate::transaccion) fn validar_scope_handle_con<S>(
+        &self,
+        handle: &File,
+        scope: &mut S,
+    ) -> Result<(), ErrorDirectorioAnclado>
+    where
+        S: FnMut(&File) -> Result<super::ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        let scope_validado = self.scope_validado.ok_or(ErrorDirectorioAnclado::Io)?;
+        validar_scope_con(handle, scope_validado, scope)
     }
 }
 
