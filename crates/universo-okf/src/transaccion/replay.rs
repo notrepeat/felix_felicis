@@ -4,6 +4,9 @@
 //! demuestra el estado instalado del filesystem ni enlaza la propuesta a un
 //! journal.
 
+#[allow(dead_code)]
+pub(crate) mod new_esperado;
+
 use std::fmt;
 
 use universo_core::{Delta, EtapaErrorPropuesta, ResultadoPropuesta, proponer};

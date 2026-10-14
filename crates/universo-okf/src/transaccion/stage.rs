@@ -1085,6 +1085,14 @@ fn inventario_objetivo(plan: &PlanStaging) -> Result<Vec<EntradaSnapshot>, Codig
     Ok(entradas)
 }
 
+/// Devuelve el inventario raw completo que escribiría el plan para el helper
+/// puro de replay. No crea ni observa un stage.
+pub(crate) fn inventario_objetivo_para_replay(
+    plan: &PlanStaging,
+) -> Result<Vec<EntradaSnapshot>, ErrorPlanStaging> {
+    inventario_objetivo(plan).map_err(|_| ErrorPlanStaging::SnapshotInconsistente)
+}
+
 fn inventarios_iguales(actual: &[EntradaSnapshot], esperado: &[EntradaSnapshot]) -> bool {
     actual.len() == esperado.len()
         && actual.iter().zip(esperado).all(|(actual, esperado)| {
