@@ -446,12 +446,12 @@ pub(crate) fn inventariar_root_anclado_con_limites(
     raiz: super::anclado::DirectorioAnclado,
     limites: LimitesInventario,
 ) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot> {
-    caminar_inventario_con_limites(
-        &mut BackendAnclado {
-            leer: leer_handle_limitado,
-        },
+    inventariar_root_anclado_con_probe(
         raiz,
         limites,
+        leer_handle_limitado,
+        super::anclado::scope_filesystem,
+        || {},
     )
 }
 
@@ -463,22 +463,63 @@ where
     F: FnMut(&mut File) -> Result<Vec<u8>, ErrorSnapshot>,
 {
     let mut leer = leer;
-    caminar_inventario_con_limites(
-        &mut BackendAnclado {
-            leer: |archivo: &mut File, _maximo_lectura| leer(archivo),
-        },
+    inventariar_root_anclado_con_probe(
         raiz,
         LimitesInventario::CONTRATO,
+        |archivo: &mut File, _maximo_lectura| leer(archivo),
+        super::anclado::scope_filesystem,
+        || {},
     )
 }
 
-struct BackendAnclado<F> {
+fn inventariar_root_anclado_con_probe<F, S, N>(
+    raiz: super::anclado::DirectorioAnclado,
+    limites: LimitesInventario,
     leer: F,
-}
-
-impl<F> BackendInventario for BackendAnclado<F>
+    mut sonda_scope: S,
+    antes_de_enumerar: N,
+) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>
 where
     F: FnMut(&mut File, usize) -> Result<Vec<u8>, ErrorSnapshot>,
+    S: FnMut(
+        &File,
+    )
+        -> Result<super::anclado::ScopeFilesystem, super::anclado::ErrorDirectorioAnclado>,
+    N: FnMut(),
+{
+    // Scope is checked by opened handle. This remains partial: Windows probes
+    // volume, not mount instance; external changes are TOCTOU, and real bind
+    // mounts are not covered by a test here.
+    let scope_raiz = raiz
+        .scope_parent_y_raiz_con(&mut sonda_scope)
+        .map_err(mapear_error_anclado)?;
+    caminar_inventario_con_limites(
+        &mut BackendAnclado {
+            leer,
+            sonda_scope,
+            scope_raiz,
+            antes_de_enumerar,
+        },
+        raiz,
+        limites,
+    )
+}
+
+struct BackendAnclado<F, S, N> {
+    leer: F,
+    sonda_scope: S,
+    scope_raiz: super::anclado::ScopeFilesystem,
+    antes_de_enumerar: N,
+}
+
+impl<F, S, N> BackendInventario for BackendAnclado<F, S, N>
+where
+    F: FnMut(&mut File, usize) -> Result<Vec<u8>, ErrorSnapshot>,
+    S: FnMut(
+        &File,
+    )
+        -> Result<super::anclado::ScopeFilesystem, super::anclado::ErrorDirectorioAnclado>,
+    N: FnMut(),
 {
     type Directorio = super::anclado::DirectorioAnclado;
     type Archivo = File;
@@ -492,6 +533,7 @@ where
         V: FnMut(&mut Self, &mut Self::Directorio, std::ffi::OsString) -> Result<(), ErrorSnapshot>,
     {
         let mut enumeracion = directorio.clonar().map_err(mapear_error_anclado)?;
+        (self.antes_de_enumerar)();
         let resultado = enumeracion.read_dir_con(|nombre| visitar(self, directorio, nombre));
         match resultado {
             Ok(()) => Ok(()),
@@ -512,9 +554,19 @@ where
             .map_err(mapear_error_anclado)?
         {
             super::anclado::EntradaLecturaAnclada::Directorio(directorio) => {
+                let scope = directorio
+                    .scope_parent_y_raiz_con(&mut self.sonda_scope)
+                    .map_err(mapear_error_anclado)?;
+                if scope != self.scope_raiz {
+                    return Err(ErrorSnapshot::Io);
+                }
                 Ok(EntradaAbierta::Directorio(directorio))
             }
             super::anclado::EntradaLecturaAnclada::Archivo(archivo) => {
+                let scope = (self.sonda_scope)(&archivo).map_err(|_| ErrorSnapshot::Io)?;
+                if scope != self.scope_raiz {
+                    return Err(ErrorSnapshot::Io);
+                }
                 Ok(EntradaAbierta::Archivo(archivo))
             }
         }
@@ -723,6 +775,159 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["0.empty", "a", "a/MiXeD-é.bin", "vacio"]
         );
+    }
+
+    #[test]
+    fn scope_uniforme_preserva_inventario_y_orden_anclado() {
+        let root = tempfile::tempdir().unwrap();
+        crear_arbol_estable(root.path());
+        let mut sondas = 0;
+        let mut enumeraciones = 0;
+
+        let entries = inventariar_root_anclado_con_probe(
+            anclar(root.path()).abrir_raiz().unwrap(),
+            LimitesInventario::CONTRATO,
+            |archivo, _| {
+                let mut bytes = Vec::new();
+                archivo
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| ErrorSnapshot::Io)?;
+                Ok(bytes)
+            },
+            |_| {
+                sondas += 1;
+                Ok(crate::transaccion::anclado::ScopeFilesystem(17))
+            },
+            || enumeraciones += 1,
+        )
+        .unwrap();
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(EntradaSnapshot::ruta)
+                .collect::<Vec<_>>(),
+            ["0.empty", "a", "a/MiXeD-é.bin", "vacio"]
+        );
+        assert_eq!(entries[0].bytes(), Some([].as_slice()));
+        assert_eq!(entries[2].bytes(), Some([0, 255, 1].as_slice()));
+        assert_eq!(sondas, 8);
+        assert_eq!(enumeraciones, 3);
+    }
+
+    #[test]
+    fn scope_root_parent_error_o_mismatch_falla_antes_de_enumerar() {
+        for falla in 1..=3 {
+            let root = tempfile::tempdir().unwrap();
+            fs::write(root.path().join("child.txt"), b"contents").unwrap();
+            let sondas = Cell::new(0);
+            let lecturas = Cell::new(0);
+            let enumeraciones = Cell::new(0);
+
+            let resultado = inventariar_root_anclado_con_probe(
+                anclar(root.path()).abrir_raiz().unwrap(),
+                LimitesInventario::CONTRATO,
+                |_, _| {
+                    lecturas.set(lecturas.get() + 1);
+                    Ok(Vec::new())
+                },
+                |_| {
+                    let llamada = sondas.get() + 1;
+                    sondas.set(llamada);
+                    match (falla, llamada) {
+                        (1, 1) | (2, 2) => {
+                            Err(crate::transaccion::anclado::ErrorDirectorioAnclado::Io)
+                        }
+                        (3, 2) => Ok(crate::transaccion::anclado::ScopeFilesystem(18)),
+                        (_, 1) | (_, 2) => Ok(crate::transaccion::anclado::ScopeFilesystem(17)),
+                        _ => panic!("no debe sondear hijos si falla el scope root-parent"),
+                    }
+                },
+                || enumeraciones.set(enumeraciones.get() + 1),
+            );
+
+            assert!(matches!(resultado, Err(ErrorSnapshot::Io)));
+            assert_eq!(sondas.get(), if falla == 1 { 1 } else { 2 });
+            assert_eq!(enumeraciones.get(), 0);
+            assert_eq!(lecturas.get(), 0);
+        }
+    }
+
+    #[test]
+    fn scope_hijo_archivo_error_o_mismatch_falla_antes_de_leer() {
+        for falla in 1..=2 {
+            let root = tempfile::tempdir().unwrap();
+            fs::write(root.path().join("child.txt"), b"contents").unwrap();
+            let sondas = Cell::new(0);
+            let lecturas = Cell::new(0);
+            let enumeraciones = Cell::new(0);
+
+            let resultado = inventariar_root_anclado_con_probe(
+                anclar(root.path()).abrir_raiz().unwrap(),
+                LimitesInventario::CONTRATO,
+                |_, _| {
+                    lecturas.set(lecturas.get() + 1);
+                    Ok(Vec::new())
+                },
+                |_| {
+                    let llamada = sondas.get() + 1;
+                    sondas.set(llamada);
+                    match llamada {
+                        1 | 2 => Ok(crate::transaccion::anclado::ScopeFilesystem(17)),
+                        3 if falla == 1 => {
+                            Err(crate::transaccion::anclado::ErrorDirectorioAnclado::Io)
+                        }
+                        3 => Ok(crate::transaccion::anclado::ScopeFilesystem(18)),
+                        _ => panic!("no debe sondear después de fallar el scope del archivo"),
+                    }
+                },
+                || enumeraciones.set(enumeraciones.get() + 1),
+            );
+
+            assert!(matches!(resultado, Err(ErrorSnapshot::Io)));
+            assert_eq!(sondas.get(), 3);
+            assert_eq!(enumeraciones.get(), 1);
+            assert_eq!(lecturas.get(), 0);
+        }
+    }
+
+    #[test]
+    fn scope_hijo_directorio_error_o_mismatch_falla_antes_de_descender() {
+        for falla in 1..=2 {
+            let root = tempfile::tempdir().unwrap();
+            fs::create_dir(root.path().join("child")).unwrap();
+            fs::write(root.path().join("child/file.txt"), b"contents").unwrap();
+            let sondas = Cell::new(0);
+            let lecturas = Cell::new(0);
+            let enumeraciones = Cell::new(0);
+
+            let resultado = inventariar_root_anclado_con_probe(
+                anclar(root.path()).abrir_raiz().unwrap(),
+                LimitesInventario::CONTRATO,
+                |_, _| {
+                    lecturas.set(lecturas.get() + 1);
+                    Ok(Vec::new())
+                },
+                |_| {
+                    let llamada = sondas.get() + 1;
+                    sondas.set(llamada);
+                    match llamada {
+                        1..=3 => Ok(crate::transaccion::anclado::ScopeFilesystem(17)),
+                        4 if falla == 1 => {
+                            Err(crate::transaccion::anclado::ErrorDirectorioAnclado::Io)
+                        }
+                        4 => Ok(crate::transaccion::anclado::ScopeFilesystem(18)),
+                        _ => panic!("no debe descender después de fallar el scope del directorio"),
+                    }
+                },
+                || enumeraciones.set(enumeraciones.get() + 1),
+            );
+
+            assert!(matches!(resultado, Err(ErrorSnapshot::Io)));
+            assert_eq!(sondas.get(), 4);
+            assert_eq!(enumeraciones.get(), 1);
+            assert_eq!(lecturas.get(), 0);
+        }
     }
 
     #[test]

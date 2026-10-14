@@ -153,6 +153,9 @@ impl IdentidadDirectorio {
     }
 }
 
+/// Scope probe token: Linux mount ID, Windows volume serial (not mount
+/// instance). External races remain TOCTOU, and real bind-mount coverage is
+/// still pending; this is not a complete filesystem-boundary proof.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct ScopeFilesystem(pub(super) u64);
 
@@ -361,6 +364,25 @@ impl DirectorioAnclado {
 
     pub(crate) fn identidad_raiz(&self) -> Option<IdentidadDirectorio> {
         self.identidad_raiz
+    }
+
+    pub(super) fn scope_parent_y_raiz_con<S>(
+        &self,
+        sonda_scope: &mut S,
+    ) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>
+    where
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        let raiz = self
+            .raiz
+            .as_ref()
+            .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
+        let scope_parent = sonda_scope(&self.parent).map_err(|_| ErrorDirectorioAnclado::Io)?;
+        let scope_raiz = sonda_scope(raiz).map_err(|_| ErrorDirectorioAnclado::Io)?;
+        if scope_parent != scope_raiz {
+            return Err(ErrorDirectorioAnclado::Io);
+        }
+        Ok(scope_raiz)
     }
 
     /// Reopens the journal-derived stage name through the write-capable parent
@@ -885,7 +907,7 @@ fn metadata_directorio_validada(
 }
 
 #[cfg(target_os = "linux")]
-fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
+pub(super) fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
     use std::os::fd::AsRawFd;
 
     handle.metadata().map_err(mapear_io)?;
@@ -912,14 +934,14 @@ fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnc
 }
 
 #[cfg(windows)]
-fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
+pub(super) fn scope_filesystem(handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
     handle.metadata().map_err(mapear_io)?;
     let identidad = identidad_windows(handle).map_err(mapear_io)?;
     Ok(ScopeFilesystem(identidad.volumen))
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-fn scope_filesystem(_handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
+pub(super) fn scope_filesystem(_handle: &File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado> {
     Err(ErrorDirectorioAnclado::Io)
 }
 
