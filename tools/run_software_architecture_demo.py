@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from time import perf_counter_ns
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
@@ -67,7 +68,12 @@ PRIVATE_FIXTURE_MARKERS = (
     '"domain"',
     '"port"',
     '"adapter"',
+    "domain",
+    "port",
+    "adapter",
+    "depends",
     '"dependency"',
+    "dependency",
     "type: domain",
     "type: port",
     "type: adapter",
@@ -398,37 +404,42 @@ def strict_json_loads(raw: Union[bytes, str]) -> Any:
     return json.loads(raw, object_pairs_hook=unique_object_pairs)
 
 
+@lru_cache(maxsize=1)
 def private_fixture_markers() -> tuple[bytes, ...]:
     markers = {marker.encode("utf-8") for marker in PRIVATE_FIXTURE_MARKERS}
-    path_relatives = (
-        "manifest.toml",
-        "bundle/n/domain.md",
-        "bundle/n/port.md",
-        "bundle/n/adapter.md",
-        "invariants/architecture.sx",
-        "invariants/architecture-gap.sx",
-        "proposals/contradictory/delta.json",
-        "proposals/valid/delta.json",
-        "proposals/gap/delta.json",
-        "states/contradictory/n/domain.md",
-        "states/contradictory/n/port.md",
-        "states/contradictory/n/adapter.md",
-        "states/corrected/n/domain.md",
-        "states/corrected/n/port.md",
-        "states/corrected/n/adapter.md",
-        "states/gap/n/domain.md",
-        "states/gap/n/port.md",
-        "states/gap/n/adapter.md",
-    )
-    for relative in path_relatives:
-        path = FIXTURE / relative
+    for path in FIXTURE.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(FIXTURE)
         for marker in (
             str(path),
             path.as_posix(),
+            relative.as_posix(),
+            relative.name,
             (Path("examples/software-architecture") / relative).as_posix(),
         ):
             markers.add(marker.encode("utf-8"))
             markers.add(marker.casefold().encode("utf-8"))
+
+        if path.suffix == ".md" and relative.parts[0] in {"bundle", "states"}:
+            node_id = Path(*relative.parts[-2:]).with_suffix("").as_posix()
+            markers.add(node_id.encode("utf-8"))
+            markers.add(node_id.casefold().encode("utf-8"))
+
+    for proposal in (FIXTURE / "proposals").rglob("delta.json"):
+        try:
+            delta = json.loads(proposal.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise DemoFailure("no se pudo cargar la fixture para comprobar la redacción.") from None
+        for atom in (*delta.get("add", []), *delta.get("remove", [])):
+            if not isinstance(atom, str):
+                raise DemoFailure("la fixture contiene un átomo inválido al comprobar redacción.")
+            markers.add(atom.encode("utf-8"))
+            markers.add(atom.casefold().encode("utf-8"))
+            identity = atom.partition("(")[2].split(",", maxsplit=1)[0].strip()
+            if "→" in identity:
+                markers.add(identity.encode("utf-8"))
+                markers.add(identity.casefold().encode("utf-8"))
 
     for relative in ("invariants/architecture.sx", "invariants/architecture-gap.sx"):
         try:
@@ -441,9 +452,10 @@ def private_fixture_markers() -> tuple[bytes, ...]:
             if line.strip() and not line.lstrip().startswith(";")
         )
 
-    for marker in (str(FIXTURE), FIXTURE.as_posix()):
-        markers.add(marker.encode("utf-8"))
-        markers.add(marker.casefold().encode("utf-8"))
+    for path in (ROOT, FIXTURE):
+        for marker in (str(path), path.as_posix()):
+            markers.add(marker.encode("utf-8"))
+            markers.add(marker.casefold().encode("utf-8"))
     for marker in tuple(markers):
         for ensure_ascii in (False, True):
             escaped = json.dumps(marker.decode("utf-8"), ensure_ascii=ensure_ascii)[1:-1]
@@ -452,7 +464,12 @@ def private_fixture_markers() -> tuple[bytes, ...]:
 
 
 def verify_redaction(state: State, output_name: str, raw: bytes) -> None:
-    if any(marker in raw for marker in private_fixture_markers()):
+    markers = private_fixture_markers()
+    normalized = raw.replace(b"\\", b"/").lower()
+    if any(
+        marker in raw or marker.replace(b"\\", b"/").lower() in normalized
+        for marker in markers
+    ):
         raise DemoFailure(f"{state.name} {output_name}: se expuso un marcador concreto de la fixture.")
 
 

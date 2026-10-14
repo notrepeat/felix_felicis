@@ -27,12 +27,17 @@ The integration test
 consumes this durable fixture: it loads the bundle, manifest, both invariants,
 and three proposal deltas. Core rejects the contradictory and gap proposals;
 the test also builds their candidates in memory and compares them with the
-durable snapshots. The concrete mapping from the abstract gap witness to the
-removed edge and label is asserted only in the test. Only the corrected
-candidate is serialized and reloaded. CLI `validate`/`check` run on that
-candidate, and `validate`/`check --explain enumerate` run on the gap snapshot;
-the test does not reject a proposal through the CLI or serialize the
-reconstructed contradictory or gap candidates.
+durable snapshots. Inside the test only, the redacted contradiction witness is
+correlated with the concrete domain-to-adapter edge and label in
+`proposals/contradictory/delta.json` and `states/contradictory/n/domain.md`;
+the redacted gap is correlated with the domain-to-port edge and `HasLab` atom
+removed by `proposals/gap/delta.json` and absent from `states/gap/`. Both
+correlations use invented fixture data. Public CLI output and all goldens stay
+redacted and contain no concrete fixture paths, node or edge IDs, labels, or
+formula text. Only the corrected candidate is serialized and reloaded. CLI
+`validate`/`check` run on that candidate, and `validate`/`check --explain
+enumerate` run on the gap snapshot; the test does not reject a proposal through
+the CLI or serialize the reconstructed contradictory or gap candidates.
 
 `states/contradictory/` and `states/corrected/` are complete, versioned,
 illustrative snapshots for the states after the respective deltas. The test
@@ -63,9 +68,10 @@ in `expected/`. The contradictory check uses `--explain decide`; the gap check
 uses `--explain enumerate` so its abstract, redacted witness and gap summary
 are part of the goldens. The runner validates the JSON structure and budget,
 rejects duplicate object keys, and checks stdout, stderr, and goldens for
-concrete fixture markers. These marker checks cover this public fixture; the
-CLI witness does not expose its concrete filenames, atom IDs, labels, formula
-text, or concrete arguments. Its abstract gap summary exposes predicate
+concrete paths and identifiers derived from every fixture file and proposal
+delta. These marker checks cover this public fixture; the CLI witness does not
+expose its concrete filenames, atom IDs, labels, formula text, or concrete
+arguments. Its abstract gap summary exposes predicate
 names, binder shape, and counts: allowlisted `gap.form` carries predicates
 and binders, while sibling `gap.counts` carries counts.
 Run it from the repository root with:

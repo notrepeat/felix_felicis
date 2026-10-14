@@ -89,7 +89,13 @@ fn check(root: &Path, manifiesto: &Path, invariantes: &Path) -> Value {
     json
 }
 
-fn check_gap(root: &Path, manifiesto: &Path, invariantes: &Path, formato: &OsStr) -> Output {
+fn check_explicado(
+    root: &Path,
+    manifiesto: &Path,
+    invariantes: &Path,
+    modo: &OsStr,
+    formato: &OsStr,
+) -> Output {
     ejecutar_universo(&[
         OsStr::new("check"),
         root.as_os_str(),
@@ -98,7 +104,7 @@ fn check_gap(root: &Path, manifiesto: &Path, invariantes: &Path, formato: &OsStr
         OsStr::new("--invariantes"),
         invariantes.as_os_str(),
         OsStr::new("--explain"),
-        OsStr::new("enumerate"),
+        modo,
         OsStr::new("--format"),
         formato,
     ])
@@ -123,6 +129,18 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
     }
     let invariantes_texto = fs::read_to_string(&invariantes_path).unwrap();
     let invariantes = parsear_programa(&invariantes_texto).expect("invariante público válido");
+    assert!(
+        invariantes_texto
+            .lines()
+            .nth(1)
+            .is_some_and(|linea| linea.starts_with("(forall ((e E) (x N) (y N))"))
+    );
+    assert!(
+        invariantes_texto
+            .lines()
+            .nth(2)
+            .is_some_and(|linea| linea.contains("(Edge e x y depends)"))
+    );
     let delta_vacio = Delta::nuevo([], []).unwrap();
     let atomos_base = base.atomos();
     let anexos_base = anexos(&base);
@@ -166,6 +184,106 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
         cargar_bundle(&fixture_path("states/contradictory"), manifiesto.clone())
             .unwrap_or_else(|errores| panic!("snapshot contradictorio inválido: {errores:?}"));
     afirmar_misma_semantica(&candidato_rechazado, &estado_contradictorio);
+
+    let (id_arista_domain_adapter, atomo_arista_domain_adapter) = delta_prohibido
+        .agregar()
+        .iter()
+        .find_map(|atomo| match atomo {
+            Atomo::Edge {
+                id,
+                origen,
+                destino,
+                sorte,
+            } if origen.como_str() == "n/domain"
+                && destino.como_str() == "n/adapter"
+                && sorte.como_str() == "depends" =>
+            {
+                Some((id.clone(), atomo.clone()))
+            }
+            _ => None,
+        })
+        .expect("la propuesta contradictoria añade domain→adapter");
+    let atomo_etiqueta_domain_adapter = delta_prohibido
+        .agregar()
+        .iter()
+        .find_map(|atomo| match atomo {
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(id),
+                etiqueta,
+            } if id == &id_arista_domain_adapter && etiqueta.como_str() == "dependency" => {
+                Some(atomo.clone())
+            }
+            _ => None,
+        })
+        .expect("la propuesta etiqueta la arista contradictoria");
+    let atomos_contradictorios = estado_contradictorio.atomos();
+    let aristas_contradictorias: Vec<_> = atomos_contradictorios
+        .iter()
+        .filter(|atomo| matches!(atomo, Atomo::Edge { .. }))
+        .collect();
+    assert_eq!(aristas_contradictorias, vec![&atomo_arista_domain_adapter]);
+    assert!(atomos_contradictorios.contains(&atomo_etiqueta_domain_adapter));
+    for (ruta, sorte) in [("n/domain", "domain"), ("n/adapter", "adapter")] {
+        assert!(atomos_contradictorios.contains(&Atomo::Type {
+            sujeto: BundlePath::nuevo(ruta).unwrap(),
+            sorte: Sorte::nuevo(sorte),
+        }));
+    }
+    let archivo_domain_contradictorio =
+        fs::read_to_string(fixture_path("states/contradictory/n/domain.md")).unwrap();
+    assert!(archivo_domain_contradictorio.contains("to: \"[[adapter]]\""));
+    assert!(archivo_domain_contradictorio.contains("kind: dependency"));
+
+    // La salida conserva el testigo abstracto. Su binding falsificante se
+    // correlaciona internamente con la única arista domain→adapter del
+    // snapshot inventado; el test no añade esos IDs a la salida pública.
+    let resultado_check_contradictorio = check_explicado(
+        &fixture_path("states/contradictory"),
+        &manifiesto_path,
+        &invariantes_path,
+        OsStr::new("decide"),
+        OsStr::new("json"),
+    );
+    assert_eq!(resultado_check_contradictorio.status.code(), Some(1));
+    assert!(resultado_check_contradictorio.stderr.is_empty());
+    let json_contradictorio: Value =
+        serde_json::from_slice(&resultado_check_contradictorio.stdout).unwrap();
+    assert_eq!(json_contradictorio["status"], "reject");
+    let objetos_contradictorios = json_contradictorio["explanations"]["objects"]
+        .as_array()
+        .expect("objetos de explicación de contradicción");
+    assert_eq!(objetos_contradictorios.len(), 1);
+    let objeto_contradictorio = &objetos_contradictorios[0];
+    assert_eq!(objeto_contradictorio["source_index"], 0);
+    assert_eq!(objeto_contradictorio["line"], 2);
+    assert!(objeto_contradictorio["presence_core"].is_null());
+    assert!(objeto_contradictorio["gap"].is_null());
+    let contraejemplo_presencia = &objeto_contradictorio["counterexample"];
+    assert_eq!(contraejemplo_presencia["rule"], "forall");
+    assert_eq!(contraejemplo_presencia["value"], false);
+    let bindings_presencia = contraejemplo_presencia["instances"]
+        .as_array()
+        .expect("bindings del contraejemplo de presencia");
+    let bindings_falsificantes: Vec<_> = bindings_presencia
+        .iter()
+        .filter(|binding| binding["value"] == false)
+        .collect();
+    assert_eq!(bindings_falsificantes.len(), 1);
+    let binding_presencia = bindings_falsificantes[0];
+    assert_eq!(binding_presencia["guard"]["predicate"], "edge");
+    assert_eq!(binding_presencia["guard"]["value"], true);
+    assert_eq!(binding_presencia["body"]["rule"], "or");
+    assert_eq!(binding_presencia["body"]["value"], false);
+    let disyuntos = binding_presencia["body"]["children"]
+        .as_array()
+        .expect("disyuntos del testigo de presencia");
+    assert_eq!(disyuntos.len(), 2);
+    for disyunto in disyuntos {
+        assert_eq!(disyunto["rule"], "not");
+        assert_eq!(disyunto["value"], false);
+        assert_eq!(disyunto["inner"]["predicate"], "type");
+        assert_eq!(disyunto["inner"]["value"], true);
+    }
 
     let delta_correctivo = parsear_delta_json_v1(
         &fs::read_to_string(fixture_path("proposals/valid/delta.json")).unwrap(),
@@ -320,10 +438,11 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
     assert_eq!(resultado_validate_gap["summary"]["nodes"], 3);
     assert_eq!(resultado_validate_gap["summary"]["edges"], 1);
 
-    let resultado_check_gap = check_gap(
+    let resultado_check_gap = check_explicado(
         &fixture_path("states/gap"),
         &manifiesto_path,
         &invariantes_gap_path,
+        OsStr::new("enumerate"),
         OsStr::new("json"),
     );
     assert_eq!(resultado_check_gap.status.code(), Some(1));
@@ -362,37 +481,155 @@ fn la_fixture_aporta_la_correccion_y_felix_evalua_y_admite_el_candidato() {
     );
     assert_eq!(objeto_gap["counterexample"]["rule"], "forall");
     assert_eq!(objeto_gap["counterexample"]["value"], false);
+    let bindings_gap = objeto_gap["counterexample"]["instances"]
+        .as_array()
+        .expect("bindings del contraejemplo gap");
+    let bindings_gap_falsificantes: Vec<_> = bindings_gap
+        .iter()
+        .filter(|binding| binding["value"] == false)
+        .collect();
+    assert_eq!(bindings_gap_falsificantes.len(), 1);
+    let binding_gap = bindings_gap_falsificantes[0];
+    assert_eq!(binding_gap["guard"]["predicate"], "type");
+    assert_eq!(binding_gap["guard"]["value"], true);
+    assert_eq!(binding_gap["body"]["rule"], "exists");
+    assert_eq!(binding_gap["body"]["value"], false);
+    let candidatos_existenciales = binding_gap["body"]["instances"]
+        .as_array()
+        .expect("candidatos examinados por el testigo gap");
+    assert_eq!(candidatos_existenciales.len(), 3);
+    assert!(candidatos_existenciales.iter().all(|candidato| {
+        candidato["value"] == false
+            && candidato["guard"]["predicate"] == "edge"
+            && candidato["guard"]["value"] == false
+    }));
 
-    let resultado_check_gap_texto = check_gap(
+    let atomo_arista_domain_port = delta_gap
+        .retirar()
+        .iter()
+        .find(|atomo| matches!(atomo, Atomo::Edge { id, .. } if id == arista_domain_port))
+        .expect("el delta retira el átomo concreto domain→port");
+    let atomo_etiqueta_domain_port = delta_gap
+        .retirar()
+        .iter()
+        .find(|atomo| matches!(atomo, Atomo::HasLab { sujeto: Sujeto::Arista(id), .. } if id == arista_domain_port))
+        .expect("el delta retira el HasLab concreto de domain→port");
+    assert!(
+        candidato
+            .estructura()
+            .atomos()
+            .contains(atomo_arista_domain_port)
+    );
+    assert!(
+        candidato
+            .estructura()
+            .atomos()
+            .contains(atomo_etiqueta_domain_port)
+    );
+    assert!(!estado_gap.atomos().contains(atomo_arista_domain_port));
+    assert!(!estado_gap.atomos().contains(atomo_etiqueta_domain_port));
+    let atomos_gap = estado_gap.atomos();
+    let nodos_domain_gap: Vec<_> = atomos_gap
+        .iter()
+        .filter(|atomo| matches!(atomo, Atomo::Type { sorte, .. } if sorte.como_str() == "domain"))
+        .collect();
+    assert_eq!(nodos_domain_gap.len(), 1);
+    assert!(matches!(
+        nodos_domain_gap[0],
+        Atomo::Type { sujeto, .. } if sujeto.como_str() == "n/domain"
+    ));
+    let aristas_gap: Vec<_> = atomos_gap
+        .iter()
+        .filter(|atomo| matches!(atomo, Atomo::Edge { .. }))
+        .collect();
+    assert_eq!(aristas_gap.len(), 1);
+    assert!(matches!(
+        aristas_gap[0],
+        Atomo::Edge { origen, destino, sorte, .. }
+            if origen.como_str() == "n/port"
+                && destino.como_str() == "n/adapter"
+                && sorte.como_str() == "depends"
+    ));
+    let archivo_domain_corregido =
+        fs::read_to_string(fixture_path("states/corrected/n/domain.md")).unwrap();
+    let archivo_domain_gap = fs::read_to_string(fixture_path("states/gap/n/domain.md")).unwrap();
+    assert!(archivo_domain_corregido.contains("to: \"[[port]]\""));
+    assert!(archivo_domain_corregido.contains("kind: dependency"));
+    assert!(!archivo_domain_gap.contains("depends:"));
+    assert!(invariantes_gap_texto.lines().nth(1).is_some_and(|linea| {
+        linea.contains("(Type x domain)")
+            && linea.contains("(Edge e x y depends)")
+            && linea.contains("(Type y port)")
+    }));
+
+    let resultado_check_gap_texto = check_explicado(
         &fixture_path("states/gap"),
         &manifiesto_path,
         &invariantes_gap_path,
+        OsStr::new("enumerate"),
         OsStr::new("text"),
     );
     assert_eq!(resultado_check_gap_texto.status.code(), Some(1));
     assert!(resultado_check_gap_texto.stderr.is_empty());
+    let resultado_check_contradictorio_texto = check_explicado(
+        &fixture_path("states/contradictory"),
+        &manifiesto_path,
+        &invariantes_path,
+        OsStr::new("decide"),
+        OsStr::new("text"),
+    );
+    assert_eq!(resultado_check_contradictorio_texto.status.code(), Some(1));
+    assert!(resultado_check_contradictorio_texto.stderr.is_empty());
     let marcadores_concretos = [
         "n/domain",
         "n/port",
         "n/adapter",
+        "n/domain→n/adapter#depends#0",
         "n/domain→n/port#depends#0",
         "n/port→n/adapter#depends#0",
         "dependency",
+        "states/contradictory/n/domain.md",
+        "states/gap/n/domain.md",
+        "examples/software-architecture/states/contradictory/n/domain.md",
+        "examples/software-architecture/states/gap/n/domain.md",
+        "architecture.sx",
         "architecture-gap.sx",
-        "examples/software-architecture/states/gap",
+        "(forall ((e E) (x N) (y N))\n  :guarda (Edge e x y depends)\n  (or (not (Type x domain)) (not (Type y adapter))))",
         "(forall ((x N)) :guarda (Type x domain) (exists ((e E) (y N)) :guarda (Edge e x y depends) (Type y port)))",
     ];
-    for bytes in [
-        resultado_check_gap.stdout.as_slice(),
-        resultado_check_gap.stderr.as_slice(),
-        resultado_check_gap_texto.stdout.as_slice(),
-        resultado_check_gap_texto.stderr.as_slice(),
+    for (nombre, bytes) in [
+        (
+            "contradictory JSON stdout",
+            resultado_check_contradictorio.stdout.as_slice(),
+        ),
+        (
+            "contradictory JSON stderr",
+            resultado_check_contradictorio.stderr.as_slice(),
+        ),
+        (
+            "contradictory text stdout",
+            resultado_check_contradictorio_texto.stdout.as_slice(),
+        ),
+        (
+            "contradictory text stderr",
+            resultado_check_contradictorio_texto.stderr.as_slice(),
+        ),
+        ("gap JSON stdout", resultado_check_gap.stdout.as_slice()),
+        ("gap JSON stderr", resultado_check_gap.stderr.as_slice()),
+        (
+            "gap text stdout",
+            resultado_check_gap_texto.stdout.as_slice(),
+        ),
+        (
+            "gap text stderr",
+            resultado_check_gap_texto.stderr.as_slice(),
+        ),
     ] {
         let salida_publica = String::from_utf8_lossy(bytes);
         for marcador in marcadores_concretos {
             assert!(
                 !salida_publica.contains(marcador),
-                "la salida pública expuso marcador concreto {marcador:?}"
+                "{nombre} expuso marcador concreto {marcador:?}"
             );
         }
     }
