@@ -151,6 +151,10 @@ fn reemplazo_de_root_existente_recibe_otra_identidad() {
                 );
                 return;
             }
+            if es_sentinel_file_id(&error) {
+                eprintln!("SKIP explícito: FILE_ID_INFO devolvió un FileId sentinel");
+                return;
+            }
             panic!("FILE_ID_INFO falló sin indicar falta de soporte: {error}");
         }
     }

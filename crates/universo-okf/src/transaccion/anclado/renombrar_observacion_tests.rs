@@ -34,6 +34,10 @@ fn saltar_sin_file_id(ruta: &Path) -> bool {
             );
             true
         }
+        Err(error) if super::es_sentinel_file_id(&error) => {
+            eprintln!("SKIP explícito: FILE_ID_INFO devolvió un FileId sentinel");
+            true
+        }
         Err(error) => panic!("FILE_ID_INFO falló sin indicar falta de soporte: {error}"),
     }
 }
