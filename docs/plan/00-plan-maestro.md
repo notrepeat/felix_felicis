@@ -110,6 +110,18 @@ estaba integrado el probe en inventario/captura. CI `38582798497` pasó para
 `a4583c2` en Linux y Windows; no acredita bind mounts reales, mounts anidados
 ni la guardia de escrituras añadida después.
 
+`21c09d1` añade una prueba sintética de mismatch en el segundo probe del cleanup
+de `RestoreOld`: el fallo ocurre antes de borrar y conserva capability, stage
+`New`, backup `Old` y journal; un retry con probe real restaura `Old`. No prueba
+un bind/mount real ni añade un tercer corte interproceso. CI `38621049587` pasó
+en Windows; el workspace Linux registró 396 passed, 1 failed y 4 ignored por
+`writer_lock_busy` en esa prueba. La interferencia del harness de tests es una
+causa probable, no demostrada. `1d5a02b` serializa solo tests `cfg(test)` del
+binario lib entre el único spawn y los ciclos drop/reacquire de locks, incluida
+la prueba multiepoca de captura; no cambia producción ni agrega un corte. CI
+`38626804482` pasó en Linux y Windows con tests de workspace, fmt, clippy y
+frontera pública.
+
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
 evidencia reproducible en su registro.
@@ -397,6 +409,10 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | CI `38613062605` | Éxito para `b990c72`. Acredita ese corte `RestoreOld`; no demuestra durabilidad ante pérdida de energía o caída del SO. Sin bind mount real/frontera real de scope ni caller productivo. Fase 04/U7 siguen parciales, 4/9. |
 | `b5e4da8` | Añade un segundo corte interproceso, distinto: desde `Installed`, el hijo hace el rename real root `New`→stage, observa root `Absent`/backup `Old`/stage `New` y sale con código 87 antes de cleanup/reconciliación. El padre verifica journal sin cambios, readquiere el lock y ejecuta recovery real: el dispatcher clasifica `RestoreOld`, limpia stage, restaura `Old` y retira journal al final. Prueba terminación de proceso y retry para este corte, no power-loss, caída del SO ni durabilidad `fsync`; no hay frontera real de scope/bind, otros cortes completos ni caller productivo. `KeepValidated`, `Committed` y recovery completo siguen pendientes; fase 04/U7 parciales, 4/9. |
 | CI `38617261125` | Éxito para `b5e4da80901226ff67ce0f95a52e27da992cc73b`. Acredita el test del segundo corte en Linux y Windows; no amplía la prueba a power-loss, caída del SO, `fsync`, scope/bind real ni otros cortes. Fase 04/U7 siguen parciales, 4/9. |
+| `21c09d1` | Añade prueba sintética de fallo de scope en el segundo probe de cleanup `RestoreOld`: cero deletes, capability/stage `New`/backup `Old`/journal preservados y retry fresco que restaura `Old`. No prueba bind/mount real ni es un tercer corte interproceso. |
+| CI `38621049587` | Windows pasó; el workspace Linux falló en la nueva prueba con `writer_lock_busy` (396 passed/1 failed/4 ignored). La interferencia de harness es una hipótesis probable, no causa demostrada. |
+| `1d5a02b` | Serializa únicamente tests `cfg(test)` del binario lib entre el único spawn y los ciclos drop/reacquire de lock, incluida la prueba multiepoca de captura; no modifica producción ni añade un corte interproceso. |
+| CI `38626804482` | Éxito Linux y Windows para `1d5a02b`: tests del workspace, fmt, clippy y frontera pública pasan. U7/fase 04 continúan parciales; progreso 4/9. |
 
 ### Evidencia de fase 05 — historial y cierre de la demo pública
 
