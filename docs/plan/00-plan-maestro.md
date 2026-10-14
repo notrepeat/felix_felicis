@@ -16,6 +16,14 @@ resultado de un agente en escenarios reproducibles.
 | Foco actual | Fase 04, Unidad 7: journal, commit y recovery. El dispatcher crate-private enruta `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` en su fila exacta; `RestoreOld` acepta stage `Absent`/`New`/`PartialNew` con root ausente y backup old en `Prepared`/`BackupReady`/`Installed`; `DiscardNewRestoreOld` solo acepta root `New`, backup `Old` y stage `Absent` en `BackupReady` (validación false/true) o `Installed` (false). Ambas limpiezas reobservan, conservan journal si queda stage parcial y permiten retry por identidad durable; root `New` con stage sibling presente falla cerrado. Desde `5c11f76`, `PartialOld` solo observa el backup con identidad de `old`, digest distinto y `old`/`new` IDs distintas; identidad de backup distinta o IDs old/new iguales quedan `Unknown`. `PartialOld` en root, backup o stage produce `FailClosed`/`NO_STEPS`, sin capacidad de recovery, cleanup, paso del runner ni orden nuevo. La limpieza del backup `PartialOld` se pospone por falta de frontera segura frente a cruce mount/bind/FUSE; es un bloqueo de diseño, no algo probado por el commit. No hay caller desde apply/producción; `KeepValidated`, `Committed` y recovery completo siguen pendientes. Los retries descritos como reinicio sueltan y readquieren el lock en el mismo proceso; no prueban kill/restart ni crash durability. La auditoría de prerequisitos de 2026-10-14 no cambia este estado parcial; su secuencia y límites están en «Próximo paso». |
 | Última actualización | 2026-10-14 |
 
+La evidencia de identidad Windows en `401a4be`, `316bdb8` y `cedc11c` establece
+que los `FileId` sentinel fallan cerrado para identidades requeridas por
+transacciones y journal; solo el marcador exacto permite el fallback canónico
+del recorrido bundle de solo lectura. CI `38517718310`
+pasó en Linux y Windows para `cedc11c`. Esto no cierra la barrera mount/volume:
+el bind mount Linux sigue pendiente, U7 y fase 04 siguen en curso y el progreso
+global permanece en 4/9.
+
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
 solo pasa a `completo` cuando cumple todos sus criterios de aceptación y deja
 evidencia reproducible en su registro.
@@ -98,8 +106,10 @@ basada en handles, fail-closed y sin persistir mount ID: Linux con
 `openat2`/`RESOLVE_NO_XDEV` o `statx`/`MNT_ID`, Windows rechazando reparse points
 y verificando volume por handles. Debe abarcar inventario, captura, validación
 de stage, cleanup y recovery; el walker de rutas del bundle es una familia
-separada. La cobertura debe considerar el sentinel `FileId` de Windows y un
-bind mount Linux con el mismo `st_dev`.
+separada. La cobertura determinista del sentinel `FileId` de Windows ya está
+registrada en la evidencia de fase 04; la prueba de bind mount Linux que
+comparte `st_dev` sigue pendiente. La prueba del sentinel no demuestra
+pertenencia al mismo volume/mount.
 
 La procedencia también forma parte de `RootNewValidado`: un `Candidato` público
 o comparador de representación no acredita admisión contra base, delta e
@@ -219,6 +229,10 @@ presupuesto de explicación devuelve status `error` y summary nulo.
 | CI `38509652854` | Éxito para `c763f8527d412778e99eb26c81194f96fdc0c545`: Linux 723 passed/0 failed/6 ignored; Windows 715/0/6; 38 resúmenes de suites. Ocho pruebas/casos de recovery nuevos visibles, unittest de herramientas 7/OS, fmt, clippy y frontera pública pasan. Los tests de retry soltaron y readquirieron el lock en el mismo proceso; no simulan kill/restart ni prueban crash durability. U7 continúa parcial y no integra apply/producción ni publicación completa. |
 | `5c11f76` | Añade clasificación `PartialOld` solo para backup: identidad durable igual a `old`, digest raw distinto, e identidades `old`/`new` distintas. Otra identidad de backup o identidades old/new iguales quedan `Unknown`. Cualquier slot `PartialOld` produce `FailClosed`/`NO_STEPS`; cuatro pruebas nuevas. Observación/rechazo solamente, sin capacidad, cleanup, paso del runner ni orden. La limpieza del backup `PartialOld` se pospone por no existir frontera segura ante cruce mount/bind/FUSE; límite/bloqueo de diseño, no probado por el commit. |
 | CI `38512944346` | Éxito para `5c11f763c1eef3df30c97c76de43dbbe9dd18fd3`: Linux 727 passed/0 failed/6 ignored; Windows 719/0/6; 38 resúmenes de suites. Unittest de herramientas 7/OS, fmt, clippy y frontera pública pasan. U7 sigue parcial, sin caller de apply/producción. Los retries previos descritos como reinicio soltaron/readquirieron el lock en el mismo proceso; no prueban kill/restart ni crash durability. |
+| `401a4be` | Rechaza los `FileId` de Windows de 16 bytes todos cero o todos `0xFF` antes de construir una identidad de directorio. |
+| `316bdb8` | Lleva los sentinels con un marcador exacto: las identidades transaccionales/journal propagan el error; solo el recorrido bundle de solo lectura puede usar fallback canónico para ese marcador. `Unsupported` genérico no activa fallback; los errores Windows 1/50/87 conservan el tratamiento previo de lectura. |
+| `cedc11c` | Los preflights de pruebas Windows omiten el sentinel exacto; el cambio es solo de tests y no altera comportamiento de producción. |
+| CI `38517718310` | Éxito para `cedc11c3414d4f704fc8344eb5c6d562a02ec2aa`: jobs `verify` Linux y `verify-windows` completados; pruebas del workspace, fmt, clippy y frontera pública pasan. U7/04 siguen parciales; la barrera mount/volume y la prueba Linux del bind mount con `st_dev` compartido continúan pendientes. |
 
 ### Evidencia de fase 05 — historial y cierre de la demo pública
 

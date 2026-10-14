@@ -112,8 +112,20 @@ de conflictos y expansión; tampoco acota memoria ni tiempo total.
 
 ## Auditoría de prerequisitos de U7 (2026-10-14)
 
-Este registro precisa condiciones de diseño para cleanup, validación y recovery;
-no documenta comportamiento nuevo. U7 y la fase 04 siguen parciales.
+Este registro separa la evidencia reciente de identidad Windows de las
+condiciones de diseño aún pendientes para cleanup, validación y recovery. U7 y
+la fase 04 siguen en curso; el progreso maestro permanece en 4/9.
+
+Los commits `401a4be` y `316bdb8` hacen que un `FILE_ID_INFO` exitoso con un
+`FileId` de 16 bytes todo cero o todo `0xFF` falle como identidad requerida por
+transacciones y journal. Solo el marcador exacto de sentinel puede degradarse a
+identidad ausente en `identidad_directorio_para_recorrido`, donde el walker
+bundle de solo lectura continúa con fallback por ruta canónica; un
+`Unsupported` genérico no activa esa ruta. Los errores Windows 1/50/87
+conservan el fallback de lectura ya existente. `cedc11c` hace que los
+preflights de pruebas omitan ese sentinel exacto, sin cambiar producción.
+CI `38517718310`
+pasó para `cedc11c` en Linux (`verify`) y Windows (`verify-windows`).
 
 La frontera de mount/volume debe obtenerse de handles y fallar cerrado si no
 puede comprobarse. En Linux, usar `openat2` con `RESOLVE_NO_XDEV` o comparar
@@ -122,9 +134,10 @@ fallback por ruta ni por `st_dev`. En Windows, rechazar reparse points y
 comprobar el volumen desde los handles abiertos. No persistir el mount ID en el
 journal. Esa frontera debe proteger inventario anclado, captura, validación de
 stage, cleanup y recovery. El walker de rutas del bundle pertenece a otra
-familia y no queda cubierto por este alcance. Las pruebas deben incluir el
-sentinel de `FileId` en Windows y un bind mount Linux que comparte `st_dev`,
-casos que no prueban por sí solos pertenencia al mismo volume/mount.
+familia y no queda cubierto por este alcance. La cobertura determinista del
+sentinel `FileId` de Windows ya está registrada arriba; la prueba de bind mount
+Linux que comparte `st_dev` sigue pendiente. Las pruebas de sentinel y bind
+mount, por sí solas, no demuestran pertenencia al mismo volume/mount.
 
 `RootNewValidado` también necesita procedencia de admisión: un `Candidato`
 público o un comparador de representación no demuestra qué base, delta e
@@ -929,6 +942,8 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | `34b7e0a`, `428d432`, `980a3f0`, `86bb79b` | Corte histórico: `KeepOld` limpia stage `New`/`PartialNew` con root `Old` y backup `Absent` en tres fases; identidad durable, reobservación antes del journal y retry tras cleanup parcial. Cuatro regresiones visibles; CI `38505451293` pasa Linux (716/0/6) y Windows (708/0/6), 38 resúmenes, unittest de herramientas 7/OS, fmt, clippy y frontera pública. `38504988001` tenía tests/fmt verdes y fallo clippy por dos préstamos, corregidos en `86bb79b`. | U7 parcial, sin caller apply/producción ni publicación completa; en ese corte `RestoreOld` requería stage `Absent` y `DiscardNewRestoreOld` seguía pendiente. No se afirma atomicidad/durabilidad; writers cooperantes y TOCTOU externo fuera del contrato. |
 | 2026-10-14 | `c888347`, `c763f85`; CI `38509652854` | `RestoreOld` limpia/reobserva stage identificado como `New`/`PartialNew` antes de restaurar old; `DiscardNewRestoreOld` cubre solo las filas exactas de `BackupReady`/`Installed`, con rename y cleanup reconciliados por reobservación. Ocho pruebas/casos de recovery nuevos visibles; foco `recovery::`: 60 passed en `c888347`, 65 en `c763f85`. Los tests de retry sueltan y readquieren el lock en el mismo proceso, sin kill/restart. CI para `c763f8527d412778e99eb26c81194f96fdc0c545`: Linux 723/0/6, Windows 715/0/6 (38 resúmenes); tools 7/OS, fmt, clippy y frontera pública pasan. | U7 sigue parcial: sin caller apply/producción ni publicación completa; `KeepValidated`, `Committed` y recovery completo pendientes. Runtime harness: N/A; las pruebas focales ejercitan filesystem y rename ambiguo inyectado, pero no prueban crash durability. No se afirma atomicidad/durabilidad; writers Felix cooperantes y TOCTOU externo fuera del contrato. |
 | 2026-10-14 | `5c11f76`; CI `38512944346` | `PartialOld` solo se clasifica en backup cuando coincide la identidad durable de `old`, difiere el digest raw y las identidades de `old`/`new` son distintas; identidad distinta o identidades old/new iguales quedan `Unknown`. En cualquier slot produce `FailClosed`/`NO_STEPS`; cuatro pruebas de recovery nuevas. CI: Linux 727/0/6, Windows 719/0/6 (38 resúmenes), tools 7/OS, fmt, clippy y frontera pública pasan. | U7 sigue parcial y sin caller apply/producción. Es observación y rechazo: no añade capacidad, cleanup, paso del runner ni orden. La limpieza del backup `PartialOld` se pospone por no tener frontera segura ante cruce de mount/bind/FUSE; bloqueo de diseño, no probado por este commit. Los retries previos solo readquieren lock en el mismo proceso; no kill/restart ni crash durability. |
+| 2026-10-14 | `401a4be`, `316bdb8`, `cedc11c` | Rechaza `FileId` Windows todo cero/todo `0xFF` para identidad requerida; el marcador exacto solo permite fallback canónico en el recorrido bundle de solo lectura, y `Unsupported` genérico no hace fallback. Los preflights Windows omiten el sentinel exacto solo en tests. | U7/fase 04 siguen parciales. La barrera mount/volume y la prueba de bind mount Linux con `st_dev` compartido siguen pendientes; estos commits no afirman cobertura total ni cleanup seguro. |
+| 2026-10-14 | CI `38517718310` | Éxito para `cedc11c3414d4f704fc8344eb5c6d562a02ec2aa`: jobs `verify` Linux y `verify-windows` completados; `cargo test --workspace`, fmt, clippy y frontera pública pasan. | Evidencia del snapshot enviado, no del límite mount/volume; U7 sigue en curso y el progreso global permanece en 4/9. |
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
