@@ -17,6 +17,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python tools/check_public_cli_demo.py
+      - run: python -m unittest discover -s tools -p "test_run_software_architecture_demo.py" -v
       - run: python tools/run_software_architecture_demo.py
       - run: cargo test --workspace
       - run: cargo fmt --all -- --check
@@ -35,6 +36,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python tools/check_public_cli_demo.py
+      - run: python -m unittest discover -s tools -p "test_run_software_architecture_demo.py" -v
       - run: python tools/run_software_architecture_demo.py
       - run: cargo test --workspace
       - run: cargo fmt --all -- --check

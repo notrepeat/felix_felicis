@@ -7,8 +7,10 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter_ns
 from typing import Any, Sequence, Union
 
 
@@ -117,6 +119,224 @@ STATES = (
         True,
     ),
 )
+
+
+RSS_SAMPLE_INTERVAL_SECONDS = 0.1
+ProcessSnapshot = dict[int, tuple[int, int | None]]
+
+
+def aggregate_process_tree_rss(
+    root_pid: int, snapshot: ProcessSnapshot
+) -> tuple[int, int]:
+    """Sum RSS bytes and process count for root_pid and observed descendants."""
+    children: dict[int, list[int]] = {}
+    for pid, (parent_pid, _) in snapshot.items():
+        children.setdefault(parent_pid, []).append(pid)
+
+    total_bytes = 0
+    process_count = 0
+    pending = [root_pid]
+    visited: set[int] = set()
+    while pending:
+        pid = pending.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        memory = snapshot.get(pid)
+        if memory is not None and memory[1] is not None:
+            total_bytes += memory[1]
+            process_count += 1
+        pending.extend(children.get(pid, ()))
+    return total_bytes, process_count
+
+
+def linux_process_memory_snapshot() -> ProcessSnapshot:
+    """Read a best-effort PID/PPID/RSS snapshot from Linux procfs."""
+    snapshot: ProcessSnapshot = {}
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    for process_path in Path("/proc").iterdir():
+        if not process_path.name.isdecimal():
+            continue
+        try:
+            stat = (process_path / "stat").read_text(encoding="ascii")
+            fields = stat[stat.rfind(")") + 2 :].split()
+            parent_pid = int(fields[1])
+            resident_pages = int((process_path / "statm").read_text(encoding="ascii").split()[1])
+        except (IndexError, OSError, ValueError):
+            # Processes can exit between the procfs reads.
+            continue
+        snapshot[int(process_path.name)] = (parent_pid, resident_pages * page_size)
+    return snapshot
+
+
+def windows_process_memory_snapshot() -> ProcessSnapshot:
+    """Read a best-effort PID/PPID/working-set snapshot using Win32 APIs."""
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", ctypes.c_wchar * 260),
+        ]
+
+    class ProcessMemoryCounters(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W)]
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    psapi.GetProcessMemoryInfo.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ProcessMemoryCounters),
+        wintypes.DWORD,
+    ]
+    psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+
+    snapshot_handle = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if snapshot_handle == invalid_handle:
+        raise OSError(ctypes.get_last_error(), "CreateToolhelp32Snapshot failed")
+
+    parents: dict[int, int] = {}
+    try:
+        entry = ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        has_entry = kernel32.Process32FirstW(snapshot_handle, ctypes.byref(entry))
+        while has_entry:
+            parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            has_entry = kernel32.Process32NextW(snapshot_handle, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot_handle)
+
+    children: dict[int, list[int]] = {}
+    for pid, parent_pid in parents.items():
+        children.setdefault(parent_pid, []).append(pid)
+    tree: list[int] = []
+    pending = [os.getpid()]
+    visited: set[int] = set()
+    while pending:
+        pid = pending.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        tree.append(pid)
+        pending.extend(children.get(pid, ()))
+
+    memory_snapshot: ProcessSnapshot = {}
+    query_rights = 0x0400 | 0x0010  # PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
+    for pid in tree:
+        parent_pid = parents.get(pid, 0)
+        memory_snapshot[pid] = (parent_pid, None)
+        handle = kernel32.OpenProcess(query_rights, False, pid)
+        if not handle:
+            continue
+        try:
+            counters = ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            if psapi.GetProcessMemoryInfo(
+                handle, ctypes.byref(counters), ctypes.sizeof(counters)
+            ):
+                memory_snapshot[pid] = (parent_pid, int(counters.WorkingSetSize))
+        finally:
+            kernel32.CloseHandle(handle)
+    return memory_snapshot
+
+
+def process_memory_snapshot() -> ProcessSnapshot | None:
+    if sys.platform.startswith("linux"):
+        return linux_process_memory_snapshot()
+    if os.name == "nt":
+        return windows_process_memory_snapshot()
+    return None
+
+
+class ProcessTreeRSSSampler:
+    """Sample the runner and observed descendants; the peak is approximate."""
+
+    def __init__(self) -> None:
+        self._root_pid = os.getpid()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._started = False
+        self._samples = 0
+        self._peak_bytes = 0
+        self._peak_processes = 0
+
+    def _sample(self) -> None:
+        try:
+            snapshot = process_memory_snapshot()
+        except OSError:
+            return
+        if snapshot is None:
+            return
+        total_bytes, process_count = aggregate_process_tree_rss(self._root_pid, snapshot)
+        if process_count == 0:
+            return
+        self._samples += 1
+        if total_bytes > self._peak_bytes:
+            self._peak_bytes = total_bytes
+            self._peak_processes = process_count
+
+    def _sample_loop(self) -> None:
+        while not self._stop.wait(RSS_SAMPLE_INTERVAL_SECONDS):
+            self._sample()
+
+    def start(self) -> None:
+        self._sample()
+        if sys.platform.startswith("linux") or os.name == "nt":
+            if self._samples == 0:
+                raise DemoFailure("no se pudo tomar una muestra RSS del proceso del runner.")
+            self._started = True
+            self._thread.start()
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._stop.set()
+        self._thread.join()
+        self._sample()
+        self._started = False
+
+
+def metrics_diagnostic(elapsed_ns: int, sampler: ProcessTreeRSSSampler) -> str:
+    rss = str(sampler._peak_bytes) if sampler._samples else "unavailable"
+    return (
+        "METRICS "
+        f"elapsed_ns={elapsed_ns} "
+        f"rss_tree_peak_sampled_bytes={rss} "
+        f"rss_tree_sample_interval_ms={int(RSS_SAMPLE_INTERVAL_SECONDS * 1000)} "
+        f"rss_tree_samples={sampler._samples} "
+        f"rss_processes_at_peak={sampler._peak_processes}"
+    )
 
 
 def run_process(
@@ -594,7 +814,10 @@ def verify_output(
 
 
 def main() -> int:
+    started_ns = perf_counter_ns()
+    sampler = ProcessTreeRSSSampler()
     try:
+        sampler.start()
         run_integration_story()
         executable = build_cli()
         for state in STATES:
@@ -604,11 +827,16 @@ def main() -> int:
     except DemoFailure as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
+    finally:
+        sampler.stop()
 
+    elapsed_ns = perf_counter_ns() - started_ns
     print(
         "OK: historia de integración aprobada; 4 estados de arquitectura y "
-        "16 salidas validate/check JSON/texto coinciden con sus goldens"
+        "16 salidas validate/check JSON/texto coinciden con sus goldens",
+        flush=True,
     )
+    print(metrics_diagnostic(elapsed_ns, sampler), file=sys.stderr)
     return 0
 
 

@@ -80,12 +80,25 @@ candidato corregido. Los snapshots y goldens siguen siendo datos versionados,
 no salidas de `apply`. El workflow de CI ejecuta el runner y la suite workspace
 en Linux y Windows; todavía no hay resultado de CI remoto para `f15af52`.
 
+En una ejecución satisfactoria, el runner conserva su resumen estable en
+`stdout` y escribe una línea `METRICS` variable en `stderr`. `elapsed_ns` es el
+tiempo de pared de la ruta del runner, como diferencia entre lecturas de un
+reloj monotónico; su resolución efectiva depende de la plataforma.
+`rss_tree_peak_sampled_bytes` es el máximo muestreado cada 100 ms de la suma del
+RSS de `/proc` en Linux o del working set en Windows para el runner y sus
+descendientes observados. La muestra puede perder picos entre intervalos y la
+suma puede contar páginas compartidas más de una vez; es una estimación, no un
+pico exacto ni memoria física única. Las métricas no forman parte de los
+goldens ni se usan como umbrales de CI.
+
 ```text
 # Windows
 python tools/run_software_architecture_demo.py
+python -m unittest discover -s tools -p "test_run_software_architecture_demo.py" -v
 
 # WSL Ubuntu
 python3 tools/run_software_architecture_demo.py
+python3 -m unittest discover -s tools -p "test_run_software_architecture_demo.py" -v
 ```
 
 ## Registro de evidencia
