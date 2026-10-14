@@ -110,6 +110,41 @@ reinicia por fórmula. La cuota incluye el preflight de cada fórmula, pero no
 cubre la preparación previa al contador: construcción del candidato, detección
 de conflictos y expansión; tampoco acota memoria ni tiempo total.
 
+## Auditoría de prerequisitos de U7 (2026-10-14)
+
+Este registro precisa condiciones de diseño para cleanup, validación y recovery;
+no documenta comportamiento nuevo. U7 y la fase 04 siguen parciales.
+
+La frontera de mount/volume debe obtenerse de handles y fallar cerrado si no
+puede comprobarse. En Linux, usar `openat2` con `RESOLVE_NO_XDEV` o comparar
+`statx` `MNT_ID`; si la primitiva elegida no está disponible o falla, no hay
+fallback por ruta ni por `st_dev`. En Windows, rechazar reparse points y
+comprobar el volumen desde los handles abiertos. No persistir el mount ID en el
+journal. Esa frontera debe proteger inventario anclado, captura, validación de
+stage, cleanup y recovery. El walker de rutas del bundle pertenece a otra
+familia y no queda cubierto por este alcance. Las pruebas deben incluir el
+sentinel de `FileId` en Windows y un bind mount Linux que comparte `st_dev`,
+casos que no prueban por sí solos pertenencia al mismo volume/mount.
+
+`RootNewValidado` también necesita procedencia de admisión: un `Candidate`
+público o un comparador de representación no demuestra qué base, delta e
+invariantes se evaluaron ni que la propuesta fuera admitida. El root debe
+respaldarse con una prueba de admisión sellada y no forjable, o recovery debe
+volver a ejecutar `proponer` con la base, el delta y las invariantes y comprobar
+el resultado admitido. Journal v1 no conserva esas entradas; por tanto, hoy un
+restart no puede revalidar `New`. Hasta que exista esa capacidad opaca, el
+observer mantiene `root_new_validated=false` y `Committed` es inalcanzable.
+
+La siguiente secuencia se divide en unidades pequeñas, en este orden:
+
+1. Abstracción de scope y pruebas inyectadas.
+2. Backends de plataforma para Linux y Windows.
+3. Integración con inventario anclado, captura, validación de stage, cleanup y
+   recovery.
+4. Prueba de admisión sellada o revalidación con sus entradas.
+5. Validación de identidad y contenido del root `New`.
+6. Habilitar `Committed` solo después de esa validación.
+
 ## Decisiones de contrato v1
 
 - `add`/`remove` es un parche transaccional explícito sobre un snapshot; es

@@ -13,7 +13,7 @@ resultado de un agente en escenarios reproducibles.
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
 | Progreso | 4/9 fases completas; fase 04 sigue en curso. U0–U4 y U6 están cerradas en sus límites; U5, U7 y U8 conservan avance parcial. CI `38512944346` pasó para `5c11f76`: Linux 727 passed/0 failed/6 ignored, Windows 719/0/6, 38 resúmenes de suites, tools 7/OS, fmt, clippy y frontera pública; añade cuatro pruebas de recovery. La matriz local workspace Windows 701/6 y WSL 709/6 pertenece al antecedente `609936a`, que no tiene CI remoto propio. CI `38232932504` es histórico para `a082467`; CI `38240021138` pasó solo para `701de13`, `38242930608` para SHA `db71e3c` con el runner `RestoreOld` previo, y `38246129604` solo para `a4d01e5`; esos runs no acreditan `609936a`. |
-| Foco actual | Fase 04, Unidad 7: journal, commit y recovery. El dispatcher crate-private enruta `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` en su fila exacta; `RestoreOld` acepta stage `Absent`/`New`/`PartialNew` con root ausente y backup old en `Prepared`/`BackupReady`/`Installed`; `DiscardNewRestoreOld` solo acepta root `New`, backup `Old` y stage `Absent` en `BackupReady` (validación false/true) o `Installed` (false). Ambas limpiezas reobservan, conservan journal si queda stage parcial y permiten retry por identidad durable; root `New` con stage sibling presente falla cerrado. Desde `5c11f76`, `PartialOld` solo observa el backup con identidad de `old`, digest distinto y `old`/`new` IDs distintas; identidad de backup distinta o IDs old/new iguales quedan `Unknown`. `PartialOld` en root, backup o stage produce `FailClosed`/`NO_STEPS`, sin capacidad de recovery, cleanup, paso del runner ni orden nuevo. La limpieza del backup `PartialOld` se pospone por falta de frontera segura frente a cruce mount/bind/FUSE; es un bloqueo de diseño, no algo probado por el commit. No hay caller desde apply/producción; `KeepValidated`, `Committed` y recovery completo siguen pendientes. Los retries descritos como reinicio sueltan y readquieren el lock en el mismo proceso; no prueban kill/restart ni crash durability. |
+| Foco actual | Fase 04, Unidad 7: journal, commit y recovery. El dispatcher crate-private enruta `KeepOld`, `RestoreOld` y `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` en su fila exacta; `RestoreOld` acepta stage `Absent`/`New`/`PartialNew` con root ausente y backup old en `Prepared`/`BackupReady`/`Installed`; `DiscardNewRestoreOld` solo acepta root `New`, backup `Old` y stage `Absent` en `BackupReady` (validación false/true) o `Installed` (false). Ambas limpiezas reobservan, conservan journal si queda stage parcial y permiten retry por identidad durable; root `New` con stage sibling presente falla cerrado. Desde `5c11f76`, `PartialOld` solo observa el backup con identidad de `old`, digest distinto y `old`/`new` IDs distintas; identidad de backup distinta o IDs old/new iguales quedan `Unknown`. `PartialOld` en root, backup o stage produce `FailClosed`/`NO_STEPS`, sin capacidad de recovery, cleanup, paso del runner ni orden nuevo. La limpieza del backup `PartialOld` se pospone por falta de frontera segura frente a cruce mount/bind/FUSE; es un bloqueo de diseño, no algo probado por el commit. No hay caller desde apply/producción; `KeepValidated`, `Committed` y recovery completo siguen pendientes. Los retries descritos como reinicio sueltan y readquieren el lock en el mismo proceso; no prueban kill/restart ni crash durability. La auditoría de prerequisitos de 2026-10-14 no cambia este estado parcial; su secuencia y límites están en «Próximo paso». |
 | Última actualización | 2026-10-14 |
 
 Estados admitidos: `pendiente`, `en curso`, `bloqueado`, `completo`. Una fase
@@ -90,6 +90,30 @@ La fase 03 preserva el baseline JSON v1; solo la salida solicitada usa v2.
 El presupuesto medido de 1.000.000 se aplica al pase explicativo separado, no
 al trabajo total del proceso. No se exponen asignaciones universales sensibles
 ni resultados parciales por agotamiento de recurso.
+
+### Auditoría de prerequisitos U7 (2026-10-14)
+
+Antes de cleanup seguro y `Committed`, U7 requiere una frontera de mount/volume
+basada en handles, fail-closed y sin persistir mount ID: Linux con
+`openat2`/`RESOLVE_NO_XDEV` o `statx`/`MNT_ID`, Windows rechazando reparse points
+y verificando volume por handles. Debe abarcar inventario, captura, validación
+de stage, cleanup y recovery; el walker de rutas del bundle es una familia
+separada. La cobertura debe considerar el sentinel `FileId` de Windows y un
+bind mount Linux con el mismo `st_dev`.
+
+La procedencia también forma parte de `RootNewValidado`: un `Candidate` público
+o comparador de representación no acredita admisión contra base, delta e
+invariantes. Se necesita una prueba sellada no forjable o volver a ejecutar
+`proponer` con esas entradas. Journal v1 no las conserva, así que restart no
+puede revalidar `New` hoy. La capacidad debe ser opaca; mientras no exista, el
+observer sigue en `root_new_validated=false` y `Committed` no es alcanzable.
+
+Orden de las unidades pequeñas: 1) abstracción de scope y pruebas inyectadas;
+2) backends Linux/Windows; 3) integrar en inventario anclado, captura,
+validación de stage, cleanup y recovery; 4) prueba de admisión; 5) validación
+del root `New`; 6) `Committed`. Este orden registra trabajo pendiente y no
+afirma implementación. U7 y fase 04 permanecen parciales; el progreso maestro
+sigue en 4/9.
 
 ## Evidencia de las fases cerradas
 
