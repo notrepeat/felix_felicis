@@ -22,6 +22,8 @@ const RESTORE_OLD_CHILD_ROOT_ENV: &str = "FELIX_TEST_RESTORE_OLD_CHILD_ROOT";
 const RESTORE_OLD_CHILD_NONCE_ENV: &str = "FELIX_TEST_RESTORE_OLD_CHILD_NONCE";
 const DISCARD_NEW_CHILD_ROOT_ENV: &str = "FELIX_TEST_DISCARD_NEW_CHILD_ROOT";
 const DISCARD_NEW_CHILD_NONCE_ENV: &str = "FELIX_TEST_DISCARD_NEW_CHILD_NONCE";
+const RESTORE_OLD_CLEANUP_CHILD_ROOT_ENV: &str = "FELIX_TEST_RESTORE_OLD_CLEANUP_CHILD_ROOT";
+const RESTORE_OLD_CLEANUP_CHILD_NONCE_ENV: &str = "FELIX_TEST_RESTORE_OLD_CLEANUP_CHILD_NONCE";
 
 fn crear_arbol(root: &Path, bytes: &[u8]) {
     fs::create_dir_all(root.join("empty-dir")).unwrap();
@@ -878,6 +880,95 @@ fn discard_new_child_exits_after_rename_before_cleanup() {
             assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
             std::process::exit(87);
         },
+    );
+    panic!("recovery returned instead of exiting at the cut: {result:?}");
+}
+
+#[test]
+fn restore_old_reanuda_tras_salida_del_hijo_despues_de_cleanup() {
+    let (_temp, root, lock, canonical, journal) = preparar_fila(JournalState::Installed);
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    fs::rename(&root, &backup).unwrap();
+    fs::rename(root.with_file_name("new-fixture"), &stage).unwrap();
+    let journal_bytes = fs::read(&canonical).unwrap();
+    assert!(!root.exists());
+    assert!(fingerprint(&backup) == *journal.old());
+    assert!(fingerprint(&stage) == *journal.new_fingerprint());
+    drop(lock);
+
+    ejecutar_hijo_interproceso(
+        "restore_old_child_exits_after_cleanup_before_rename",
+        &root,
+        RESTORE_OLD_CLEANUP_CHILD_ROOT_ENV,
+        RESTORE_OLD_CLEANUP_CHILD_NONCE_ENV,
+        88,
+    );
+
+    assert!(!root.exists());
+    assert!(fingerprint(&backup) == *journal.old());
+    assert!(!stage.exists());
+    assert!(canonical.is_file());
+    assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+
+    let mut restarted = LockEscritura::adquirir(&root).unwrap();
+    assert_eq!(
+        ejecutar_recovery_soportado_con(
+            &mut restarted,
+            observar_inventario_recovery,
+            |_| {},
+            |_| {}
+        ),
+        Ok(ResultadoRecoverySoportado::RestoreOld(
+            ResultadoFilaJournalRestoreOld::Eliminado
+        ))
+    );
+    assert!(!backup.exists() && !stage.exists() && !canonical.exists());
+    assert_root_intact(&root);
+    assert!(fingerprint(&root) == *journal.old());
+}
+
+#[test]
+#[ignore = "la ejecuta el padre interproceso para cortar RestoreOld tras cleanup y antes del rename"]
+fn restore_old_child_exits_after_cleanup_before_rename() {
+    let Some(root) = root_hijo_interproceso(
+        RESTORE_OLD_CLEANUP_CHILD_ROOT_ENV,
+        RESTORE_OLD_CLEANUP_CHILD_NONCE_ENV,
+    ) else {
+        return;
+    };
+    assert!(!root.exists(), "RestoreOld precondition: root absent");
+
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let backup = backup_path(&lock);
+    let stage = stage_path(&lock);
+    let canonical = lock.ubicacion().journal().as_path().to_path_buf();
+    assert!(
+        backup.is_dir(),
+        "RestoreOld precondition: old backup exists"
+    );
+    assert!(stage.is_dir(), "RestoreOld precondition: new stage exists");
+    let journal_bytes = fs::read(&canonical).unwrap();
+    let journal = Journal::parse(&journal_bytes).unwrap();
+    assert_eq!(journal.state(), JournalState::Installed);
+    assert!(fingerprint(&backup) == *journal.old());
+    assert!(fingerprint(&stage) == *journal.new_fingerprint());
+
+    let result = ejecutar_fila_journal_restore_old_con(
+        &mut lock,
+        |lock| {
+            let inventory = observar_inventario_recovery(lock, &journal).unwrap();
+            assert_eq!(inventory.root, ArtifactState::Absent);
+            assert_eq!(inventory.backup, ArtifactState::Old);
+            assert_eq!(inventory.stage, ArtifactState::Absent);
+            assert!(!root.exists(), "root remains absent before backup rename");
+            assert!(fingerprint(&backup) == *journal.old());
+            assert!(!stage.exists(), "stage cleanup completed before cut");
+            assert!(canonical.is_file(), "journal removal has not started");
+            assert_eq!(fs::read(&canonical).unwrap(), journal_bytes);
+            std::process::exit(88);
+        },
+        |_| {},
     );
     panic!("recovery returned instead of exiting at the cut: {result:?}");
 }
