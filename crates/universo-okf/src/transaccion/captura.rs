@@ -114,6 +114,22 @@ impl ConfigRawCapturada {
             ruta_invariantes_root,
         })
     }
+
+    pub(crate) fn manifiesto_raw(&self) -> &[u8] {
+        &self.manifiesto_raw
+    }
+
+    pub(crate) fn invariantes_raw(&self) -> &[u8] {
+        &self.invariantes_raw
+    }
+
+    pub(crate) fn ruta_manifiesto_root(&self) -> Option<&str> {
+        self.ruta_manifiesto_root.as_deref()
+    }
+
+    pub(crate) fn ruta_invariantes_root(&self) -> Option<&str> {
+        self.ruta_invariantes_root.as_deref()
+    }
 }
 
 fn validar_suma_bytes_configuracion(
@@ -204,6 +220,17 @@ impl Snapshot {
 
     pub(crate) fn policy_id(&self) -> &str {
         &self.policy_id
+    }
+
+    /// Configuración raw capturada, con bytes compartidos y solo procedencia
+    /// root-relative. No conserva una ruta que pueda reabrirse.
+    pub(crate) fn configuracion_raw_capturada(&self) -> ConfigRawCapturada {
+        ConfigRawCapturada {
+            manifiesto_raw: Arc::clone(&self.manifiesto_raw),
+            invariantes_raw: Arc::clone(&self.invariantes_raw),
+            ruta_manifiesto_root: self.ruta_manifiesto_root.clone(),
+            ruta_invariantes_root: self.ruta_invariantes_root.clone(),
+        }
     }
 
     pub(crate) fn identidad_root(&self) -> Option<IdentidadDirectorio> {
@@ -620,6 +647,49 @@ pub(crate) fn materializar_desde_entradas(
         identidad_root: original.identidad_root,
         ruta_manifiesto_root: original.ruta_manifiesto_root.clone(),
         ruta_invariantes_root: original.ruta_invariantes_root.clone(),
+    })
+}
+
+/// Reconstruye un snapshot exclusivamente desde el inventario raw y la
+/// configuración capturada. No consulta el filesystem y deja sin identidad
+/// root el snapshot reproducido; las rutas de configuración solo sirven para
+/// verificar procedencia contra las entradas suministradas.
+pub(crate) fn materializar_snapshot_desde_entradas(
+    entradas: Vec<EntradaSnapshot>,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let ConfigRawCapturada {
+        manifiesto_raw,
+        invariantes_raw,
+        ruta_manifiesto_root,
+        ruta_invariantes_root,
+    } = configuracion;
+
+    // Revalidar antes de hashear o materializar protege también los contextos
+    // reconstruidos desde un journal, sin depender de quién creó la captura.
+    validar_presupuesto_configuracion(&manifiesto_raw, &invariantes_raw, PRESUPUESTO_BYTES_RAW)?;
+    let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
+    let token = calcular_token_snapshot(
+        version_motor,
+        policy_id,
+        &manifiesto_raw,
+        &invariantes_raw,
+        &entradas,
+    )?;
+
+    materializar(CapturaSnapshotRaw {
+        token,
+        raw_tree_digest,
+        entradas,
+        manifiesto_raw,
+        invariantes_raw,
+        version_motor: Arc::from(version_motor),
+        policy_id: Arc::from(policy_id),
+        identidad_root: None,
+        ruta_manifiesto_root,
+        ruta_invariantes_root,
     })
 }
 
@@ -1121,6 +1191,90 @@ ignorados = ["ignored.md"]
             assert!(!format!("{error:?}").contains(secreto));
             assert!(!error.to_string().contains(secreto));
         }
+    }
+
+    #[test]
+    fn materializador_raw_reconstruye_identidad_sin_root_filesystem() {
+        let entradas = vec![
+            EntradaSnapshot::archivo("manifest.toml", MANIFIESTO.as_bytes()),
+            EntradaSnapshot::archivo("invariants.smt2", b"\n".as_slice()),
+            EntradaSnapshot::directorio("knowledge"),
+            EntradaSnapshot::archivo(
+                "knowledge/a.md",
+                b"---\ntype: a\ntitle: A\n---\n".as_slice(),
+            ),
+        ];
+        let configuracion = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .unwrap();
+        let token_esperado = calcular_token_snapshot(
+            "engine-test/1",
+            "policy-test/1",
+            MANIFIESTO.as_bytes(),
+            b"\n",
+            &entradas,
+        )
+        .unwrap();
+        let digest_esperado = calcular_digest_raw_tree(&entradas).unwrap();
+
+        let snapshot = materializar_snapshot_desde_entradas(
+            entradas,
+            configuracion,
+            "engine-test/1",
+            "policy-test/1",
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), token_esperado);
+        assert!(snapshot.raw_tree_digest() == &digest_esperado);
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.version_motor(), "engine-test/1");
+        assert_eq!(snapshot.policy_id(), "policy-test/1");
+        assert_eq!(snapshot.identidad_root(), None);
+        assert_eq!(snapshot.ruta_manifiesto_root(), Some("manifest.toml"));
+        assert_eq!(snapshot.ruta_invariantes_root(), Some("invariants.smt2"));
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+
+        let replay_config = snapshot.configuracion_raw_capturada();
+        assert!(Arc::ptr_eq(
+            &snapshot.manifiesto_raw,
+            &replay_config.manifiesto_raw
+        ));
+        assert!(Arc::ptr_eq(
+            &snapshot.invariantes_raw,
+            &replay_config.invariantes_raw
+        ));
+    }
+
+    #[test]
+    fn materializador_raw_rechaza_procedencia_root_relative_que_no_coincide() {
+        let entradas = vec![
+            EntradaSnapshot::archivo("manifest.toml", b"contenido distinto".as_slice()),
+            EntradaSnapshot::archivo("invariants.smt2", b"\n".as_slice()),
+        ];
+        let configuracion = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .unwrap();
+
+        let error = materializar_snapshot_desde_entradas(
+            entradas,
+            configuracion,
+            "engine-test/1",
+            "policy-test/1",
+        )
+        .err()
+        .unwrap();
+
+        assert_eq!(error, ErrorSnapshot::BundleInvalido);
     }
 
     #[test]
