@@ -11,7 +11,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter_ns
-from typing import Any, Sequence, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,7 +122,7 @@ STATES = (
 
 
 RSS_SAMPLE_INTERVAL_SECONDS = 0.1
-ProcessSnapshot = dict[int, tuple[int, int | None]]
+ProcessSnapshot = Dict[int, Tuple[int, Optional[int]]]
 
 
 def aggregate_process_tree_rss(
