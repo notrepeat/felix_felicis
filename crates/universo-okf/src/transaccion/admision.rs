@@ -6,6 +6,8 @@
 //! [`ContextoAdmision::validar_base`] y evaluar de nuevo la propuesta.
 
 pub(crate) mod codec;
+#[allow(dead_code)]
+pub(crate) mod envelope;
 
 use std::fmt;
 use std::sync::Arc;
