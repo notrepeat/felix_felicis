@@ -213,6 +213,9 @@ pub(super) fn renombrar_plataforma(
     use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES};
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
+    #[cfg(test)]
+    limpiar_diagnostico_renombrar_windows();
+
     // A relative no-follow open is enough to detect any existing target,
     // including files and reparse points; it is never opened for writing.
     let mut opciones_destino = OpenOptionsAt::default();
@@ -222,7 +225,16 @@ pub(super) fn renombrar_plataforma(
     match opciones_destino.open_at(parent, Path::new(destino)) {
         Ok(_) => return Err(ErrorRenombrarAnclado::DestinoExistente),
         Err(error) if windows_not_found(&error) => {}
-        Err(error) => return Err(mapear_error_io(error)),
+        Err(error) => {
+            #[cfg(test)]
+            registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
+                etapa: EtapaRenombrarWindows::ProbeDestino,
+                raw_os_error: error.raw_os_error(),
+                ntstatus: None,
+                io_status: None,
+            });
+            return Err(mapear_error_io(error));
+        }
     }
 
     // Request only the attributes needed to verify the object and DELETE to
@@ -233,12 +245,40 @@ pub(super) fn renombrar_plataforma(
         .follow(false);
     let fuente_renombrable = opciones_fuente
         .open_dir_at(parent, Path::new(fuente))
-        .map_err(mapear_error_io)?;
-    let identidad = metadata_directorio(&fuente_renombrable).map_err(mapear_error_directorio)?;
-    if identidad != identidad_esperada
-        || metadata_directorio(raiz_conocida).map_err(mapear_error_directorio)?
-            != identidad_esperada
-    {
+        .map_err(|error| {
+            #[cfg(test)]
+            registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
+                etapa: EtapaRenombrarWindows::AperturaFuente,
+                raw_os_error: error.raw_os_error(),
+                ntstatus: None,
+                io_status: None,
+            });
+            mapear_error_io(error)
+        })?;
+    let identidad = metadata_directorio(&fuente_renombrable).map_err(|error| {
+        #[cfg(test)]
+        registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
+            etapa: EtapaRenombrarWindows::MetadataFuente,
+            raw_os_error: None,
+            ntstatus: None,
+            io_status: None,
+        });
+        mapear_error_directorio(error)
+    })?;
+    if identidad != identidad_esperada {
+        return Err(ErrorRenombrarAnclado::IdentidadNoCoincide);
+    }
+    let identidad_raiz_conocida = metadata_directorio(raiz_conocida).map_err(|error| {
+        #[cfg(test)]
+        registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
+            etapa: EtapaRenombrarWindows::MetadataRaiz,
+            raw_os_error: None,
+            ntstatus: None,
+            io_status: None,
+        });
+        mapear_error_directorio(error)
+    })?;
+    if identidad_raiz_conocida != identidad_esperada {
         return Err(ErrorRenombrarAnclado::IdentidadNoCoincide);
     }
 
@@ -282,13 +322,79 @@ pub(super) fn renombrar_plataforma(
             FileRenameInformation,
         )
     };
+    #[cfg(test)]
+    let io_status_code = unsafe { io_status.Anonymous.Status };
     if status < 0 {
+        #[cfg(test)]
+        registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
+            etapa: EtapaRenombrarWindows::NtSetInformationFile,
+            raw_os_error: None,
+            ntstatus: Some(status),
+            io_status: Some(io_status_code),
+        });
         // NTSTATUS never leaves the primitive. A failed rename syscall can
         // still have moved the directory, so recovery must reconcile it.
         return Err(ErrorRenombrarAnclado::OperacionAmbigua);
     }
     Ok(())
 }
+
+#[cfg(all(test, windows))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EtapaRenombrarWindows {
+    ProbeDestino,
+    AperturaFuente,
+    MetadataFuente,
+    MetadataRaiz,
+    NtSetInformationFile,
+}
+
+#[cfg(all(test, windows))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DiagnosticoRenombrarWindows {
+    etapa: EtapaRenombrarWindows,
+    raw_os_error: Option<i32>,
+    ntstatus: Option<i32>,
+    io_status: Option<i32>,
+}
+
+#[cfg(all(test, windows))]
+thread_local! {
+    static ULTIMO_DIAGNOSTICO_RENOMBRAR_WINDOWS: std::cell::Cell<Option<DiagnosticoRenombrarWindows>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(all(test, windows))]
+fn limpiar_diagnostico_renombrar_windows() {
+    ULTIMO_DIAGNOSTICO_RENOMBRAR_WINDOWS.with(|ultimo| ultimo.set(None));
+}
+
+#[cfg(all(test, windows))]
+fn registrar_diagnostico_renombrar_windows(diagnostico: DiagnosticoRenombrarWindows) {
+    eprintln!(
+        "windows rename diagnostic: etapa={:?}, raw_os_error={:?}, ntstatus={:?}, io_status={:?}",
+        diagnostico.etapa, diagnostico.raw_os_error, diagnostico.ntstatus, diagnostico.io_status,
+    );
+    ULTIMO_DIAGNOSTICO_RENOMBRAR_WINDOWS.with(|ultimo| ultimo.set(Some(diagnostico)));
+}
+
+#[cfg(all(test, windows))]
+fn tomar_diagnostico_renombrar_windows() -> Option<DiagnosticoRenombrarWindows> {
+    ULTIMO_DIAGNOSTICO_RENOMBRAR_WINDOWS.with(|ultimo| ultimo.take())
+}
+
+#[cfg(all(test, windows))]
+fn registrar_diagnostico_ntstatus_prueba(ntstatus: i32, io_status: i32) {
+    registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
+        etapa: EtapaRenombrarWindows::NtSetInformationFile,
+        raw_os_error: None,
+        ntstatus: Some(ntstatus),
+        io_status: Some(io_status),
+    });
+}
+
+#[cfg(all(test, windows))]
+#[path = "renombrar_move_platform_windows_tests.rs"]
+mod windows_diagnostics_tests;
 
 #[cfg(not(any(unix, windows)))]
 pub(super) fn renombrar_plataforma(
