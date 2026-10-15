@@ -78,16 +78,50 @@ recuperación futura requiere replay y falta evidencia, debe fallar cerrada y
 conservar los artefactos para decisión manual. Cambiar esa conducta requiere
 una decisión de contrato separada.
 
+## Vínculo puro a journal (sin persistencia)
+
+`EnvelopeContextoAdmision` es un valor crate-private en memoria que conserva un
+`ContextoAdmision` junto a una copia de `transaction_id`, parent y huellas
+completas `old`/`new` del journal. El vínculo omite `JournalState`, que avanza
+durante la transacción. `ligar` solo copia esos campos; `validar_replay` exige
+que coincidan con el journal recibido y vuelve a llamar
+`calcular_new_esperado`, que revalida `Old`, admisión y `New` antes de devolver
+su expectativa.
+
+Esto añade consistencia entre el contexto en memoria y los metadatos del
+journal, no autenticidad ni autoridad: `NewEsperado` sigue copiando los IDs del
+journal y ningún valor prueba por sí solo el estado instalado. El envelope no
+consulta el filesystem, no conserva rutas o handles, no es capability y no
+tiene codec ni lifecycle. El decoder de `FELIX-ADMCTX` sigue sin ligarlo por sí
+mismo a un journal. `FELIX-ADMCTX` v1 y `felix-journal-v1` permanecen sin
+cambios; no hay auxiliar persistido ni caller de publicación o recovery.
+
 ## Pendiente antes de cualquier I/O
+
+- La próxima unidad debe decidir el lifecycle antes de escribir o leer el
+  envelope. El tipo en memoria no elige dueño, ubicación, nombre, formato
+  auxiliar ni orden de operaciones. Debe cerrar estas decisiones sin cambiar
+  el contrato de `felix-journal-v1`:
+
+  | Decisión | Criterio de cierre |
+  |---|---|
+  | Dueño y lock | Un dueño de transacción identifica la capability que publica, lee y retira la evidencia; se especifica su relación con parent, journal, backup y stage. El envelope no posee esa capability. |
+  | Cortes de publicación | Una tabla cubre cada corte entre escritura temporal, sincronización, publicación del auxiliar y journal, y primer cambio destructivo. Define qué conserva cada corte y quién puede retirar un auxiliar huérfano; no permite recolección por nombre o namespace solamente. |
+  | Cuotas y lectura | Se fija un límite total inclusivo para envelope y contexto, y el lector limita bytes antes de materializar payloads. El encuadre extra debe caber en la cuota sin inflar la lectura sobre el límite. La cuota wire no promete RSS limitado ni errores OOM recuperables. |
+  | Recovery y compatibilidad | Bajo lock se compara el vínculo completo con journal, se reproduce el contexto y se contrasta identidad/digest del root observado antes de aplicar solo filas permitidas. Contexto ausente, truncado, grande, no canónico, incompatible o incoherente falla cerrado y conserva la evidencia. Los journals v1 sin auxiliar nunca se tratan como si contuvieran replay. |
+  | Cleanup | Se determina el orden de retiro de journal, auxiliar y backup. El contexto requerido se conserva mientras exista journal, incluso en `Committed`; se define el destino de un corte que deje auxiliar huérfano y la frontera pendiente de `PartialOld` frente a mounts. |
+  | Harness Windows | Los filtros actuales registran `ERROR_SHARING_VIOLATION` seguido por `STATUS_INVALID_HANDLE` en el retry y dos `PermissionDenied` al preparar junctions; antes de cualquier I/O queda aislar los fallos de recovery aún no explicados. No se atribuyen al sandbox ni a una regresión. |
+
+  La ubicación de almacenamiento, el orden de publicación, la política de
+  huérfanos y la capability que autoriza cleanup siguen abiertos; esta tabla
+  define el alcance del siguiente diseño, no los resuelve por afirmación.
 
 - Definir el dueño y la ubicación del auxiliar privado, su escritura atómica,
   sincronización, identidad y relación de lock con journal, backup y stage.
-  El siguiente diseño debería ligar el envelope privado a `transaction_id`,
-  parent y huellas `old`/`new` del journal, y decidir la ownership/capability
-  que gobierna lifecycle y cleanup. `ContextoAdmision` no contiene esas
-  identidades, y `NewEsperado` solo las copia del journal recibido. Es una
-  recomendación pendiente, no una arquitectura pública o ubicación de
-  almacenamiento ya elegida.
+  `EnvelopeContextoAdmision` ya liga esos datos en memoria. El siguiente
+  diseño debe decidir cómo persistir el vínculo y qué capability gobierna su
+  lifecycle y cleanup. El tipo no elige ubicación ni ownership; esa decisión
+  queda pendiente y no es arquitectura pública.
 - Fijar cuotas inclusivas por componente y para el total serializado. El valor
   en memoria ya limita delta y metadata, y el encoder experimental impone un
   máximo total de 512 MiB con framing; eso no habilita lectura o persistencia.
@@ -124,6 +158,25 @@ por `getaddrinfo` y la consulta GET de CI con `gh` no conectó. No se obtuvo
 SHA, estado ni conclusión del run y no se publicó push; no hay un CI remoto
 nuevo que registrar. Toda la evidencia siguiente es local, no un run de CI:
 
+- Sobre la base `5935608` más el árbol de trabajo, el filtro
+  `cargo test --locked --offline -p universo-okf --lib admision::envelope`
+  terminó 6/6. Los mismos bytes de esta unidad quedaron registrados en
+  `74f7afa` (envelope, 345 líneas) y el seam de pruebas en `b37635b`
+  (237 líneas). La prueba y los commits corresponden a los mismos bytes; no hay
+  CI remoto asociado.
+
+- El filtro focal de diagnóstico Windows registró 1 passed/1 failed. La
+  suite de recovery también volvió a ejecutarse en la ronda actual; su
+  resultado está separado abajo. `share_delete_denial_records_source_open_and_success_clears_the_previous_diagnostic`
+  reprodujo un bloqueo real al abrir la fuente (`AperturaFuente`,
+  `raw_os_error=32`, `ERROR_SHARING_VIOLATION`). Tras cerrar el handle que lo
+  bloqueaba, el retry alcanzó `NtSetInformationFile` y falló con
+  `NTSTATUS=0xC0000008` (`STATUS_INVALID_HANDLE`) e
+  `IO_STATUS_BLOCK.Status=0`; esa prueba falló en la expectativa de retry. La
+  prueba de diagnóstico sintético del mismo filtro pasó. Esto no identifica la
+  causa de las fallas restantes de recovery ni permite atribuirlas al sandbox
+  o a una regresión.
+
 - Los 10 commits locales de código/pruebas desde la base esperada `116a0d8`
   son `5d04927` (materialización raw), `bfe13b7` (contexto), `8803966`
   (replay), `dcdbd83` (identidad), `fb45b09` (encoder), `d91f946` (cursor),
@@ -152,7 +205,10 @@ nuevo que registrar. Toda la evidencia siguiente es local, no un run de CI:
 - `cargo check -p universo-okf --all-targets --target
   x86_64-unknown-linux-gnu` terminó con exit 0 con el preflight lector
   y el decoder registrados; es compilación cruzada, no ejecuta tests ni runtime.
-- La suite completa se ejecutó con
+
+### Historial de ejecuciones de la suite de recovery
+
+- En una ejecución previa, la suite completa se ejecutó con
   `cargo test --locked --offline -p universo-okf --lib transaccion::journal::recovery::`.
   Con `TEMP` predeterminado dio 46 passed, 31 failed y 3 ignored; el resultado
   fue fallido, pero no se conservó su código de salida. Al redirigir
@@ -160,10 +216,48 @@ nuevo que registrar. Toda la evidencia siguiente es local, no un run de CI:
   passed, 17 failed y 3 ignored; el resultado fue fallido y la herramienta
   reportó exit 1, pero no se conservó el código bruto de Cargo. Quedaron 16
   `anchored_rename_io` en pruebas de rename y un `PermissionDenied` explícito
-  al preparar una junction. El cambio de entorno corrigió fallos de setup,
-  pero la suite completa no quedó verde. No se conservó NTSTATUS crudo de los
-  renames y su causa raíz no quedó identificada; no se atribuye al sandbox ni
-  se afirma regresión.
+  al preparar una junction. Con la redirección se observó una reducción de
+  fallos reportados, pero no se aisló la causa y la suite no quedó verde. En aquella ejecución no se conservó
+  NTSTATUS crudo de los renames y su causa raíz no quedó identificada; no se
+  atribuye al sandbox ni se afirma regresión.
+
+### Verificación actual del candidato local
+
+Los resultados siguientes son locales, sobre la base `5935608` y los mismos
+bytes de código finalmente registrados en `74f7afa` (envelope) y `b37635b`
+(seam). Los commits no cambiaron los bytes verificados y no hay CI remoto
+asociado.
+
+- `cargo test --locked --offline -p universo-okf windows_diagnostics_tests -- --nocapture`:
+  1 passed/1 failed. El fallo observado es el retry de rename tras la
+  denegación real de apertura descrita arriba (`AperturaFuente`, error 32),
+  seguido por `STATUS_INVALID_HANDLE` en `NtSetInformationFile` con
+  `IO_STATUS_BLOCK.Status=0`; la prueba sintética pasó.
+- `cargo test --locked --offline -p universo-okf transaccion::anclado::renombrar -- --skip windows_diagnostics_tests`:
+  12 passed/6 failed. En esos fallos se observaron cuatro
+  `STATUS_INVALID_HANDLE` y dos `PermissionDenied` al preparar junctions. No
+  se aisló la causa de todos los fallos de rename ni se atribuye al sandbox o
+  a una regresión; este filtro no explica por sí solo los 17 fallos de
+  recovery.
+- Un probe de código temporal, fuera de la suite y no reproducible/publicado,
+  observó `STATUS_INVALID_HANDLE` con handles consultables y duplicados,
+  y `RootDirectory` apuntando al parent; con `RootDirectory=NULL` y basename
+  tuvo éxito. Es solo diagnóstico: no demuestra causa ni es solución de producción.
+- `cargo test --locked --offline -p universo-okf --lib transaccion::journal::recovery::`
+  con `TEMP` y `TMP` del proceso apuntando a `target/codex-verification-tmp`:
+  61 passed, 17 failed, 3 ignored y 347 filtered; exit 1. La suite se ejecutó
+  de nuevo y sigue roja. Los detalles de los filtros focales no identifican la
+  causa de las 17 fallas en conjunto.
+- `cargo test --locked --offline -p universo-okf --lib admision::envelope`:
+  6/6.
+- `cargo fmt --all -- --check`,
+  `cargo clippy --locked --offline --workspace --all-targets -- -D warnings`
+  y `python tools/check_public_boundary.py`: todos terminaron con exit 0.
+- `cargo check --locked --offline --target x86_64-unknown-linux-gnu -p universo-okf --all-targets`:
+  exit 0; es compilación cruzada y no ejecuta pruebas ni runtime Linux.
+- Un intento de ejecutar runtime en WSL devolvió `E_ACCESSDENIED`; no se
+  registra como runtime Linux exitoso ni se atribuye causa al entorno.
+
 - La revisión de privacidad fue manual y de solo lectura sobre los diffs de
   este avance y las fixtures sintéticas del repositorio público. No revisó
   bundles personales ni fue un escáner; no garantiza ausencia de datos
