@@ -596,3 +596,77 @@ fn validar_gate_reconciliacion_c(
     }
     Ok(())
 }
+
+impl<'owner, 'lock> ObservacionIntentConReplayYInventario<'owner, 'lock> {
+    /// Retira el Journal observado y solo devuelve B si una lectura nueva la valida.
+    ///
+    /// El resultado del borrado decide si se intenta observar B; no es un recibo
+    /// ni concede autoridad para cleanup o apply.
+    // El caller productivo se integra en una unidad posterior.
+    #[allow(dead_code)]
+    pub(super) fn retirar_journal_y_observar_b_sin_journal(
+        self,
+    ) -> Result<
+        ObservacionIntentConReplayYInventarioSinJournal<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    > {
+        self.retirar_journal_y_observar_b_sin_journal_con(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn retirar_journal_y_observar_b_sin_journal_con_prueba<F>(
+        self,
+        antes_de_retirar: F,
+    ) -> Result<
+        ObservacionIntentConReplayYInventarioSinJournal<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    >
+    where
+        F: FnOnce(),
+    {
+        self.retirar_journal_y_observar_b_sin_journal_con(antes_de_retirar)
+    }
+
+    fn retirar_journal_y_observar_b_sin_journal_con<F>(
+        self,
+        antes_de_retirar: F,
+    ) -> Result<
+        ObservacionIntentConReplayYInventarioSinJournal<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    >
+    where
+        F: FnOnce(),
+    {
+        let ObservacionIntentConReplayYInventario {
+            _intent: intent_inicial,
+            ..
+        } = self;
+        let observacion_a_fresca = intent_inicial.observar_reconciliacion_a()?;
+
+        antes_de_retirar();
+
+        let resultado = {
+            let owner = &mut *observacion_a_fresca._intent._owner;
+            let lease = owner
+                .journal_temporal_estricto()
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            lease.eliminar_canonico_si_coincide(
+                observacion_a_fresca._identidad_journal,
+                &observacion_a_fresca._journal,
+            )
+        };
+
+        match resultado {
+            super::super::journal_temporal::ResultadoEliminacionJournal::Eliminado
+            | super::super::journal_temporal::ResultadoEliminacionJournal::Ausente => {}
+            super::super::journal_temporal::ResultadoEliminacionJournal::Conflicto(_)
+            | super::super::journal_temporal::ResultadoEliminacionJournal::Indeterminado(_) => {
+                return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+            }
+        }
+
+        observacion_a_fresca
+            ._intent
+            .observar_reconciliacion_b_sin_journal()
+    }
+}

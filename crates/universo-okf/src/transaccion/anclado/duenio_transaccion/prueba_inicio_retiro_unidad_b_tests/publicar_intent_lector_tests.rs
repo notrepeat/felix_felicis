@@ -175,3 +175,6 @@ mod reconciliar_b_tests;
 mod reconciliar_c_tests;
 #[path = "publicar_intent_lector_reopen_process_tests.rs"]
 mod reopen_process_tests;
+
+#[path = "publicar_intent_lector_retirar_journal_tests.rs"]
+mod retirar_journal_tests;
