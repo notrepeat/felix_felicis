@@ -29,13 +29,28 @@ siblings comprueba seis nombres desde el parent retenido. La emisión y
 revalidación de la prueba opaca exigen que el intent canónico y su temporal estén
 ausentes; ese observer no lee su contenido. La ruta especial vuelve a comprobar
 Journal, contexto, replay, root e inventario mientras el intent temporal existe;
-El publicador revalida secuencialmente antes del syscall; P2 prueba que un canónico aparecido tras observar evita la llamada al callback/syscall.
-Eso no vuelve atómica la publicación ni elimina las carreras de escritores externos. El lector canónico y reconciliador
-de reinicio siguen pendientes; su gate debe preservar y bloquear ante un
-`intent.tmp` residual, sin republicarlo ni reintentar. También siguen pendientes
-la retirada del Journal, el intent y el contexto, el cleanup y el caller de producción que
-aplique la tabla vigente. Ni el resultado de comparación ni el inventario son
-prueba o autoridad de admisión.
+P1 hace un único intento `NOREPLACE`: el canary se introduce tras la
+revalidación completa y antes del syscall; el syscall real se ejecuta una vez,
+rechaza el destino ocupado y conserva ambos archivos. P2 prueba que
+un canónico aparecido después de observar deja cero llamadas al callback/syscall,
+aunque el publicador sí se invoca. La mutación de Journal, contexto o root
+invalida antes del syscall; en Linux, mover el parent no invalida y permite
+publicar desde el parent retenido con contador 1 y decoys intactos. Windows no
+ejercita ese move porque sharing lo bloquea. El syscall `NOREPLACE` hace un
+cambio atómico del namespace sin reemplazo; las comprobaciones secuenciales
+alrededor de él no forman un snapshot ni cierran carreras externas.
+
+El lector file-bound del intent canónico ya existe: exige el intent presente y
+los temporales de intent, Journal y contexto ausentes; abre el archivo como
+regular y no-follow, lee como máximo 1537 bytes para rechazar frames mayores de
+1536, usa el decoder existente y vincula el ID y scope medidos con el handle,
+además del parent del Journal almacenado con el parent retenido. Reabre el nombre
+canónico y vuelve a comprobar ID y scope antes de devolver una observación que
+retiene el owner y el `File` final. Ese handle retiene el objeto observado, pero
+no congela sus bytes ni garantiza que el nombre siga ligado a él; el resultado
+es una observación puntual frente a cambios externos.
+
+El lector no exige que existan los nombres canónicos de Journal o contexto y no explica por qué pueden faltar. No crea una prueba normal de replay: esa prueba sigue exigiendo que intent canónico y temporal estén ausentes. El helper privado de inventario recibe un `&Journal` completo como dato; un futuro consumidor puede pasárselo desde el intent, pero el helper no atribuye autoridad a su origen. Deriva backup desde la ubicación interna del owner y stage desde `Journal.transaction_id`, tras revalidar parent, guard, scope y binding del parent. Observa el root con su huella nativa completa (identidad y digest raw) y clasifica presencia o ausencia de backup y stage como datos; mantiene `root_new_validated=false`. El wrapper normal sigue cargando primero el Journal canónico. Ni esa observación ni la del intent autorizan reconciliación, cleanup o apply. La reconciliación de reinicio y la retirada del Journal, el intent y el contexto siguen pendientes, junto con el caller productivo que aplique la tabla vigente. Un `intent.tmp` residual bloquea y se preserva; no se republica ni se reintenta.
 
 La identidad persistida de archivo tiene ahora un DTO
 versionado y acotado que solo convierte desde una identidad observada en un
@@ -845,9 +860,9 @@ global permanece en 4/9.
 | P1, publicador privado | `ee6a1fdb6f88801c983a26dfeb27038427e57740` | 329 (328+/1-) | 84/89; contexto 24/25 |
 | P2, pruebas de carrera | `790011750d4d45d5f8d910dae524b04e0c3132d5` | 348 altas | 88/93 |
 
-P1 cubre publicación exitosa; un canónico canary ya presente en el destino deja
-que se invoque una vez el syscall real `NOREPLACE`, que rechaza el rename por
-ocupación y conserva ambos archivos; y un rename real seguido por error inyectado
+P1 cubre publicación exitosa; en el caso canary, el nombre canónico se introduce
+tras el gate completo y antes del syscall real `NOREPLACE`, que se invoca una vez,
+rechaza el rename por ocupación y conserva ambos archivos; y un rename real seguido por error inyectado
 cuyo resultado se confirma mediante postcondiciones. P2 confirma que si aparece
 un canónico después de observar, la llamada al publicador revalida y retorna
 antes del callback/syscall (cero llamadas al callback/syscall, no cero llamadas
@@ -865,10 +880,44 @@ Linux también pasó. El CI publicado anterior, base
 con Linux 957/0/9 y Windows 940/0/9, 38 resúmenes por sistema, 7 pruebas Python
 por sistema y demo. Ese CI no incluye `ed5`, P1 ni P2. El rollback local es P2,
 luego P1 y luego `ed5`, preservando el lector de contexto, el writer del intent
-y el recovery legacy. El estado global sigue en 4/9: quedan el lector y
-reconciliador, retiro del Journal, del intent y del contexto, cleanup, caller productivo y recovery
-completo; fase 04/U7 siguen parciales. No hay garantía de dirsync, pérdida de
-energía ni cobertura general de montajes.
+y el recovery legacy. Al cerrar P2, el progreso global permanecía en 4/9; el
+lector file-bound y el helper de inventario descritos en el bloque siguiente no
+completan una fase. Siguen pendientes la reconciliación, el retiro del Journal,
+del intent y del contexto, cleanup, caller productivo y recovery completo; fase
+04/U7 siguen parciales. No hay garantía de dirsync, pérdida de energía ni
+cobertura general de montajes.
+
+## Lector file-bound e inventario con Journal almacenado
+
+La API pura `FELIX-RETIRE` de
+`2bfbca587565c310b633904a013ec25ed251e821` expone internamente el decoder y
+la validación del vínculo entre la identidad nativa medida y el DTO persistido,
+además del scope; el Journal completo queda disponible solo como dato de
+lectura. Tuvo 84 líneas de churn y pasó 10/10 pruebas focales en Windows y
+Linux, además de formato, clippy de workspace con todos los targets y
+`-D warnings`, frontera pública, diffcheck y limpieza del harness Linux.
+
+El lector de `734871f998a05a3bea017d012eb7d2b5a7ed7451` tuvo 348 líneas de
+churn y pasó el filtro owner 94/94 en Windows y 99/99 en Linux. El lector
+decodifica el primer handle y luego retiene el handle de la reapertura final,
+validado contra el mismo ID y scope. No vuelve a leer ni a comparar bytes en
+ese segundo handle; la retención no inmoviliza el contenido ni el namespace.
+Su prueba normal de replay sigue bloqueando ante un intent presente. La cobertura
+adicional del reader `3be9ee7d9cca9fab324ba13c08a1a1f834ab3660`
+tuvo 148 líneas de churn; el helper de inventario
+`83e5533d776b33bf12c23c7bfdb3e33f1260bd2f` tuvo 167. El gate combinado pasó
+owner 99/99 en Windows y 104/104 en Linux; formato, clippy workspace con todos
+los targets y `-D warnings`, frontera y diffcheck terminaron con exit 0 en ambos
+sistemas. El resumen de productos Linux y la limpieza del harness también
+terminaron con exit 0.
+
+El CI exacto de la base publicada `e579` (run `38903272871`) terminó SUCCESS:
+Linux 964/0/9 y Windows 947/0/9 en 38 resúmenes Cargo por sistema, además de 7
+pruebas Python y el demo por sistema. Es anterior y no cubre la API pura
+`2bfbca587565c310b633904a013ec25ed251e821`, el lector
+`734871f998a05a3bea017d012eb7d2b5a7ed7451` ni las unidades locales posteriores.
+El estado global permanece en 4/9; U7 y fase 04 siguen parciales. No hay garantía de
+dirsync, pérdida de energía, cobertura general de montajes o recovery completo.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
