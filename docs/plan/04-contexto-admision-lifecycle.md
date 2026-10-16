@@ -140,8 +140,9 @@ confirma la identidad que posee.
   cuota inclusiva y errores redactados. El decoder owned puro también está
   implementado; exige journal canónico `Prepared`, reconstruye y liga el
   contexto, y sus pruebas cubren roundtrip/replay, fases, binding, journal
-  inválido y corrupción inner. No hay I/O ni caller. `FELIX-ADMCTX` v1 conserva
-  su wire; las funciones siguen `pub(crate)`.
+  inválido y corrupción inner. El reader genérico sobre `Read` exige EOF y no
+  abre rutas ni se conecta a un caller. `FELIX-ADMCTX` v1 conserva su wire; las
+  funciones siguen `pub(crate)`.
 - Si encoder y decoder con sus pruebas superan 400 líneas de churn, se separan
   en dos commits por comportamiento: primero codificación canónica con límite
   combinado; después preflight/decode y pruebas de corrupción/binding. Cada

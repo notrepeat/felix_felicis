@@ -66,9 +66,11 @@ implementado en `admision/envelope/codec.rs` y pasa al codec interior solo la
 cuota restante antes de reservar. El preflight exterior devuelve vistas
 prestadas y valida el framing sin decodificar payloads. El decoder exterior
 owned en memoria parsea el journal v1 canónico en `Prepared`, reconstruye el
-contexto interior y liga sus metadatos inmutables. I/O y callers siguen
-pendientes; el wire y wrapper interior no cambian. El filtro focal local del
-codec exterior pasó 10/10 pruebas en Windows. `bc38412` incorpora un preflight
+contexto interior y liga sus metadatos inmutables. El lector genérico sobre
+`Read` valida el tamaño antes de reservar y exige EOF tras el frame; no abre
+rutas ni admite streams persistentes. Persistencia y callers siguen pendientes;
+el wire y wrapper interior no cambian. El filtro focal local del codec exterior
+pasó 10/10 pruebas en Windows. `bc38412` incorpora un preflight
 lector con vistas
 prestadas, cubierto con pruebas de robustez en `ef79ea7`. El decoder owned ya
 está implementado en memoria: reconstruye las entradas raw por ruta, tipo y bytes;
@@ -116,9 +118,10 @@ journal → contexto. También fija cortes, preservación de huérfanos y límit
 durabilidad. Es diseño para un futuro flujo; no autoriza I/O ni un caller de
 producción.
 
-El encoder exterior es una unidad pura en memoria, mantiene `felix-journal-v1`
-sin cambios y no tiene I/O ni caller. El decoder, persistencia y recovery
-context-aware requieren otra revisión. En particular, antes de integrarlos se debe demostrar el
+El encoder y decoder exterior son codecs puros, mantienen `felix-journal-v1`
+sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un
+caller. La persistencia y recovery context-aware requieren otra revisión. En
+particular, antes de integrarlos se debe demostrar el
 dispatch entre transacciones nuevas y journals v1 legacy: los journals legacy
 sin auxiliar siguen exactamente el recovery actual. El codec y el binding no
 son autoridad para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar el
@@ -143,6 +146,12 @@ diagnósticos 2/2 y filtros focales 37/37. `cargo fmt`, clippy con warnings
 denegados y el chequeo de frontera pública terminaron verdes. La repetición de
 runtime nativo en WSL se canceló ante la orden de detener; no cuenta como
 resultado ni como runtime Linux exitoso.
+
+El CI remoto exacto de `713cec7f629c794c635a6ae8a89b1c1d8a619559` (run
+`38833928734`) terminó SUCCESS en Linux y Windows, en ambos jobs y todos sus
+pasos. La suite del workspace en WSL terminó con exit 0, aunque su salida no
+conservó un conteo agregado. Esa evidencia precede y no cubre el reader de esta
+unidad.
 
 En este worktree posterior, sin SHA ni CI propios, el filtro del encoder
 exterior terminó 3/3, el filtro del codec interior 2/2 y

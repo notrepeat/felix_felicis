@@ -21,8 +21,12 @@ const CONTEXT_LENGTH_BYTES: usize = 8;
 #[allow(dead_code)]
 mod decodificar;
 mod lectura;
+#[allow(dead_code)]
+mod leer;
 #[allow(dead_code, unused_imports)]
 pub(crate) use decodificar::decodificar;
+#[allow(dead_code, unused_imports)]
+pub(crate) use leer::leer;
 
 /// Codifica el vínculo y contexto en un framing único de cuota inclusiva.
 pub(crate) fn codificar(
@@ -117,6 +121,7 @@ fn mapear_error_contexto(error: ErrorCodecAdmision) -> ErrorCodecEnvelopeAdmisio
 pub(crate) enum ErrorCodecEnvelopeAdmision {
     FramingInvalido,
     VersionNoSoportada,
+    LecturaFallida,
     JournalInvalido,
     ContextoInvalido,
     TotalExcedeLimite,
@@ -129,6 +134,7 @@ impl ErrorCodecEnvelopeAdmision {
         match self {
             Self::FramingInvalido => "admission_envelope_framing_invalid",
             Self::VersionNoSoportada => "admission_envelope_version_unsupported",
+            Self::LecturaFallida => "admission_envelope_read_failed",
             Self::JournalInvalido => "admission_envelope_journal_invalid",
             Self::ContextoInvalido => "admission_envelope_context_invalid",
             Self::TotalExcedeLimite => "admission_envelope_limit",
