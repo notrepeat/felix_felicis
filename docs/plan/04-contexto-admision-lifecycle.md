@@ -37,8 +37,9 @@ transición real de apply ni que un caller haya instalado `New`. La unidad local
 `69f3842e9b208aeadaf7721d84a9fc0d07b541af` añade
 `PruebaReplayAdmitidoRootCoincidente::revalidar(self)`,
 que consume la prueba y solo la reemite después de revalidar el mismo owner,
-guard, parent y scope; comprobar los cuatro siblings; y recargar el ID y el
-Journal completo, incluida su fase. Relee identidad, longitud y SHA-256 del
+guard, parent y scope; comprobar los cuatro slots de journal/contexto; y
+recargar el ID y el Journal completo, incluida su fase. Relee identidad,
+longitud y SHA-256 del
 contexto, comprueba binding y replay soportados de nuevo y exige que root siga
 coincidiendo. Sus tests cubren reemisión sin cambios e invalidación ante avance sintético de
 `Installed` a `Committed`, frame cambiado de igual longitud con el mismo ID y
@@ -71,6 +72,29 @@ prueba original, su revalidación, el observer y la tabla legacy. El rollback de
 `revalidar`; luego se revierten el método, wiring y tests de revalidación,
 conservando la prueba original, el observer y la tabla legacy. Véase
 `04-contexto-admision.md` para condiciones completas y límites.
+
+La extensión de namespace `36bd34a55cddcb53bb6c4154f83474635c49ebd5` hace que
+el observer del owner compruebe seis nombres sibling desde el parent retenido.
+Los dos slots nuevos son el intent canónico y su temporal; solo su presencia se
+observa, sin leer ni parsear su contenido. La emisión y revalidación de la prueba
+opaca requieren que ambos estén ausentes; cualquier presencia o error de
+verificación bloquea y preserva. No hay writer, reconciliador, cleanup ni
+preflight global del intent.
+
+El commit tuvo 256 líneas de churn real (235 altas, 21 bajas y cinco paths).
+El filtro `cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion`
+pasó Windows 58/58 y Linux 63/63. Formato, clippy de workspace con todos los
+targets y `-D warnings`, frontera pública y diffcheck terminaron verdes en ambos
+sistemas; el cleanup del harness Linux pasó. Linux ejercitó el componente
+demasiado largo y el parent movido con decoys. En Windows, el sharing bloqueó
+el movimiento y el test informó que no ejercitó los decoys; la fixture larga no
+pudo prepararse. El CI exacto de `e8cd77e` (run `38877305256`) es anterior y no
+cubre este commit: en 38 targets reportó Linux 921 pass/0 fail/9 ignored y
+Windows 906 pass/0 fail/9 ignored, más 7 pruebas Python por sistema. El rollback
+de `36bd34a` retira solo la extensión de seis
+slots y sus pruebas/wiring, devolviendo al preflight anterior de cuatro; el
+codec de datos y el recovery legacy quedan intactos. El detalle de límites y
+fixtures está en [04-contexto-admision.md](04-contexto-admision.md#evidencia-de-verificación).
 La unidad `66e8419f63ffd409eaf687fc7aa54183613ac19c` añade métodos de captura
 fija sobre el root abierto desde el parent retenido y bajo el lock. Los gates
 locales de esa unidad pasaron; el detalle y sus límites están en la evidencia
@@ -177,9 +201,25 @@ y el temporal añade `.tmp`. No acepta rutas ni nombres del caller:
 
 | Artefacto | Nombre sibling | Uso |
 |---|---|---|
-| Contexto publicado | `.<basename>.felix.admctx` | Sibling que la primitiva publica y confirma; no concede autoridad. |
+| Journal | `.<basename>.felix.journal` | Nombre canónico `felix-journal-v1`; el lease lo carga y valida. |
+| Temporal de journal | `.<basename>.felix.journal.tmp` | El observer comprueba presencia; no interpreta este slot. |
+| Contexto publicado | `.<basename>.felix.admctx` | Sibling que la primitiva publica y confirma; el lease lector decodifica el frame. |
 | Temporal de contexto | `.<basename>.felix.admctx.tmp` | Creación exclusiva y fuente que se verifica antes de publicar. |
-| Journal | `.<basename>.felix.journal` | Se conserva exactamente `felix-journal-v1`. |
+| Intent de retiro | `.<basename>.felix.admctx-retire` | El observer comprueba presencia, sin leer ni parsear el contenido. |
+| Temporal del intent | `.<basename>.felix.admctx-retire.tmp` | Presencia bloquea la prueba; no hay creación ni reconciliación. |
+
+El observer informa hechos de presencia secuenciales bajo el lock. Solo la
+ausencia observada se clasifica como `Ausente`; los errores de tipo, reparse,
+scope, identidad o nombre demasiado largo fallan cerrados. La lista no es un
+snapshot frente a escritores externos y no habilita una operación.
+
+Las pruebas ejercitan presencia en ambos slots nuevos: la emisión se bloquea
+y una prueba previamente emitida deja de revalidar, preservando los canarios.
+El filtro focal reproducible, ejecutado en Windows y Linux, es:
+
+```text
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion
+```
 
 El contexto puede contener los bytes privados completos de `Old`, la
 configuración y la propuesta. El temporal usa modo `0600` en Unix y ACL heredada

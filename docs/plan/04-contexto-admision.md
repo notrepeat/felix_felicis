@@ -11,11 +11,14 @@ recovery ni se conecta a apply. Los tags fijos del snapshot no avalan la
 propuesta: su admisión debe verificarse por separado. Ya existe un coordinador
 privado que carga journal y contexto con leases secuenciales, valida el replay y
 compara esa huella con `NewEsperado`; devuelve datos de comparación, no una
-decisión de recovery. El observador privado nuevo carga el journal canónico y
-clasifica root, backup y stage con `root_new_validated=false`; también devuelve
-solo datos y no escoge una fila. La cobertura combinada de storage y namespace
-quedó verificada en `996ec93f91da61a33e6130b4f5a858de70ef79a1`; sus resultados
-y límites están registrados abajo. Falta el caller de
+decisión de recovery. El observer del inventario carga el journal canónico y
+clasifica root, backup y stage con `root_new_validated=false`; devuelve solo
+datos. Por separado, el observer de siblings comprueba seis nombres desde el
+parent retenido. La emisión
+y revalidación de la prueba opaca exigen que el intent canónico y su temporal
+estén ausentes; el observer no lee su contenido ni inicia una retirada. La
+extensión local `36bd34a55cddcb53bb6c4154f83474635c49ebd5` y sus resultados
+están registrados abajo. Falta el caller de
 producción que aplique la tabla vigente, además de cleanup y preflight global
 de huérfanos. Ni el resultado de comparación ni el inventario son prueba o
 autoridad de admisión. La identidad persistida de archivo tiene ahora un DTO
@@ -27,7 +30,8 @@ fila de recovery. La unidad local
 `69f3842e9b208aeadaf7721d84a9fc0d07b541af` añade
 `PruebaReplayAdmitidoRootCoincidente::revalidar(self)`: consume la prueba y
 solo la reemite tras revalidar el mismo owner, lock, parent y scope, comprobar
-los cuatro siblings, recargar el ID y el Journal completo, releer identidad,
+los cuatro slots de journal/contexto, recargar el ID y el Journal completo,
+releer identidad,
 longitud y SHA-256 del contexto, repetir el replay soportado y observar que
 root aún coincide. Sus pruebas cubren reemisión sin cambios e invalidación
 ante avance sintético `Installed`→`Committed`, un frame distinto de igual
@@ -448,7 +452,8 @@ demuestran que un caller instaló `New`.
 
 El método local `PruebaReplayAdmitidoRootCoincidente::revalidar(self)`
 consume y reemite la prueba solo después de revalidar guard, parent y scope,
-observar los cuatro siblings, y recargar el ID y Journal completo, incluida su
+observar los cuatro slots de journal/contexto, y recargar el ID y Journal
+completo, incluida su
 fase. También compara la identidad, longitud y SHA-256 del contexto, vuelve a
 comprobar binding y replay soportados, y exige que la huella del root siga
 coincidiendo. La igualdad del Journal es semántica del registro completo; el
@@ -609,8 +614,47 @@ canónico. El CI remoto exacto `0fac7be` (run `38875241340`) es anterior: Linux
 914/0/9 y Windows 899/0/9 en 38 resúmenes, más 7 pruebas Python por sistema; no
 cubre estas unidades. Revertir `6e134924` conserva el codec base; retirar luego
 `4bf4789` elimina el DTO y su wiring sin cambiar los codecs de journal/contexto
-ni el recovery legacy. El intent aún no se crea, descubre, reconcilia ni retira
-desde el filesystem.
+ni el recovery legacy. El intent aún no se crea, parsea, reconcilia ni retira
+desde el filesystem. El observer solo comprueba la presencia de sus nombres
+canónico y temporal; si uno está presente o no se puede verificar, la prueba
+nueva se bloquea y el archivo se preserva.
+
+La unidad de namespace `36bd34a55cddcb53bb6c4154f83474635c49ebd5` añade al
+observer dos slots derivados internamente del basename: el intent canónico
+`.<basename>.felix.admctx-retire` y su temporal
+`.<basename>.felix.admctx-retire.tmp`. Junto con el journal y el contexto, el
+owner observa así seis nombres relativos al parent retenido. Para cada entrada,
+solo una ausencia observada se informa como `Ausente`; las presentes se
+validan por tipo, scope e identidad del mismo handle, sin leer payload. Un
+error de tipo, reparse, scope, identidad o componente demasiado largo falla
+cerrado. Es una observación secuencial, no un snapshot frente a writers externos
+ni un preflight global. La presencia de cualquiera de los dos slots del intent
+impide emitir o revalidar la prueba de replay admitido; no se intenta
+interpretar, publicar, reconciliar o limpiar el archivo. Las pruebas de ambos
+slots verifican el bloqueo de emisión y la invalidación de una prueba ya emitida,
+conservando los canarios observados.
+
+El commit tiene 256 líneas de churn real (235 altas y 21 bajas, cinco paths).
+El filtro focal reproducible, ejecutado en Windows y Linux, es:
+
+```text
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion
+```
+
+Pasó Windows 58/58 y Linux 63/63. Formato, clippy de workspace con todos
+los targets y `-D warnings`, chequeo de frontera pública y diffcheck terminaron
+verdes en ambos; la limpieza del harness Linux terminó con exit 0. Linux
+ejercitó el nombre que supera el límite del componente y el parent movido con
+decoys. En Windows, el sharing bloqueó el movimiento del parent y la rama
+explícita no ejercitó los decoys; la fixture de longitud límite está condicionada
+a Linux y no se ejecuta en Windows.
+El CI exacto de `e8cd77e` (run `38877305256`) es anterior y no cubre este
+commit: en 38 targets reportó Linux 921 pass/0 fail/9 ignored y Windows 906
+pass/0 fail/9 ignored, más 7 pruebas Python por sistema. El rollback de
+`36bd34a` retira la extensión de seis nombres y sus
+pruebas/wiring, restaurando el preflight previo de cuatro; el codec de datos
+`FELIX-RETIRE` y el recovery legacy permanecen intactos. Esta unidad no cambia
+4/9: U7 y fase 04 siguen parciales.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
