@@ -2,8 +2,8 @@
 
 **Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
 valores de datos en memoria con codecs privados. El lifecycle documenta las
-primitivas de lectura, creación temporal y publicación canónica confirmada del
-contexto.
+primitivas de lectura, creación temporal, publicación canónica, verificación raw y
+retiro estricto del contexto; el flujo de transacción sigue incompleto.
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -73,8 +73,11 @@ El consumidor privado A→Journal→B revalida la observación A completa antes 
 intentar retirar el Journal una vez mediante el lease estricto. Solo tras un
 resultado `Eliminado` o `Ausente` observa B y devuelve esa observación si su
 gate completo pasa; `Conflicto` o `Indeterminado` no se convierten en prueba de
-que no hubo efecto ni habilitan retry. El consumidor no retira Context o Intent,
-no completa recovery ni tiene caller productivo. Un `intent.tmp` residual
+que no hubo efecto ni habilitan retry. El consumidor A→Journal→B conserva su
+alcance: no retira Context o Intent, no completa recovery ni tiene caller
+productivo. El puente privado B→Context→C añade un intento strict de retirar
+Context a partir de una B fresca; el Intent y un caller productivo siguen
+pendientes. Un `intent.tmp` residual
 bloquea y se preserva; no se republica ni se reintenta.
 
 La observación local A solo acepta Journal, contexto e intent canónicos presentes,
@@ -1149,9 +1152,9 @@ loss, cobertura general de mounts ni recovery completo.
 
 U1 (`1d5302b70de0f57db18baad1346fa0c5e9aba639`, 259 líneas de churn) añade
 la emisión del lease estricto del Journal y su lectura con scope. Los
-constructores legacy conservan `None` y no consultan el probe. El camino estricto
-valida ID y scope del parent, y la lectura comprueba el scope del archivo en el
-mismo handle abierto.
+constructores legacy mantienen su comportamiento y no consultan el probe. El
+camino estricto valida ID y scope del parent, y la lectura comprueba el scope
+del archivo en el mismo handle abierto.
 
 U2 (`dee43d028ec3cb42a5a406885733141ba000d645`, 324 líneas) extiende el helper
 de borrado existente: valida el scope de la fuente en el handle final que
@@ -1202,6 +1205,79 @@ parciales.
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
 identifican por sí solos la causa de los fallos observados entonces.
+
+## Verificación raw y retiro estricto de Context
+
+U1 (`21716d1d7161ab894bd0e664f4c4caff701b6576`, 249 líneas de churn)
+añade la verificación raw del Context canónico bajo el owner retenido. Revalida
+parent, lock y scope antes y después; abre el archivo no-follow y regular, y
+contrasta en el mismo objeto la identidad, longitud y SHA-256 con la
+EvidenciaLecturaContexto recibida, comprueba EOF y respeta la cuota compartida
+de 512 MiB. Devuelve el File verificado, no reconstruye un DTO ni concede
+autoridad. Su filtro focal
+pasó Windows 28/0/0 y Linux 29/0/0. Formato, clippy workspace, frontera y
+diffcheck terminaron con exit 0 en ambos sistemas; cleanup Linux terminó 0.
+Los primeros lanzamientos fallaron en setup y stderr de PowerShell; las
+corridas corregidas, registradas como `context-u1-*-corrected` y capturas de
+sesión, son las acreditadas.
+
+U2a (`bc1dcdab3f217fe7c13dba282092988b4d4d77c4`, 167 líneas) distingue una
+ausencia real del error de lectura o discrepancia: solo NotFound/EntradaAusente
+produce None; el wrapper estricto lo mapea a CanonicalUnverified y la lectura
+temporal a TemporaryUnverified. Los lectores legacy conservan su semántica.
+El filtro pasó Windows 30/0/0 y Linux 31/0/0; formato, clippy workspace,
+frontera, diffcheck y cleanup Linux terminaron con exit 0.
+
+U2b (`6858014ec2d3dfd1d083ef02b2f87c4c198843e7`, 368 líneas) añade una
+operación privada para retirar Context. Reusa la lectura raw U1 y la
+distinción de ausencia U2a. Revalida owner, parent, lock y scope antes y después
+de una sola llamada. Comprueba el scope en el handle final usado para el intento
+y confirma con una lectura strict fresca. En Windows valida con DELETE ese mismo
+handle final; en Unix queda una carrera residual entre la validación y unlinkat.
+Si el owner no puede verificarse al confirmar, el resultado queda indeterminado;
+las discrepancias observadas son conflictos. No hay retry ni se infiere ausencia
+desde un error genérico.
+El filtro pasó Windows 33/0/0 y Linux 35/0/0; formato, clippy workspace,
+frontera, diffcheck y cleanup Linux terminaron con exit 0.
+
+U2c (`ad5b2f8c170c1a748d58af1a97ada7a8f495adc0`, 251 líneas) amplía solo las
+pruebas de resultados del intento: ausencia previa, callback con error o éxito
+sin retirar, ausencia tras error, contenido cambiado con el mismo ID, reemplazo
+con el mismo frame y otro ID, y pérdida de verificación del lock. Los casos
+inyectados prueban la clasificación del callback, no los syscalls productivos.
+Tras invalidar las caches de paquete, la suite focal nueva pasó Windows 39/0/0
+(6 casos aplicables) y Linux 42/0/0 (7 casos); se verificaron los nombres de
+test y el dep-info del módulo. Clippy workspace con todos los targets y
+`-D warnings` terminó 0 en ambos sistemas; producto, cleanup y runner Linux
+terminaron 0. Formato, frontera y diffcheck ya habían quedado en 0 en el pase
+inicial; no se repitieron. Los primeros conteos 33/35 usaron un binario
+reutilizado sin los nombres nuevos y no se acreditan como prueba de U2c.
+
+El CI exacto de la base publicada `e4fe35d6ee687ad57ccbd12b20f2cf6003a3eac5`
+(run `38924787482`) terminó SUCCESS: Linux 1022/0/9 y Windows 1005/0/9, con
+38 resúmenes Cargo, 7 pruebas Python y demos por sistema. Precede y excluye
+U1, U2a, U2b, U2c y el puente. Los gates locales descritos para U1, U2a, U2b
+y U2c se completaron antes de publicar este lote. El rollback del lote
+integrado retira primero el puente, luego U2c, U2b, U2a y U1. Los leases y
+lectores legacy conservan su comportamiento; la compatibilidad v1 no cambia.
+
+El puente privado B → Context → C está en el commit local
+`4918a2016e58a4ad24ad477caf10323d4e5d6c6f` (333 líneas: 71 de lector, 3 de
+wiring y 259 de pruebas). Obtiene una B fresca, usa su evidencia Context y hace
+un único intento con el lease strict; solo `Eliminado` o `Ausente` permite
+observar C. C base comprueba el namespace, no el root. La prueba que muta el
+root después de B confirma que la extensión separada de consistencia root
+rechaza esa mutación, aunque C base pueda observarse. El puente retiene el
+intent, no reintenta y no interpreta errores como ausencia de efecto.
+El filtro owner pasó Windows 134/0/0 y Linux 139/0/0; se verificaron cinco
+nombres nuevos y el dep-info del módulo. Formato, clippy workspace con todos
+los targets y `-D warnings`, frontera y diffcheck terminaron con exit 0 en
+ambos sistemas. Producto, cleanup y launcher Linux terminaron con exit 0.
+Las corridas usaron runtime Rust 1.88 con `locked` y `offline`. No completa
+recovery, no limpia el intent y no tiene caller productivo. Las comprobaciones
+no forman un snapshot frente a escritores externos. El estado global permanece
+en 4/9, con fase 04 y U7 parciales; no se afirma dirsync, power loss, cobertura
+general de mounts ni recovery completo.
 
 ### Evidencia histórica de avances anteriores
 
