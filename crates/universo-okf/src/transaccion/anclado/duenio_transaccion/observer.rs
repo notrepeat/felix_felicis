@@ -10,6 +10,7 @@ use crate::transaccion::journal::recovery::{
 use crate::transaccion::journal::{ArtifactFingerprint, Journal};
 use crate::transaccion::snapshot::calcular_digest_raw_tree;
 
+use super::super::{metadata_directorio, scope_filesystem};
 use super::{DuenioTransaccionAnclado, ErrorDuenioTransaccionAnclado};
 
 impl DuenioTransaccionAnclado<'_> {
@@ -28,8 +29,29 @@ impl DuenioTransaccionAnclado<'_> {
                 .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?
                 .1
         };
-        let parent_esperado = self
-            .identidad_parent
+        let inventario = self.observar_inventario_recovery_con_journal_datos(&journal)?;
+        Ok((journal, inventario))
+    }
+
+    /// Observa siblings usando un Journal ya disponible como dato.
+    ///
+    /// No carga ni requiere el Journal canónico; tampoco produce una prueba de
+    /// replay, admisión, cleanup o aplicación.
+    pub(super) fn observar_inventario_recovery_con_journal_datos(
+        &mut self,
+        journal: &Journal,
+    ) -> Result<RecoveryInventory, ErrorDuenioTransaccionAnclado> {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let identidad_parent = metadata_directorio(&parent)
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let scope_parent =
+            scope_filesystem(&parent).map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        if identidad_parent != self.identidad_parent || scope_parent != self.scope_parent {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+        let parent_esperado = identidad_parent
             .journal_identity()
             .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
         if journal.parent() != &parent_esperado {
@@ -69,7 +91,7 @@ impl DuenioTransaccionAnclado<'_> {
             root_new_validated: false,
         };
 
-        Ok((journal, inventario))
+        Ok(inventario)
     }
 
     fn observar_sibling(
@@ -100,3 +122,7 @@ mod tests;
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "observer_storage_edges_tests.rs"]
 mod storage_edges_tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "observer_journal_datos_tests.rs"]
+mod journal_datos_tests;
