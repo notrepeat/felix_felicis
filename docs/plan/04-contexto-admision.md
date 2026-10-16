@@ -11,9 +11,14 @@ recovery ni se conecta a apply. Los tags fijos del snapshot no avalan la
 propuesta: su admisión debe verificarse por separado. Ya existe un coordinador
 privado que carga journal y contexto con leases secuenciales, valida el replay y
 compara esa huella con `NewEsperado`; devuelve datos de comparación, no una
-decisión de recovery. Falta el caller de producción que aplique la tabla
-vigente, además de cleanup y preflight global de huérfanos. El valor no es
-prueba ni autoridad de admisión. La unidad A añade una prueba opaca que solo
+decisión de recovery. El observador privado nuevo carga el journal canónico y
+clasifica root, backup y stage con `root_new_validated=false`; también devuelve
+solo datos y no escoge una fila. La cobertura combinada de storage y namespace
+quedó verificada en `996ec93f91da61a33e6130b4f5a858de70ef79a1`; sus resultados
+y límites están registrados abajo. Falta el caller de
+producción que aplique la tabla vigente, además de cleanup y preflight global
+de huérfanos. Ni el resultado de comparación ni el inventario son prueba o
+autoridad de admisión. La unidad A añade una prueba opaca que solo
 confirma replay admitido y huella root coincidente en `Installed` o `Committed`;
 no prueba que un caller instaló `New` ni elige una fila de recovery. Una
 recuperación futura debe revalidar el root antes de volver a aceptar `New`
@@ -433,6 +438,44 @@ alterado con el mismo ID. Una compilación inicial detectó un movimiento de
 gates verdes. El CI remoto b699 es anterior y no cubre B. Ninguna de estas
 pruebas habilita una fila, cleanup, apply ni recovery.
 
+El refactor local `dc75aecc9177ee39376fc4ff191055d78cadc1b0` extrae una apertura
+relativa de siblings desde el parent retenido y conserva el orden de
+revalidación y las validaciones del root. Sus filtros registraron owner 39/39
+en Windows y 41/41 en Linux; el filtro de captura soportada fue 4/4 en ambos,
+incluido dentro del conteo del owner y sin sumarlo aparte.
+Formato, clippy de workspace, frontera pública y diffcheck terminaron verdes;
+la limpieza del harness Linux terminó con exit 0.
+
+El commit local `b4d2b88563527fcc3d17124153b0be1472fde87f` añade un observador
+privado que carga el journal canónico y observa root, backup y stage desde el
+parent retenido. Devuelve `Journal` y `RecoveryInventory` como datos y mantiene
+`root_new_validated=false`; no selecciona fila ni ejecuta recovery o cleanup.
+El core pasó filtros locales Windows owner 43/43, contexto 24/24 y envelope
+24/24; Linux owner 46/46, contexto 25/25 y envelope 24/24. Formato, clippy de
+workspace, frontera pública y diffcheck pasaron; la limpieza del harness Linux
+terminó con exit 0.
+
+La extensión combinada de pruebas de storage y namespace quedó integrada en
+`996ec93f91da61a33e6130b4f5a858de70ef79a1` con 342 líneas de churn real. Los
+filtros locales pasaron Windows owner 47/47, contexto 24/24 y envelope 24/24;
+Linux owner 50/50, contexto 25/25 y envelope 24/24. Formato, clippy de
+workspace con todos los targets y `-D warnings`, frontera pública y diffcheck
+terminaron verdes en ambos sistemas; la limpieza del harness Linux pasó.
+Las fixtures cubren root ausente con backup Old y stage New, journal ausente,
+parent del journal incompatible y parent movido con siblings decoy. Los
+errores de journal ausente o parent incompatible fallan cerrados; las
+observaciones conservan IDs y bytes. Linux ejercitó el parent movido y los
+decoys; la prueba falla si el rename no ocurre. En Windows, sharing con
+códigos 5/32/33 bloqueó el movimiento y la rama explícita informó que no
+ejercitó el decoy. Son fixtures sintéticas de observación, no admisión,
+instalación por un caller ni recovery.
+
+El CI remoto exacto de la base `ce5337ed5b63ae1910a6778e41fea3df50043a8a`
+(run `38866490446`) terminó SUCCESS en Linux y Windows. En 38 targets reportó
+Linux 888 pass/0 fail/9 ignored y Windows 874 pass/0 fail/9 ignored, además de
+7 pruebas Python por sistema. Ese run precede y no cubre el refactor
+`dc75aecc`, el observer `b4d2b885` ni la cobertura `996ec93f`.
+
 Los filtros focales reproducibles, ejecutados por separado en Windows y Linux, son:
 
 ```text
@@ -442,9 +485,18 @@ cargo test --locked --offline -p universo-okf --lib transaccion::admision::envel
 ```
 
 Son fixtures sintéticas del filesystem bajo el lock cooperante; no ejecutan apply
-ni recovery. El rollback de B revierte su commit y quita solo la extensión de
-pruebas auxiliares/wiring, conservando A. El rollback de A retira su productor,
-test y wiring/reexport; no altera el journal v1 ni las rutas legacy de recovery.
+ni recovery. El rollback de `996ec93f` retira solo la cobertura test-only y su
+wiring, conservando el observer core. Para retirar el observer, primero se
+revierte esa cobertura dependiente; después se retiran el módulo, las pruebas
+core y el wiring de `b4d2b885`. Solo entonces se revierte el helper compartido
+`dc75aecc`, que el observer utiliza para abrir siblings desde el parent
+retenido. Ese helper refactor no modifica el recovery legacy; ningún paso de
+esta secuencia cambia el journal v1 ni sus rutas legacy.
+
+La nota histórica de rollback de las unidades de prueba de la attestation sigue
+aplicando por separado: revertir B (`0f2187c`) quita solo su cobertura y wiring,
+conservando A (`b3b16c6`); revertir A retira su productor, prueba y
+wiring/reexport, sin alterar el journal v1 ni el recovery legacy.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

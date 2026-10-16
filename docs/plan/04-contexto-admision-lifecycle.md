@@ -247,6 +247,41 @@ que posee.
   contenido root distinto con el mismo ID. Una compilación inicial detectó un
   movimiento de `PathBuf` en dos aserciones; se corrigió tomando la referencia.
   El CI b69941b es anterior y no incluye esta unidad.
+- El refactor privado del opener sibling `dc75aecc9177ee39376fc4ff191055d78cadc1b0`
+  pasó filtros focales owner 39/39 en Windows y 41/41 en Linux, además del
+  filtro de captura soportada 4/4 en ambos; ese filtro está incluido en el
+  conteo del owner y no se suma aparte. Formato, clippy de workspace,
+  frontera pública, diffcheck y limpieza Linux terminaron verdes. Mantiene la
+  revalidación de parent y scope antes de abrir el sibling.
+- El observer core local `b4d2b88563527fcc3d17124153b0be1472fde87f` pasó owner
+  43/43, contexto 24/24 y envelope 24/24 en Windows; Linux owner 46/46,
+  contexto 25/25 y envelope 24/24. Formato, clippy de workspace, frontera
+  pública, diffcheck y limpieza Linux terminaron verdes. Devuelve únicamente
+  `Journal` y datos `RecoveryInventory`, con `root_new_validated=false`.
+  La extensión combinada test-only `996ec93f91da61a33e6130b4f5a858de70ef79a1`
+  añadió 342 líneas de churn y pasó filtros locales Windows owner 47/47,
+  contexto 24/24 y envelope 24/24; Linux owner 50/50, contexto 25/25 y envelope
+  24/24. Formato, clippy de workspace con todos los targets y `-D warnings`,
+  frontera pública y diffcheck terminaron verdes en ambos sistemas; la limpieza
+  del harness Linux pasó. Las pruebas cubren root ausente con backup Old y
+  stage New, journal ausente o ligado a otro parent y parent movido con decoys.
+  Los errores de journal ausente y parent incompatible fallan cerrados y se
+  preservan IDs y bytes. Linux ejercitó el parent movido; la prueba falla si el
+  rename no ocurre. En Windows, sharing con códigos 5/32/33 bloqueó el rename y
+  la rama declaró explícitamente que no ejercitó el decoy. Son datos de
+  observación sintéticos: no ejecutan admisión, apply, recovery o cleanup.
+  El rollback de `996ec93f` retira solo las pruebas test-only y su wiring,
+  conservando el observer core. Para quitar el observer, primero se retira esa
+  cobertura dependiente; después se revierten su módulo, sus pruebas core y su
+  wiring de `b4d2b885`. Solo entonces se retira el helper compartido
+  `dc75aecc`, del que depende el observer para abrir siblings desde el parent
+  retenido. El helper no modifica el recovery legacy; la secuencia no cambia
+  `felix-journal-v1` ni sus rutas legacy.
+- El CI remoto exacto de la base `ce5337ed5b63ae1910a6778e41fea3df50043a8a`
+  (run `38866490446`) terminó SUCCESS. Reportó Linux 888 pass/0 fail/9 ignored
+  y Windows 874 pass/0 fail/9 ignored en 38 targets, además de 7 pruebas
+  Python por sistema. Es anterior y no cubre el refactor, el observer core ni
+  la cobertura `996ec93f`.
 - El observer raw del root y `comparar_root_replay` devuelven datos bajo el lock,
   no autoridad. La fixture local prepara un `New` raw real, reabre journal y
   contexto tras readquirir el lock en el mismo proceso y compara el replay con
