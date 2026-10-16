@@ -26,7 +26,7 @@ const FIXED_BYTES: usize = MAGIC.len()
     + SCOPE_BYTES
     + CONTEXT_LENGTH_BYTES
     + CONTEXT_DIGEST_BYTES;
-const MAX_INTENT_BYTES: usize =
+pub(super) const MAX_INTENT_BYTES: usize =
     FIXED_BYTES + MAX_JOURNAL_BYTES + 3 * MAX_PERSISTED_FILE_ID_FRAME_BYTES;
 
 /// Registro persistible experimental; todos sus campos son comparadores de datos.

@@ -1,12 +1,16 @@
 //! Prueba fresca y estricta para comenzar el retiro experimental.
 
 use std::fmt;
+use std::io::Read;
+
+use sha2::{Digest, Sha256};
 
 use crate::transaccion::journal::JournalState;
 use crate::transaccion::journal::recovery::ArtifactState;
 
 use super::{
-    ErrorPruebaReplayRootCoincidente, IntentTemporalEscrito, PruebaReplayAdmitidoRootCoincidente,
+    ErrorPruebaReplayRootCoincidente, IntentTemporalEscrito, IntentTemporalVerificado,
+    PruebaReplayAdmitidoRootCoincidente,
 };
 
 /// Retiene la prueba validada y su mismo owner/lock; no autoriza borrados.
@@ -101,6 +105,92 @@ impl<'owner, 'lock> PruebaInicioRetiroContexto<'owner, 'lock> {
             _inicio: PruebaInicioRetiroContexto { _prueba: prueba },
             datos,
             frame_esperado,
+        })
+    }
+}
+
+impl<'owner, 'lock> IntentTemporalEscrito<'owner, 'lock> {
+    /// Reabre el nombre temporal exacto desde el parent retenido y contrasta
+    /// el mismo handle con la identidad y el frame que escribió el creador.
+    /// No repite el replay ni entrega autoridad de publicación o cleanup.
+    pub(super) fn verificar_temporal(
+        self,
+    ) -> Result<IntentTemporalVerificado<'owner, 'lock>, ErrorPruebaReplayRootCoincidente> {
+        let prueba = &self._inicio._prueba;
+        let parent = prueba
+            ._owner
+            .parent_revalidado()
+            .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+        let nombre_temporal = {
+            let ubicacion = prueba._owner._lock.ubicacion();
+            let basename = ubicacion
+                .ruta()
+                .file_name()
+                .ok_or(ErrorPruebaReplayRootCoincidente)?;
+            let canonico =
+                super::super::observar_siblings_nuevo_flujo::nombre_intent_retiro(basename)
+                    .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+            super::super::super::contexto_admision::nombre_temporal_sibling(&canonico)
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+        };
+        let mut archivo = super::super::super::abrir::abrir_entrada_relativa(
+            &parent,
+            &nombre_temporal,
+            super::super::super::TipoEntradaAnclada::Archivo,
+        )
+        .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+
+        let metadata = archivo
+            .metadata()
+            .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+        if metadata.file_type().is_symlink()
+            || super::super::super::metadata_es_reparse(&metadata)
+            || !metadata.is_file()
+            || super::super::super::scope_filesystem(&archivo)
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+                != prueba.scope_parent
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let longitud_esperada = self.frame_esperado.len();
+        if longitud_esperada == 0
+            || longitud_esperada > super::super::super::intent_persistido::MAX_INTENT_BYTES
+            || longitud_esperada != self.datos.longitud
+            || metadata.len()
+                != u64::try_from(longitud_esperada).map_err(|_| ErrorPruebaReplayRootCoincidente)?
+            || super::super::super::identidad_archivo(&archivo)
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+                != self.datos.identidad_archivo
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let digest_esperado: [u8; 32] = Sha256::digest(&self.frame_esperado).into();
+        if digest_esperado != self.datos.digest {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let limite = u64::try_from(longitud_esperada)
+            .ok()
+            .and_then(|longitud| longitud.checked_add(1))
+            .ok_or(ErrorPruebaReplayRootCoincidente)?;
+        let mut bytes = Vec::with_capacity(longitud_esperada);
+        (&mut archivo)
+            .take(limite)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+        let digest_observado: [u8; 32] = Sha256::digest(&bytes).into();
+        if bytes.len() != longitud_esperada
+            || bytes != self.frame_esperado
+            || digest_observado != self.datos.digest
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        Ok(IntentTemporalVerificado {
+            _escrito: self,
+            _archivo: archivo,
         })
     }
 }

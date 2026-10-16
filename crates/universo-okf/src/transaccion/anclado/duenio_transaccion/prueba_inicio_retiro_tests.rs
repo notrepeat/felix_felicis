@@ -293,3 +293,251 @@ fn revalida_el_journal_antes_de_create_new_y_preserva_mutacion() {
     verificar_storage(&fixture, ids_storage);
     assert_eq!(fs::read(&ruta_journal).unwrap(), bytes_journal_mutado);
 }
+
+fn escribir_intent<'owner, 'lock>(
+    owner: &'owner mut DuenioTransaccionAnclado<'lock>,
+) -> super::super::super::IntentTemporalEscrito<'owner, 'lock> {
+    owner
+        .probar_replay_admitido_root_coincidente()
+        .unwrap()
+        .preparar_retiro_contexto()
+        .unwrap()
+        .escribir_intent_temporal()
+        .unwrap()
+}
+
+fn verificar_rechaza(escrito: super::super::super::IntentTemporalEscrito<'_, '_>) {
+    let error = escrito.verificar_temporal().unwrap_err();
+    assert_eq!(error.to_string(), "admission_replay_root_not_proven");
+    assert_eq!(format!("{error:?}"), "ErrorPruebaReplayRootCoincidente");
+}
+
+#[test]
+fn verifica_el_temporal_visible_por_id_scope_frame_y_eof() {
+    let temp = tempdir().unwrap();
+    let mut fixture = preparar_fixture(&temp.path().join("parent"), false);
+    avanzar_a(&mut fixture, JournalState::Committed);
+    let ids_storage = capturar_storage(&fixture);
+    let (_, temporary_path) = intent_paths(&fixture);
+    let bytes_esperados = {
+        let mut lock = LockEscritura::adquirir_en(&fixture.publicada.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let escrito = escribir_intent(&mut owner);
+        let bytes = fs::read(&temporary_path).unwrap();
+
+        let verificado = escrito.verificar_temporal().unwrap();
+        assert_eq!(format!("{verificado:?}"), "IntentTemporalVerificado { .. }");
+        drop(verificado);
+        bytes
+    };
+
+    assert_eq!(fs::read(&temporary_path).unwrap(), bytes_esperados);
+    verificar_storage(&fixture, ids_storage);
+}
+
+#[test]
+fn ausencia_del_nombre_temporal_falla_sin_crearlo() {
+    let temp = tempdir().unwrap();
+    let mut fixture = preparar_fixture(&temp.path().join("parent"), false);
+    avanzar_a(&mut fixture, JournalState::Committed);
+    let ids_storage = capturar_storage(&fixture);
+    let (canonical_path, temporary_path) = intent_paths(&fixture);
+    let mut lock = LockEscritura::adquirir_en(&fixture.publicada.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let escrito = escribir_intent(&mut owner);
+    fs::remove_file(&temporary_path).unwrap();
+
+    verificar_rechaza(escrito);
+
+    assert!(!temporary_path.exists());
+    assert!(!canonical_path.exists());
+    verificar_storage(&fixture, ids_storage);
+}
+
+#[test]
+fn mismo_frame_con_id_distinto_falla_y_preserva_original_y_reemplazo() {
+    let temp = tempdir().unwrap();
+    let mut fixture = preparar_fixture(&temp.path().join("parent"), false);
+    avanzar_a(&mut fixture, JournalState::Committed);
+    let ids_storage = capturar_storage(&fixture);
+    let (_, temporary_path) = intent_paths(&fixture);
+    let retained_path = temporary_path.with_file_name("retained-original-intent");
+    let mut lock = LockEscritura::adquirir_en(&fixture.publicada.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let escrito = escribir_intent(&mut owner);
+    let bytes_originales = fs::read(&temporary_path).unwrap();
+    let identidad_original = id_archivo(&temporary_path);
+    fs::rename(&temporary_path, &retained_path).unwrap();
+    fs::write(&temporary_path, &bytes_originales).unwrap();
+    let identidad_reemplazo = id_archivo(&temporary_path);
+    assert_ne!(identidad_original, identidad_reemplazo);
+
+    verificar_rechaza(escrito);
+
+    assert_eq!(fs::read(&retained_path).unwrap(), bytes_originales);
+    assert_eq!(fs::read(&temporary_path).unwrap(), bytes_originales);
+    assert!(id_archivo(&retained_path) == identidad_original);
+    assert!(id_archivo(&temporary_path) == identidad_reemplazo);
+    verificar_storage(&fixture, ids_storage);
+}
+
+#[test]
+fn mutacion_in_place_de_igual_longitud_falla_y_preserva_el_archivo() {
+    let temp = tempdir().unwrap();
+    let mut fixture = preparar_fixture(&temp.path().join("parent"), false);
+    avanzar_a(&mut fixture, JournalState::Committed);
+    let ids_storage = capturar_storage(&fixture);
+    let (_, temporary_path) = intent_paths(&fixture);
+    let mut lock = LockEscritura::adquirir_en(&fixture.publicada.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let escrito = escribir_intent(&mut owner);
+    let identidad_original = id_archivo(&temporary_path);
+    let bytes_originales = fs::read(&temporary_path).unwrap();
+    let mut bytes_mutados = bytes_originales.clone();
+    bytes_mutados[0] ^= 1;
+    assert_eq!(bytes_mutados.len(), bytes_originales.len());
+    fs::write(&temporary_path, &bytes_mutados).unwrap();
+    assert!(id_archivo(&temporary_path) == identidad_original);
+
+    verificar_rechaza(escrito);
+
+    assert_eq!(fs::read(&temporary_path).unwrap(), bytes_mutados);
+    assert!(id_archivo(&temporary_path) == identidad_original);
+    verificar_storage(&fixture, ids_storage);
+}
+
+#[test]
+fn longitudes_cortas_y_extra_fallan_sin_alterar_el_archivo() {
+    for agrega_byte in [false, true] {
+        let temp = tempdir().unwrap();
+        let mut fixture = preparar_fixture(&temp.path().join("parent"), false);
+        avanzar_a(&mut fixture, JournalState::Committed);
+        let ids_storage = capturar_storage(&fixture);
+        let (_, temporary_path) = intent_paths(&fixture);
+        let mut lock = LockEscritura::adquirir_en(&fixture.publicada.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let escrito = escribir_intent(&mut owner);
+        let identidad_original = id_archivo(&temporary_path);
+        let bytes_originales = fs::read(&temporary_path).unwrap();
+        let mut bytes_modificados = bytes_originales.clone();
+        if agrega_byte {
+            bytes_modificados.push(0xa5);
+        } else {
+            bytes_modificados.pop().unwrap();
+        }
+        fs::write(&temporary_path, &bytes_modificados).unwrap();
+        assert!(id_archivo(&temporary_path) == identidad_original);
+
+        verificar_rechaza(escrito);
+
+        assert_eq!(fs::read(&temporary_path).unwrap(), bytes_modificados);
+        assert!(id_archivo(&temporary_path) == identidad_original);
+        verificar_storage(&fixture, ids_storage);
+    }
+}
+
+#[test]
+fn parent_movido_con_decoys_reabre_desde_el_handle_retenido() {
+    let temp = tempdir().unwrap();
+    let mut fixture = preparar_fixture(&temp.path().join("parent"), false);
+    avanzar_a(&mut fixture, JournalState::Committed);
+    let parent_original = fixture
+        .publicada
+        .ubicacion
+        .ruta()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let parent_retenido = parent_original.with_file_name("parent-retained");
+    let path_root = fixture.publicada.ubicacion.ruta().to_path_buf();
+    let nombre_root = path_root.file_name().unwrap().to_os_string();
+    let path_journal = fixture
+        .publicada
+        .ubicacion
+        .journal()
+        .as_path()
+        .to_path_buf();
+    let nombre_journal = path_journal.file_name().unwrap().to_os_string();
+    let path_contexto = contexto_path(&fixture.publicada.ubicacion);
+    let nombre_contexto = path_contexto.file_name().unwrap().to_os_string();
+    let path_lock = fixture.publicada.ubicacion.lock().as_path().to_path_buf();
+    let bytes_lock = fs::read(&path_lock).unwrap();
+    let bytes_journal = fs::read(&path_journal).unwrap();
+    let bytes_contexto = fs::read(&path_contexto).unwrap();
+    let identidad_root = identidad_directorio(&fixture.publicada.root);
+    let identidad_journal = id_archivo(&path_journal);
+    let identidad_contexto = id_archivo(&path_contexto);
+    let (_, temporary_path) = intent_paths(&fixture);
+    let mut lock = LockEscritura::adquirir_en(&fixture.publicada.ubicacion).unwrap();
+    let identidad_guard = lock.identidad_archivo_lock().unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let escrito = escribir_intent(&mut owner);
+    let bytes_intent = fs::read(&temporary_path).unwrap();
+    let identidad_intent = id_archivo(&temporary_path);
+
+    if let Err(error) = fs::rename(&parent_original, &parent_retenido) {
+        #[cfg(windows)]
+        {
+            assert!(matches!(
+                error.raw_os_error(),
+                Some(5) | Some(32) | Some(33)
+            ));
+            assert!(parent_original.is_dir());
+            assert!(!parent_retenido.exists());
+            drop(escrito);
+            assert_eq!(
+                owner._lock.identidad_archivo_lock().unwrap(),
+                identidad_guard
+            );
+            drop(owner);
+            drop(lock);
+            assert_eq!(fs::read(&temporary_path).unwrap(), bytes_intent);
+            assert!(id_archivo(&temporary_path) == identidad_intent);
+            eprintln!(
+                "Windows bloqueó el rename del parent; no se ejercitaron los decoys de intent."
+            );
+            return;
+        }
+        #[cfg(not(windows))]
+        panic!("no se pudo mover el parent retenido: {error}");
+    }
+
+    fs::create_dir(&parent_original).unwrap();
+    let decoy_lock = parent_original.join(path_lock.file_name().unwrap());
+    fs::write(&decoy_lock, &bytes_lock).unwrap();
+    let identidad_decoy_lock = id_archivo(&decoy_lock);
+    assert_ne!(identidad_decoy_lock, identidad_guard);
+
+    let decoy_root = parent_original.join(&nombre_root);
+    fs::create_dir(&decoy_root).unwrap();
+    fs::write(decoy_root.join("decoy-canary"), b"root decoy").unwrap();
+    let decoy_journal = parent_original.join(&nombre_journal);
+    fs::write(&decoy_journal, b"journal decoy canary").unwrap();
+    let decoy_contexto = parent_original.join(&nombre_contexto);
+    fs::write(&decoy_contexto, b"context decoy canary").unwrap();
+    fs::write(&temporary_path, b"intent decoy canary").unwrap();
+
+    let verificado = escrito.verificar_temporal().unwrap();
+    assert_eq!(format!("{verificado:?}"), "IntentTemporalVerificado { .. }");
+    drop(verificado);
+
+    let original_root = parent_retenido.join(&nombre_root);
+    let original_journal = parent_retenido.join(&nombre_journal);
+    let original_contexto = parent_retenido.join(&nombre_contexto);
+    let original_intent = parent_retenido.join(temporary_path.file_name().unwrap());
+    assert!(identidad_directorio(&original_root) == identidad_root);
+    assert!(id_archivo(&original_journal) == identidad_journal);
+    assert!(id_archivo(&original_contexto) == identidad_contexto);
+    assert!(id_archivo(&original_intent) == identidad_intent);
+    assert_eq!(fs::read(&original_journal).unwrap(), bytes_journal);
+    assert_eq!(fs::read(&original_contexto).unwrap(), bytes_contexto);
+    assert_eq!(fs::read(&original_intent).unwrap(), bytes_intent);
+    assert_eq!(
+        fs::read(decoy_root.join("decoy-canary")).unwrap(),
+        b"root decoy"
+    );
+    assert_eq!(fs::read(decoy_journal).unwrap(), b"journal decoy canary");
+    assert_eq!(fs::read(decoy_contexto).unwrap(), b"context decoy canary");
+    assert_eq!(fs::read(&temporary_path).unwrap(), b"intent decoy canary");
+    assert_eq!(fs::read(&decoy_lock).unwrap(), bytes_lock);
+}

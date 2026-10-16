@@ -1,6 +1,7 @@
 //! Prueba opaca de replay soportado y root observado coincidente.
 
 use std::fmt;
+use std::fs::File;
 use std::sync::Arc;
 
 use crate::transaccion::admision::envelope::ErrorEnvelopeAdmision;
@@ -231,6 +232,23 @@ pub(super) struct IntentTemporalEscrito<'owner, 'lock> {
 impl fmt::Debug for IntentTemporalEscrito<'_, '_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("IntentTemporalEscrito { .. }")
+    }
+}
+
+/// Reapertura comprobada del intent temporal bajo el mismo owner.
+///
+/// Conserva el handle y la prueba que lo produjo. Solo acredita el nombre,
+/// identidad, scope y frame observados; no vuelve a validar journal, contexto,
+/// replay, root, backup o stage ni autoriza publicación o cleanup. La observación
+/// es puntual frente a cambios externos.
+pub(super) struct IntentTemporalVerificado<'owner, 'lock> {
+    _escrito: IntentTemporalEscrito<'owner, 'lock>,
+    _archivo: File,
+}
+
+impl fmt::Debug for IntentTemporalVerificado<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("IntentTemporalVerificado { .. }")
     }
 }
 
