@@ -466,5 +466,33 @@ diffcheck y cleanup Linux terminaron verdes. El CI de la base
 cubre esta unidad. El rollback retira la factory y sus tests/wiring, dejando
 intacto el consumidor, la prueba previa y la tabla legacy.
 
+La unidad local `3e2760d0baaa9ff7faed7e89f9790d8d234782a7` extrae el helper
+compartido para abrir y validar un temporal, y ofrece `crear_vacio` seguido de
+`ArchivoTemporalVacio::escribir`, que usa `write_all` y `sync_all`. La capacidad
+retiene el handle del temporal, su ID del mismo handle y el préstamo del parent
+con identidad y scope capturados. No adquiere ni conserva `LockEscritura` ni
+el owner. Una escritura rechaza un archivo que ya no esté vacío; si falla
+después de crear el nombre, lo conserva sin cleanup. La ruta existente
+`crear_con` mantiene su orden y comportamiento. Esto prepara una futura
+integración, pero no escribe ni publica un intent y no confirma su reapertura.
+
+El commit tuvo 318 líneas de churn real en dos paths. Los filtros
+`transaccion::anclado::archivo_temporal`,
+`transaccion::anclado::contexto_admision` y
+`transaccion::anclado::journal_temporal`, ejecutados con
+`cargo test --locked --offline -p universo-okf --lib <filtro>`, pasaron en
+Windows 12/12, 24/24 y 59/59, y en Linux 13/13, 25/25 y 60/60. Formato,
+clippy de workspace con todos los targets y `-D warnings`, frontera pública y
+diffcheck pasaron en ambos; la limpieza del harness Linux terminó con exit 0.
+Linux ejercitó el parent movido con decoy. En Windows el sharing impidió el
+rename y el test dejó explícito que no ejercitó ese escenario. El rollback
+retira el helper/capacidad y sus pruebas, preservando `crear_con`, el codec y
+el recovery legacy. El CI exacto de la base
+`a0093f898bb8f5c71540e879703d6449ba120113` (run `38880090980`) terminó SUCCESS
+con Linux 931 pass/0 fail/9 ignored y Windows 914/0/9 en 38 resúmenes, más
+7 pruebas Python por sistema. Es anterior y no cubre la unidad temporal vacía.
+No cambia 4/9: U7 y fase 04 siguen parciales; no se añade writer de intent,
+publicación, cleanup ni caller productivo.
+
 El lifecycle documentado no cierra fase 04 ni U7, no agrega callers de
 producción y no cambia el progreso global de 4/9.

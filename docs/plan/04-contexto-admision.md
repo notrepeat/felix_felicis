@@ -682,6 +682,41 @@ rollback retira solo la factory y sus tests/wiring, conservando el consumidor,
 la prueba y revalidación, el observer y la tabla legacy. No cambia 4/9; U7 y
 fase 04 siguen parciales.
 
+La unidad local `3e2760d0baaa9ff7faed7e89f9790d8d234782a7` extrae la apertura y
+validación común del temporal y añade `crear_vacio` más una escritura concreta
+con `write_all` y `sync_all`. La capacidad `ArchivoTemporalVacio` conserva el
+handle del archivo, su identidad medida desde ese handle y el parent retenido
+con su identidad y scope. No adquiere ni retiene por sí misma el lock ni al
+owner; una operación futura debe mantener su propia prueba ligada al owner.
+`crear_con` conserva su orden y comportamiento previos. La nueva capacidad
+rechaza una escritura si el archivo dejó de estar vacío; los errores posteriores
+a su creación preservan el archivo y no ejecutan cleanup. Esta primitiva no
+escribe un intent, no publica ni elimina nombres y no demuestra durabilidad del
+directorio o resistencia a pérdida de energía.
+
+El cambio tuvo 318 líneas de churn real en dos paths. Estos filtros focales
+pasaron en Windows y Linux:
+
+```text
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::archivo_temporal
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::contexto_admision
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::journal_temporal
+```
+
+Los filtros reportaron respectivamente Windows 12/12, 24/24 y 59/59, y Linux
+13/13, 25/25 y 60/60. Formato, clippy de workspace con todos los targets y
+`-D warnings`, frontera pública y diffcheck pasaron en ambos sistemas; la
+limpieza del harness Linux terminó con exit 0. Linux ejercitó el parent movido
+y el decoy; en Windows el sharing bloqueó el rename y esa rama indicó que el
+decoy no se ejercitó. El rollback revierte la extracción y la capacidad nueva
+junto con sus pruebas, conservando el comportamiento previo de `crear_con`,
+el codec de datos y el recovery legacy. El CI exacto de la base
+`a0093f898bb8f5c71540e879703d6449ba120113` (run `38880090980`) terminó SUCCESS
+en ambos jobs: Linux 931 pass/0 fail/9 ignored y Windows 914/0/9 en 38
+resúmenes, además de 7 pruebas Python por sistema. Ese CI precede y no cubre
+esta unidad. U7 y fase 04 continúan parciales; no se agrega writer de intent,
+publicación, cleanup ni caller productivo.
+
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
 identifican por sí solos la causa de los fallos observados entonces.
