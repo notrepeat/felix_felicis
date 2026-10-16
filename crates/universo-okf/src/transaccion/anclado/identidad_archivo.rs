@@ -6,6 +6,9 @@ use std::io;
 #[cfg(not(any(unix, windows)))]
 use std::marker::PhantomData;
 
+#[path = "identidad_persistida.rs"]
+pub(super) mod persistida;
+
 /// Identidad de un archivo basada en el objeto del filesystem, no en su ruta.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IdentidadArchivo {
