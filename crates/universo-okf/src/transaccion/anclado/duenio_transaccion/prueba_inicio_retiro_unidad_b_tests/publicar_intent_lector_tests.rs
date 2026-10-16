@@ -154,3 +154,6 @@ fn frame_truncado_extra_y_oversize_fallan_sin_alterar_identidad() {
         assert!(id_archivo(&canonico) == identidad);
     }
 }
+
+#[path = "publicar_intent_lector_parent_tests.rs"]
+mod parent_binding_tests;
