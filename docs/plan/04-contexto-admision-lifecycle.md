@@ -13,9 +13,12 @@ contexto, con un máximo total de 1536 bytes. La base pasó 3/3 pruebas focales
 en Windows y Linux. La cobertura complementaria de
 `6e1349246b71ed5acb82cab7927bcde1cc84b738` llevó el filtro a 7/7 por sistema;
 formato, clippy, frontera, diffcheck y limpieza Linux también terminaron verdes.
-Existe un writer temporal privado de intent, pero todavía no hay verificación del
-nombre visible, publicación, reconciliación ni retiro; el lector del archivo
-persistido también sigue pendiente. El writer se describe al final de esta nota.
+Existe un writer temporal privado de intent y un verificador que reabre el
+nombre exacto desde el parent retenido y contrasta tipo, scope, ID, longitud,
+bytes, SHA-256 y EOF en el mismo handle. Esa verificación solo acredita el
+archivo observado: no revalida Journal/contexto/replay/root ni el inventario,
+y no publica, reconcilia o retira. Sigue pendiente el lector/reconciliador de
+un intent persistido tras reiniciar; ambos pasos se describen al final de esta nota.
 También existe `DuenioTransaccionAnclado::desde_lock`: retiene el lock y el
 parent, captura identidad, scope y autoridad, y exige que el lock sibling
 visible corresponda al handle del guard. El dueño emite leases secuenciales
@@ -513,12 +516,38 @@ los targets y `-D warnings`, frontera pública y diffcheck pasaron en ambos; la
 limpieza del harness Linux terminó con exit 0. El CI exacto de la base
 `c5fe6d28f3c78b94fa07315c8fcedcd35393bb4b` (run `38881213774`) terminó SUCCESS
 con Linux 938 pass/0 fail/9 ignored y Windows 921/0/9 en 38 resúmenes, más
-7 pruebas Python por sistema; no cubre este commit. La verificación que reabra
-el nombre temporal desde el parent retenido sigue pendiente, al igual que la
-publicación, cleanup y caller productivo. No hubo fixture UNC de runtime. El
+7 pruebas Python por sistema; no cubre este commit. En esa unidad todavía
+quedaba pendiente reabrir el nombre temporal desde el parent retenido, además
+de la publicación, cleanup y caller productivo. No hubo fixture UNC de runtime. El
 rollback retira el writer y sus seams/tests, dejando la factory, el helper de
 temporal vacío y el recovery legacy. U7 y fase 04 siguen parciales; el progreso
 global permanece en 4/9.
+
+El commit local `fa96f27e7fc684726727d548c26073eafdd5076d` añade
+`IntentTemporalEscrito::verificar_temporal`. Consume el writer y reabre el
+nombre temporal exacto mediante el parent retenido. `IntentTemporalVerificado`
+conserva el proof y el `File` de lectura; valida en ese mismo handle que el
+archivo sea regular, no reparse y esté en el scope esperado, que su identidad
+coincida con la medida al crear, y que longitud, bytes, SHA-256 y EOF coincidan
+con el frame esperado acotado. Linux ejercitó el parent movido y decoys; Windows
+no pudo mover el parent porque sharing bloqueó el rename, y la rama lo declara
+sin afirmar que ejercitó el decoy. La operación no vuelve a validar el Journal,
+el contexto, el replay, el root ni backup/stage, y no da autoridad de
+publicación o cleanup. La prueba normal sigue rechazando la presencia de
+cualquiera de los nombres de intent; este verificador no relaja ese gate.
+
+El cambio tuvo 360 líneas de churn real (358 altas y 2 bajas). El filtro focal
+`cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion`
+pasó 72/72 en Windows y 77/77 en Linux. Formato, clippy de workspace con todos
+los targets y `-D warnings`, frontera pública, diffcheck y cleanup terminaron
+verdes. El CI exacto de la base `e359b02` (run `38884144988`) terminó SUCCESS
+en ambos sistemas; reportó Linux 942 pass/0 fail/9 ignored y Windows 925/0/9
+en 38 resúmenes, más 7 pruebas Python por sistema y el demo. Es anterior y no
+cubre `fa96f27`. El rollback retira el verificador y sus pruebas conservando el
+writer temporal y el recovery legacy. La revalidación completa inmediatamente
+antes de publicación, la publicación misma, reconciliación, cleanup y caller
+productivo siguen pendientes; no hubo fixture UNC de runtime. U7 y fase 04
+siguen parciales; el progreso global permanece en 4/9.
 
 El lifecycle documentado no cierra fase 04 ni U7, no agrega callers de
 producción y no cambia el progreso global de 4/9.

@@ -3,9 +3,12 @@
 **Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
 valores de datos en memoria con codecs privados. El lifecycle documenta las
 primitivas de lectura, creación temporal, verificación y publicación canónica del
-contexto ya implementadas. También existe un writer privado para crear y
-sincronizar el intent temporal; todavía no verifica el nombre visible ni lo
-publica. El dueño observa el root raw desde el parent retenido y devuelve
+contexto ya implementadas. También existen un writer privado del intent
+temporal y un verificador de solo archivo que reabre su nombre exacto desde el
+parent retenido. El token conserva el `File` de lectura y el proof. El
+verificador comprueba en el mismo handle tipo, scope, ID, longitud, bytes,
+SHA-256 y EOF; no revalida Journal/contexto/replay/root ni publica el intent o
+autoriza cleanup. El dueño observa el root raw desde el parent retenido y devuelve
 la huella como dato. `capturar_snapshot_soportado` y su variante CAS capturan
 desde ese root abierto bajo el lock retenido y devuelven un `Snapshot` de datos.
 El CAS compara el token antes de validar procedencia o parsear, pero no ejecuta
@@ -18,8 +21,8 @@ clasifica root, backup y stage con `root_new_validated=false`; devuelve solo
 datos. Por separado, el observer de siblings comprueba seis nombres desde el
 parent retenido. La emisión
 y revalidación de la prueba opaca exigen que el intent canónico y su temporal
-estén ausentes; el observer no lee su contenido. El writer temporal de retiro
-se describe más abajo y todavía no lo publica. La extensión local `36bd34a55cddcb53bb6c4154f83474635c49ebd5` y sus resultados
+estén ausentes; el observer no lee su contenido. Esa ruta estricta no se relaja
+por la verificación de archivo del intent descrita más abajo. La extensión local `36bd34a55cddcb53bb6c4154f83474635c49ebd5` y sus resultados
 están registrados abajo. Falta el caller de
 producción que aplique la tabla vigente, además de cleanup y preflight global
 de huérfanos. Ni el resultado de comparación ni el inventario son prueba o
@@ -753,9 +756,37 @@ con Linux 938 pass/0 fail/9 ignored y Windows 921/0/9 en 38 resúmenes, además
 de 7 pruebas Python por sistema. Ese CI precede y no cubre el writer. El
 rollback retira el writer y sus pruebas/seams, preservando la factory y el
 helper de temporal vacío, los codecs v1 y el recovery legacy. La verificación
-que reabra el nombre temporal desde el parent retenido sigue pendiente; también
-lo están la publicación, cleanup, preflight global y caller productivo. U7 y
-fase 04 siguen parciales; el progreso global permanece en 4/9.
+completa que revalide Journal, contexto, replay, root e inventario antes de
+publicar sigue pendiente; también lo están la publicación, cleanup, preflight
+global y caller productivo. U7 y fase 04 siguen parciales; el progreso global
+permanece en 4/9.
+
+El commit local `fa96f27e7fc684726727d548c26073eafdd5076d` añade
+`IntentTemporalEscrito::verificar_temporal`. Consume el estado escrito y abre
+el nombre temporal exacto desde el parent retenido. La prueba opaca conserva el
+handle de lectura y el proof; el verificador comprueba en ese mismo handle que
+el archivo sea regular y no reparse, que su scope coincida, que su ID sea el
+medido al crear, y que longitud, bytes, SHA-256 y EOF coincidan con el frame
+esperado acotado. Esto acredita solo el nombre y archivo observados en esa
+operación: no revalida de nuevo el Journal/contexto/replay/root, el inventario
+backup/stage ni el namespace completo, y no concede autoridad de publicación
+o cleanup. La prueba normal sigue exigiendo ambos nombres de intent ausentes;
+esta operación especial no la relaja. La publicación y una revalidación
+completa inmediatamente anterior siguen pendientes.
+
+La unidad tuvo 360 líneas de churn real (358 altas y 2 bajas). El filtro focal
+`cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion`
+pasó Windows 72/72 y Linux 77/77. Formato, clippy de workspace con todos los
+targets y `-D warnings`, frontera pública, diffcheck y cleanup terminaron
+verdes. Linux ejercitó parent movido y decoys; en Windows sharing bloqueó el
+rename y la rama indicó que el escenario no se ejercitó. El CI exacto de la
+base `e359b02` (run `38884144988`) terminó SUCCESS en ambos sistemas, pero es
+anterior y no cubre `fa96f27`: reportó Linux 942 pass/0 fail/9 ignored y
+Windows 925/0/9 en 38 resúmenes por sistema, además de 7 pruebas Python por
+sistema y el demo. El
+rollback retira la verificación y sus pruebas sin cambiar el writer temporal,
+el verificador de contexto ni el recovery legacy. U7 y fase 04 siguen
+parciales; el progreso global permanece en 4/9.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
