@@ -63,8 +63,10 @@ crate-private y experimentales; el encoder actual calcula una cuota de 512 MiB
 que incluye su propio framing. El envelope exterior combinado, que también
 incluye journal y encuadre, sigue experimental. Su encoder puro en memoria está
 implementado en `admision/envelope/codec.rs` y pasa al codec interior solo la
-cuota restante antes de reservar. El decoder exterior, I/O y callers siguen
-pendientes; el wire y wrapper interior no cambian. `bc38412` incorpora un
+cuota restante antes de reservar. El preflight exterior devuelve vistas
+prestadas y valida el framing sin decodificar payloads. El decoder exterior
+semántico, I/O y callers siguen pendientes; el wire y wrapper interior no
+cambian. `bc38412` incorpora un
 preflight lector con vistas
 prestadas, cubierto con pruebas de robustez en `ef79ea7`. El decoder owned ya
 está implementado en memoria: reconstruye las entradas raw por ruta, tipo y bytes;

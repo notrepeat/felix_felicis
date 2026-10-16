@@ -18,6 +18,8 @@ const HEADER_BYTES: usize = MAGIC.len() + 2 + 8;
 const JOURNAL_LENGTH_BYTES: usize = 4;
 const CONTEXT_LENGTH_BYTES: usize = 8;
 
+mod lectura;
+
 /// Codifica el vínculo y contexto en un framing único de cuota inclusiva.
 pub(crate) fn codificar(
     envelope: &EnvelopeContextoAdmision,
@@ -106,9 +108,11 @@ fn mapear_error_contexto(error: ErrorCodecAdmision) -> ErrorCodecEnvelopeAdmisio
     }
 }
 
-/// Errores fijos y redactados del encoder exterior.
+/// Errores fijos y redactados del codec exterior.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCodecEnvelopeAdmision {
+    FramingInvalido,
+    VersionNoSoportada,
     JournalInvalido,
     ContextoInvalido,
     TotalExcedeLimite,
@@ -119,6 +123,8 @@ pub(crate) enum ErrorCodecEnvelopeAdmision {
 impl ErrorCodecEnvelopeAdmision {
     pub(crate) const fn codigo(self) -> &'static str {
         match self {
+            Self::FramingInvalido => "admission_envelope_framing_invalid",
+            Self::VersionNoSoportada => "admission_envelope_version_unsupported",
             Self::JournalInvalido => "admission_envelope_journal_invalid",
             Self::ContextoInvalido => "admission_envelope_context_invalid",
             Self::TotalExcedeLimite => "admission_envelope_limit",
