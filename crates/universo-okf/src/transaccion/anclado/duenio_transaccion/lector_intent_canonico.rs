@@ -354,3 +354,121 @@ fn validar_gate_reconciliacion_a(
     }
     Ok(())
 }
+
+/// Observación de replay para intent presente, Journal canónico ausente y
+/// Contexto canónico presente. El Journal retenido solo es dato del intent.
+#[must_use = "la observación conserva el intent file-bound y el owner"]
+// El consumidor futuro de esta observación aún no forma parte del corte B.
+#[allow(dead_code)]
+pub(super) struct ObservacionIntentConReplayYInventarioSinJournal<'owner, 'lock> {
+    _intent: ObservacionIntentCanonico<'owner, 'lock>,
+    _journal: crate::transaccion::journal::Journal,
+    _evidencia_contexto: crate::transaccion::anclado::contexto_admision::EvidenciaLecturaContexto,
+    _huella_replay: crate::transaccion::journal::ArtifactFingerprint,
+    _inventario: crate::transaccion::journal::recovery::RecoveryInventory,
+}
+
+impl fmt::Debug for ObservacionIntentConReplayYInventarioSinJournal<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionIntentConReplayYInventarioSinJournal { .. }")
+    }
+}
+
+impl<'owner, 'lock> ObservacionIntentCanonico<'owner, 'lock> {
+    /// Observa replay con el Journal Committed guardado en el intent como dato.
+    /// No infiere por qué falta el Journal canónico ni entrega autoridad.
+    // El consumidor de reconciliación no se integra en esta unidad.
+    #[allow(dead_code)]
+    pub(super) fn observar_reconciliacion_b_sin_journal(
+        self,
+    ) -> Result<
+        ObservacionIntentConReplayYInventarioSinJournal<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    > {
+        let observacion_inicial = self.revalidar()?;
+        let (journal, evidencia_contexto, huella_replay, inventario) = {
+            let registro = &observacion_inicial._registro;
+            let owner = &mut *observacion_inicial._owner;
+            validar_gate_reconciliacion_b(owner)?;
+
+            let journal = registro.journal().clone();
+            let parent_esperado = owner
+                .identidad_parent
+                .journal_identity()
+                .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            if journal.state() != crate::transaccion::journal::JournalState::Committed
+                || journal.parent() != &parent_esperado
+            {
+                return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+            }
+
+            let (envelope, evidencia_contexto) = {
+                let lease = owner
+                    .contexto_admision()
+                    .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+                lease
+                    .leer_canonico_con_evidencia()
+                    .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?
+                    .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?
+            };
+            registro
+                .validar_vinculo_contexto(
+                    evidencia_contexto.identidad_archivo,
+                    evidencia_contexto.longitud,
+                    evidencia_contexto.sha256,
+                )
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+
+            let replay = envelope
+                .validar_replay_soportado(&journal)
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            if replay.new_fingerprint() != journal.new_fingerprint() {
+                return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+            }
+            let huella_replay = replay.new_fingerprint().clone();
+
+            let inventario = owner
+                .observar_inventario_recovery_con_journal_datos(&journal)
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            use crate::transaccion::journal::recovery::ArtifactState;
+            if inventario.root != ArtifactState::New
+                || inventario.backup != ArtifactState::Absent
+                || inventario.stage != ArtifactState::Absent
+                || inventario.root_new_validated
+            {
+                return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+            }
+            validar_gate_reconciliacion_b(owner)?;
+
+            (journal, evidencia_contexto, huella_replay, inventario)
+        };
+
+        let intent_final = observacion_inicial.revalidar()?;
+        validar_gate_reconciliacion_b(&mut *intent_final._owner)?;
+
+        Ok(ObservacionIntentConReplayYInventarioSinJournal {
+            _intent: intent_final,
+            _journal: journal,
+            _evidencia_contexto: evidencia_contexto,
+            _huella_replay: huella_replay,
+            _inventario: inventario,
+        })
+    }
+}
+
+fn validar_gate_reconciliacion_b(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+) -> Result<(), ErrorDuenioTransaccionAnclado> {
+    let siblings = owner.observar_siblings_nuevo_flujo()?;
+    use PresenciaSiblingNuevoFlujo::{Ausente, Presente};
+    if siblings.journal() != Ausente
+        || siblings.contexto() != Presente
+        || siblings.intent_retiro() != Presente
+        || siblings.journal_temporal() != Ausente
+        || siblings.contexto_temporal() != Ausente
+        || siblings.intent_retiro_temporal() != Ausente
+    {
+        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+    }
+    Ok(())
+}

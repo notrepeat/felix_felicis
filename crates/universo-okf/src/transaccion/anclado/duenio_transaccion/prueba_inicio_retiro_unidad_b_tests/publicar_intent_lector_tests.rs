@@ -165,3 +165,5 @@ mod parent_binding_tests;
 mod reconciliar_a_inventario_tests;
 #[path = "publicar_intent_lector_reconciliar_a_tests.rs"]
 mod reconciliar_a_tests;
+#[path = "publicar_intent_lector_reconciliar_b_tests.rs"]
+mod reconciliar_b_tests;
