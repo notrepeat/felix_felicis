@@ -128,6 +128,27 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         )
     }
 
+    /// Emite un lease del Journal que conserva el scope capturado por el dueño.
+    ///
+    /// Este entrypoint privado queda preparado para el futuro consumidor
+    /// estricto; los leases existentes siguen usando `journal_temporal`.
+    #[allow(dead_code)]
+    pub(super) fn journal_temporal_estricto(
+        &mut self,
+    ) -> Result<
+        super::journal_temporal::JournalTemporalAnclado<'_>,
+        super::journal_temporal::ErrorJournalAnclado,
+    > {
+        let parent = self.parent_revalidado()?;
+        super::journal_temporal::desde_parent_retenido_con_scope(
+            &mut *self._lock,
+            parent,
+            self.identidad_parent,
+            self.scope_parent,
+            Arc::clone(&self._autoridad),
+        )
+    }
+
     /// Emite un lease de lectura del contexto canónico desde el mismo parent.
     ///
     /// Revalida identidad, scope y lock visible antes de ceder el lease. Los

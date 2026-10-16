@@ -2,7 +2,7 @@ use super::*;
 use crate::transaccion::journal::{
     ArtifactFingerprint, DirectoryIdentity, Journal, JournalError, JournalState, RawTreeDigest,
 };
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
@@ -78,6 +78,112 @@ fn journal_canonico_ausente_devuelve_none() {
 
     assert_eq!(capability.abrir_y_leer_canonico().unwrap(), None);
     assert_eq!(capability.cargar_canonico().unwrap(), None);
+}
+
+#[test]
+fn lease_estricto_comprueba_scope_de_parent_y_archivo_abierto() {
+    use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let expected = journal_prueba(lease.identidad_parent.journal_identity().unwrap());
+    let bytes = expected.encode().unwrap();
+    fs::write(nombre_journal(&root), &bytes).unwrap();
+
+    let mut parent_calls = 0;
+    let mut source_calls = 0;
+    let observed = {
+        let mut probe = |handle: &File| {
+            let metadata = handle.metadata().unwrap();
+            if metadata.is_dir() {
+                parent_calls += 1;
+            } else {
+                assert!(metadata.is_file());
+                source_calls += 1;
+            }
+            Ok(scope_esperado)
+        };
+        lease
+            .cargar_canonico_con_scope_test(&mut probe)
+            .unwrap()
+            .unwrap()
+            .1
+    };
+    assert_eq!(observed, expected);
+    assert_eq!(parent_calls, 1);
+    assert_eq!(source_calls, 1);
+
+    let mut wrong_parent = |handle: &File| {
+        if handle.metadata().unwrap().is_dir() {
+            Ok(ScopeFilesystem(scope_esperado.0 ^ 1))
+        } else {
+            Ok(scope_esperado)
+        }
+    };
+    assert_eq!(
+        lease
+            .cargar_canonico_con_scope_test(&mut wrong_parent)
+            .unwrap_err(),
+        ErrorJournalAnclado::ParentScopeUnverified
+    );
+
+    let mut wrong_source = |handle: &File| {
+        if handle.metadata().unwrap().is_file() {
+            Ok(ScopeFilesystem(scope_esperado.0 ^ 1))
+        } else {
+            Ok(scope_esperado)
+        }
+    };
+    assert_eq!(
+        lease
+            .cargar_canonico_con_scope_test(&mut wrong_source)
+            .unwrap_err(),
+        ErrorJournalAnclado::SourceScopeUnverified
+    );
+
+    let mut source_error = |handle: &File| {
+        if handle.metadata().unwrap().is_file() {
+            Err(ErrorDirectorioAnclado::Io)
+        } else {
+            Ok(scope_esperado)
+        }
+    };
+    assert_eq!(
+        lease
+            .cargar_canonico_con_scope_test(&mut source_error)
+            .unwrap_err(),
+        ErrorJournalAnclado::SourceScopeUnverified
+    );
+    assert_eq!(fs::read(nombre_journal(&root)).unwrap(), bytes);
+}
+
+#[test]
+fn lease_legacy_no_consulta_probe_de_scope() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let lease = lock.journal_temporal_anclado().unwrap();
+    let expected = journal_prueba(lease.identidad_parent.journal_identity().unwrap());
+    fs::write(nombre_journal(&root), expected.encode().unwrap()).unwrap();
+    let mut calls = 0;
+    let mut probe = |_handle: &File| {
+        calls += 1;
+        Ok(ScopeFilesystem(0))
+    };
+
+    assert_eq!(
+        lease
+            .cargar_canonico_con_scope_test(&mut probe)
+            .unwrap()
+            .unwrap()
+            .1,
+        expected
+    );
+    assert_eq!(calls, 0);
 }
 
 #[test]
@@ -519,6 +625,14 @@ fn codigos_de_error_journal_son_estables_y_redactados() {
         (
             ErrorJournalAnclado::ParentIdentityMismatch,
             "journal_parent_identity_mismatch",
+        ),
+        (
+            ErrorJournalAnclado::ParentScopeUnverified,
+            "journal_parent_scope_unverified",
+        ),
+        (
+            ErrorJournalAnclado::SourceScopeUnverified,
+            "journal_source_scope_unverified",
         ),
         (
             ErrorJournalAnclado::InvalidJournal(JournalError::Malformed),

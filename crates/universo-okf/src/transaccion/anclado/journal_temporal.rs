@@ -12,8 +12,8 @@ use fs_at::{OpenOptions as OpenOptionsAt, OpenOptionsWriteMode};
 
 use super::abrir::abrir_entrada_relativa;
 use super::{
-    DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, TipoEntradaAnclada,
-    metadata_directorio, validar_componente,
+    DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, ScopeFilesystem,
+    TipoEntradaAnclada, metadata_directorio, scope_filesystem, validar_componente,
 };
 use crate::transaccion::journal::{Journal, JournalError, MAX_JOURNAL_BYTES};
 use crate::transaccion::lock::LockEscritura;
@@ -37,6 +37,7 @@ pub(crate) enum ErrorJournalAnclado {
     ParentIdentityUnavailable,
     ParentIdentityMismatch,
     ParentScopeUnverified,
+    SourceScopeUnverified,
     InvalidJournal(JournalError),
 }
 
@@ -57,6 +58,7 @@ impl ErrorJournalAnclado {
             Self::ParentIdentityUnavailable => "journal_parent_identity_unavailable",
             Self::ParentIdentityMismatch => "journal_parent_identity_mismatch",
             Self::ParentScopeUnverified => "journal_parent_scope_unverified",
+            Self::SourceScopeUnverified => "journal_source_scope_unverified",
             Self::InvalidJournal(error) => error.code(),
         }
     }
@@ -177,6 +179,7 @@ pub(crate) struct JournalTemporalAnclado<'lock> {
     nombre: OsString,
     nombre_journal: OsString,
     raiz_remota: bool,
+    scope_parent: Option<ScopeFilesystem>,
     _autoridad: Arc<()>,
     _vida_lock: PhantomData<&'lock LockEscritura>,
 }
@@ -254,7 +257,17 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     pub(crate) fn abrir_y_leer(
         &self,
     ) -> Result<(IdentidadArchivoJournal, Vec<u8>), ErrorJournalAnclado> {
-        self.validar_parent()?;
+        self.abrir_y_leer_con_scope(&mut scope_filesystem)
+    }
+
+    fn abrir_y_leer_con_scope<S>(
+        &self,
+        scope_probe: &mut S,
+    ) -> Result<(IdentidadArchivoJournal, Vec<u8>), ErrorJournalAnclado>
+    where
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        self.validar_parent_con_scope(scope_probe)?;
         let archivo =
             abrir_entrada_relativa(&self.parent, &self.nombre, TipoEntradaAnclada::Archivo)
                 .map_err(|error| match error {
@@ -262,6 +275,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
                     otro => mapear_error_directorio(otro),
                 })?;
         validar_archivo_regular(&archivo)?;
+        self.validar_scope_source_con(&archivo, scope_probe)?;
         let identidad = identidad_archivo(&archivo)?;
         let mut bytes = Vec::with_capacity(MAX_JOURNAL_BYTES + 1);
         archivo
@@ -279,7 +293,17 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     pub(crate) fn abrir_y_leer_canonico(
         &self,
     ) -> Result<Option<(IdentidadArchivoJournal, Vec<u8>)>, ErrorJournalAnclado> {
-        self.validar_parent()?;
+        self.abrir_y_leer_canonico_con_scope(&mut scope_filesystem)
+    }
+
+    fn abrir_y_leer_canonico_con_scope<S>(
+        &self,
+        scope_probe: &mut S,
+    ) -> Result<Option<(IdentidadArchivoJournal, Vec<u8>)>, ErrorJournalAnclado>
+    where
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        self.validar_parent_con_scope(scope_probe)?;
         let archivo = match abrir_entrada_relativa(
             &self.parent,
             &self.nombre_journal,
@@ -290,6 +314,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             Err(error) => return Err(mapear_error_directorio(error)),
         };
         validar_archivo_regular(&archivo)?;
+        self.validar_scope_source_con(&archivo, scope_probe)?;
         let identidad = identidad_archivo(&archivo)?;
         let mut bytes = Vec::with_capacity(MAX_JOURNAL_BYTES + 1);
         archivo
@@ -308,11 +333,33 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     pub(crate) fn cargar_canonico(
         &self,
     ) -> Result<Option<(IdentidadArchivoJournal, Journal)>, ErrorJournalAnclado> {
-        let Some((identidad_archivo, bytes)) = self.abrir_y_leer_canonico()? else {
+        self.cargar_canonico_con_scope(&mut scope_filesystem)
+    }
+
+    fn cargar_canonico_con_scope<S>(
+        &self,
+        scope_probe: &mut S,
+    ) -> Result<Option<(IdentidadArchivoJournal, Journal)>, ErrorJournalAnclado>
+    where
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        let Some((identidad_archivo, bytes)) = self.abrir_y_leer_canonico_con_scope(scope_probe)?
+        else {
             return Ok(None);
         };
         self.cargar_journal_leido(identidad_archivo, &bytes)
             .map(Some)
+    }
+
+    #[cfg(test)]
+    pub(super) fn cargar_canonico_con_scope_test<S>(
+        &self,
+        scope_probe: &mut S,
+    ) -> Result<Option<(IdentidadArchivoJournal, Journal)>, ErrorJournalAnclado>
+    where
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        self.cargar_canonico_con_scope(scope_probe)
     }
 
     /// Carga el temporal fijo y lo liga a la identidad del parent retenido.
@@ -321,7 +368,17 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     pub(crate) fn cargar_temporal(
         &self,
     ) -> Result<(IdentidadArchivoJournal, Journal), ErrorJournalAnclado> {
-        let (identidad_archivo, bytes) = self.abrir_y_leer()?;
+        self.cargar_temporal_con_scope(&mut scope_filesystem)
+    }
+
+    fn cargar_temporal_con_scope<S>(
+        &self,
+        scope_probe: &mut S,
+    ) -> Result<(IdentidadArchivoJournal, Journal), ErrorJournalAnclado>
+    where
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        let (identidad_archivo, bytes) = self.abrir_y_leer_con_scope(scope_probe)?;
         self.cargar_journal_leido(identidad_archivo, &bytes)
     }
 
@@ -342,9 +399,35 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     }
 
     fn validar_parent(&self) -> Result<(), ErrorJournalAnclado> {
+        self.validar_parent_con_scope(&mut scope_filesystem)
+    }
+
+    fn validar_parent_con_scope<S>(&self, scope_probe: &mut S) -> Result<(), ErrorJournalAnclado>
+    where
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
         let identidad = metadata_directorio(&self.parent).map_err(mapear_error_directorio)?;
         if identidad != self.identidad_parent {
             return Err(ErrorJournalAnclado::ParentChanged);
+        }
+        if let Some(scope_esperado) = self.scope_parent {
+            super::validar_scope_con(&self.parent, scope_esperado, scope_probe)
+                .map_err(|_| ErrorJournalAnclado::ParentScopeUnverified)?;
+        }
+        Ok(())
+    }
+
+    fn validar_scope_source_con<S>(
+        &self,
+        archivo: &File,
+        scope_probe: &mut S,
+    ) -> Result<(), ErrorJournalAnclado>
+    where
+        S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        if let Some(scope_esperado) = self.scope_parent {
+            super::validar_scope_con(archivo, scope_esperado, scope_probe)
+                .map_err(|_| ErrorJournalAnclado::SourceScopeUnverified)?;
         }
         Ok(())
     }
@@ -354,6 +437,32 @@ pub(super) fn desde_parent_retenido<'lock>(
     lock: &'lock mut LockEscritura,
     parent: File,
     identidad_parent: IdentidadDirectorio,
+    autoridad: Arc<()>,
+) -> Result<JournalTemporalAnclado<'lock>, ErrorJournalAnclado> {
+    construir_desde_parent_retenido(lock, parent, identidad_parent, None, autoridad)
+}
+
+pub(super) fn desde_parent_retenido_con_scope<'lock>(
+    lock: &'lock mut LockEscritura,
+    parent: File,
+    identidad_parent: IdentidadDirectorio,
+    scope_parent: ScopeFilesystem,
+    autoridad: Arc<()>,
+) -> Result<JournalTemporalAnclado<'lock>, ErrorJournalAnclado> {
+    construir_desde_parent_retenido(
+        lock,
+        parent,
+        identidad_parent,
+        Some(scope_parent),
+        autoridad,
+    )
+}
+
+fn construir_desde_parent_retenido<'lock>(
+    lock: &'lock mut LockEscritura,
+    parent: File,
+    identidad_parent: IdentidadDirectorio,
+    scope_parent: Option<ScopeFilesystem>,
     autoridad: Arc<()>,
 ) -> Result<JournalTemporalAnclado<'lock>, ErrorJournalAnclado> {
     let ubicacion = lock.ubicacion();
@@ -374,6 +483,7 @@ pub(super) fn desde_parent_retenido<'lock>(
         nombre,
         nombre_journal,
         raiz_remota,
+        scope_parent,
         _autoridad: autoridad,
         _vida_lock: PhantomData,
     })
