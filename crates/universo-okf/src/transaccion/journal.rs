@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 mod codec;
 pub(crate) mod recovery;
+pub(crate) mod selector;
 pub(crate) mod v2;
 
 const SCHEMA_V1: &str = "felix-journal-v1";
