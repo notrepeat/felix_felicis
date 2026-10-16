@@ -149,13 +149,19 @@ pub(super) fn desde_parent_retenido<'lock>(
     })
 }
 
-fn nombre_canonico(basename: &OsStr) -> Result<OsString, ErrorContextoAdmisionAnclado> {
+pub(super) fn nombre_canonico(basename: &OsStr) -> Result<OsString, ErrorContextoAdmisionAnclado> {
     validar_componente(basename).map_err(|_| ErrorContextoAdmisionAnclado::NameInvalid)?;
     let mut nombre = OsString::from(".");
     nombre.push(basename);
     nombre.push(".felix.admctx");
     validar_componente(&nombre).map_err(|_| ErrorContextoAdmisionAnclado::NameInvalid)?;
     Ok(nombre)
+}
+
+pub(super) fn nombre_temporal_sibling(
+    nombre_canonico: &OsStr,
+) -> Result<OsString, ErrorContextoAdmisionAnclado> {
+    temporal::nombre_temporal(nombre_canonico)
 }
 
 fn validar_scope(

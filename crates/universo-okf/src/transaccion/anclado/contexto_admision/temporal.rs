@@ -123,7 +123,9 @@ impl<'lock> ContextoAdmisionAnclado<'lock> {
     }
 }
 
-fn nombre_temporal(nombre_canonico: &OsStr) -> Result<OsString, ErrorContextoAdmisionAnclado> {
+pub(super) fn nombre_temporal(
+    nombre_canonico: &OsStr,
+) -> Result<OsString, ErrorContextoAdmisionAnclado> {
     let mut nombre = nombre_canonico.to_os_string();
     nombre.push(".tmp");
     validar_componente(&nombre).map_err(|_| ErrorContextoAdmisionAnclado::NameInvalid)?;
