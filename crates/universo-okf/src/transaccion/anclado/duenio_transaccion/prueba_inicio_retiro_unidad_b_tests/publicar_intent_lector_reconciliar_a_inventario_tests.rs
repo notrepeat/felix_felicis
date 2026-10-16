@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::path::Path;
 
-fn fixture_publicada_con_backup_old(parent: &Path) -> FixtureFilaConservarNew {
+pub(super) fn fixture_publicada_con_backup_old(parent: &Path) -> FixtureFilaConservarNew {
     let mut fixture = preparar_fixture(parent, true);
     avanzar_a(&mut fixture, JournalState::Committed);
     let backup = fixture.publicada.ubicacion.backup().as_path().to_path_buf();
