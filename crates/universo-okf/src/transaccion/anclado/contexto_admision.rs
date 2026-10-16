@@ -30,6 +30,7 @@ pub(crate) enum ErrorContextoAdmisionAnclado {
     TemporaryExists,
     TemporaryUnverified,
     PublicationUnverified,
+    RemovalUnverified,
     RemoteUnsupported,
     Io,
     Codec(ErrorCodecEnvelopeAdmision),
@@ -47,6 +48,7 @@ impl ErrorContextoAdmisionAnclado {
             Self::TemporaryExists => "admission_context_temporary_exists",
             Self::TemporaryUnverified => "admission_context_temporary_unverified",
             Self::PublicationUnverified => "admission_context_publication_unverified",
+            Self::RemovalUnverified => "admission_context_removal_unverified",
             Self::RemoteUnsupported => "admission_context_remote_unsupported",
             Self::Io => "admission_context_io",
             Self::Codec(error) => error.codigo(),
@@ -71,6 +73,28 @@ impl fmt::Display for ErrorContextoAdmisionAnclado {
 
 impl std::error::Error for ErrorContextoAdmisionAnclado {}
 
+#[must_use]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResultadoEliminacionContextoAnclado {
+    Ausente,
+    Eliminado,
+    Conflicto(ErrorContextoAdmisionAnclado),
+    Indeterminado(ErrorContextoAdmisionAnclado),
+}
+
+impl fmt::Debug for ResultadoEliminacionContextoAnclado {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ausente => formatter.write_str("Ausente"),
+            Self::Eliminado => formatter.write_str("Eliminado"),
+            Self::Conflicto(error) => formatter.debug_tuple("Conflicto").field(error).finish(),
+            Self::Indeterminado(error) => {
+                formatter.debug_tuple("Indeterminado").field(error).finish()
+            }
+        }
+    }
+}
+
 pub(crate) type RegistroContextoAdmisionLeido = (EnvelopeContextoAdmision, IdentidadArchivo);
 
 /// Lease de lectura del sibling canónico; no concede autoridad de recovery.
@@ -87,6 +111,8 @@ pub(crate) struct ContextoAdmisionAnclado<'lock> {
     _autoridad: Arc<()>,
 }
 
+#[path = "contexto_admision/eliminar.rs"]
+mod eliminar;
 #[path = "contexto_admision/evidencia.rs"]
 mod evidencia;
 #[path = "contexto_admision/publicar.rs"]

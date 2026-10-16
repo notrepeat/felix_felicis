@@ -3,6 +3,7 @@ use super::*;
 use crate::transaccion::admision::envelope::{
     EnvelopeContextoAdmision, codec, tests as envelope_fixtures,
 };
+use crate::transaccion::anclado::contexto_admision::ResultadoEliminacionContextoAnclado;
 use crate::transaccion::anclado::journal_temporal::ResultadoPublicacionJournal;
 use crate::transaccion::journal::{
     ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
@@ -16,6 +17,8 @@ use tempfile::tempdir;
 
 #[path = "contexto_admision_tests/contexto_canonico_tests.rs"]
 mod contexto_canonico_tests;
+#[path = "contexto_admision_tests/eliminar_contexto_tests.rs"]
+mod eliminar_contexto_tests;
 
 fn frame(transaction_id: &str, parent: DirectoryIdentity) -> Vec<u8> {
     codec::codificar(&envelope(transaction_id, parent)).unwrap()
