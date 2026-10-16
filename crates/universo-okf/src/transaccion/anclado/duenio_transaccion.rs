@@ -199,6 +199,9 @@ fn mapear_error(_error: ErrorDirectorioAnclado) -> ErrorDuenioTransaccionAnclado
     ErrorDuenioTransaccionAnclado::NoVerificable
 }
 
+#[path = "duenio_transaccion/observar_root.rs"]
+mod observar_root;
+
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion_tests.rs"]
 mod tests;
