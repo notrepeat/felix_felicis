@@ -280,8 +280,34 @@ Los filtros focales de esta unidad registraron Windows owner 16/16, contexto
 journal 60/60 y envelope 20/20. Clippy de workspace con todos los targets y
 `-D warnings` terminó verde en ambos sistemas; formato y diffcheck pasaron en
 ambos, y el chequeo de frontera pública pasó en Linux y Windows. El CI remoto
-aún no cubre esta unidad; el último CI exacto documentado arriba corresponde a
-`fad5736`.
+consultado durante esa revisión inicial correspondía a `fad5736` y no cubría
+esta unidad.
+
+El CI remoto exacto de `650c2555d6087cdea6fd3df22f70dc3d129578d4` (run
+`38855248822`) terminó SUCCESS en Linux y Windows. Las suites de workspace
+reportaron Linux 855 pass/0 fail/9 ignored y Windows 842 pass/0 fail/9 ignored
+en 38 targets, además de 7 pruebas Python por sistema. Es evidencia de esa
+base publicada; no cubre la primitive local `4f7d3286cc63c4b181029acc75ae1044c1e4c963`
+ni su integración de cuatro nombres.
+
+La primitive local `4f7d3286cc63c4b181029acc75ae1044c1e4c963` prueba la
+observación de un sibling no-follow: solo una ausencia observada produce
+`Ausente`; un archivo regular se valida por scope e identidad del mismo handle,
+sin leer payload, y los errores fallan cerrados. Sus filtros focales registraron
+Windows owner 20/20 y Linux owner 22/22; formato, clippy con warnings
+denegados, frontera pública y diffcheck pasaron en ambos sistemas.
+
+La integración `bddaea4c9285dd20fc6ea39bd163b00d7c55ca5d` combina los cuatro
+resultados de presencia bajo el mismo owner. Es observación secuencial de datos:
+no es permiso para iniciar una operación, caller, dispatch o cleanup, ni
+garantiza un snapshot frente a writers externos. Sus filtros focales registraron
+Windows owner 8/8 y contexto 21/21, Linux owner 9/9 y contexto 22/22. Formato,
+clippy de workspace con todos los targets y `-D warnings`, frontera pública y
+diffcheck pasaron en ambos sistemas; Linux usó un `TMPDIR` corto nativo y el
+cleanup del harness terminó correctamente. Linux ejercitó el parent movido y
+preservó los decoys; en Windows el sharing del guard bloqueó el rename, por lo
+que la rama explícita preservó el estado sin afirmar que ejercitó ese escenario.
+El CI remoto citado arriba no cubre esta integración local.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

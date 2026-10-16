@@ -213,9 +213,20 @@ que posee.
   [04-contexto-admision.md](04-contexto-admision.md#evidencia-de-verificación).
   La unidad de comparación `c3853e03819386d4c4364d57be615f26b2b2766c` también
   pasó sus filtros focales, clippy de workspace, formato, frontera pública y
-  diffcheck locales; el detalle está en la evidencia anterior. Aún no hay CI que
-  cubra ese coordinador. Ninguna de esas pruebas demuestra instalación de `New`
-  por un caller productivo, recovery ni resistencia a pérdida de energía.
+  diffcheck locales; el detalle está en la evidencia anterior. El CI remoto
+  exacto registrado para `650c2555d6087cdea6fd3df22f70dc3d129578d4` (run
+  `38855248822`) terminó SUCCESS en Linux y Windows; sus conteos están en la
+  evidencia enlazada arriba. Ese run no cubre los cambios locales posteriores.
+  El probe individual de siblings `4f7d3286cc63c4b181029acc75ae1044c1e4c963`
+  pasó filtros focales; sus conteos están en la evidencia enlazada arriba. La
+  integración local `bddaea4c9285dd20fc6ea39bd163b00d7c55ca5d` pasó sus filtros
+  focales, clippy de workspace, formato, frontera pública y diffcheck en ambos
+  sistemas; sus conteos y el límite del caso de parent movido están en la
+  evidencia enlazada arriba. La integración solo reúne datos de observación
+  secuencial: no autoriza iniciar una operación, caller, dispatch o cleanup, ni
+  garantiza un snapshot frente a escritores externos. Ninguna de estas pruebas
+  demuestra instalación de `New` por un caller productivo, recovery ni
+  resistencia a pérdida de energía.
 - Antes de conectar el recovery nuevo, debe diseñarse y probarse el dispatch
   entre transacciones nuevas y journals v1 legacy. Un v1 sin contexto mantiene
   su camino actual; la ausencia de sidecar no se usa para reinterpretarlo como
