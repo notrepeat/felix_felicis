@@ -22,7 +22,10 @@ datos. Por separado, el observer de siblings comprueba seis nombres desde el
 parent retenido. La emisión
 y revalidación de la prueba opaca exigen que el intent canónico y su temporal
 estén ausentes; el observer no lee su contenido. Esa ruta estricta no se relaja
-por la verificación de archivo del intent descrita más abajo. La extensión local `36bd34a55cddcb53bb6c4154f83474635c49ebd5` y sus resultados
+por la verificación de archivo del intent descrita más abajo. Una ruta especial
+separada vuelve a comprobar Journal, contexto, replay, root e inventario mientras
+el intent temporal está presente; tampoco publica ni relaja el gate normal. La
+extensión local `36bd34a55cddcb53bb6c4154f83474635c49ebd5` y sus resultados
 están registrados abajo. Falta el caller de
 producción que aplique la tabla vigente, además de cleanup y preflight global
 de huérfanos. Ni el resultado de comparación ni el inventario son prueba o
@@ -755,11 +758,10 @@ harness Linux terminó con exit 0. El CI exacto de la base publicada
 con Linux 938 pass/0 fail/9 ignored y Windows 921/0/9 en 38 resúmenes, además
 de 7 pruebas Python por sistema. Ese CI precede y no cubre el writer. El
 rollback retira el writer y sus pruebas/seams, preservando la factory y el
-helper de temporal vacío, los codecs v1 y el recovery legacy. La verificación
-completa que revalide Journal, contexto, replay, root e inventario antes de
-publicar sigue pendiente; también lo están la publicación, cleanup, preflight
-global y caller productivo. U7 y fase 04 siguen parciales; el progreso global
-permanece en 4/9.
+helper de temporal vacío, los codecs v1 y el recovery legacy. En ese punto aún
+faltaba la verificación completa previa a publicar; también estaban pendientes
+la publicación, cleanup, preflight global y caller productivo. U7 y fase 04
+siguen parciales; el progreso global permanece en 4/9.
 
 El commit local `fa96f27e7fc684726727d548c26073eafdd5076d` añade
 `IntentTemporalEscrito::verificar_temporal`. Consume el estado escrito y abre
@@ -787,6 +789,44 @@ sistema y el demo. El
 rollback retira la verificación y sus pruebas sin cambiar el writer temporal,
 el verificador de contexto ni el recovery legacy. U7 y fase 04 siguen
 parciales; el progreso global permanece en 4/9.
+
+La unidad A `cbb06d2bb40702bdf55d2a16f50d67220a0acc1e` extrae la comprobación
+común de artefactos y la guardia de owner para reutilizarlas sin relajar la
+prueba normal. La unidad B1 `b92ec27f6972ac239a0edb4b9bb0e6107a333f70` añade
+una observación especial consumible del intent temporal presente. Después de
+revisar el vínculo owner/lock/parent/scope y los seis nombres, reabre y verifica
+el intent exacto; vuelve a cargar Journal y contexto, repite binding/replay/root
+y exige Journal `Committed`, root `New`, backup y stage ausentes. El resultado
+retiene el proof y el owner y es solo una observación puntual: no publica, no
+renombra y no concede cleanup. La unidad B2
+`85b7cb92f7bdb3251ccd7c16f465664b360d45f8` añade pruebas de mutación del intent
+con mismo ID, truncamiento y byte extra, ausencia de Journal/contexto y contexto
+válido del mismo ID y longitud con SHA distinta; las pruebas preservan los bytes
+e identidades observados. El diagnóstico Windows `--nocapture` pasó 8/8 y
+confirmó el rechazo efectivo de mutaciones, el reemplazo de intent y el rechazo
+ante backup `Old` reaparecido en la fixture. Linux ejercitó esos caminos en el
+filtro owner 86/86, que falla si las operaciones no se realizan. La cobertura
+previa de parent movido sigue siendo
+la única que ejercita Linux con decoys; Windows conserva su rama explícita
+porque sharing impide el rename.
+
+Las tres unidades añadieron 714 líneas de churn real: A, 103 (53 altas y 50
+bajas); B1, 395 altas; B2, 216 altas. El filtro focal para cada unidad fue
+`cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion`.
+A pasó 72/72 en Windows y 77/77 en Linux; B1, 78/78 y 83/83; B2, 81/81 y
+86/86. Formato, clippy de workspace con todos los targets y `-D warnings`,
+frontera pública y diffcheck terminaron verdes en ambos sistemas; la limpieza
+del harness Linux también terminó correctamente.
+El CI exacto de la base publicada
+`92986a21cbba38af2af8557f326c9aaf04fcce3d` (run `38885487075`) terminó SUCCESS:
+Linux 948 pass/0 fail/9 ignored y Windows 931/0/9 en 38 resúmenes por sistema,
+más 7 pruebas Python por sistema y el demo. Ese CI es anterior y excluye A+B.
+El rollback retira B2 antes de B1; después retira la extracción A, preservando
+el writer/verificador de archivo y el recovery legacy. La observación completa
+especial ya revalida Journal, contexto, replay, root e inventario con el intent
+temporal presente; repetirla dentro del publicador inmediatamente antes del
+syscall, publicar, reconciliar, limpiar y añadir un caller productivo siguen
+pendientes. U7 y fase 04 siguen parciales; el progreso global permanece en 4/9.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

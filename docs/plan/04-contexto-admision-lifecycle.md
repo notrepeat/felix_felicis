@@ -544,10 +544,43 @@ verdes. El CI exacto de la base `e359b02` (run `38884144988`) terminó SUCCESS
 en ambos sistemas; reportó Linux 942 pass/0 fail/9 ignored y Windows 925/0/9
 en 38 resúmenes, más 7 pruebas Python por sistema y el demo. Es anterior y no
 cubre `fa96f27`. El rollback retira el verificador y sus pruebas conservando el
-writer temporal y el recovery legacy. La revalidación completa inmediatamente
-antes de publicación, la publicación misma, reconciliación, cleanup y caller
-productivo siguen pendientes; no hubo fixture UNC de runtime. U7 y fase 04
-siguen parciales; el progreso global permanece en 4/9.
+writer temporal y el recovery legacy. Esa unidad todavía dejaba pendiente la
+revalidación completa inmediatamente anterior a la publicación; no hubo fixture
+UNC de runtime. U7 y fase 04 siguen parciales; el progreso global permanece en
+4/9.
+
+Las unidades A y B completan ahora esa observación especial mientras el intent
+temporal está presente. A (`cbb06d2bb40702bdf55d2a16f50d67220a0acc1e`, 103 de
+churn) extrae la comprobación común de artefactos. B1
+(`b92ec27f6972ac239a0edb4b9bb0e6107a333f70`, 395 altas) consume el token
+verificado, vuelve a comprobar owner/lock/parent/scope y los seis nombres,
+revalida Journal, contexto, replay y root, y exige `Committed`, root `New`,
+backup/stage ausentes. Devuelve solo una observación que retiene el proof y el
+owner. B2 (`85b7cb92f7bdb3251ccd7c16f465664b360d45f8`, 216 altas) cubre intent
+mutado con el mismo ID, truncado, con bytes extra, Journal/contexto ausentes y
+contexto válido de mismo ID y longitud pero SHA distinta; las pruebas conservan
+bytes e identidades. El diagnóstico Windows `--nocapture` pasó 8/8 y confirmó
+mutaciones, reemplazo de intent y el rechazo ante backup `Old` reaparecido en la
+fixture. Linux ejercitó esos caminos en el filtro owner 86/86, que falla si las
+operaciones no se realizan. El escenario de parent movido con decoys sigue
+ejercitado en Linux; Windows conserva la rama de sharing que indica que no lo
+ejercitó.
+
+El filtro focal de estas unidades fue
+`cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion`:
+A pasó 72/72 Windows y 77/77 Linux, B1 78/78 y 83/83, B2 81/81 y 86/86.
+Formato, clippy workspace con todos los targets y `-D warnings`, frontera
+pública y diffcheck terminaron verdes en ambos sistemas; la limpieza del harness
+Linux también terminó correctamente. El CI exacto
+de la base `92986a21cbba38af2af8557f326c9aaf04fcce3d` (run `38885487075`)
+terminó SUCCESS con Linux 948 pass/0 fail/9 ignored y Windows 931/0/9 en 38
+resúmenes, además de 7 pruebas Python por sistema y el demo; precede y excluye
+A+B. El rollback retira B2, luego B1 y finalmente A, preservando el writer y
+verificador del archivo, la tabla legacy y el recovery. La observación especial
+no publica ni reconcilia el intent; el futuro publicador debe volver a
+revalidarla inmediatamente antes del syscall. Publicación, reconciliación,
+cleanup y caller productivo siguen pendientes. U7 y fase 04 siguen parciales;
+el progreso global permanece en 4/9.
 
 El lifecycle documentado no cierra fase 04 ni U7, no agrega callers de
 producción y no cambia el progreso global de 4/9.
