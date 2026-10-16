@@ -142,6 +142,19 @@ del cálculo, no una identidad de evaluador soportada por un caller productivo.
 El coordinador no elige una fila de recovery, no altera archivos ni habilita
 cleanup. `FELIX-ADMCTX` v1 y `felix-journal-v1` permanecen sin cambios.
 
+La unidad local `8c6893a93d9fff8b544db6a5d677a7f24a3448f6` añade
+`EnvelopeContextoAdmision::validar_replay_soportado`
+para un contexto ya materializado en memoria. Selecciona un par cerrado de tags:
+`felix_felicis:proposal-semantics/v1` cubre materialización/captura, Delta,
+candidato y conflictos, evaluación/cuotas, serialización, staging e inventario
+raw/digest; un cambio observable del replay requiere otro tag. El framing wire
+se versiona por separado. `felix_felicis:admission-policy/v1` deriva
+`NewEsperado` solo si la propuesta resulta `Admitida`; rechazos y errores fallan
+cerrados. Los tags son datos de consistencia, no autenticación ni autoridad.
+No es un preflight antes del decode wire ni un caller productivo. El helper
+genérico y el coordinador del owner que reciben motor/policy explícitos siguen
+siendo cálculos de datos, no una identidad confiable elegida por un caller.
+
 ## Lifecycle y gates para publicación y recovery
 
 El documento [04-contexto-admision-lifecycle.md](04-contexto-admision-lifecycle.md)
@@ -308,6 +321,20 @@ cleanup del harness terminó correctamente. Linux ejercitó el parent movido y
 preservó los decoys; en Windows el sharing del guard bloqueó el rename, por lo
 que la rama explícita preservó el estado sin afirmar que ejercitó ese escenario.
 El CI remoto citado arriba no cubre esta integración local.
+
+La unidad local `8c6893a93d9fff8b544db6a5d677a7f24a3448f6` pasó los filtros
+focales Envelope 10/10 y replay 8/8 en Windows y Linux. Clippy de workspace
+con todos los targets y `-D warnings`, formato, frontera pública y diffcheck
+pasaron en ambos sistemas; Linux usó un `TMPDIR` válido y lo retiró al
+terminar. El CI remoto exacto de la base anterior que se detalla a continuación
+no cubre esta unidad; el CI remoto específico de este SHA aún no se ha
+registrado.
+
+El CI remoto exacto de `66633e407d44aaf9c106ac5bb5f71ba2f5b27cbd` (run
+`38857168736`) terminó SUCCESS en Linux y Windows. Las suites de workspace en
+38 targets reportaron Linux 864 pass/0 fail/9 ignored y Windows 850 pass/0
+fail/9 ignored, además de 7 pruebas Python por sistema. Esta es la base previa
+al selector cerrado de tags; el run no cubre la unidad `8c6893a`.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

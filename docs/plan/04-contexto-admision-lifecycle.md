@@ -227,6 +227,19 @@ que posee.
   garantiza un snapshot frente a escritores externos. Ninguna de estas pruebas
   demuestra instalación de `New` por un caller productivo, recovery ni
   resistencia a pérdida de energía.
+- La unidad local `8c6893a93d9fff8b544db6a5d677a7f24a3448f6` añade
+  `EnvelopeContextoAdmision::validar_replay_soportado`
+  para un contexto ya materializado y un par cerrado de tags semánticos. La
+  policy deriva `NewEsperado` solo para `Admitida`; los tags son datos, no
+  autenticación. El helper genérico y el coordinador que reciben strings
+  explícitos siguen siendo cálculos de datos. Los filtros locales pasaron
+  Envelope 10/10 y replay 8/8 en Windows y Linux; clippy de workspace con todos
+  los targets y `-D warnings`, formato, frontera pública y diffcheck pasaron en
+  ambos sistemas. Linux usó y retiró un `TMPDIR` válido. Esta entrada no
+  anticipa el decode wire ni implementa una factoría fija, caller productivo,
+  apply, dispatch o recovery. El CI remoto específico de esta unidad aún no se
+  ha registrado. El detalle de sus filtros locales, los tags y la evidencia
+  exacta del CI base están en [04-contexto-admision.md](04-contexto-admision.md).
 - Antes de conectar el recovery nuevo, debe diseñarse y probarse el dispatch
   entre transacciones nuevas y journals v1 legacy. Un v1 sin contexto mantiene
   su camino actual; la ausencia de sidecar no se usa para reinterpretarlo como
