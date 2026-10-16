@@ -119,7 +119,9 @@ impl DuenioTransaccionAnclado<'_> {
     }
 }
 
-fn nombre_intent_retiro(basename: &OsStr) -> Result<OsString, ErrorDuenioTransaccionAnclado> {
+pub(super) fn nombre_intent_retiro(
+    basename: &OsStr,
+) -> Result<OsString, ErrorDuenioTransaccionAnclado> {
     validar_componente(basename).map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
     let mut nombre = OsString::from(".");
     nombre.push(basename);

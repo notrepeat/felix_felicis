@@ -19,6 +19,7 @@ use crate::transaccion::journal::{Journal, JournalError, MAX_JOURNAL_BYTES};
 use crate::transaccion::lock::LockEscritura;
 
 use super::IdentidadArchivo;
+
 /// Error estable y redactado para operaciones sobre archivos del journal.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorJournalAnclado {
@@ -151,6 +152,13 @@ impl std::error::Error for ErrorJournalAnclado {}
 /// File identity captured from an opened handle. Its representation is secret.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IdentidadArchivoJournal(IdentidadArchivo);
+
+impl IdentidadArchivoJournal {
+    /// Copia los datos de identidad capturados del handle del journal.
+    pub(super) fn identidad_archivo(self) -> IdentidadArchivo {
+        self.0
+    }
+}
 
 impl fmt::Debug for IdentidadArchivoJournal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

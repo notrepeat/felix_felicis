@@ -6,6 +6,7 @@
 use std::fmt;
 
 use crate::transaccion::admision::MAX_ENVELOPE_BYTES;
+use crate::transaccion::anclado::IdentidadArchivo;
 use crate::transaccion::anclado::identidad_archivo::MAX_PERSISTED_FILE_ID_FRAME_BYTES;
 use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
 use crate::transaccion::journal::{Journal, JournalState, MAX_JOURNAL_BYTES};
@@ -46,7 +47,7 @@ impl fmt::Debug for IntentRetiroPersistido {
     }
 }
 
-struct ErrorIntentRetiroPersistido;
+pub(super) struct ErrorIntentRetiroPersistido;
 
 impl fmt::Debug for ErrorIntentRetiroPersistido {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -190,6 +191,35 @@ impl IntentRetiroPersistido {
         }
         Ok(record)
     }
+}
+
+/// Codifica datos observados; nunca construye una identidad desde el frame.
+pub(super) fn codificar_nuevo(
+    journal: &Journal,
+    identidad_intent: IdentidadArchivo,
+    identidad_journal: IdentidadArchivo,
+    identidad_contexto: IdentidadArchivo,
+    scope_parent: u64,
+    longitud_contexto: u64,
+    digest_contexto: [u8; 32],
+) -> Result<Vec<u8>, ErrorIntentRetiroPersistido> {
+    let identidad_intent = IdentidadArchivoPersistida::try_from(identidad_intent)
+        .map_err(|_| ErrorIntentRetiroPersistido)?;
+    let identidad_journal = IdentidadArchivoPersistida::try_from(identidad_journal)
+        .map_err(|_| ErrorIntentRetiroPersistido)?;
+    let identidad_contexto = IdentidadArchivoPersistida::try_from(identidad_contexto)
+        .map_err(|_| ErrorIntentRetiroPersistido)?;
+
+    IntentRetiroPersistido::new(
+        journal.clone(),
+        identidad_intent,
+        identidad_journal,
+        identidad_contexto,
+        scope_parent,
+        longitud_contexto,
+        digest_contexto,
+    )?
+    .encode()
 }
 
 fn encode_identity(
@@ -388,5 +418,55 @@ mod tests {
         assert_eq!(format!("{error:?}"), "ErrorIntentRetiroPersistido");
         assert_eq!(error.to_string(), "invalid_persisted_retirement_intent");
         assert!(!format!("{intent:?}").contains("0123456789abcdef"));
+    }
+
+    #[test]
+    fn wrapper_asigna_tres_ids_reales_a_sus_campos_en_orden() {
+        let temp = tempfile::tempdir().unwrap();
+        let self_path = temp.path().join("intent-self-canary");
+        let journal_path = temp.path().join("journal-canary");
+        let context_path = temp.path().join("context-canary");
+        fs::write(&self_path, b"self file identity canary").unwrap();
+        fs::write(&journal_path, b"journal file identity canary").unwrap();
+        fs::write(&context_path, b"context file identity canary").unwrap();
+
+        let self_handle = File::open(self_path).unwrap();
+        let journal_handle = File::open(journal_path).unwrap();
+        let context_handle = File::open(context_path).unwrap();
+        let self_id = identidad_archivo(&self_handle).unwrap();
+        let journal_id = identidad_archivo(&journal_handle).unwrap();
+        let context_id = identidad_archivo(&context_handle).unwrap();
+        assert_ne!(self_id, journal_id);
+        assert_ne!(self_id, context_id);
+        assert_ne!(journal_id, context_id);
+
+        let journal = journal_committed();
+        let scope_parent = 0x0102_0304_0506_0708;
+        let context_length = 123;
+        let context_digest = [0xa5; 32];
+        let frame = super::codificar_nuevo(
+            &journal,
+            self_id,
+            journal_id,
+            context_id,
+            scope_parent,
+            context_length,
+            context_digest,
+        )
+        .unwrap();
+
+        let expected = IntentRetiroPersistido::new(
+            journal,
+            IdentidadArchivoPersistida::try_from(self_id).unwrap(),
+            IdentidadArchivoPersistida::try_from(journal_id).unwrap(),
+            IdentidadArchivoPersistida::try_from(context_id).unwrap(),
+            scope_parent,
+            context_length,
+            context_digest,
+        )
+        .unwrap();
+        let decoded = IntentRetiroPersistido::decode(&frame).unwrap();
+
+        assert_eq!(decoded, expected);
     }
 }

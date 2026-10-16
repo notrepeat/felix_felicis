@@ -12,6 +12,7 @@ use crate::transaccion::journal::recovery::{
 };
 use crate::transaccion::journal::{Journal, JournalState};
 
+use super::super::archivo_temporal::DatosArchivoTemporal;
 use super::DuenioTransaccionAnclado;
 use super::observar_siblings_nuevo_flujo::PresenciaSiblingNuevoFlujo;
 
@@ -218,6 +219,20 @@ fn mapear_error_replay(_error: ErrorEnvelopeAdmision) -> ErrorPruebaReplayRootCo
 
 #[path = "prueba_inicio_retiro.rs"]
 mod prueba_inicio_retiro;
+
+/// Estado intermedio tras crear, escribir y sincronizar el temporal.
+/// Todavía no demuestra que el nombre visible conserve estos bytes.
+pub(super) struct IntentTemporalEscrito<'owner, 'lock> {
+    _inicio: prueba_inicio_retiro::PruebaInicioRetiroContexto<'owner, 'lock>,
+    datos: DatosArchivoTemporal,
+    frame_esperado: Vec<u8>,
+}
+
+impl fmt::Debug for IntentTemporalEscrito<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("IntentTemporalEscrito { .. }")
+    }
+}
 
 /// Observación privada y secuencial de la fila que conservaría `New`.
 /// No ejecuta la decisión ni concede una capability de mutación.
