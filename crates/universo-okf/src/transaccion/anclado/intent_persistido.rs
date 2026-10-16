@@ -7,6 +7,7 @@ use std::fmt;
 
 use crate::transaccion::admision::MAX_ENVELOPE_BYTES;
 use crate::transaccion::anclado::IdentidadArchivo;
+use crate::transaccion::anclado::ScopeFilesystem;
 use crate::transaccion::anclado::identidad_archivo::MAX_PERSISTED_FILE_ID_FRAME_BYTES;
 use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
 use crate::transaccion::journal::{Journal, JournalState, MAX_JOURNAL_BYTES};
@@ -31,7 +32,7 @@ pub(super) const MAX_INTENT_BYTES: usize =
 
 /// Registro persistible experimental; todos sus campos son comparadores de datos.
 #[derive(PartialEq, Eq)]
-struct IntentRetiroPersistido {
+pub(super) struct IntentRetiroPersistido {
     journal: Journal,
     identidad_intent: IdentidadArchivoPersistida,
     identidad_journal: IdentidadArchivoPersistida,
@@ -64,6 +65,25 @@ impl fmt::Display for ErrorIntentRetiroPersistido {
 impl std::error::Error for ErrorIntentRetiroPersistido {}
 
 impl IntentRetiroPersistido {
+    /// Expone el Journal parseado como dato; no valida su vínculo con el parent.
+    pub(super) fn journal(&self) -> &Journal {
+        &self.journal
+    }
+
+    /// Compara solo valores recibidos; no abre archivos ni consulta un owner.
+    pub(super) fn validar_vinculo_archivo_intent(
+        &self,
+        identidad: IdentidadArchivo,
+        scope: ScopeFilesystem,
+    ) -> Result<(), ErrorIntentRetiroPersistido> {
+        let identidad_observada = IdentidadArchivoPersistida::try_from(identidad)
+            .map_err(|_| ErrorIntentRetiroPersistido)?;
+        if identidad_observada != self.identidad_intent || scope.0 != self.scope_parent {
+            return Err(ErrorIntentRetiroPersistido);
+        }
+        Ok(())
+    }
+
     fn new(
         journal: Journal,
         identidad_intent: IdentidadArchivoPersistida,
@@ -147,7 +167,8 @@ impl IntentRetiroPersistido {
         Ok(frame)
     }
 
-    fn decode(frame: &[u8]) -> Result<Self, ErrorIntentRetiroPersistido> {
+    /// Decodifica framing en memoria; no prueba identidad de archivo ni admisión.
+    pub(super) fn decode(frame: &[u8]) -> Result<Self, ErrorIntentRetiroPersistido> {
         if frame.len() > MAX_INTENT_BYTES {
             return Err(ErrorIntentRetiroPersistido);
         }
@@ -277,6 +298,7 @@ fn take<'a>(
 mod tests {
     use std::fs::{self, File};
 
+    use crate::transaccion::anclado::ScopeFilesystem;
     use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
     use crate::transaccion::anclado::identidad_archivo::{IdentidadArchivo, identidad_archivo};
     use crate::transaccion::journal::{
@@ -349,11 +371,67 @@ mod tests {
     fn roundtrip_committed_es_canonico_y_acotado() {
         let temp = tempfile::tempdir().unwrap();
         let intent = record(&temp, u64::try_from(MAX_ENVELOPE_BYTES).unwrap());
+        let self_handle = File::open(temp.path().join("intent")).unwrap();
+        let self_id = identidad_archivo(&self_handle).unwrap();
+        let scope = ScopeFilesystem(19);
         let frame = intent.encode().unwrap();
         assert_eq!(MAX_INTENT_BYTES, 1536);
         assert!(frame.len() <= MAX_INTENT_BYTES);
-        assert_eq!(IntentRetiroPersistido::decode(&frame).unwrap(), intent);
+        let decoded = IntentRetiroPersistido::decode(&frame).unwrap();
+        assert_eq!(decoded, intent);
+        assert!(decoded.journal() == intent.journal());
+        decoded
+            .validar_vinculo_archivo_intent(self_id, scope)
+            .unwrap();
         assert_eq!(format!("{intent:?}"), "IntentRetiroPersistido([redacted])");
+    }
+
+    #[test]
+    fn identidad_self_distinta_falla_mientras_ambos_archivos_siguen_abiertos() {
+        let temp = tempfile::tempdir().unwrap();
+        let intent = record(&temp, 1);
+        let self_path = temp.path().join("intent");
+        let decoy_path = temp.path().join("intent-decoy");
+        fs::write(&decoy_path, b"intent identity fixture").unwrap();
+
+        let self_handle = File::open(&self_path).unwrap();
+        let decoy_handle = File::open(&decoy_path).unwrap();
+        let self_id = identidad_archivo(&self_handle).unwrap();
+        let decoy_id = identidad_archivo(&decoy_handle).unwrap();
+        assert_ne!(self_id, decoy_id);
+        assert!(
+            intent
+                .validar_vinculo_archivo_intent(self_id, ScopeFilesystem(19))
+                .is_ok()
+        );
+
+        let error = intent
+            .validar_vinculo_archivo_intent(decoy_id, ScopeFilesystem(19))
+            .unwrap_err();
+        assert_eq!(format!("{error:?}"), "ErrorIntentRetiroPersistido");
+        assert_eq!(error.to_string(), "invalid_persisted_retirement_intent");
+        assert_eq!(fs::read(&self_path).unwrap(), b"intent identity fixture");
+        assert_eq!(fs::read(&decoy_path).unwrap(), b"intent identity fixture");
+    }
+
+    #[test]
+    fn scope_distinto_con_id_correcto_falla_con_error_redactado() {
+        let temp = tempfile::tempdir().unwrap();
+        let intent = record(&temp, 1);
+        let self_handle = File::open(temp.path().join("intent")).unwrap();
+        let self_id = identidad_archivo(&self_handle).unwrap();
+        let scope_sintetico = ScopeFilesystem(19 ^ 1);
+        assert!(
+            intent
+                .validar_vinculo_archivo_intent(self_id, ScopeFilesystem(19))
+                .is_ok()
+        );
+
+        let error = intent
+            .validar_vinculo_archivo_intent(self_id, scope_sintetico)
+            .unwrap_err();
+        assert_eq!(format!("{error:?}"), "ErrorIntentRetiroPersistido");
+        assert_eq!(error.to_string(), "invalid_persisted_retirement_intent");
     }
 
     #[test]
