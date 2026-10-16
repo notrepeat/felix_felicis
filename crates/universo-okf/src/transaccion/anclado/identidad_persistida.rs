@@ -14,7 +14,7 @@ const MAGIC: &[u8] = b"FELIX-FILEID\0";
 const VERSION: u16 = 1;
 const HEADER_BYTES: usize = MAGIC.len() + 2 + 4;
 const MAX_PAYLOAD_BYTES: usize = 128;
-const MAX_FRAME_BYTES: usize = HEADER_BYTES + MAX_PAYLOAD_BYTES;
+pub(super) const MAX_FRAME_BYTES: usize = HEADER_BYTES + MAX_PAYLOAD_BYTES;
 
 /// Los valores persistidos son comparadores, no objetos de filesystem.
 #[derive(Clone, PartialEq, Eq)]

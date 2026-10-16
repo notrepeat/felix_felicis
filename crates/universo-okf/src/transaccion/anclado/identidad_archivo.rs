@@ -9,6 +9,8 @@ use std::marker::PhantomData;
 #[path = "identidad_persistida.rs"]
 pub(super) mod persistida;
 
+pub(super) const MAX_PERSISTED_FILE_ID_FRAME_BYTES: usize = persistida::MAX_FRAME_BYTES;
+
 /// Identidad de un archivo basada en el objeto del filesystem, no en su ruta.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IdentidadArchivo {

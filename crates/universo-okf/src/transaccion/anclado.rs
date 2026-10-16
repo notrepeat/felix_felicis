@@ -26,6 +26,7 @@ pub(crate) mod contexto_admision;
 #[allow(dead_code)]
 pub(crate) mod duenio_transaccion;
 mod identidad_archivo;
+pub(super) mod intent_persistido;
 pub(crate) mod journal_temporal;
 mod limpieza;
 mod operaciones;

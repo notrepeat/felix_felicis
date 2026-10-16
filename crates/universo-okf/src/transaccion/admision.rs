@@ -6,6 +6,7 @@
 //! [`ContextoAdmision::validar_base`] y evaluar de nuevo la propuesta.
 
 pub(crate) mod codec;
+pub(super) const MAX_ENVELOPE_BYTES: usize = codec::MAX_CODEC_BYTES;
 #[allow(dead_code)]
 pub(crate) mod envelope;
 
