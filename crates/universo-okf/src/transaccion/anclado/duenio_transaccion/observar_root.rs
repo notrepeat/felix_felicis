@@ -2,11 +2,7 @@ use crate::transaccion::inventario::{LimitesInventario, inventariar_root_anclado
 use crate::transaccion::journal::ArtifactFingerprint;
 use crate::transaccion::snapshot::calcular_digest_raw_tree;
 
-use super::super::{
-    DirectorioAnclado, ErrorDirectorioAnclado, abrir_directorio_hijo_lectura, metadata_directorio,
-    scope_filesystem, validar_componente,
-};
-use super::{DuenioTransaccionAnclado, ErrorDuenioTransaccionAnclado, mapear_error};
+use super::{DuenioTransaccionAnclado, ErrorDuenioTransaccionAnclado};
 
 impl DuenioTransaccionAnclado<'_> {
     /// Observa el fingerprint raw del root desde el parent retenido.
@@ -17,41 +13,12 @@ impl DuenioTransaccionAnclado<'_> {
     pub(crate) fn observar_root_raw(
         &mut self,
     ) -> Result<Option<ArtifactFingerprint>, ErrorDuenioTransaccionAnclado> {
-        let parent = self
-            .parent_revalidado()
-            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
-        let ruta_root = self._lock.ubicacion().ruta();
-        let basename = ruta_root
-            .file_name()
+        let Some(ancla) = self.abrir_root_lectura()? else {
+            return Ok(None);
+        };
+        let identidad_raiz = ancla
+            .identidad_raiz()
             .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
-        let basename = validar_componente(basename).map_err(mapear_error)?;
-
-        let identidad_parent = metadata_directorio(&parent).map_err(mapear_error)?;
-        let scope_parent = scope_filesystem(&parent).map_err(mapear_error)?;
-        if identidad_parent != self.identidad_parent || scope_parent != self.scope_parent {
-            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
-        }
-
-        let raiz = match abrir_directorio_hijo_lectura(&parent, basename) {
-            Ok(raiz) => raiz,
-            Err(ErrorDirectorioAnclado::EntradaAusente) => return Ok(None),
-            Err(error) => return Err(mapear_error(error)),
-        };
-        let identidad_raiz = metadata_directorio(&raiz).map_err(mapear_error)?;
-        if scope_filesystem(&raiz).map_err(mapear_error)? != scope_parent {
-            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
-        }
-
-        let ancla = DirectorioAnclado {
-            parent,
-            basename: basename.to_os_string(),
-            raiz: Some(raiz),
-            identidad_parent,
-            identidad_raiz: Some(identidad_raiz),
-            permite_escritura: false,
-            puede_crear_stage_sibling: false,
-            scope_validado: None,
-        };
         let entradas = inventariar_root_anclado_con_limites(ancla, LimitesInventario::CONTRATO)
             .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
         let digest = calcular_digest_raw_tree(&entradas)
@@ -67,7 +34,9 @@ impl DuenioTransaccionAnclado<'_> {
 #[cfg(all(test, any(target_os = "linux", windows)))]
 mod tests {
     use super::*;
-    use crate::transaccion::anclado::{abrir_directorio_absoluto, abrir_directorio_hijo_lectura};
+    use crate::transaccion::anclado::{
+        abrir_directorio_absoluto, abrir_directorio_hijo_lectura, metadata_directorio,
+    };
     use crate::transaccion::lock::LockEscritura;
     use crate::transaccion::raiz::UbicacionRaiz;
     use crate::transaccion::snapshot::{EntradaSnapshot, calcular_digest_raw_tree};

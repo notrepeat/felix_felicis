@@ -12,8 +12,9 @@ use crate::transaccion::lock::LockEscritura;
 
 use super::abrir::abrir_entrada_relativa;
 use super::{
-    ErrorDirectorioAnclado, IdentidadDirectorio, ScopeFilesystem, TipoEntradaAnclada,
-    identidad_archivo, metadata_directorio, scope_filesystem, validar_componente,
+    DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, ScopeFilesystem,
+    TipoEntradaAnclada, abrir_directorio_hijo_lectura, identidad_archivo, metadata_directorio,
+    scope_filesystem, validar_componente,
 };
 
 /// Error único y redactado cuando no se puede demostrar el ownership anclado.
@@ -141,6 +142,46 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
             self.scope_parent,
             Arc::clone(&self._autoridad),
         )
+    }
+
+    fn abrir_root_lectura(
+        &self,
+    ) -> Result<Option<DirectorioAnclado>, ErrorDuenioTransaccionAnclado> {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let ruta_root = self._lock.ubicacion().ruta();
+        let basename = ruta_root
+            .file_name()
+            .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let basename = validar_componente(basename).map_err(mapear_error)?;
+
+        let identidad_parent = metadata_directorio(&parent).map_err(mapear_error)?;
+        let scope_parent = scope_filesystem(&parent).map_err(mapear_error)?;
+        if identidad_parent != self.identidad_parent || scope_parent != self.scope_parent {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        let raiz = match abrir_directorio_hijo_lectura(&parent, basename) {
+            Ok(raiz) => raiz,
+            Err(ErrorDirectorioAnclado::EntradaAusente) => return Ok(None),
+            Err(error) => return Err(mapear_error(error)),
+        };
+        let identidad_raiz = metadata_directorio(&raiz).map_err(mapear_error)?;
+        if scope_filesystem(&raiz).map_err(mapear_error)? != scope_parent {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        Ok(Some(DirectorioAnclado {
+            parent,
+            basename: basename.to_os_string(),
+            raiz: Some(raiz),
+            identidad_parent,
+            identidad_raiz: Some(identidad_raiz),
+            permite_escritura: false,
+            puede_crear_stage_sibling: false,
+            scope_validado: None,
+        }))
     }
 
     fn parent_revalidado(&self) -> Result<File, super::journal_temporal::ErrorJournalAnclado> {
