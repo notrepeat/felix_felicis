@@ -1,0 +1,165 @@
+# Lifecycle del contexto privado de admisión
+
+**Diseño propuesto para un futuro dueño; todavía sin persistencia.** El contexto
+se conservaría en un sibling privado del root, publicado con el lock del
+escritor y un parent anclado. El nuevo flujo lo publicaría antes de su journal
+`Prepared`; no ejecutaría rename destructivo hasta confirmar ambos. El contexto
+sería obligatorio solo para transacciones iniciadas por ese futuro flujo, y al
+terminar se retiraría primero su journal y después su contexto.
+
+Los journals `felix-journal-v1` ya existentes siguen el recovery actual sin
+auxiliar. Este diseño no los reinterpreta, no exige contexto para ellos ni
+cambia la tabla de recovery vigente. Como v1 no identifica qué flujo creó un
+journal, el dispatch que distinga transacciones nuevas de las legacy es un gate
+previo a cualquier integración: si no puede demostrarse que un auxiliar
+pertenece al nuevo flujo, se preservan los artefactos y no se cambia ni se
+puentea el recovery existente.
+
+Este contrato gobierna únicamente el lifecycle del contexto. No autentica el
+journal, no concede autoridad de recovery y no cambia el contrato
+`felix-journal-v1`, las filas vigentes ni la política del backup. Fase 04 y U7
+siguen parciales.
+
+## Ruta normal
+
+1. El dueño de transacción recibe `&mut LockEscritura`, abre una sola vez el
+   parent de `lock.ubicacion()` como `DirectorioAnclado` y conserva el handle y
+   la identidad observada del objeto directorio. No vuelve a resolver una ruta
+   caller-provided.
+2. Tras capturar y admitir la propuesta, calcula `Old` y `New` y construye el
+   `Journal` inicial en `Prepared`. Crea en memoria el envelope que liga el
+   contexto con `transaction_id`, parent y fingerprints completos de `Old` y
+   `New`.
+3. El codec exterior produce un único buffer dentro de la cuota combinada de
+   512 MiB. El dueño lo escribe en el temporal privado, sincroniza el archivo,
+   lo publica sin reemplazo y reabre el nombre canónico por el parent retenido
+   para confirmar identidad, tipo y bytes.
+4. Solo después de confirmar el contexto, publica y confirma el journal
+   `Prepared` con su capability existente. Solo después de confirmar el
+   journal puede empezar el primer cambio destructivo (`root` → backup).
+5. El mismo contexto se conserva sin modificaciones a través de las fases del
+   journal de ese nuevo flujo y de cualquier retry. Un futuro recovery
+   context-aware leería ambos siblings bajo un nuevo `&mut LockEscritura`,
+   uno por lease secuencial. Comprueba que ambos nombres se observaron por el
+   mismo handle de parent y que su identidad real coincide con la identidad
+   esperada del parent/root; después compara el binding del envelope con el
+   journal. El binding serializado solo no acredita esas identidades. Luego
+   reproduce la admisión y aplica únicamente una fila permitida por la tabla
+   vigente.
+6. Tras observar y validar el estado final autorizado, el dueño obtiene la
+   capability del journal, la retira por identidad y contenido esperados, y
+   suelta ese lease. Solo después de confirmar la ausencia del journal obtiene
+   el lease del contexto y lo retira por la identidad exacta observada.
+
+El dueño es el único que coordina estas operaciones. Mantiene el préstamo
+mutable del lock, el handle del parent y los recibos de identidad/bytes durante
+la operación; adquiere y suelta las sub-capabilities del journal y contexto en
+secuencia, nunca dos leases mutables simultáneos. Ninguna acepta paths ni
+nombres del caller. La capability del backup sigue siendo independiente. No
+se usa `Stage` para guardar contexto, `Old` ni backup.
+
+## Siblings y framing
+
+El helper futuro de `UbicacionRaiz` deriva los nombres desde el basename
+validado, junto al journal, backup y stage:
+
+| Artefacto | Nombre sibling propuesto | Uso |
+|---|---|---|
+| Contexto publicado | `.<basename>.felix.admctx` | Único registro auxiliar de la transacción. |
+| Temporal de contexto | `.<basename>.felix.admctx.tmp` | Exclusivo mientras se escribe y publica el auxiliar. |
+| Journal | `.<basename>.felix.journal` | Se conserva exactamente `felix-journal-v1`. |
+
+El contexto puede contener los bytes privados completos de `Old`, la
+configuración y la propuesta. El temporal debe usar permisos equivalentes a los
+del temporal del journal: modo `0600` en Unix y ACL heredada del parent en
+Windows. Solo se permiten filesystems locales ya soportados por las
+capabilities ancladas; una ruta remota o un probe de parent no verificable falla
+cerrado.
+
+El wire exterior propuesto es experimental y canónico:
+
+```text
+magic[12] = "FELIX-ADMENV"
+version:u16be = 1
+total_bytes:u64be
+journal_bytes:u32be + journal_prepared[]
+context_bytes:u64be + FELIX-ADMCTX_v1[]
+```
+
+`total_bytes` incluye el header, ambos campos de longitud, el journal canónico y
+todo el framing y payload de `FELIX-ADMCTX`. El total inclusivo no puede superar
+512 MiB. El encoder deriva un `Journal::new` desde los metadatos inmutables del
+envelope, que siempre codifica `Prepared`, aunque el envelope se haya ligado a
+un journal de fase posterior. `Journal::parse` debe validar canonicalidad y el
+decoder exterior exige `Prepared`; la fase mutable no se guarda en el auxiliar.
+El journal v1, sus bytes y su límite de 1024 bytes no cambian.
+
+Antes de reservar o copiar payloads, el parser exterior comprueba el límite
+total, las longitudes con aritmética checked, el tamaño máximo de journal, la
+versión y la ausencia de bytes sobrantes. El encoder interior recibe como cuota
+el espacio restante después del framing exterior y el journal mediante una
+variante interna `codificar_con_limite`; `codificar` conserva su wrapper y cuota
+actual. Se mantienen todas las comprobaciones existentes. El decoder interior conserva su preflight prestado,
+sus límites por componente, la validación de procedencia y el recálculo de
+token y digest. `validar_replay` sigue comprobando la admisión contra las
+versiones de motor y policy soportadas; el wire no convierte datos en
+autoridad. La cuota limita bytes serializados, no RSS ni fallos OOM recuperables.
+
+## Cortes y conservación
+
+La tabla describe solo una transacción iniciada por el futuro dueño. Un journal
+v1 preexistente sin contexto sigue por el recovery legacy actual; esta tabla no
+se usa para reinterpretarlo. Resolver el dispatch y demostrarlo con fixtures
+sintéticas es requisito antes de conectar un nuevo caller.
+
+| Corte observado bajo el lock | Estado que se conserva | Conducta siguiente |
+|---|---|---|
+| Antes de crear el temporal | No hay contexto ni journal; root sigue intacto. | Una nueva publicación puede iniciar sus preflight normales. |
+| Durante escritura/sync del temporal | Puede quedar un `.tmp`; el journal no existe y el root sigue intacto. | El proceso dueño puede retirar solo la identidad temporal que creó. Si no demuestra la retirada, conserva el archivo. Un proceso posterior falla cerrado ante el `.tmp`; no lo recolecta por nombre. |
+| Contexto publicado, antes del journal | Contexto canónico presente; journal ausente; ningún rename destructivo ocurrió. | Si el dueño sigue vivo, solo puede retirar el contexto con su identidad retenida y una observación inequívoca de journal ausente. Tras terminar ese proceso, el siguiente escritor conserva el huérfano y bloquea nuevas publicaciones. |
+| Publicación del journal indeterminada | Se conservan contexto, temporal y cualquier journal visible; root aún no debe cambiar. | Reobservar los nombres con el parent retenido. Si no puede probar el journal canónico esperado o su ausencia, parar y preservar todo. Si se confirma journal ausente, el contexto queda huérfano y bloquea. |
+| Journal `Prepared` de este nuevo flujo confirmado, antes de `root` → backup | Journal y contexto canónicos; root debe seguir siendo `Old`. | El futuro recovery context-aware carga contexto y comprueba el vínculo. Si falta, es inválido o no coincide, conserva journal y artefactos; no habilita el recovery nuevo. |
+| Cualquier fase de este nuevo flujo con journal presente | Journal y contexto se conservan juntos, incluso en `Committed`. | La falta, truncamiento, exceso de cuota, wire no canónico, versión no soportada o mismatch falla cerrado y preserva la evidencia. Solo la tabla vigente decide recovery. |
+| Estado final autorizado, antes de retirar journal | Journal y contexto siguen presentes. | Validar estado final antes de retirar evidencia. No se retira contexto primero. |
+| Journal retirado, antes de retirar contexto | El estado final ya fue validado; puede quedar el auxiliar huérfano. | El dueño vivo intenta cleanup únicamente con la identidad retenida y verifica ausencia. Si el proceso termina o la verificación es ambigua, el auxiliar queda preservado y bloquea la próxima publicación. |
+| Contexto retirado y ausencia confirmada | No hay journal ni contexto de esta transacción. | Se aplican los preflight normales de root, backup y stage antes de iniciar otra transacción. |
+
+La presencia de contexto con journal ausente nunca constituye recibo de una
+admisión ni prueba de que el auxiliar sea huérfano recuperable. El preflight del
+nuevo dueño preserva y bloquea ante cualquier contexto o temporal inesperado,
+incluso si se puede parsear; esto no añade una comprobación al recovery legacy
+actual. No hay barrido por prefijo, namespace o `transaction_id`; la resolución
+de un huérfano requiere una decisión/capability específica futura. Un error
+posterior a un unlink puede dejar cleanup incompleto; el dueño solo reintenta o
+confirma la identidad que posee.
+
+## Alcance y gates
+
+- El outer codec es una unidad separada de código puro en memoria. Debe probar
+  roundtrip determinista, tamaño inclusivo, truncamiento, magic/versión,
+  longitudes inválidas, bytes sobrantes, journal no canónico o no `Prepared`, y
+  binding a los metadatos inmutables mientras acepta el avance de fase.
+  `FELIX-ADMCTX` v1 conserva su wire. El nuevo módulo vive bajo
+  `admision/envelope/`; sus funciones siguen `pub(crate)`.
+- Si encoder y decoder con sus pruebas superan 400 líneas de churn, se separan
+  en dos commits por comportamiento: primero codificación canónica con límite
+  combinado; después preflight/decode y pruebas de corrupción/binding. Cada
+  commit lleva sus pruebas focales, resultado exacto y rollback propio; no se
+  reduce legibilidad o cobertura para alcanzar el límite.
+- La persistencia/lectura anclada y el caller de recovery requieren otra unidad
+  revisada. Ningún resultado del codec habilita por sí mismo `KeepNew`,
+  `Committed`, aceptación de un `New` observado ni limpieza del backup.
+- Antes de conectar el recovery nuevo, debe diseñarse y probarse el dispatch
+  entre transacciones nuevas y journals v1 legacy. Un v1 sin contexto mantiene
+  su camino actual; la ausencia de sidecar no se usa para reinterpretarlo como
+  transacción nueva. Si no se puede distinguir con evidencia verificable,
+  permanece bloqueada la integración context-aware.
+- La capability del backup y las recetas existentes siguen su contrato
+  vigente. En particular, este diseño no resuelve la frontera de mount, bind
+  mount o FUSE para cleanup de `PartialOld`; ese bloqueo permanece explícito.
+- `sync_all` del archivo y cortes de terminación de proceso no demuestran
+  durabilidad del directorio, pérdida de energía, caída del SO ni garantías de
+  `fsync` del filesystem. El diseño no declara esas propiedades.
+
+El lifecycle documentado no cierra fase 04 ni U7, no agrega callers de
+producción y no cambia el progreso global de 4/9.

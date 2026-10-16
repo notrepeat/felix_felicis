@@ -1,12 +1,13 @@
 # Contexto privado para reproducir una admisión
 
 **Estado:** decisión de diseño autorizada; `ContextoAdmision` es hoy un valor
-de datos en memoria y no se persiste. Este documento no define almacenamiento
-ni implementa I/O. El valor no es prueba ni autoridad de admisión: una
-recuperación futura debe revalidarlo antes de volver a aceptar `New` después de
-perder el backup. El estado global sigue en 4/9 fases; U7 y fase 04 permanecen
-parciales. Replay y decoder aún no tienen caller desde apply/producción ni
-cierran esas fases.
+de datos en memoria y no se persiste. El lifecycle propuesto para un futuro
+dueño está separado en [04-contexto-admision-lifecycle.md](04-contexto-admision-lifecycle.md);
+ninguno de los dos documentos implementa I/O. El valor no es prueba ni
+autoridad de admisión: una recuperación futura debe revalidarlo antes de volver
+a aceptar `New` después de perder el backup. El estado global sigue en 4/9
+fases; U7 y fase 04 permanecen parciales. Replay y decoder aún no tienen caller
+desde apply/producción ni cierran esas fases.
 
 ## Decisión
 
@@ -58,8 +59,12 @@ esta decisión tampoco define una API pública, un formato wire ni un contrato
 de compatibilidad para un futuro archivo auxiliar.
 
 El contexto, replay, `NewEsperado` y framing `FELIX-ADMCTX` v1 siguen siendo
-crate-private y experimentales; el encoder calcula una cuota total de 512 MiB
-que incluye framing. `bc38412` incorpora un preflight lector con vistas
+crate-private y experimentales; el encoder actual calcula una cuota de 512 MiB
+que incluye su propio framing. El envelope exterior combinado propuesto, que
+también incluye journal y encuadre, está especificado en el documento lifecycle
+y aún no está implementado. Su futuro encoder deberá pasar al codec interior
+solo la cuota restante, antes de reservar; el wrapper actual conserva su
+comportamiento. `bc38412` incorpora un preflight lector con vistas
 prestadas, cubierto con pruebas de robustez en `ef79ea7`. El decoder owned ya
 está implementado en memoria: reconstruye las entradas raw por ruta, tipo y bytes;
 revalida los marcadores de configuración contra las entradas; parsea y
@@ -96,74 +101,55 @@ tiene codec ni lifecycle. El decoder de `FELIX-ADMCTX` sigue sin ligarlo por sí
 mismo a un journal. `FELIX-ADMCTX` v1 y `felix-journal-v1` permanecen sin
 cambios; no hay auxiliar persistido ni caller de publicación o recovery.
 
-## Pendiente antes de cualquier I/O
+## Lifecycle y gates antes de persistencia
 
-- La próxima unidad debe decidir el lifecycle antes de escribir o leer el
-  envelope. El tipo en memoria no elige dueño, ubicación, nombre, formato
-  auxiliar ni orden de operaciones. Debe cerrar estas decisiones sin cambiar
-  el contrato de `felix-journal-v1`:
+El documento [04-contexto-admision-lifecycle.md](04-contexto-admision-lifecycle.md)
+define como propuesta el dueño con `&mut LockEscritura`, el parent anclado, los
+leases secuenciales, el orden contexto → journal `Prepared` → primer rename,
+el framing exterior con cuota combinada inclusiva de 512 MiB y el cleanup
+journal → contexto. También fija cortes, preservación de huérfanos y límites de
+durabilidad. Es diseño para un futuro flujo; no autoriza I/O ni un caller de
+producción.
 
-  | Decisión | Criterio de cierre |
-  |---|---|
-  | Dueño y lock | Un dueño de transacción identifica la capability que publica, lee y retira la evidencia; se especifica su relación con parent, journal, backup y stage. El envelope no posee esa capability. |
-  | Cortes de publicación | Una tabla cubre cada corte entre escritura temporal, sincronización, publicación del auxiliar y journal, y primer cambio destructivo. Define qué conserva cada corte y quién puede retirar un auxiliar huérfano; no permite recolección por nombre o namespace solamente. |
-  | Cuotas y lectura | Se fija un límite total inclusivo para envelope y contexto, y el lector limita bytes antes de materializar payloads. El encuadre extra debe caber en la cuota sin inflar la lectura sobre el límite. La cuota wire no promete RSS limitado ni errores OOM recuperables. |
-  | Recovery y compatibilidad | Bajo lock se compara el vínculo completo con journal, se reproduce el contexto y se contrasta identidad/digest del root observado antes de aplicar solo filas permitidas. Contexto ausente, truncado, grande, no canónico, incompatible o incoherente falla cerrado y conserva la evidencia. Los journals v1 sin auxiliar nunca se tratan como si contuvieran replay. |
-  | Cleanup | Se determina el orden de retiro de journal, auxiliar y backup. El contexto requerido se conserva mientras exista journal, incluso en `Committed`; se define el destino de un corte que deje auxiliar huérfano y la frontera pendiente de `PartialOld` frente a mounts. |
-  | Harness Windows | Los filtros actuales registran `ERROR_SHARING_VIOLATION` seguido por `STATUS_INVALID_HANDLE` en el retry y dos `PermissionDenied` al preparar junctions; antes de cualquier I/O queda aislar los fallos de recovery aún no explicados. No se atribuyen al sandbox ni a una regresión. |
+El codec exterior puede avanzar como unidad pura en memoria, manteniendo
+`felix-journal-v1` sin cambios. Persistencia y recovery context-aware requieren
+otra revisión. En particular, antes de integrarlos se debe demostrar el
+dispatch entre transacciones nuevas y journals v1 legacy: los journals legacy
+sin auxiliar siguen exactamente el recovery actual. El codec y el binding no
+son autoridad para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar el
+backup. Sigue bloqueada la frontera real de mount, bind mount o FUSE para
+cleanup de `PartialOld`; no se cambia el contrato ni la capability del backup.
 
-  La ubicación de almacenamiento, el orden de publicación, la política de
-  huérfanos y la capability que autoriza cleanup siguen abiertos; esta tabla
-  define el alcance del siguiente diseño, no los resuelve por afirmación.
+`Committed` mantiene los requisitos de la tabla vigente. No se salta su
+validación por retirar un auxiliar futuro. Fase 04 y U7 continúan parciales;
+el progreso global permanece en 4/9.
 
-- Definir el dueño y la ubicación del auxiliar privado, su escritura atómica,
-  sincronización, identidad y relación de lock con journal, backup y stage.
-  `EnvelopeContextoAdmision` ya liga esos datos en memoria. El siguiente
-  diseño debe decidir cómo persistir el vínculo y qué capability gobierna su
-  lifecycle y cleanup. El tipo no elige ubicación ni ownership; esa decisión
-  queda pendiente y no es arquitectura pública.
-- Fijar cuotas inclusivas por componente y para el total serializado. El valor
-  en memoria ya limita delta y metadata, y el encoder experimental impone un
-  máximo total de 512 MiB con framing; eso no habilita lectura o persistencia.
-  El límite de 1024 bytes corresponde al journal y no sirve como cuota del
-  contexto; los límites actuales de árbol y configuración son precedentes,
-  no una garantía pública para el auxiliar. El límite wire tampoco es una
-  promesa de RSS acotado o de fallo OOM recuperable: el decoder usa
-  asignaciones `Vec`, `to_owned` y `Arc` que no devuelven errores de reserva.
-- Especificar comportamiento fail-closed ante contexto ausente, truncado,
-  demasiado grande, no canónico, incompatible o incoherente con el `New`
-  observado; conservar journal y evidencia en esos casos.
-- Integrar y probar bajo lock la comparación de `NewEsperado` con identidad y
-  digest del root observado, aplicando solo filas permitidas por la tabla. El
-  cálculo puro no autoriza conservar `New` ni aceptar `Committed` por sí solo.
-- Determinar cuándo puede retirarse el contexto sin eliminar evidencia que
-  todavía necesita una fila de recovery. Mientras exista el journal, incluso
-  en `Committed`, el contexto sigue siendo requerido. La opción segura es
-  retirarlo después de eliminar el journal por su capability; un corte entre
-  ambas limpiezas deja un auxiliar huérfano que no se puede recolectar por
-  nombre o namespace solamente. La autoridad para cleanup de ese huérfano y el
-  orden de cleanup de backup/contexto quedan abiertos. También sigue pendiente
-  la frontera segura de cleanup de `PartialOld` frente a mount, bind mount o
-  FUSE.
+## Evidencia de verificación
 
-`Committed` sigue requiriendo `New` revalidado según la tabla actual. No se
-autoriza saltarse esa validación cuando el auxiliar se borre. No se debe
-implementar persistencia del contexto hasta resolver lifecycle, cuotas y
-fallos de setup del entorno de pruebas.
+El candidato exacto `aa814e3c28231bb83934a1275328594fa8853649` está publicado en
+`origin/codex/plan-demostracion`. El CI exacto `38764635021` terminó SUCCESS
+en ambos jobs, Linux y Windows, y en todos sus pasos; el operador verificó los
+logs. No se atribuye una causa a fallos históricos por el resultado actual.
 
-## Evidencia de esta sesión
+La verificación local más reciente, reportada sobre ese SHA, registró en
+Windows 783 passed/0 failed/9 ignored para workspace, recovery 78/0/3,
+diagnósticos 2/2 y filtros focales 37/37. `cargo fmt`, clippy con warnings
+denegados y el chequeo de frontera pública terminaron verdes. La repetición de
+runtime nativo en WSL se canceló ante la orden de detener; no cuenta como
+resultado ni como runtime Linux exitoso.
 
-El acceso remoto de Git y `gh` sigue bloqueado: el último `git ls-remote` falló
-por `getaddrinfo` y la consulta GET de CI con `gh` no conectó. No se obtuvo
-SHA, estado ni conclusión del run y no se publicó push; no hay un CI remoto
-nuevo que registrar. Toda la evidencia siguiente es local, no un run de CI:
+Los registros siguientes son históricos de rondas anteriores. Se conservan
+sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
+identifican por sí solos la causa de los fallos observados entonces.
+
+### Evidencia histórica de avances anteriores
 
 - Sobre la base `5935608` más el árbol de trabajo, el filtro
   `cargo test --locked --offline -p universo-okf --lib admision::envelope`
   terminó 6/6. Los mismos bytes de esta unidad quedaron registrados en
   `74f7afa` (envelope, 345 líneas) y el seam de pruebas en `b37635b`
-  (237 líneas). La prueba y los commits corresponden a los mismos bytes; no hay
-  CI remoto asociado.
+  (237 líneas). La prueba y los commits corresponden a los mismos bytes; en
+  esa ronda no había CI remoto asociado.
 
 - El filtro focal de diagnóstico Windows registró 1 passed/1 failed. La
   suite de recovery también volvió a ejecutarse en la ronda actual; su
@@ -221,12 +207,13 @@ nuevo que registrar. Toda la evidencia siguiente es local, no un run de CI:
   NTSTATUS crudo de los renames y su causa raíz no quedó identificada; no se
   atribuye al sandbox ni se afirma regresión.
 
-### Verificación actual del candidato local
+### Ensayos locales históricos previos al CI exacto
 
-Los resultados siguientes son locales, sobre la base `5935608` y los mismos
-bytes de código finalmente registrados en `74f7afa` (envelope) y `b37635b`
-(seam). Los commits no cambiaron los bytes verificados y no hay CI remoto
-asociado.
+Los resultados siguientes son locales de una ronda anterior, sobre la base
+`5935608` y los mismos bytes de código finalmente registrados en `74f7afa`
+(envelope) y `b37635b` (seam). Estos conteos quedan preservados como historia;
+no son el estado actual del candidato remoto `aa814e3` y no hay inferencia de
+causa a partir de su diferencia con la verificación actual.
 
 - `cargo test --locked --offline -p universo-okf windows_diagnostics_tests -- --nocapture`:
   1 passed/1 failed. El fallo observado es el retry de rename tras la
@@ -262,6 +249,7 @@ asociado.
   este avance y las fixtures sintéticas del repositorio público. No revisó
   bundles personales ni fue un escáner; no garantiza ausencia de datos
   sensibles fuera del material inspeccionado.
-- Se reportó el CI `38630887294`; esta sesión no pudo reconfirmarlo porque el
-  acceso remoto quedó bloqueado. El resultado se registra como informado, no
-  verificado aquí.
+- Se reportó el CI histórico `38630887294`; en aquella sesión no pudo
+  reconfirmarse porque el acceso remoto quedó bloqueado. El resultado permanece
+  registrado como informado, no verificado; el CI `38764635021` es la
+  verificación exacta más reciente del candidato y tiene estado SUCCESS.
