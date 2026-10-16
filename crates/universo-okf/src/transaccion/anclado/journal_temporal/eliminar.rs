@@ -11,10 +11,29 @@ impl JournalTemporalAnclado<'_> {
         identidad_esperada: IdentidadArchivoJournal,
         journal_esperado: &Journal,
     ) -> ResultadoEliminacionJournal {
+        self.eliminar_canonico_si_coincide_con_scope(
+            identidad_esperada,
+            journal_esperado,
+            &mut super::scope_filesystem,
+            eliminar_entrada_plataforma,
+        )
+    }
+
+    fn eliminar_canonico_si_coincide_con_scope<S, D>(
+        &self,
+        identidad_esperada: IdentidadArchivoJournal,
+        journal_esperado: &Journal,
+        scope_probe: &mut S,
+        eliminar: D,
+    ) -> ResultadoEliminacionJournal
+    where
+        S: FnMut(&File) -> Result<super::ScopeFilesystem, super::ErrorDirectorioAnclado>,
+        D: FnOnce(&File, &std::ffi::OsStr, &File) -> Result<(), ErrorJournalAnclado>,
+    {
         if self.raiz_remota {
             return ResultadoEliminacionJournal::Conflicto(ErrorJournalAnclado::RemoteUnsupported);
         }
-        if let Err(error) = self.validar_parent() {
+        if let Err(error) = self.validar_parent_con_scope(scope_probe) {
             return ResultadoEliminacionJournal::Conflicto(error);
         }
         let Some(parent_esperado) = self.identidad_parent.journal_identity() else {
@@ -33,16 +52,20 @@ impl JournalTemporalAnclado<'_> {
             ));
         }
 
-        let mut archivo = match self.abrir_canonico_para_eliminar(identidad_esperada) {
-            Ok(archivo) => archivo,
-            Err(error) => return resultado_error_previo(error),
-        };
+        let mut archivo =
+            match self.abrir_canonico_para_eliminar_con_scope(identidad_esperada, scope_probe) {
+                Ok(archivo) => archivo,
+                Err(error) => return resultado_error_previo(error),
+            };
         let identidad = match identidad_archivo(&archivo) {
             Ok(identidad) => identidad,
             Err(error) => return resultado_error_previo(error),
         };
         if identidad != identidad_esperada {
             return ResultadoEliminacionJournal::Conflicto(ErrorJournalAnclado::IdentityMismatch);
+        }
+        if let Err(error) = self.validar_scope_source_con(&archivo, scope_probe) {
+            return ResultadoEliminacionJournal::Conflicto(error);
         }
 
         let mut bytes = Vec::with_capacity(MAX_JOURNAL_BYTES + 1);
@@ -63,20 +86,29 @@ impl JournalTemporalAnclado<'_> {
         if journal_actual != *journal_esperado {
             return ResultadoEliminacionJournal::Conflicto(ErrorJournalAnclado::JournalMismatch);
         }
-        if let Err(error) = self.validar_parent() {
+        if let Err(error) = self.validar_parent_con_scope(scope_probe) {
             return ResultadoEliminacionJournal::Conflicto(error);
         }
 
-        let intento = eliminar_entrada_plataforma(&self.parent, &self.nombre_journal, &archivo);
+        let intento = eliminar(&self.parent, &self.nombre_journal, &archivo);
         drop(archivo);
-        self.confirmar_eliminacion(intento, identidad_esperada, journal_esperado)
+        self.confirmar_eliminacion_con_scope(
+            intento,
+            identidad_esperada,
+            journal_esperado,
+            scope_probe,
+        )
     }
 
-    fn abrir_canonico_para_eliminar(
+    fn abrir_canonico_para_eliminar_con_scope<S>(
         &self,
         identidad_esperada: IdentidadArchivoJournal,
-    ) -> Result<File, ErrorJournalAnclado> {
-        self.validar_parent()?;
+        scope_probe: &mut S,
+    ) -> Result<File, ErrorJournalAnclado>
+    where
+        S: FnMut(&File) -> Result<super::ScopeFilesystem, super::ErrorDirectorioAnclado>,
+    {
+        self.validar_parent_con_scope(scope_probe)?;
 
         #[cfg(windows)]
         {
@@ -135,13 +167,17 @@ impl JournalTemporalAnclado<'_> {
         }
     }
 
-    fn confirmar_eliminacion(
+    fn confirmar_eliminacion_con_scope<S>(
         &self,
         intento: Result<(), ErrorJournalAnclado>,
         identidad_esperada: IdentidadArchivoJournal,
         journal_esperado: &Journal,
-    ) -> ResultadoEliminacionJournal {
-        match self.cargar_canonico() {
+        scope_probe: &mut S,
+    ) -> ResultadoEliminacionJournal
+    where
+        S: FnMut(&File) -> Result<super::ScopeFilesystem, super::ErrorDirectorioAnclado>,
+    {
+        match self.cargar_canonico_con_scope(scope_probe) {
             Ok(None) => match intento {
                 Ok(()) => ResultadoEliminacionJournal::Eliminado,
                 Err(_) => ResultadoEliminacionJournal::Ausente,

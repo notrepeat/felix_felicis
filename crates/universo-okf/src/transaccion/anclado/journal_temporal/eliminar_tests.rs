@@ -2,6 +2,7 @@ use super::*;
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, RawTreeDigest};
 use crate::transaccion::lock::LockEscritura;
 use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
@@ -71,6 +72,265 @@ fn elimina_coincidencia_y_confirma_ausencia_idempotente() {
         capability.eliminar_canonico_si_coincide(identity, &expected),
         ResultadoEliminacionJournal::Ausente
     );
+}
+
+#[test]
+fn lease_estricto_elimina_con_scope_del_handle_final() {
+    use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let expected = journal_prueba(lease.identidad_parent.journal_identity().unwrap());
+    let canonical = nombre_journal(&root);
+    fs::write(&canonical, expected.encode().unwrap()).unwrap();
+    let identity = lease.abrir_y_leer_canonico().unwrap().unwrap().0;
+    let mut probe = crate::transaccion::anclado::scope_filesystem;
+    let mut syscalls = 0;
+
+    let result = lease.eliminar_canonico_si_coincide_con_scope(
+        identity,
+        &expected,
+        &mut probe,
+        |parent, name, file| {
+            syscalls += 1;
+            eliminar_entrada_plataforma(parent, name, file)
+        },
+    );
+
+    assert_eq!(result, ResultadoEliminacionJournal::Eliminado);
+    assert_eq!(syscalls, 1);
+    assert!(!canonical.exists());
+}
+
+#[test]
+fn lease_estricto_bloquea_scope_fallido_en_confirmacion_y_preserva_journal() {
+    use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let expected = journal_prueba(lease.identidad_parent.journal_identity().unwrap());
+    let canonical = nombre_journal(&root);
+    let bytes = expected.encode().unwrap();
+    fs::write(&canonical, &bytes).unwrap();
+    let identity = lease.abrir_y_leer_canonico().unwrap().unwrap().0;
+    let mut source_calls = 0;
+    let mut delete_callbacks = 0;
+
+    let result = {
+        let mut probe = |handle: &File| {
+            if handle.metadata().unwrap().is_file() {
+                source_calls += 1;
+                if source_calls == 2 {
+                    return Err(ErrorDirectorioAnclado::Io);
+                }
+            }
+            Ok(scope_esperado)
+        };
+        lease.eliminar_canonico_si_coincide_con_scope(
+            identity,
+            &expected,
+            &mut probe,
+            |_parent, _name, _file| {
+                delete_callbacks += 1;
+                Err(ErrorJournalAnclado::Io)
+            },
+        )
+    };
+
+    assert_eq!(
+        result,
+        ResultadoEliminacionJournal::Conflicto(ErrorJournalAnclado::SourceScopeUnverified)
+    );
+    assert_eq!(source_calls, 2);
+    assert_eq!(delete_callbacks, 1);
+    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    assert_eq!(identidad_de_ruta(&canonical), identity);
+}
+
+#[test]
+fn lease_estricto_bloquea_parent_fuera_de_scope_antes_del_borrado() {
+    use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let expected = journal_prueba(lease.identidad_parent.journal_identity().unwrap());
+    let canonical = nombre_journal(&root);
+    let bytes = expected.encode().unwrap();
+    fs::write(&canonical, &bytes).unwrap();
+    let identity = lease.abrir_y_leer_canonico().unwrap().unwrap().0;
+    let mut parent_calls = 0;
+    let mut probe = |handle: &File| {
+        if handle.metadata().unwrap().is_dir() {
+            parent_calls += 1;
+            if parent_calls == 1 {
+                return Ok(ScopeFilesystem(scope_esperado.0 ^ 1));
+            }
+        }
+        Ok(scope_esperado)
+    };
+    let mut syscalls = 0;
+
+    let result = lease.eliminar_canonico_si_coincide_con_scope(
+        identity,
+        &expected,
+        &mut probe,
+        |parent, name, file| {
+            syscalls += 1;
+            eliminar_entrada_plataforma(parent, name, file)
+        },
+    );
+
+    assert_eq!(
+        result,
+        ResultadoEliminacionJournal::Conflicto(ErrorJournalAnclado::ParentScopeUnverified)
+    );
+    assert_eq!(syscalls, 0);
+    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    assert_eq!(identidad_de_ruta(&canonical), identity);
+}
+
+#[test]
+fn lease_estricto_bloquea_parent_que_cambia_antes_del_borrado() {
+    use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let expected = journal_prueba(lease.identidad_parent.journal_identity().unwrap());
+    let canonical = nombre_journal(&root);
+    let bytes = expected.encode().unwrap();
+    fs::write(&canonical, &bytes).unwrap();
+    let identity = lease.abrir_y_leer_canonico().unwrap().unwrap().0;
+    let mut parent_calls = 0;
+    let mut probe = |handle: &File| {
+        if handle.metadata().unwrap().is_dir() {
+            parent_calls += 1;
+            if parent_calls == 3 {
+                return Ok(ScopeFilesystem(scope_esperado.0 ^ 1));
+            }
+        }
+        Ok(scope_esperado)
+    };
+    let mut syscalls = 0;
+
+    let result = lease.eliminar_canonico_si_coincide_con_scope(
+        identity,
+        &expected,
+        &mut probe,
+        |parent, name, file| {
+            syscalls += 1;
+            eliminar_entrada_plataforma(parent, name, file)
+        },
+    );
+
+    assert_eq!(
+        result,
+        ResultadoEliminacionJournal::Conflicto(ErrorJournalAnclado::ParentScopeUnverified)
+    );
+    assert_eq!(parent_calls, 3);
+    assert_eq!(syscalls, 0);
+    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    assert_eq!(identidad_de_ruta(&canonical), identity);
+}
+
+#[test]
+fn lease_estricto_bloquea_scope_distinto_en_archivo_origen() {
+    use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let expected = journal_prueba(lease.identidad_parent.journal_identity().unwrap());
+    let canonical = nombre_journal(&root);
+    let bytes = expected.encode().unwrap();
+    fs::write(&canonical, &bytes).unwrap();
+    let identity = lease.abrir_y_leer_canonico().unwrap().unwrap().0;
+    let mut probe = |handle: &File| {
+        if handle.metadata().unwrap().is_file() {
+            Ok(ScopeFilesystem(scope_esperado.0 ^ 1))
+        } else {
+            Ok(scope_esperado)
+        }
+    };
+    let mut syscalls = 0;
+
+    let result = lease.eliminar_canonico_si_coincide_con_scope(
+        identity,
+        &expected,
+        &mut probe,
+        |parent, name, file| {
+            syscalls += 1;
+            eliminar_entrada_plataforma(parent, name, file)
+        },
+    );
+
+    assert_eq!(
+        result,
+        ResultadoEliminacionJournal::Conflicto(ErrorJournalAnclado::SourceScopeUnverified)
+    );
+    assert_eq!(syscalls, 0);
+    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    assert_eq!(identidad_de_ruta(&canonical), identity);
+}
+
+#[test]
+fn lease_estricto_bloquea_error_de_scope_en_archivo_origen() {
+    use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let expected = journal_prueba(lease.identidad_parent.journal_identity().unwrap());
+    let canonical = nombre_journal(&root);
+    let bytes = expected.encode().unwrap();
+    fs::write(&canonical, &bytes).unwrap();
+    let identity = lease.abrir_y_leer_canonico().unwrap().unwrap().0;
+    let mut probe = |handle: &File| {
+        if handle.metadata().unwrap().is_file() {
+            Err(ErrorDirectorioAnclado::Io)
+        } else {
+            Ok(scope_esperado)
+        }
+    };
+    let mut syscalls = 0;
+
+    let result = lease.eliminar_canonico_si_coincide_con_scope(
+        identity,
+        &expected,
+        &mut probe,
+        |parent, name, file| {
+            syscalls += 1;
+            eliminar_entrada_plataforma(parent, name, file)
+        },
+    );
+
+    assert_eq!(
+        result,
+        ResultadoEliminacionJournal::Conflicto(ErrorJournalAnclado::SourceScopeUnverified)
+    );
+    assert_eq!(syscalls, 0);
+    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    assert_eq!(identidad_de_ruta(&canonical), identity);
 }
 
 #[test]
