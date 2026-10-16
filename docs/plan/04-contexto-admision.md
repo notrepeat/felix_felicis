@@ -68,8 +68,14 @@ prestadas y valida el framing sin decodificar payloads. El decoder exterior
 owned en memoria parsea el journal v1 canónico en `Prepared`, reconstruye el
 contexto interior y liga sus metadatos inmutables. El lector genérico sobre
 `Read` valida el tamaño antes de reservar y exige EOF tras el frame; no abre
-rutas ni admite streams persistentes. Persistencia y callers siguen pendientes;
-el wire y wrapper interior no cambian. El filtro focal local del codec exterior
+rutas ni admite streams persistentes. El dueño ya emite un lease de solo lectura
+que abre el sibling canónico desde el parent retenido, comprueba tipo, scope e
+identidad del handle y devuelve el envelope decodificado con esa identidad. Solo
+la ausencia observada produce `None`; el lease no persiste, publica, reproduce
+ni autoriza cleanup, y no compara el binding con un journal observado. La
+lectura del archivo no valida por sí sola parent, `Old` o `New` del envelope.
+Persistencia, publicación y callers siguen pendientes; el
+wire y wrapper interior no cambian. El filtro focal local del codec exterior
 pasó 10/10 pruebas en Windows. `bc38412` incorpora un preflight
 lector con vistas
 prestadas, cubierto con pruebas de robustez en `ef79ea7`. El decoder owned ya
@@ -115,8 +121,9 @@ define el lifecycle propuesto y ya cuenta con un scaffold en memoria para el
 dueño: conserva `&mut LockEscritura`, valida la identidad del lock sibling y
 retiene únicamente el parent como handle de filesystem. El dueño ya emite
 leases secuenciales del journal desde ese parent, revalidando identidad, scope y
-lock visible; el lease del contexto, su persistencia/lectura y el caller que
-ordene contexto → journal `Prepared` → primer rename siguen pendientes, junto
+lock visible. El lease de lectura del contexto ya está implementado; su
+escritura/publicación y el caller que ordene contexto → journal `Prepared` →
+primer rename siguen pendientes, junto
 con el cleanup journal → contexto. El framing exterior y sus codecs ya están
 implementados; el diseño también fija cortes, preservación de huérfanos y
 límites de durabilidad. El lease de journal habilita solo storage y no un caller

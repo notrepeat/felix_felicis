@@ -4,9 +4,11 @@
 `DuenioTransaccionAnclado::desde_lock` como scaffold en memoria: retiene el lock,
 abre solo el parent con derechos transaccionales, captura identidad, scope y
 autoridad, y exige que el lock sibling visible tenga la identidad del handle del
-guard. El dueño ya emite leases secuenciales del journal desde una copia del
-mismo parent retenido, tras revalidar su identidad, scope y lock visible; aún no
-crea lease del contexto ni persiste contexto. El flujo futuro conservaría el
+guard. El dueño emite leases secuenciales del journal y un lease de lectura del
+contexto desde el mismo parent retenido, tras revalidar identidad, scope y lock
+visible. El lease de contexto solo abre el sibling canónico sin seguir enlaces,
+comprueba el handle y decodifica el frame; aún no escribe ni publica contexto.
+El flujo futuro conservaría el
 contexto en un sibling privado, publicado antes del journal `Prepared`, y no
 ejecutaría rename destructivo hasta confirmar ambos. Al terminar retiraría
 primero el journal y después el contexto.
@@ -51,13 +53,12 @@ siguen parciales.
 5. El mismo contexto se conserva sin modificaciones a través de las fases del
    journal de ese nuevo flujo y de cualquier retry. Un futuro recovery
    context-aware leería ambos siblings bajo un nuevo `&mut LockEscritura`,
-   mediante leases secuenciales: el lease del journal está disponible y el del
-   contexto sigue pendiente. Comprueba que ambos nombres se observaron por el
-   mismo handle de parent y que su identidad real coincide con la identidad
-   esperada del parent/root; después compara el binding del envelope con el
-   journal. El binding serializado solo no acredita esas identidades. Luego
-   reproduce la admisión y aplica únicamente una fila permitida por la tabla
-   vigente.
+   mediante leases secuenciales. Ambos leases de lectura están disponibles como
+   primitivas; todavía falta el caller que coordine la lectura del journal y el
+   contexto, contraste el parent y compare el binding del envelope con el
+   journal. El binding serializado solo no acredita esas identidades. Luego, en
+   un flujo futuro, reproduce la admisión y aplica únicamente una fila permitida
+   por la tabla vigente.
 6. Tras observar y validar el estado final autorizado, el dueño obtiene la
    capability del journal, la retira por identidad y contenido esperados, y
    suelta ese lease. Solo después de confirmar la ausencia del journal obtiene
@@ -160,8 +161,9 @@ confirma la identidad que posee.
   combinado; después preflight/decode y pruebas de corrupción/binding. Cada
   commit lleva sus pruebas focales, resultado exacto y rollback propio; no se
   reduce legibilidad o cobertura para alcanzar el límite.
-- La persistencia/lectura anclada y el caller de recovery requieren otra unidad
-  revisada. Ningún resultado del codec habilita por sí mismo `KeepNew`,
+- La escritura/publicación anclada y el caller de recovery requieren otra
+  unidad revisada; el lease de lectura solo devuelve datos y no liga el envelope
+  al journal observado. Ningún resultado del codec habilita por sí mismo `KeepNew`,
   `Committed`, aceptación de un `New` observado ni limpieza del backup.
 - Antes de conectar el recovery nuevo, debe diseñarse y probarse el dispatch
   entre transacciones nuevas y journals v1 legacy. Un v1 sin contexto mantiene
