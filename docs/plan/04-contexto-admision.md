@@ -1,9 +1,17 @@
 # Contexto privado para reproducir una admisión
 
-**Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
-valores de datos en memoria con codecs privados. El lifecycle documenta las
+**Estado:** `ContextoAdmision` y su envelope v1 son valores de datos en memoria
+con codecs privados. El lifecycle documenta las
 primitivas de lectura, creación temporal, publicación canónica, verificación raw y
 retiro estricto del contexto; el flujo de transacción sigue incompleto.
+
+La estrategia de formato adoptada para flujos nuevos es un Journal v2 paralelo,
+con `schema=felix-journal-v2`, el kind `context_required` y cuota propia,
+preservando Journal v1 y sus bytes. La etiqueta `kind=context_required` fija la
+dirección de ese dato; serialización, framing, bytes y cualquier otro tag siguen
+pendientes. El payload, las versiones de envelope, el selector, los codecs, el I/O
+y el clasificador previo al dispatcher aún deben diseñarse e implementarse; no hay
+caller productivo activo.
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -40,45 +48,36 @@ ejercita ese move porque sharing lo bloquea. El syscall `NOREPLACE` hace un
 cambio atómico del namespace sin reemplazo; las comprobaciones secuenciales
 alrededor de él no forman un snapshot ni cierran carreras externas.
 
-El lector file-bound del intent canónico ya existe: exige el intent presente y
-los temporales de intent, Journal y contexto ausentes; abre el archivo como
-regular y no-follow, lee como máximo 1537 bytes para rechazar frames mayores de
-1536, usa el decoder existente y vincula el ID y scope medidos con el handle,
-además del parent del Journal almacenado con el parent retenido. Reabre el nombre
-canónico y vuelve a comprobar ID y scope antes de devolver una observación que
-retiene el owner y el `File` final. Ese handle retiene el objeto observado, pero
-no congela sus bytes ni garantiza que el nombre siga ligado a él; el resultado
-es una observación puntual frente a cambios externos.
+El lector file-bound del intent canónico exige el intent presente y los
+temporales de intent, Journal y contexto ausentes. Abre un archivo regular y
+no-follow, limita la lectura a 1537 bytes para rechazar frames mayores de 1536,
+usa el decoder existente y liga ID, scope y parent al handle y al parent retenido.
+Antes de devolver una observación, reabre el nombre canónico y vuelve a validar
+ID y scope. Retiene el owner y el `File` final: conserva el objeto observado,
+pero no congela sus bytes ni garantiza que el nombre siga ligado a él.
 
-El lector no exige que existan los nombres canónicos de Journal o contexto y no
-explica por qué podrían faltar. Puede emitir una observación file-bound del
-Intent aunque falte cualquiera de esos nombres. La prueba normal de replay
-sigue exigiendo que Intent canónico y temporal estén ausentes; el reader no
-fabrica esa prueba.
+El lector puede observar el intent aunque falte un nombre canónico de Journal o
+Context; no explica la causa. La prueba normal de replay sigue exigiendo que el
+Intent canónico y su temporal estén ausentes. El helper privado de inventario
+recibe el Journal completo solo como dato, deriva backup y stage desde ubicación
+del owner y `Journal.transaction_id`, revalida parent/guard/scope/binding y
+observa el root por identidad nativa y digest raw. Clasifica backup y stage como
+datos y mantiene `root_new_validated=false`; no atribuye autoridad al registro.
 
-El helper privado de inventario recibe el Journal completo solo como dato. A,
-B y la extensión de consistencia C lo usan sin atribuir autoridad al origen del
-registro. Deriva backup de la ubicación interna del owner y stage de
-`Journal.transaction_id` después de revalidar parent, guard, scope y binding
-del parent. Observa el root con huella nativa completa (identidad y digest raw),
-clasifica backup y stage como datos de presencia o ausencia y conserva
-`root_new_validated=false`. El wrapper normal sigue cargando primero el Journal
-canónico.
+La secuencia privada final parte de una observación `Croot` fresca, intenta
+retirar Intent una sola vez y, solo con `Eliminado` o `Ausente`, produce una
+observación final ligada al owner. La observación final vuelve a validar owner
+antes y después, exige los seis siblings ausentes antes y después, y reconstruye
+un inventario fresco: Journal `Committed` ligado al parent, root `New` con
+huella nativa completa, backup y stage ausentes, y
+`root_new_validated=false`. No reutiliza un inventario anterior.
 
-La C base sigue siendo namespace-only. Una extensión separada compara la
-huella actual del root con el `New` del Journal almacenado, sin replay ni
-cleanup. Estas observaciones no autorizan reconciliación o apply.
-
-El consumidor privado A→Journal→B revalida la observación A completa antes de
-intentar retirar el Journal una vez mediante el lease estricto. Solo tras un
-resultado `Eliminado` o `Ausente` observa B y devuelve esa observación si su
-gate completo pasa; `Conflicto` o `Indeterminado` no se convierten en prueba de
-que no hubo efecto ni habilitan retry. El consumidor A→Journal→B conserva su
-alcance: no retira Context o Intent, no completa recovery ni tiene caller
-productivo. El puente privado B→Context→C añade un intento strict de retirar
-Context a partir de una B fresca; el Intent y un caller productivo siguen
-pendientes. Un `intent.tmp` residual
-bloquea y se preserva; no se republica ni se reintenta.
+Esta cadena entrega datos privados; no concede autoridad de admisión, apply o
+recovery ni tiene caller productivo. `Conflicto` e `Indeterminado` no prueban
+que no hubo efecto; no se reintenta ni se presenta el resultado como `NoEffect`.
+Las comprobaciones son secuenciales, no una operación atómica frente a writers
+externos. No demuestran dirsync, resistencia a power-loss ni cobertura de
+fronteras de mounts.
 
 La observación local A solo acepta Journal, contexto e intent canónicos presentes,
 con los tres temporales ausentes. Vincula el Journal completo y la identidad
@@ -176,14 +175,15 @@ digests. No se trata como recibo firmado ni como defensa contra ese adversario.
 
 El codec `felix-journal-v1` conserva sus bytes canónicos, el rechazo de campos
 desconocidos y su límite actual de 1024 bytes. El contexto no se añade a ese
-JSON ni modifica el comportamiento de v1. El journal y su codec son privados:
-esta decisión tampoco define una API pública, un formato wire ni un contrato
-de compatibilidad para un futuro archivo auxiliar.
+JSON ni modifica el comportamiento de v1. Que el lector o el codec Rust sean
+`private` o `pub(crate)` no elimina la compatibilidad de los bytes ya
+persistidos: los consumidores deben seguir interpretando v1 sin cambios. Esta
+decisión no define una API pública ni el contrato de un archivo auxiliar futuro.
 
-El contexto, replay, `NewEsperado` y framing `FELIX-ADMCTX` v1 siguen siendo
-crate-private y experimentales; el encoder actual calcula una cuota de 512 MiB
-que incluye su propio framing. El envelope exterior combinado, que también
-incluye journal y encuadre, sigue experimental. Su encoder puro en memoria está
+El contexto, replay, `NewEsperado` y framing interior `FELIX-ADMCTX` v1 siguen
+siendo crate-private y experimentales; el encoder actual calcula una cuota de
+512 MiB que incluye su propio framing. La envolvente exterior `FELIX-ADMENV` v1,
+que combina contexto, Journal v1 y encuadre, sigue experimental. Su encoder puro en memoria está
 implementado en `admision/envelope/codec.rs` y pasa al codec interior solo la
 cuota restante antes de reservar. El preflight exterior devuelve vistas
 prestadas y valida el framing sin decodificar payloads. El decoder exterior
@@ -236,14 +236,29 @@ canónicas y bytes extra con errores redactados; el constructor exige Journal
 `Committed` y longitud de contexto entre 1 y la cuota del envelope. Solo
 serializa datos: no crea ni
 abre el archivo de intent, no reconstruye identidades físicas y no autoriza
-retiro, recovery o cleanup.
+retiro, recovery o cleanup. Este frame experimental es un codec de datos, no una
+versión de Journal ni `FELIX-RETIRE Journal v2`.
 
-Los journals v1 existentes no contienen contexto de replay y no se reinterpretan
-como si lo tuvieran. En particular, la ausencia o pérdida del contexto no
-autoriza a omitir la validación de `New` ni a aceptar `Committed`. Si una
-recuperación futura requiere replay y falta evidencia, debe fallar cerrada y
-conservar los artefactos para decisión manual. Cambiar esa conducta requiere
-una decisión de contrato separada.
+Los journals v1 existentes no contienen contexto de replay y no se
+reinterpretan como si lo tuvieran. En particular, la ausencia o pérdida del
+contexto no autoriza a omitir la validación de `New` ni a aceptar `Committed`. Si una recuperación
+futura requiere replay y falta evidencia, debe fallar cerrada y conservar los
+artefactos para decisión manual. La estrategia adoptada es un formato paralelo de
+Journal v2 para transacciones nuevas, con `schema=felix-journal-v2`,
+`kind=context_required` y cuota propia, preservando v1 sin migrar ni inferir el
+significado de journals existentes.
+
+Los frames exteriores `FELIX-ADMENV` v1 y `FELIX-RETIRE` v1 contienen Journal v1
+canónico y son estrictos: nunca aceptan v2 bajo framing v1. `FELIX-ADMCTX` v1 es
+un frame interior distinto; solo podrá conservarse dentro de un envelope exterior
+v2 si su semántica permanece igual. Un flujo que contenga Journal v2 requiere la
+versión exterior correspondiente. La serialización, framing, bytes y cualquier
+otro tag siguen por definir; `kind=context_required` es la dirección ya elegida.
+
+El payload, el selector, los codecs, el I/O y el clasificador puro de schema/kind
+previo al dispatcher existente quedan por implementar. El dispatcher actual
+conserva sus responsabilidades mutantes; la estrategia no activa un caller
+productivo de apply o recovery.
 
 ## Vínculo de replay y leases de datos
 
@@ -295,14 +310,18 @@ publicado no conserva el borrow del lock y solo liga identidad, scope y datos;
 no da autoridad de recovery ni cleanup. Si la confirmación falla, el error no
 demuestra que el rename no tuvo efecto y la operación no reintenta ni limpia.
 El cleanup, el preflight global de huérfanos y el caller que ordene contexto →
-journal `Prepared` → primer rename siguen pendientes. El framing exterior y sus
-codecs ya están implementados; el diseño también fija cortes, preservación de
-huérfanos y límites de durabilidad. Las primitivas de storage no son un caller
+journal `Prepared` → primer rename siguen pendientes. El framing exterior v1 y sus
+codecs ya están implementados; los codecs de Journal v2 siguen pendientes. El
+diseño también fija cortes, preservación de huérfanos y límites de durabilidad. Las primitivas de storage no son un caller
 de producción ni una decisión de recovery.
 
-El encoder y decoder exterior son codecs puros, mantienen `felix-journal-v1`
-sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un
+El encoder y decoder exteriores v1 son codecs puros, mantienen
+`felix-journal-v1` sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un
 caller. La orquestación y el recovery context-aware requieren otra revisión.
+La secuencia privada `Croot→Intent→observación final` produce datos
+observacionales; no implementa Journal v2, nuevas versiones de envelope, codecs,
+I/O ni el clasificador puro previo al dispatcher. La estrategia v2 está
+adoptada, pero estas piezas y el caller de apply o recovery siguen pendientes.
 En particular, antes de integrarlos se debe demostrar el
 dispatch entre transacciones nuevas y journals v1 legacy: los journals legacy
 sin auxiliar siguen exactamente el recovery actual. El codec y el binding no
@@ -315,6 +334,50 @@ validación por retirar un auxiliar futuro. Fase 04 y U7 continúan parciales;
 el progreso global permanece en 4/9.
 
 ## Evidencia de verificación
+
+Los cinco CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
+ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
+
+| SHA abreviado | Run ID | Windows (pass/fail/ignored) | Linux (pass/fail/ignored) |
+|---|---:|---:|---:|
+| `f8954d44` | `38932852247` | `1025/0/9` | `1044/0/9` |
+| `c05e670` | `38964216495` | `1030/0/9` | `1049/0/9` |
+| `c30c704` | `38967692704` | `1037/0/9` | `1056/0/9` |
+| `f4bdfcd` | `38971406899` | `1049/0/9` | `1068/0/9` |
+| `1b4b25e` | `38973980033` | `1057/0/9` | `1076/0/9` |
+
+El CI acreditado al preparar este lote es run `38973980033` de
+`1b4b25e`. No cubre Unit6, Unit5-C ni este lote documental; sus cierres
+locales no se atribuyen a ese CI.
+
+La prueba integrada de Unit6 (`5a270ca1686bb66169de6916b8a1d824da27ad09`, +86 líneas Rust) recorre con
+fixture sintética la cadena privada A → retiro Journal/B → retiro Context →
+Croot → retiro Intent → observación final. Comprueba la observación coherente y
+redactada, la ausencia de los seis nombres reservados y, por separado, que las
+entradas backup y stage están ausentes en el inventario; preserva la identidad y
+el árbol del root, y confirma que el replay normal sigue rechazando tras soltar
+la observación final. Es una prueba privada integrada, sin caller productivo ni
+recuperación real.
+
+Los gates focales locales se registran por separado del CI remoto. Los conteos
+son pass/fail/ignored del filtro owner, no el total de la suite:
+
+| Corte local | Windows (pass/fail/ignored) | Linux (pass/fail/ignored) | Controles locales |
+|---|---:|---:|---|
+| Unit4, `9c7755e` | `161/0/0` | `166/0/0` | fmt/clippy/frontera/diffcheck `0`; cleanup Linux `0` |
+| Unit5-A, `aa0db56` | `164/0/0` | `169/0/0` | fmt/clippy/frontera/diffcheck `0`; cleanup Linux `0` |
+| Unit5-B, `1b4b25e` | `166/0/0` | `171/0/0` | fmt/clippy/frontera/diffcheck `0`; cleanup Linux `0` |
+| Unit5-C, `000c7b7` | `173/0/0` | `178/0/0` | fmt/clippy workspace con `-D warnings`/frontera/diff semántico `0`; cleanup Linux `0` |
+| Unit6, `5a270ca` | `167/0/0` | `172/0/0` | fmt/clippy/frontera/diffcheck `0`; cleanup Linux `0` |
+
+Unit5-C (`000c7b724545d2bb92f6e1c922122df4d72dda80`, parent `5a270ca`) añade +336 líneas
+Rust, seis funciones nuevas y siete fixtures. Sus gates locales cerraron Windows
+173/0/0 y Linux 178/0/0; formato, clippy de workspace con `-D warnings`, frontera y diff
+semántico terminaron en 0. Cleanup Linux terminó en 0; la verificación usó nombres
+y artefactos frescos. Unit6, Unit5-C y este lote documental todavía no tienen CI propio.
+
+### Registro histórico detallado
 
 En la ronda de `aa814e3c28231bb83934a1275328594fa8853649`, ese candidato estaba
 publicado en `origin/codex/plan-demostracion` y el CI exacto `38764635021`

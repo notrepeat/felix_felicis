@@ -40,6 +40,9 @@ por el journal, reobserva para reconciliar el intento, limpia y reobserva el
 stage, restaura el backup verificado y retira el journal al final. Root `New`
 con cualquier stage sibling presente falla cerrado. Estas funciones siguen
 crate-private y no tienen caller desde apply/producción.
+La secuencia privada `Croot→retiro de Intent→observación final` owner-bound se
+resume en [04-contexto-admision.md](04-contexto-admision.md); sigue sin caller
+de apply o recovery.
 Hay tres tests interproceso en cortes diferentes. `b990c72` termina con código
 86 en `RestoreOld`, después de restaurar y reobservar `Old` y antes de retirar
 el journal; el proceso padre permanece vivo, readquiere el lock y en su
