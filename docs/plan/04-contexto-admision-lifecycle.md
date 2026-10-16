@@ -1,11 +1,17 @@
 # Lifecycle del contexto privado de admisión
 
-**Diseño propuesto para un futuro dueño; todavía sin persistencia.** El contexto
-se conservaría en un sibling privado del root, publicado con el lock del
-escritor y un parent anclado. El nuevo flujo lo publicaría antes de su journal
-`Prepared`; no ejecutaría rename destructivo hasta confirmar ambos. El contexto
-sería obligatorio solo para transacciones iniciadas por ese futuro flujo, y al
-terminar se retiraría primero su journal y después su contexto.
+**Diseño propuesto para un futuro flujo; todavía sin persistencia.** Ya existe
+`DuenioTransaccionAnclado::desde_lock` como scaffold en memoria: retiene el lock,
+abre solo el parent con derechos transaccionales, captura identidad, scope y
+autoridad, y exige que el lock sibling visible tenga la identidad del handle del
+guard. Aún no crea leases ni guarda contexto. El flujo futuro conservaría el
+contexto en un sibling privado, publicado antes del journal `Prepared`, y no
+ejecutaría rename destructivo hasta confirmar ambos. Al terminar retiraría
+primero el journal y después el contexto.
+
+El scope capturado usa el probe disponible en cada plataforma; no acredita una
+frontera general de mounts ni cubre hardlinks o carreras de procesos externos.
+La exclusión sigue limitada a escritores Felix cooperantes.
 
 Los journals `felix-journal-v1` ya existentes siguen el recovery actual sin
 auxiliar. Este diseño no los reinterpreta, no exige contexto para ellos ni
@@ -22,10 +28,11 @@ siguen parciales.
 
 ## Ruta normal
 
-1. El dueño de transacción recibe `&mut LockEscritura`, abre una sola vez el
-   parent de `lock.ubicacion()` como `DirectorioAnclado` y conserva el handle y
-   la identidad observada del objeto directorio. No vuelve a resolver una ruta
-   caller-provided.
+1. `DuenioTransaccionAnclado::desde_lock` recibe `&mut LockEscritura`, abre una
+   sola vez el parent de `lock.ubicacion()` y conserva el handle, la identidad,
+   el scope y la autoridad. No abre ni inspecciona root, ni vuelve a resolver
+   una ruta caller-provided. Los fallos de identidad, scope, parent o lock
+   visible se devuelven como un error fijo y redactado.
 2. Tras capturar y admitir la propuesta, calcula `Old` y `New` y construye el
    `Journal` inicial en `Prepared`. Crea en memoria el envelope que liga el
    contexto con `transaction_id`, parent y fingerprints completos de `Old` y

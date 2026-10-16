@@ -111,12 +111,14 @@ cambios; no hay auxiliar persistido ni caller de publicación o recovery.
 ## Lifecycle y gates antes de persistencia
 
 El documento [04-contexto-admision-lifecycle.md](04-contexto-admision-lifecycle.md)
-define como propuesta el dueño con `&mut LockEscritura`, el parent anclado, los
-leases secuenciales, el orden contexto → journal `Prepared` → primer rename,
-el framing exterior con cuota combinada inclusiva de 512 MiB y el cleanup
-journal → contexto. También fija cortes, preservación de huérfanos y límites de
-durabilidad. Es diseño para un futuro flujo; no autoriza I/O ni un caller de
-producción.
+define el lifecycle propuesto y ya cuenta con un scaffold en memoria para el
+dueño: conserva `&mut LockEscritura`, valida la identidad del lock sibling y
+retiene únicamente el parent como handle de filesystem. Los leases secuenciales,
+el orden de publicación persistente contexto → journal `Prepared` → primer
+rename y el cleanup journal → contexto siguen pendientes, junto con el caller
+de persistencia. El framing exterior y sus codecs ya están implementados; el
+diseño también fija cortes, preservación de huérfanos y límites de durabilidad.
+El scaffold no autoriza I/O ni un caller de producción.
 
 El encoder y decoder exterior son codecs puros, mantienen `felix-journal-v1`
 sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un

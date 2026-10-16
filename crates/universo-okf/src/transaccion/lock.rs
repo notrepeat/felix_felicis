@@ -130,6 +130,13 @@ impl LockEscritura {
     pub(super) fn autoridad(&self) -> Arc<()> {
         Arc::clone(&self.autoridad)
     }
+
+    /// Devuelve la identidad física del lock abierto por este guard.
+    pub(crate) fn identidad_archivo_lock(
+        &self,
+    ) -> std::io::Result<super::anclado::IdentidadArchivo> {
+        super::anclado::identidad_archivo(&self._archivo_lock)
+    }
 }
 
 impl fmt::Debug for LockEscritura {
