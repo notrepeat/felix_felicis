@@ -308,3 +308,6 @@ fn rechaza_backup_unknown_y_preserva_original_y_decoy() {
         fixture.entradas_old.as_ref().unwrap(),
     );
 }
+
+#[path = "prueba_inicio_retiro_tests.rs"]
+mod inicio_retiro_tests;

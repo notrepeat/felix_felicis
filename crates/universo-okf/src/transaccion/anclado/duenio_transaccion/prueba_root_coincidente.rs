@@ -216,6 +216,9 @@ fn mapear_error_replay(_error: ErrorEnvelopeAdmision) -> ErrorPruebaReplayRootCo
     ErrorPruebaReplayRootCoincidente
 }
 
+#[path = "prueba_inicio_retiro.rs"]
+mod prueba_inicio_retiro;
+
 /// Observación privada y secuencial de la fila que conservaría `New`.
 /// No ejecuta la decisión ni concede una capability de mutación.
 pub(super) struct ObservacionConservarNew<'owner, 'lock> {
