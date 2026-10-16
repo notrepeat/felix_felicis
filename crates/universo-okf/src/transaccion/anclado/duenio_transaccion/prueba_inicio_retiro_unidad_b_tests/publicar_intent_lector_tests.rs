@@ -190,3 +190,6 @@ mod intent_retiro_lease_integridad_tests;
 
 #[path = "publicar_intent_lector_intent_retiro_core_tests.rs"]
 mod intent_retiro_core_tests;
+
+#[path = "publicar_intent_lector_pipeline_unit6_tests.rs"]
+mod pipeline_privado_unit6_tests;
