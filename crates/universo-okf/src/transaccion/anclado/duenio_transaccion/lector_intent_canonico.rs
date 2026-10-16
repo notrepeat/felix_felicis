@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use super::super::abrir::abrir_entrada_relativa;
@@ -16,6 +16,130 @@ use super::observar_siblings_nuevo_flujo::{
     PresenciaSiblingNuevoFlujo, nombre_intent_retiro, observar_sibling,
 };
 use super::{DuenioTransaccionAnclado, ErrorDuenioTransaccionAnclado};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ErrorLecturaIntent {
+    Io,
+    Discrepancia,
+}
+
+pub(super) struct IntentoCanonicoLeido {
+    pub(super) archivo: File,
+    pub(super) identidad: IdentidadArchivo,
+    pub(super) scope: ScopeFilesystem,
+    pub(super) registro: IntentRetiroPersistido,
+}
+
+/// Abre solo el nombre canónico y conserva ausencia exacta como `None`.
+pub(super) fn abrir_intent_canonico(
+    parent: &File,
+    nombre: &OsStr,
+) -> Result<Option<File>, ErrorLecturaIntent> {
+    match abrir_entrada_relativa(parent, nombre, TipoEntradaAnclada::Archivo) {
+        Ok(archivo) => Ok(Some(archivo)),
+        Err(ErrorDirectorioAnclado::EntradaAusente) => Ok(None),
+        Err(
+            ErrorDirectorioAnclado::EnlaceNoPermitido
+            | ErrorDirectorioAnclado::TipoNoAdmitido
+            | ErrorDirectorioAnclado::ComponenteInvalido,
+        ) => Err(ErrorLecturaIntent::Discrepancia),
+        Err(_) => Err(ErrorLecturaIntent::Io),
+    }
+}
+
+/// Valida un handle abierto y decodifica el único framing canónico existente.
+pub(super) fn leer_intent_canonico<F>(
+    mut archivo: File,
+    scope_esperado: ScopeFilesystem,
+    identidad_parent: IdentidadDirectorio,
+    vinculo_esperado: Option<(IdentidadArchivo, &IntentRetiroPersistido)>,
+    mut sondear_scope: F,
+) -> Result<IntentoCanonicoLeido, ErrorLecturaIntent>
+where
+    F: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+{
+    let metadata = archivo.metadata().map_err(|_| ErrorLecturaIntent::Io)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || super::super::metadata_es_reparse(&metadata)
+    {
+        return Err(ErrorLecturaIntent::Discrepancia);
+    }
+    if metadata.len() > u64::try_from(MAX_INTENT_BYTES).map_err(|_| ErrorLecturaIntent::Io)? {
+        return Err(ErrorLecturaIntent::Discrepancia);
+    }
+
+    let scope = sondear_scope(&archivo).map_err(|_| ErrorLecturaIntent::Io)?;
+    if scope != scope_esperado {
+        return Err(ErrorLecturaIntent::Discrepancia);
+    }
+    let identidad = identidad_archivo(&archivo).map_err(|_| ErrorLecturaIntent::Io)?;
+    if vinculo_esperado.is_some_and(|(identidad_esperada, _)| identidad != identidad_esperada) {
+        return Err(ErrorLecturaIntent::Discrepancia);
+    }
+
+    let limite = u64::try_from(MAX_INTENT_BYTES)
+        .ok()
+        .and_then(|maximo| maximo.checked_add(1))
+        .ok_or(ErrorLecturaIntent::Io)?;
+    let mut bytes = Vec::new();
+    archivo
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| ErrorLecturaIntent::Io)?;
+    (&archivo)
+        .take(limite)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ErrorLecturaIntent::Io)?;
+    if bytes.len() > MAX_INTENT_BYTES {
+        return Err(ErrorLecturaIntent::Discrepancia);
+    }
+
+    let registro =
+        IntentRetiroPersistido::decode(&bytes).map_err(|_| ErrorLecturaIntent::Discrepancia)?;
+    registro
+        .validar_vinculo_archivo_intent(identidad, scope)
+        .map_err(|_| ErrorLecturaIntent::Discrepancia)?;
+    let parent_journal = identidad_parent
+        .journal_identity()
+        .ok_or(ErrorLecturaIntent::Discrepancia)?;
+    if registro.journal().parent() != &parent_journal
+        || vinculo_esperado.is_some_and(|(_, registro_esperado)| &registro != registro_esperado)
+    {
+        return Err(ErrorLecturaIntent::Discrepancia);
+    }
+
+    Ok(IntentoCanonicoLeido {
+        archivo,
+        identidad,
+        scope,
+        registro,
+    })
+}
+
+pub(super) fn mapear_error_lectura_intent(
+    _error: ErrorLecturaIntent,
+) -> ErrorDuenioTransaccionAnclado {
+    ErrorDuenioTransaccionAnclado::NoVerificable
+}
+
+#[cfg(test)]
+impl ObservacionIntentCanonico<'_, '_> {
+    pub(super) fn leer_nucleo_tipado_para_test(
+        &self,
+    ) -> Result<IntentoCanonicoLeido, ErrorLecturaIntent> {
+        let archivo = self
+            ._archivo
+            .try_clone()
+            .map_err(|_| ErrorLecturaIntent::Io)?;
+        leer_intent_canonico(
+            archivo,
+            self._scope_parent,
+            self._identidad_parent,
+            Some((self._identidad_intent, &self._registro)),
+            scope_filesystem,
+        )
+    }
+}
 
 /// Observación file-bound que retiene el préstamo mutable del owner.
 ///

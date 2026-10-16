@@ -187,3 +187,6 @@ mod intent_retiro_lease_tests;
 
 #[path = "publicar_intent_lector_intent_retiro_lease_integridad_tests.rs"]
 mod intent_retiro_lease_integridad_tests;
+
+#[path = "publicar_intent_lector_intent_retiro_core_tests.rs"]
+mod intent_retiro_core_tests;
