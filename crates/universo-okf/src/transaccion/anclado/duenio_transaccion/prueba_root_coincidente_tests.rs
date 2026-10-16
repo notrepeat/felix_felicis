@@ -15,6 +15,9 @@ use tempfile::tempdir;
 #[path = "prueba_root_coincidente_aux_tests.rs"]
 mod aux_tests;
 
+#[path = "prueba_root_coincidente_revalidacion_tests.rs"]
+mod revalidation_tests;
+
 struct Storage {
     bytes_contexto: Vec<u8>,
     bytes_journal: Vec<u8>,

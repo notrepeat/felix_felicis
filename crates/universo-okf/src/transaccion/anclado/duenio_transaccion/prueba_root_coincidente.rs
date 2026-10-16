@@ -115,6 +115,96 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
     }
 }
 
+impl PruebaReplayAdmitidoRootCoincidente<'_, '_> {
+    /// Consume la prueba anterior y la reemite solo si persisten los datos
+    /// exactos que la sustentaron bajo el mismo owner y guard.
+    pub(super) fn revalidar(self) -> Result<Self, ErrorPruebaReplayRootCoincidente> {
+        let Self {
+            _owner,
+            _autoridad,
+            identidad_parent,
+            scope_parent,
+            identidad_archivo_journal,
+            journal,
+            evidencia_contexto,
+        } = self;
+
+        if !Arc::ptr_eq(&_autoridad, &_owner._autoridad)
+            || identidad_parent != _owner.identidad_parent
+            || scope_parent != _owner.scope_parent
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let siblings = _owner
+            .observar_siblings_nuevo_flujo()
+            .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+        if siblings.journal() != PresenciaSiblingNuevoFlujo::Presente
+            || siblings.journal_temporal() != PresenciaSiblingNuevoFlujo::Ausente
+            || siblings.contexto() != PresenciaSiblingNuevoFlujo::Presente
+            || siblings.contexto_temporal() != PresenciaSiblingNuevoFlujo::Ausente
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let (identidad_journal_actual, journal_actual) = {
+            let lease = _owner
+                .journal_temporal()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+            lease
+                .cargar_canonico()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+                .ok_or(ErrorPruebaReplayRootCoincidente)?
+        };
+        if identidad_journal_actual != identidad_archivo_journal || journal_actual != journal {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+        if !matches!(
+            journal_actual.state(),
+            JournalState::Installed | JournalState::Committed
+        ) {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let (envelope, evidencia_actual) = {
+            let lease = _owner
+                .contexto_admision()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+            lease
+                .leer_canonico_con_evidencia()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+                .ok_or(ErrorPruebaReplayRootCoincidente)?
+        };
+        if evidencia_actual.identidad_archivo != evidencia_contexto.identidad_archivo
+            || evidencia_actual.longitud != evidencia_contexto.longitud
+            || evidencia_actual.sha256 != evidencia_contexto.sha256
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let replay = envelope
+            .validar_replay_soportado(&journal_actual)
+            .map_err(mapear_error_replay)?;
+        let root_observado = _owner
+            .observar_root_raw()
+            .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+            .ok_or(ErrorPruebaReplayRootCoincidente)?;
+        if root_observado != *replay.new_fingerprint() {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        Ok(Self {
+            _owner,
+            _autoridad,
+            identidad_parent,
+            scope_parent,
+            identidad_archivo_journal,
+            journal,
+            evidencia_contexto,
+        })
+    }
+}
+
 fn mapear_error_replay(_error: ErrorEnvelopeAdmision) -> ErrorPruebaReplayRootCoincidente {
     ErrorPruebaReplayRootCoincidente
 }
