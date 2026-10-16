@@ -6,12 +6,13 @@ use crate::transaccion::anclado::{
     abrir_directorio_hijo_lectura, identidad_archivo, metadata_directorio,
 };
 use crate::transaccion::journal::{ArtifactFingerprint, Journal, JournalState};
-use crate::transaccion::lock::LockEscritura;
+use crate::transaccion::lock::{LockEscritura, serializar_forks_y_reacquisiciones_test};
 use crate::transaccion::raiz::UbicacionRaiz;
 use crate::transaccion::replay::new_esperado::calcular_new_esperado;
 use crate::transaccion::snapshot::{EntradaSnapshot, TipoEntradaSnapshot};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::sync::MutexGuard;
 use tempfile::tempdir;
 
 pub(super) struct FixturePublicada {
@@ -22,6 +23,8 @@ pub(super) struct FixturePublicada {
     pub(super) bytes_contexto: Vec<u8>,
     pub(super) bytes_journal: Vec<u8>,
     pub(super) id_journal_publicado: IdentidadArchivoJournal,
+    // Solo coordina fixtures de tests con tests que lanzan procesos hijos.
+    _serializacion: MutexGuard<'static, ()>,
 }
 
 pub(super) fn contexto_path(ubicacion: &UbicacionRaiz) -> PathBuf {
@@ -53,6 +56,9 @@ pub(super) fn preparar_con_tags(
     motor_soportado: &str,
     policy_soportada: &str,
 ) -> FixturePublicada {
+    // Coordina solo tests: conserva el mutex durante el ciclo del fixture,
+    // incluidos los drop/reacquire y los forks de otros tests.
+    let serializacion = serializar_forks_y_reacquisiciones_test();
     fs::create_dir_all(parent).unwrap();
     let root = parent.join("bundle");
     fs::create_dir(&root).unwrap();
@@ -129,6 +135,7 @@ pub(super) fn preparar_con_tags(
         bytes_contexto,
         bytes_journal,
         id_journal_publicado,
+        _serializacion: serializacion,
     }
 }
 

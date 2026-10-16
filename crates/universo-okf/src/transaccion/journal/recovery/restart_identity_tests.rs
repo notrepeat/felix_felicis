@@ -3,7 +3,7 @@ use super::*;
 use crate::transaccion::anclado::DirectorioAnclado;
 use crate::transaccion::inventario::inventariar_root_anclado;
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
-use crate::transaccion::lock::LockEscritura;
+use crate::transaccion::lock::{LockEscritura, serializar_forks_y_reacquisiciones_test};
 use crate::transaccion::raiz::UbicacionRaiz;
 use crate::transaccion::snapshot::calcular_digest_raw_tree;
 use std::cell::Cell;
@@ -49,6 +49,8 @@ fn backup_path(lock: &LockEscritura) -> PathBuf {
 
 #[test]
 fn dispatcher_refuses_persisted_new_replacement_with_same_tree_and_other_identity() {
+    // Coordina el drop/reacquire con los forks de otros tests.
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("bundle");
     let new_fixture = temp.path().join("new-fixture");

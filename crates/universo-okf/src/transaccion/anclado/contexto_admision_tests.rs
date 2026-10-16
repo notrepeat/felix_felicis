@@ -7,7 +7,7 @@ use crate::transaccion::anclado::journal_temporal::ResultadoPublicacionJournal;
 use crate::transaccion::journal::{
     ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
 };
-use crate::transaccion::lock::LockEscritura;
+use crate::transaccion::lock::{LockEscritura, serializar_forks_y_reacquisiciones_test};
 use crate::transaccion::raiz::UbicacionRaiz;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -88,6 +88,8 @@ fn parent_identity(path: &Path) -> DirectoryIdentity {
 
 #[test]
 fn reabre_el_contexto_despues_de_soltar_y_readquirir_el_lock_en_el_proceso() {
+    // Coordina el drop/reacquire con los forks de otros tests.
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let temp = tempdir().unwrap();
     let parent = temp.path().join("parent");
     let (ubicacion, _) = ubicacion(&parent, false);
@@ -113,6 +115,8 @@ fn reabre_el_contexto_despues_de_soltar_y_readquirir_el_lock_en_el_proceso() {
 
 #[test]
 fn publica_y_reabre_contexto_y_journal_prepared_para_replay_puro() {
+    // Coordina el drop/reacquire con los forks de otros tests.
+    let _serializacion = serializar_forks_y_reacquisiciones_test();
     let temp = tempdir().unwrap();
     let parent = temp.path().join("parent");
     let (ubicacion, _) = ubicacion(&parent, true);
