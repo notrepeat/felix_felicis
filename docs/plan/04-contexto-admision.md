@@ -2,8 +2,10 @@
 
 **Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
 valores de datos en memoria con codecs privados. El lifecycle documenta las
-primitivas de lectura, creación temporal, verificación y publicación canónica ya
-implementadas. El dueño observa el root raw desde el parent retenido y devuelve
+primitivas de lectura, creación temporal, verificación y publicación canónica del
+contexto ya implementadas. También existe un writer privado para crear y
+sincronizar el intent temporal; todavía no verifica el nombre visible ni lo
+publica. El dueño observa el root raw desde el parent retenido y devuelve
 la huella como dato. `capturar_snapshot_soportado` y su variante CAS capturan
 desde ese root abierto bajo el lock retenido y devuelven un `Snapshot` de datos.
 El CAS compara el token antes de validar procedencia o parsear, pero no ejecuta
@@ -16,8 +18,8 @@ clasifica root, backup y stage con `root_new_validated=false`; devuelve solo
 datos. Por separado, el observer de siblings comprueba seis nombres desde el
 parent retenido. La emisión
 y revalidación de la prueba opaca exigen que el intent canónico y su temporal
-estén ausentes; el observer no lee su contenido ni inicia una retirada. La
-extensión local `36bd34a55cddcb53bb6c4154f83474635c49ebd5` y sus resultados
+estén ausentes; el observer no lee su contenido. El writer temporal de retiro
+se describe más abajo y todavía no lo publica. La extensión local `36bd34a55cddcb53bb6c4154f83474635c49ebd5` y sus resultados
 están registrados abajo. Falta el caller de
 producción que aplique la tabla vigente, además de cleanup y preflight global
 de huérfanos. Ni el resultado de comparación ni el inventario son prueba o
@@ -619,10 +621,11 @@ canónico. El CI remoto exacto `0fac7be` (run `38875241340`) es anterior: Linux
 914/0/9 y Windows 899/0/9 en 38 resúmenes, más 7 pruebas Python por sistema; no
 cubre estas unidades. Revertir `6e134924` conserva el codec base; retirar luego
 `4bf4789` elimina el DTO y su wiring sin cambiar los codecs de journal/contexto
-ni el recovery legacy. El intent aún no se crea, parsea, reconcilia ni retira
-desde el filesystem. El observer solo comprueba la presencia de sus nombres
-canónico y temporal; si uno está presente o no se puede verificar, la prueba
-nueva se bloquea y el archivo se preserva.
+ni el recovery legacy. Esas unidades de codec y namespace no añadieron escritura ni lectura o parseo
+del contenido del intent desde el filesystem, ni reconciliación; el writer
+privado se describe más adelante. El observer solo comprueba la presencia de
+sus nombres canónico y temporal; si uno está presente o no se puede verificar,
+la prueba nueva se bloquea y el archivo se preserva.
 
 La unidad de namespace `36bd34a55cddcb53bb6c4154f83474635c49ebd5` añade al
 observer dos slots derivados internamente del basename: el intent canónico
@@ -714,8 +717,45 @@ el codec de datos y el recovery legacy. El CI exacto de la base
 `a0093f898bb8f5c71540e879703d6449ba120113` (run `38880090980`) terminó SUCCESS
 en ambos jobs: Linux 931 pass/0 fail/9 ignored y Windows 914/0/9 en 38
 resúmenes, además de 7 pruebas Python por sistema. Ese CI precede y no cubre
-esta unidad. U7 y fase 04 continúan parciales; no se agrega writer de intent,
-publicación, cleanup ni caller productivo.
+esta unidad.
+
+El commit local `e3c7ebd455fd6edf36663a23a08e1bca28a202a4` añade el writer
+privado `PruebaInicioRetiroContexto::escribir_intent_temporal`. Rechaza las
+rutas UNC sintácticas antes de las lecturas de revalidación de esta entrada;
+después revalida el estado fresco,
+deriva los nombres sibling internos y crea el temporal de intent en exclusiva.
+Mide la identidad propia desde el handle vacío antes de codificar `FELIX-RETIRE`
+v1, y escribe y sincroniza el frame acotado. `IntentTemporalEscrito` retiene la
+prueba y el owner, además del ID, longitud, digest y bytes esperados; no vuelve
+a abrir el nombre visible, no confirma su contenido, no publica ni renombra y
+no elimina. Los errores posteriores a `create_new` preservan el archivo y no
+devuelven recibo. Las pruebas independientes de los tres IDs detectan cruces
+de campos en el codec; otras comprueban que mutar el contexto o el journal tras
+la prueba bloquea antes de crear el intent y conserva los cambios. El gate UNC
+es sintáctico: no hubo fixture UNC de runtime ni se afirma detectar unidades
+mapeadas o todos los mounts.
+
+El writer añadió 334 líneas de churn real en seis paths (329 altas y 5 bajas).
+Los filtros focales fueron:
+
+```text
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::intent_persistido
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::journal_temporal
+```
+
+En Windows reportaron 66/66, 8/8 y 59/59; en Linux, 71/71, 8/8 y 60/60.
+Formato, clippy de workspace con todos los targets y `-D warnings`, frontera
+pública y diffcheck terminaron verdes en ambos sistemas; la limpieza del
+harness Linux terminó con exit 0. El CI exacto de la base publicada
+`c5fe6d28f3c78b94fa07315c8fcedcd35393bb4b` (run `38881213774`) terminó SUCCESS
+con Linux 938 pass/0 fail/9 ignored y Windows 921/0/9 en 38 resúmenes, además
+de 7 pruebas Python por sistema. Ese CI precede y no cubre el writer. El
+rollback retira el writer y sus pruebas/seams, preservando la factory y el
+helper de temporal vacío, los codecs v1 y el recovery legacy. La verificación
+que reabra el nombre temporal desde el parent retenido sigue pendiente; también
+lo están la publicación, cleanup, preflight global y caller productivo. U7 y
+fase 04 siguen parciales; el progreso global permanece en 4/9.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

@@ -13,7 +13,9 @@ contexto, con un máximo total de 1536 bytes. La base pasó 3/3 pruebas focales
 en Windows y Linux. La cobertura complementaria de
 `6e1349246b71ed5acb82cab7927bcde1cc84b738` llevó el filtro a 7/7 por sistema;
 formato, clippy, frontera, diffcheck y limpieza Linux también terminaron verdes.
-No hay todavía escritor, lector de archivo persistido, reconciliación ni retiro.
+Existe un writer temporal privado de intent, pero todavía no hay verificación del
+nombre visible, publicación, reconciliación ni retiro; el lector del archivo
+persistido también sigue pendiente. El writer se describe al final de esta nota.
 También existe `DuenioTransaccionAnclado::desde_lock`: retiene el lock y el
 parent, captura identidad, scope y autoridad, y exige que el lock sibling
 visible corresponda al handle del guard. El dueño emite leases secuenciales
@@ -78,8 +80,9 @@ el observer del owner compruebe seis nombres sibling desde el parent retenido.
 Los dos slots nuevos son el intent canónico y su temporal; solo su presencia se
 observa, sin leer ni parsear su contenido. La emisión y revalidación de la prueba
 opaca requieren que ambos estén ausentes; cualquier presencia o error de
-verificación bloquea y preserva. No hay writer, reconciliador, cleanup ni
-preflight global del intent.
+verificación bloquea y preserva. Esa unidad de namespace no añadió writer ni
+reconciliador, cleanup o preflight global; el writer privado se describe más
+abajo, mientras los otros pasos siguen pendientes.
 
 El commit tuvo 256 líneas de churn real (235 altas, 21 bajas y cinco paths).
 El filtro `cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion`
@@ -206,7 +209,7 @@ y el temporal añade `.tmp`. No acepta rutas ni nombres del caller:
 | Contexto publicado | `.<basename>.felix.admctx` | Sibling que la primitiva publica y confirma; el lease lector decodifica el frame. |
 | Temporal de contexto | `.<basename>.felix.admctx.tmp` | Creación exclusiva y fuente que se verifica antes de publicar. |
 | Intent de retiro | `.<basename>.felix.admctx-retire` | El observer comprueba presencia, sin leer ni parsear el contenido. |
-| Temporal del intent | `.<basename>.felix.admctx-retire.tmp` | Presencia bloquea la prueba; no hay creación ni reconciliación. |
+| Temporal del intent | `.<basename>.felix.admctx-retire.tmp` | El creador privado lo escribe bajo una prueba de inicio; faltan verificación visible y reconciliación. |
 
 El observer informa hechos de presencia secuenciales bajo el lock. Solo la
 ausencia observada se clasifica como `Ausente`; los errores de tipo, reparse,
@@ -491,8 +494,31 @@ el recovery legacy. El CI exacto de la base
 `a0093f898bb8f5c71540e879703d6449ba120113` (run `38880090980`) terminó SUCCESS
 con Linux 931 pass/0 fail/9 ignored y Windows 914/0/9 en 38 resúmenes, más
 7 pruebas Python por sistema. Es anterior y no cubre la unidad temporal vacía.
-No cambia 4/9: U7 y fase 04 siguen parciales; no se añade writer de intent,
-publicación, cleanup ni caller productivo.
+
+El commit local `e3c7ebd455fd6edf36663a23a08e1bca28a202a4` añade el writer
+`PruebaInicioRetiroContexto::escribir_intent_temporal`: gatea las rutas UNC
+sintácticas antes de las lecturas de revalidación de esta entrada y antes de
+crear. Deriva el nombre temporal internamente, crea en exclusiva y mide su ID
+desde el handle vacío antes de
+codificar, escribir y sincronizar `FELIX-RETIRE` v1. Retiene la prueba/owner y
+los datos y frame esperados. Un error después de crear preserva el archivo. La
+unidad no reabre el nombre visible ni confirma ID, scope o bytes desde ese
+nombre; tampoco publica, renombra o elimina. Los filtros focales
+`transaccion::anclado::duenio_transaccion`,
+`transaccion::anclado::intent_persistido` y
+`transaccion::anclado::journal_temporal` pasaron con
+`cargo test --locked --offline -p universo-okf --lib <filtro>`: Windows 66/66,
+8/8 y 59/59; Linux 71/71, 8/8 y 60/60. Formato, clippy de workspace con todos
+los targets y `-D warnings`, frontera pública y diffcheck pasaron en ambos; la
+limpieza del harness Linux terminó con exit 0. El CI exacto de la base
+`c5fe6d28f3c78b94fa07315c8fcedcd35393bb4b` (run `38881213774`) terminó SUCCESS
+con Linux 938 pass/0 fail/9 ignored y Windows 921/0/9 en 38 resúmenes, más
+7 pruebas Python por sistema; no cubre este commit. La verificación que reabra
+el nombre temporal desde el parent retenido sigue pendiente, al igual que la
+publicación, cleanup y caller productivo. No hubo fixture UNC de runtime. El
+rollback retira el writer y sus seams/tests, dejando la factory, el helper de
+temporal vacío y el recovery legacy. U7 y fase 04 siguen parciales; el progreso
+global permanece en 4/9.
 
 El lifecycle documentado no cierra fase 04 ni U7, no agrega callers de
 producción y no cambia el progreso global de 4/9.
