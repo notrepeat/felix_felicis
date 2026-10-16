@@ -1,17 +1,23 @@
 # Lifecycle del contexto privado de admisión
 
-**Diseño propuesto para un futuro flujo; todavía sin persistencia.** Ya existe
-`DuenioTransaccionAnclado::desde_lock` como scaffold en memoria: retiene el lock,
-abre solo el parent con derechos transaccionales, captura identidad, scope y
-autoridad, y exige que el lock sibling visible tenga la identidad del handle del
-guard. El dueño emite leases secuenciales del journal y un lease de lectura del
-contexto desde el mismo parent retenido, tras revalidar identidad, scope y lock
-visible. El lease de contexto solo abre el sibling canónico sin seguir enlaces,
-comprueba el handle y decodifica el frame; aún no escribe ni publica contexto.
-El flujo futuro conservaría el
-contexto en un sibling privado, publicado antes del journal `Prepared`, y no
-ejecutaría rename destructivo hasta confirmar ambos. Al terminar retiraría
-primero el journal y después el contexto.
+**Estado:** están implementados el lease de lectura canónica y la creación
+exclusiva del temporal; el flujo de transacción sigue incompleto. Ya existe
+`DuenioTransaccionAnclado::desde_lock`: retiene el lock y el parent, captura
+identidad, scope y autoridad, y exige que el lock sibling visible corresponda
+al handle del guard. El dueño emite leases secuenciales del journal y del
+contexto desde ese parent retenido. El lease de lectura abre el sibling
+canónico sin seguir enlaces, comprueba el handle y decodifica el frame.
+
+El lease también codifica el envelope con la cuota combinada antes de crear o
+escribir `.<basename>.felix.admctx.tmp`; revalida parent, scope y la identidad
+del lock visible, crea el temporal en exclusiva y sincroniza el archivo. El
+recibo opaco retiene el lease y los datos de identidad, longitud y digest. Si
+una escritura o sincronización falla después de crear el archivo, no se devuelve
+recibo ni se elimina el temporal; `create_new` hace que un retry choque con ese
+huérfano. Aún no se publica el canonical, no hay cleanup ni preflight global de
+huérfanos, y ningún caller ordena contexto → journal `Prepared` → rename. El
+flujo propuesto publicaría y confirmaría ambos antes de cualquier rename
+destructivo, y retiraría el journal antes que el contexto.
 
 El scope capturado usa el probe disponible en cada plataforma; no acredita una
 frontera general de mounts ni cubre hardlinks o carreras de procesos externos.
@@ -41,53 +47,60 @@ siguen parciales.
    `Journal` inicial en `Prepared`. Crea en memoria el envelope que liga el
    contexto con `transaction_id`, parent y fingerprints completos de `Old` y
    `New`.
-3. El codec exterior produce un único buffer dentro de la cuota combinada de
-   512 MiB. El dueño lo escribe en el temporal privado, sincroniza el archivo,
-   lo publica sin reemplazo y reabre el nombre canónico por el parent retenido
-   para confirmar identidad, tipo y bytes.
-4. Solo después de confirmar el contexto, obtiene un lease secuencial del
-   journal, publica y confirma `Prepared`. Ese lease desde el parent retenido
-   ya está implementado como primitiva de storage, pero no hay caller que
-   conecte el orden contexto → journal → rename. Solo después de confirmar el
-   journal puede empezar el primer cambio destructivo (`root` → backup).
-5. El mismo contexto se conserva sin modificaciones a través de las fases del
-   journal de ese nuevo flujo y de cualquier retry. Un futuro recovery
+3. **Implementado parcialmente:** el codec exterior produce un único buffer
+   dentro de la cuota combinada de 512 MiB antes de crear o escribir el
+   temporal. El lease revalida el parent y el lock visible, crea el sibling en
+   exclusiva y sincroniza sus bytes; el recibo opaco conserva el lease y sus
+   datos. La publicación sin reemplazo y la reapertura del canonical para
+   confirmar identidad, tipo y bytes siguen pendientes.
+4. **Pendiente:** solo después de publicar y confirmar el contexto, el flujo
+   futuro obtiene un lease secuencial del journal y publica `Prepared`. Ese
+   lease desde el parent retenido ya está implementado como primitiva de
+   storage, pero no hay caller que conecte el orden contexto → journal → rename.
+   Solo después de confirmar el journal puede empezar el primer cambio
+   destructivo (`root` → backup).
+5. El mismo contexto se conservaría sin modificaciones a través de las fases
+   del journal de ese nuevo flujo y de cualquier retry. Un futuro recovery
    context-aware leería ambos siblings bajo un nuevo `&mut LockEscritura`,
-   mediante leases secuenciales. Ambos leases de lectura están disponibles como
-   primitivas; todavía falta el caller que coordine la lectura del journal y el
-   contexto, contraste el parent y compare el binding del envelope con el
-   journal. El binding serializado solo no acredita esas identidades. Luego, en
-   un flujo futuro, reproduce la admisión y aplica únicamente una fila permitida
-   por la tabla vigente.
-6. Tras observar y validar el estado final autorizado, el dueño obtiene la
-   capability del journal, la retira por identidad y contenido esperados, y
-   suelta ese lease. Solo después de confirmar la ausencia del journal obtiene
-   el lease del contexto y lo retira por la identidad exacta observada.
+   mediante leases secuenciales. Los leases de lectura están disponibles como
+   primitivas; todavía falta el caller que coordine ambas lecturas, contraste el
+   parent y compare el binding del envelope con el journal. El binding
+   serializado solo no acredita esas identidades. Luego, en un flujo futuro,
+   reproduce la admisión y aplica únicamente una fila permitida por la tabla
+   vigente.
+6. **Pendiente:** tras observar y validar el estado final autorizado, el dueño
+   futuro obtiene la capability del journal, la retira por identidad y
+   contenido esperados, y suelta ese lease. Solo después de confirmar la
+   ausencia del journal obtiene el lease del contexto y lo retira por la
+   identidad exacta observada.
 
-El dueño es el único que coordina estas operaciones. Mantiene el préstamo
-mutable del lock, el handle del parent y los recibos de identidad/bytes durante
-la operación; adquiere y suelta las sub-capabilities del journal y contexto en
-secuencia, nunca dos leases mutables simultáneos. Ninguna acepta paths ni
-nombres del caller. La capability del backup sigue siendo independiente. No
-se usa `Stage` para guardar contexto, `Old` ni backup.
+El diseño reserva al dueño la coordinación del flujo futuro. Mantendría el
+préstamo mutable del lock, el handle del parent y los recibos de identidad/bytes
+durante la operación; adquiriría y soltaría las sub-capabilities del journal y
+contexto en secuencia, nunca dos leases mutables simultáneos. Los leases
+implementados no aceptan paths ni nombres del caller. El recibo temporal actual
+retiene el lock, el parent y sus datos; no habilita cleanup. La capability del
+backup sigue siendo independiente. No se usa `Stage` para guardar contexto,
+`Old` ni backup.
 
 ## Siblings y framing
 
-El helper futuro de `UbicacionRaiz` deriva los nombres desde el basename
-validado, junto al journal, backup y stage:
+El lease deriva internamente los nombres sibling desde el basename de
+`UbicacionRaiz`: el nombre canónico de contexto se construye desde ese basename
+y el temporal añade `.tmp`. No acepta rutas ni nombres del caller:
 
 | Artefacto | Nombre sibling propuesto | Uso |
 |---|---|---|
 | Contexto publicado | `.<basename>.felix.admctx` | Único registro auxiliar de la transacción. |
-| Temporal de contexto | `.<basename>.felix.admctx.tmp` | Exclusivo mientras se escribe y publica el auxiliar. |
+| Temporal de contexto | `.<basename>.felix.admctx.tmp` | Creación exclusiva; futuro origen de publicación. |
 | Journal | `.<basename>.felix.journal` | Se conserva exactamente `felix-journal-v1`. |
 
 El contexto puede contener los bytes privados completos de `Old`, la
-configuración y la propuesta. El temporal debe usar permisos equivalentes a los
-del temporal del journal: modo `0600` en Unix y ACL heredada del parent en
-Windows. Solo se permiten filesystems locales ya soportados por las
-capabilities ancladas; una ruta remota o un probe de parent no verificable falla
-cerrado.
+configuración y la propuesta. El temporal usa modo `0600` en Unix y ACL heredada
+del parent en Windows. El gate actual rechaza prefijos UNC explícitos en
+Windows; no detecta unidades mapeadas ni todos los filesystems remotos. Un probe
+de parent no verificable falla cerrado, pero el scope no prueba una frontera
+general de mounts.
 
 El wire exterior propuesto es experimental y canónico:
 
@@ -127,8 +140,9 @@ sintéticas es requisito antes de conectar un nuevo caller.
 
 | Corte observado bajo el lock | Estado que se conserva | Conducta siguiente |
 |---|---|---|
-| Antes de crear el temporal | No hay contexto ni journal; root sigue intacto. | Una nueva publicación puede iniciar sus preflight normales. |
-| Durante escritura/sync del temporal | Puede quedar un `.tmp`; el journal no existe y el root sigue intacto. | El proceso dueño puede retirar solo la identidad temporal que creó. Si no demuestra la retirada, conserva el archivo. Un proceso posterior falla cerrado ante el `.tmp`; no lo recolecta por nombre. |
+| Antes de crear el temporal | Este intento aún no ha creado un temporal ni un journal; root no se modifica. Eso no demuestra ausencia global de artefactos. | El lease codifica antes de crear/escribir; si falla el codec, no toca el sibling. El caller y sus preflight aún no existen. |
+| Durante escritura/sync del temporal | Puede quedar un `.tmp`; no se devuelve recibo. Este intento no escribe journal ni modifica root, pero no demuestra ausencia global de esos nombres. | El error conserva el archivo y no ejecuta cleanup. Un retry choca con `create_new`; aún no hay recolección ni cleanup por identidad. |
+| Temporal escrito y sincronizado, antes de publicarlo | El recibo opaco describe el temporal creado por este intento. El método no publica canonical, no escribe journal ni renombra root; no demuestra ausencia global de esos nombres. | No hay operación de publicación disponible. Si el proceso termina, el temporal queda huérfano; el preflight global que lo detectaría sigue pendiente. |
 | Contexto publicado, antes del journal | Contexto canónico presente; journal ausente; ningún rename destructivo ocurrió. | Si el dueño sigue vivo, solo puede retirar el contexto con su identidad retenida y una observación inequívoca de journal ausente. Tras terminar ese proceso, el siguiente escritor conserva el huérfano y bloquea nuevas publicaciones. |
 | Publicación del journal indeterminada | Se conservan contexto, temporal y cualquier journal visible; root aún no debe cambiar. | Reobservar los nombres con el parent retenido. Si no puede probar el journal canónico esperado o su ausencia, parar y preservar todo. Si se confirma journal ausente, el contexto queda huérfano y bloquea. |
 | Journal `Prepared` de este nuevo flujo confirmado, antes de `root` → backup | Journal y contexto canónicos; root debe seguir siendo `Old`. | El futuro recovery context-aware carga contexto y comprueba el vínculo. Si falta, es inválido o no coincide, conserva journal y artefactos; no habilita el recovery nuevo. |
@@ -138,13 +152,14 @@ sintéticas es requisito antes de conectar un nuevo caller.
 | Contexto retirado y ausencia confirmada | No hay journal ni contexto de esta transacción. | Se aplican los preflight normales de root, backup y stage antes de iniciar otra transacción. |
 
 La presencia de contexto con journal ausente nunca constituye recibo de una
-admisión ni prueba de que el auxiliar sea huérfano recuperable. El preflight del
-nuevo dueño preserva y bloquea ante cualquier contexto o temporal inesperado,
-incluso si se puede parsear; esto no añade una comprobación al recovery legacy
-actual. No hay barrido por prefijo, namespace o `transaction_id`; la resolución
-de un huérfano requiere una decisión/capability específica futura. Un error
-posterior a un unlink puede dejar cleanup incompleto; el dueño solo reintenta o
-confirma la identidad que posee.
+admisión ni prueba de que el auxiliar sea huérfano recuperable. Todavía no hay
+preflight global del dueño: el helper solo rechaza la colisión del nombre `.tmp`
+que intenta crear y no inspecciona el canonical ni el journal. La integración
+futura deberá preservar y bloquear ante artefactos inesperados, sin añadir una
+comprobación al recovery legacy actual. No hay barrido por prefijo, namespace o
+`transaction_id`; resolver un huérfano requiere una decisión/capability
+específica. Un error posterior a un unlink puede dejar cleanup incompleto; el
+dueño futuro solo reintentará o confirmará la identidad que posee.
 
 ## Alcance y gates
 
@@ -161,10 +176,13 @@ confirma la identidad que posee.
   combinado; después preflight/decode y pruebas de corrupción/binding. Cada
   commit lleva sus pruebas focales, resultado exacto y rollback propio; no se
   reduce legibilidad o cobertura para alcanzar el límite.
-- La escritura/publicación anclada y el caller de recovery requieren otra
-  unidad revisada; el lease de lectura solo devuelve datos y no liga el envelope
-  al journal observado. Ningún resultado del codec habilita por sí mismo `KeepNew`,
-  `Committed`, aceptación de un `New` observado ni limpieza del backup.
+- La lectura canónica y la creación exclusiva del temporal ya están
+  implementadas como primitivas bajo lease; el recibo solo conserva el lease y
+  datos del archivo. No existen publicación del canonical, cleanup, preflight
+  global, ordenación caller contexto → journal → rename ni recovery
+  context-aware. El lease de lectura no liga el envelope al journal observado.
+  Ningún resultado del codec habilita por sí mismo `KeepNew`, `Committed`,
+  aceptación de un `New` observado ni limpieza del backup.
 - Antes de conectar el recovery nuevo, debe diseñarse y probarse el dispatch
   entre transacciones nuevas y journals v1 legacy. Un v1 sin contexto mantiene
   su camino actual; la ausencia de sidecar no se usa para reinterpretarlo como
@@ -173,6 +191,8 @@ confirma la identidad que posee.
 - La capability del backup y las recetas existentes siguen su contrato
   vigente. En particular, este diseño no resuelve la frontera de mount, bind
   mount o FUSE para cleanup de `PartialOld`; ese bloqueo permanece explícito.
+- La escritura temporal rechaza UNC explícito en Windows; no detecta drives
+  mapeados ni afirma identificar cualquier filesystem remoto.
 - `sync_all` del archivo y cortes de terminación de proceso no demuestran
   durabilidad del directorio, pérdida de energía, caída del SO ni garantías de
   `fsync` del filesystem. El diseño no declara esas propiedades.

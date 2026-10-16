@@ -1,13 +1,13 @@
 # Contexto privado para reproducir una admisión
 
-**Estado:** decisión de diseño autorizada; `ContextoAdmision` es hoy un valor
-de datos en memoria y no se persiste. El lifecycle propuesto para un futuro
-dueño está separado en [04-contexto-admision-lifecycle.md](04-contexto-admision-lifecycle.md);
-ninguno de los dos documentos implementa I/O. El valor no es prueba ni
-autoridad de admisión: una recuperación futura debe revalidarlo antes de volver
-a aceptar `New` después de perder el backup. El estado global sigue en 4/9
-fases; U7 y fase 04 permanecen parciales. Replay y decoder aún no tienen caller
-desde apply/producción ni cierran esas fases.
+**Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
+valores de datos en memoria con codecs privados. El lifecycle documenta las
+primitivas de lectura canónica y escritura temporal ya implementadas, pero aún
+no hay contexto canónico publicado, cleanup ni caller de producción. El valor
+no es prueba ni autoridad de admisión: una recuperación futura debe revalidarlo
+antes de volver a aceptar `New` después de perder el backup. El estado global
+sigue en 4/9 fases; U7 y fase 04 permanecen parciales. Replay y decoder aún no
+tienen caller desde apply/producción ni cierran esas fases.
 
 ## Decisión
 
@@ -68,13 +68,20 @@ prestadas y valida el framing sin decodificar payloads. El decoder exterior
 owned en memoria parsea el journal v1 canónico en `Prepared`, reconstruye el
 contexto interior y liga sus metadatos inmutables. El lector genérico sobre
 `Read` valida el tamaño antes de reservar y exige EOF tras el frame; no abre
-rutas ni admite streams persistentes. El dueño ya emite un lease de solo lectura
-que abre el sibling canónico desde el parent retenido, comprueba tipo, scope e
+rutas ni admite streams persistentes. El dueño emite un lease de lectura que
+abre el sibling canónico desde el parent retenido, comprueba tipo, scope e
 identidad del handle y devuelve el envelope decodificado con esa identidad. Solo
-la ausencia observada produce `None`; el lease no persiste, publica, reproduce
-ni autoriza cleanup, y no compara el binding con un journal observado. La
-lectura del archivo no valida por sí sola parent, `Old` o `New` del envelope.
-Persistencia, publicación y callers siguen pendientes; el
+la ausencia observada produce `None`; la lectura no reproduce admisión ni liga
+por sí sola el envelope al journal observado. El lease también puede codificar
+el envelope antes de crear o escribir el sibling temporal exclusivo
+`.<basename>.felix.admctx.tmp`, tras revalidar parent, scope y la identidad del
+lock visible. El helper crea sin seguir enlaces, valida el mismo handle y su
+scope, escribe y sincroniza; devuelve un recibo opaco con el lease retenido y
+datos de identidad, longitud y digest. Un error tras crear el archivo conserva
+el temporal y no devuelve recibo; un retry choca con `create_new`. No hay
+publicación del canonical, cleanup ni preflight global de huérfanos, y el
+resultado no autoriza recovery. El gate remoto rechaza solo prefijos UNC
+explícitos en Windows; no detecta unidades mapeadas ni todos los mounts. El
 wire y wrapper interior no cambian. El filtro focal local del codec exterior
 pasó 10/10 pruebas en Windows. `bc38412` incorpora un preflight
 lector con vistas
@@ -109,29 +116,32 @@ su expectativa.
 Esto añade consistencia entre el contexto en memoria y los metadatos del
 journal, no autenticidad ni autoridad: `NewEsperado` sigue copiando los IDs del
 journal y ningún valor prueba por sí solo el estado instalado. El envelope no
-consulta el filesystem, no conserva rutas o handles, no es capability y no
-tiene codec ni lifecycle. El decoder de `FELIX-ADMCTX` sigue sin ligarlo por sí
-mismo a un journal. `FELIX-ADMCTX` v1 y `felix-journal-v1` permanecen sin
-cambios; no hay auxiliar persistido ni caller de publicación o recovery.
+consulta el filesystem, no conserva rutas o handles y no es capability. El
+codec serializa el envelope, pero no liga el resultado a un journal observado ni
+ofrece lifecycle. El decoder de `FELIX-ADMCTX` sigue sin ligarlo por sí mismo a
+un journal. `FELIX-ADMCTX` v1 y `felix-journal-v1` permanecen sin cambios. El
+lease puede crear un auxiliar temporal, pero no publica el canonical ni hay
+caller de publicación o recovery.
 
-## Lifecycle y gates antes de persistencia
+## Lifecycle y gates para publicación y recovery
 
 El documento [04-contexto-admision-lifecycle.md](04-contexto-admision-lifecycle.md)
-define el lifecycle propuesto y ya cuenta con un scaffold en memoria para el
-dueño: conserva `&mut LockEscritura`, valida la identidad del lock sibling y
-retiene únicamente el parent como handle de filesystem. El dueño ya emite
-leases secuenciales del journal desde ese parent, revalidando identidad, scope y
-lock visible. El lease de lectura del contexto ya está implementado; su
-escritura/publicación y el caller que ordene contexto → journal `Prepared` →
-primer rename siguen pendientes, junto
-con el cleanup journal → contexto. El framing exterior y sus codecs ya están
-implementados; el diseño también fija cortes, preservación de huérfanos y
-límites de durabilidad. El lease de journal habilita solo storage y no un caller
-de producción ni una decisión de recovery.
+define el lifecycle propuesto y las primitivas implementadas. El dueño conserva
+`&mut LockEscritura`, valida la identidad del lock sibling y retiene únicamente
+el parent como handle de filesystem. Emite leases secuenciales del journal y
+del contexto desde ese parent, revalidando identidad, scope y lock visible. El
+lease de contexto lee el sibling canónico y crea/sincroniza un temporal
+exclusivo; su recibo opaco conserva el lease y los datos del archivo. El error
+posterior a la creación conserva el temporal, sin cleanup. La publicación del
+canonical, el cleanup, un preflight global de huérfanos y el caller que ordene
+contexto → journal `Prepared` → primer rename siguen pendientes. El framing
+exterior y sus codecs ya están implementados; el diseño también fija cortes,
+preservación de huérfanos y límites de durabilidad. Los leases habilitan solo
+storage y no un caller de producción ni una decisión de recovery.
 
 El encoder y decoder exterior son codecs puros, mantienen `felix-journal-v1`
 sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un
-caller. La persistencia y recovery context-aware requieren otra revisión. En
+caller. La publicación y recovery context-aware requieren otra revisión. En
 particular, antes de integrarlos se debe demostrar el
 dispatch entre transacciones nuevas y journals v1 legacy: los journals legacy
 sin auxiliar siguen exactamente el recovery actual. El codec y el binding no
@@ -161,13 +171,19 @@ resultado ni como runtime Linux exitoso.
 El CI remoto exacto de `713cec7f629c794c635a6ae8a89b1c1d8a619559` (run
 `38833928734`) terminó SUCCESS en Linux y Windows, en ambos jobs y todos sus
 pasos. La suite del workspace en WSL terminó con exit 0, aunque su salida no
-conservó un conteo agregado. Esa evidencia precede y no cubre el reader de esta
-unidad.
+conservó un conteo agregado. Esa evidencia precede y no cubre la lectura ni la
+escritura temporal ancladas.
 
-En este worktree posterior, sin SHA ni CI propios, el filtro del encoder
-exterior terminó 3/3, el filtro del codec interior 2/2 y
-`cargo fmt --all -- --check` terminó con exit 0. Son pruebas focales en memoria;
-no ejercitan persistencia, I/O ni recovery context-aware.
+El commit local `7ff9e0f` añade la creación exclusiva temporal al lease de
+lectura. Sus verificaciones locales focales terminaron Windows: anclado 127/127
+y admisión 40/40; Linux con `TMPDIR` nativo asertado: anclado 131/131 y
+admisión 40/40. La lectura reabre el frame sintético después de soltar y
+readquirir el lock en el mismo proceso; no simula reinicio ni recuperación tras
+una caída. `cargo clippy --workspace --all-targets --locked --offline -- -D
+warnings`, formato, frontera pública y diffcheck también terminaron verdes. Son
+filtros focales y checks locales, no una suite de tests del workspace ni CI para
+este commit. El CI remoto verificado de `4460ba0` (run `38845533059`) terminó
+verde en Linux y Windows, pero cubre la base anterior y no incluye `7ff9e0f`.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
