@@ -145,6 +145,35 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
 }
 
 impl<'owner, 'lock> ObservacionIntentCanonico<'owner, 'lock> {
+    /// Consume la observación y obtiene un lease de lectura del intent actual.
+    /// El lease retiene el archivo final; no autoriza replay ni retiro.
+    pub(super) fn abrir_lease_retiro(
+        self,
+    ) -> Result<
+        Option<super::intent_retiro::LeaseIntentRetiro<'owner, 'lock>>,
+        ErrorDuenioTransaccionAnclado,
+    > {
+        let Self {
+            _owner,
+            _autoridad,
+            _identidad_parent,
+            _scope_parent,
+            _identidad_intent,
+            _registro,
+            _archivo,
+        } = self;
+
+        super::intent_retiro::abrir_lease_retiro(
+            _owner,
+            _autoridad,
+            _identidad_parent,
+            _scope_parent,
+            _identidad_intent,
+            _registro,
+            _archivo,
+        )
+    }
+
     /// Consume la observación y vuelve a leer el nombre bajo el mismo owner.
     /// La lectura nueva se compara por datos; el handle retenido no congela bytes.
     /// El consumidor de reconciliación se integrará en una unidad posterior.
@@ -184,7 +213,7 @@ impl<'owner, 'lock> ObservacionIntentCanonico<'owner, 'lock> {
     }
 }
 
-fn validar_temporales_ausentes(
+pub(super) fn validar_temporales_ausentes(
     parent: &File,
     scope_parent: ScopeFilesystem,
     nombres: [&OsStr; 3],
@@ -197,7 +226,7 @@ fn validar_temporales_ausentes(
     Ok(())
 }
 
-fn validar_archivo_intent(
+pub(super) fn validar_archivo_intent(
     archivo: &File,
     scope_esperado: ScopeFilesystem,
 ) -> Result<(IdentidadArchivo, ScopeFilesystem), ErrorDuenioTransaccionAnclado> {
