@@ -8,7 +8,12 @@ use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
 
+use crate::transaccion::captura::{
+    ConfigRawCapturada, Snapshot, capturar_snapshot_soportado_anclado,
+    capturar_snapshot_soportado_con_cas_anclado,
+};
 use crate::transaccion::lock::LockEscritura;
+use crate::transaccion::snapshot::{ErrorSnapshot, SnapshotToken};
 
 use super::abrir::abrir_entrada_relativa;
 use super::{
@@ -184,6 +189,32 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         }))
     }
 
+    /// Captura datos del root abierto desde el parent retenido por este owner.
+    /// El snapshot no concede admisión, recovery ni autoridad de escritura.
+    pub(crate) fn capturar_snapshot_soportado(
+        &mut self,
+        configuracion: ConfigRawCapturada,
+    ) -> Result<Snapshot, ErrorSnapshot> {
+        let raiz = self
+            .abrir_root_lectura()
+            .map_err(|_| ErrorSnapshot::Io)?
+            .ok_or(ErrorSnapshot::RaizInvalida)?;
+        capturar_snapshot_soportado_anclado(&raiz, configuracion)
+    }
+
+    /// Compara el token antes de validar procedencia o parsear configuración.
+    pub(crate) fn capturar_snapshot_soportado_con_cas(
+        &mut self,
+        configuracion: ConfigRawCapturada,
+        esperado: SnapshotToken,
+    ) -> Result<Snapshot, ErrorSnapshot> {
+        let raiz = self
+            .abrir_root_lectura()
+            .map_err(|_| ErrorSnapshot::Io)?
+            .ok_or(ErrorSnapshot::RaizInvalida)?;
+        capturar_snapshot_soportado_con_cas_anclado(&raiz, configuracion, esperado)
+    }
+
     fn parent_revalidado(&self) -> Result<File, super::journal_temporal::ErrorJournalAnclado> {
         use super::journal_temporal::ErrorJournalAnclado;
 
@@ -243,6 +274,10 @@ fn mapear_error(_error: ErrorDirectorioAnclado) -> ErrorDuenioTransaccionAnclado
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion/fixture_root_replay.rs"]
 pub(super) mod fixture_root_replay;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/captura_soportada_tests.rs"]
+mod captura_soportada_tests;
 
 #[path = "duenio_transaccion/comparar_root_replay.rs"]
 mod comparar_root_replay;
