@@ -1,8 +1,8 @@
 //! Dueño en memoria del lock y el parent de una transacción.
 //!
-//! Conserva en memoria el parent y puede emitir un lease secuencial del journal
-//! tras revalidar su scope y el lock visible. No persiste contexto; el token de
-//! scope no demuestra una frontera general de mounts.
+//! Conserva el lock y el parent retenido, emite leases secuenciales del journal
+//! y contexto, y observa el root raw. Sus resultados son datos, no autoridad de
+//! recovery; el token de scope no demuestra una frontera general de mounts.
 
 use std::fmt;
 use std::fs::File;
@@ -202,6 +202,9 @@ fn mapear_error(_error: ErrorDirectorioAnclado) -> ErrorDuenioTransaccionAnclado
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion/fixture_root_replay.rs"]
 pub(super) mod fixture_root_replay;
+
+#[path = "duenio_transaccion/comparar_root_replay.rs"]
+mod comparar_root_replay;
 
 #[path = "duenio_transaccion/observar_root.rs"]
 mod observar_root;
