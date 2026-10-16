@@ -46,3 +46,6 @@ fn ausencia_real_tras_observacion_no_crea_un_intent() {
     drop(ausencia);
     verificar_storage(&fixture, ids_storage);
 }
+
+#[path = "publicar_intent_lector_intent_retiro_delete_tests.rs"]
+mod intent_retiro_delete_tests;

@@ -1,7 +1,7 @@
-//! Lease privado de lectura para volver a comprobar un intent canónico.
+//! Lease privado para validar y, en una única tentativa, retirar un intent canónico.
 //!
-//! Conserva el owner y el handle observado, pero no concede autoridad de
-//! replay, limpieza o aplicación.
+//! Conserva owner y handle observado, pero no concede autoridad de replay,
+//! recovery o aplicación.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -31,6 +31,48 @@ pub(super) struct LeaseIntentRetiro<'owner, 'lock> {
 impl fmt::Debug for LeaseIntentRetiro<'_, '_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("LeaseIntentRetiro { .. }")
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum EstadoRetiroIntent {
+    Eliminado,
+    Ausente,
+    Conflicto,
+    Indeterminado,
+}
+
+/// Resultado owner-bound, sin handle de archivo ni detalles sensibles.
+#[must_use = "el resultado conserva el owner para una continuación privada"]
+pub(super) struct ResultadoRetiroIntent<'owner, 'lock> {
+    _owner: &'owner mut DuenioTransaccionAnclado<'lock>,
+    _autoridad: Arc<()>,
+    _identidad_parent: IdentidadDirectorio,
+    _scope_parent: ScopeFilesystem,
+    _registro: IntentRetiroPersistido,
+    estado: EstadoRetiroIntent,
+}
+
+impl fmt::Debug for ResultadoRetiroIntent<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ResultadoRetiroIntent { .. }")
+    }
+}
+
+impl ResultadoRetiroIntent<'_, '_> {
+    pub(super) fn estado(&self) -> EstadoRetiroIntent {
+        self.estado
+    }
+
+    #[cfg(test)]
+    pub(super) fn owner_binding_coincide_para_test(&self) -> bool {
+        Arc::ptr_eq(&self._autoridad, &self._owner._autoridad)
+            && self._identidad_parent == self._owner.identidad_parent
+            && self._scope_parent == self._owner.scope_parent
+            && self
+                ._identidad_parent
+                .journal_identity()
+                .is_some_and(|parent| self._registro.journal().parent() == &parent)
     }
 }
 
@@ -121,6 +163,301 @@ pub(super) fn abrir_lease_retiro<'owner, 'lock>(
         _registro: registro,
         _archivo: archivo_final,
     }))
+}
+
+impl<'owner, 'lock> LeaseIntentRetiro<'owner, 'lock> {
+    /// Intenta una sola retirada y conserva owner, autoridad y registro como datos.
+    #[allow(dead_code)]
+    pub(super) fn retirar(self) -> ResultadoRetiroIntent<'owner, 'lock> {
+        let LeaseIntentRetiro {
+            _owner,
+            _autoridad,
+            _identidad_parent,
+            _scope_parent,
+            _identidad_intent,
+            _registro,
+            _archivo,
+        } = self;
+        let estado = intentar_retirar_intent(
+            _owner,
+            &_autoridad,
+            _identidad_parent,
+            _scope_parent,
+            _identidad_intent,
+            &_registro,
+            _archivo,
+        );
+        resultado_retiro(
+            _owner,
+            _autoridad,
+            _identidad_parent,
+            _scope_parent,
+            _registro,
+            estado,
+        )
+    }
+}
+
+fn intentar_retirar_intent(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+    autoridad: &Arc<()>,
+    identidad_parent: IdentidadDirectorio,
+    scope_parent: ScopeFilesystem,
+    identidad_intent: IdentidadArchivo,
+    registro: &IntentRetiroPersistido,
+    archivo_anterior: File,
+) -> EstadoRetiroIntent {
+    // Igual que Context/Journal, solo rechaza raíces remotas reconocidas lexicalmente.
+    if super::super::journal_temporal::raiz_es_remota(owner._lock.raiz_canonica()) {
+        return EstadoRetiroIntent::Conflicto;
+    }
+    let nombres = match NombresIntentRetiro::desde_owner(owner) {
+        Ok(nombres) => nombres,
+        Err(_) => return EstadoRetiroIntent::Conflicto,
+    };
+    let parent = match validar_owner_y_temporales(
+        owner,
+        autoridad,
+        identidad_parent,
+        scope_parent,
+        &nombres,
+    ) {
+        Ok(parent) => parent,
+        Err(_) => return EstadoRetiroIntent::Conflicto,
+    };
+    let fuente = match abrir_y_leer_fuente(
+        &parent,
+        &nombres.canonico,
+        scope_parent,
+        identidad_parent,
+        identidad_intent,
+        registro,
+    ) {
+        Ok(Some(fuente)) => fuente,
+        Ok(None) => return EstadoRetiroIntent::Conflicto,
+        Err(error) => {
+            return match error {
+                super::lector_intent_canonico::ErrorLecturaIntent::Io => {
+                    EstadoRetiroIntent::Indeterminado
+                }
+                super::lector_intent_canonico::ErrorLecturaIntent::Discrepancia => {
+                    EstadoRetiroIntent::Conflicto
+                }
+            };
+        }
+    };
+    drop(parent);
+
+    let parent_accion = match validar_owner_y_temporales(
+        owner,
+        autoridad,
+        identidad_parent,
+        scope_parent,
+        &nombres,
+    ) {
+        Ok(parent) => parent,
+        Err(_) => {
+            drop(fuente.archivo);
+            return EstadoRetiroIntent::Conflicto;
+        }
+    };
+
+    drop(archivo_anterior);
+    let intento = retirar_nombre_plataforma(&parent_accion, &nombres.canonico, fuente.archivo);
+    drop(parent_accion);
+    let contexto = ContextoConfirmacionRetiro {
+        autoridad,
+        identidad_parent,
+        scope_parent,
+        nombres: &nombres,
+        identidad_intent,
+        registro_esperado: registro,
+    };
+    confirmar_retiro(owner, contexto, intento)
+}
+
+fn resultado_retiro<'owner, 'lock>(
+    owner: &'owner mut DuenioTransaccionAnclado<'lock>,
+    autoridad: Arc<()>,
+    identidad_parent: IdentidadDirectorio,
+    scope_parent: ScopeFilesystem,
+    registro: IntentRetiroPersistido,
+    estado: EstadoRetiroIntent,
+) -> ResultadoRetiroIntent<'owner, 'lock> {
+    ResultadoRetiroIntent {
+        _owner: owner,
+        _autoridad: autoridad,
+        _identidad_parent: identidad_parent,
+        _scope_parent: scope_parent,
+        _registro: registro,
+        estado,
+    }
+}
+
+fn validar_owner_y_temporales(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+    autoridad: &Arc<()>,
+    identidad_parent: IdentidadDirectorio,
+    scope_parent: ScopeFilesystem,
+    nombres: &NombresIntentRetiro,
+) -> Result<File, ErrorDuenioTransaccionAnclado> {
+    validar_vinculo_owner(owner, autoridad, identidad_parent, scope_parent)?;
+    let parent = owner
+        .parent_revalidado()
+        .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+    validar_temporales(scope_parent, &parent, nombres)?;
+    Ok(parent)
+}
+
+fn abrir_y_leer_fuente(
+    parent: &File,
+    nombre: &OsStr,
+    scope_parent: ScopeFilesystem,
+    identidad_parent: IdentidadDirectorio,
+    identidad_intent: IdentidadArchivo,
+    registro_esperado: &IntentRetiroPersistido,
+) -> Result<
+    Option<super::lector_intent_canonico::IntentoCanonicoLeido>,
+    super::lector_intent_canonico::ErrorLecturaIntent,
+> {
+    let Some(sonda) = super::lector_intent_canonico::abrir_intent_canonico(parent, nombre)? else {
+        return Ok(None);
+    };
+    #[cfg(windows)]
+    let archivo = {
+        drop(sonda);
+        abrir_final_con_delete(parent, nombre)
+            .map_err(|_| super::lector_intent_canonico::ErrorLecturaIntent::Io)?
+    };
+    #[cfg(not(windows))]
+    let archivo = sonda;
+
+    super::lector_intent_canonico::leer_intent_canonico(
+        archivo,
+        scope_parent,
+        identidad_parent,
+        Some((identidad_intent, registro_esperado)),
+        super::super::scope_filesystem,
+    )
+    .map(Some)
+}
+
+struct ContextoConfirmacionRetiro<'a> {
+    autoridad: &'a Arc<()>,
+    identidad_parent: IdentidadDirectorio,
+    scope_parent: ScopeFilesystem,
+    nombres: &'a NombresIntentRetiro,
+    identidad_intent: IdentidadArchivo,
+    registro_esperado: &'a IntentRetiroPersistido,
+}
+
+fn confirmar_retiro(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+    contexto: ContextoConfirmacionRetiro<'_>,
+    intento: Result<(), ()>,
+) -> EstadoRetiroIntent {
+    let ContextoConfirmacionRetiro {
+        autoridad,
+        identidad_parent,
+        scope_parent,
+        nombres,
+        identidad_intent,
+        registro_esperado,
+    } = contexto;
+    let owner_preconfirmacion_valido =
+        validar_owner_y_temporales(owner, autoridad, identidad_parent, scope_parent, nombres)
+            .is_ok();
+    // Siempre se observa el nombre bajo el parent retenido, aunque el owner
+    // falle: sin ambos chequeos el resultado sigue siendo indeterminado.
+    let confirmacion = match owner.parent.try_clone() {
+        Ok(parent) => {
+            let confirmacion = abrir_y_leer_fuente(
+                &parent,
+                &nombres.canonico,
+                scope_parent,
+                identidad_parent,
+                identidad_intent,
+                registro_esperado,
+            )
+            .map(|resultado| match resultado {
+                Some(leido) => {
+                    drop(leido.archivo);
+                    true
+                }
+                None => false,
+            });
+            drop(parent);
+            confirmacion
+        }
+        Err(_) => Err(super::lector_intent_canonico::ErrorLecturaIntent::Io),
+    };
+    let owner_postconfirmacion_valido =
+        validar_owner_y_temporales(owner, autoridad, identidad_parent, scope_parent, nombres)
+            .is_ok();
+    if !owner_preconfirmacion_valido || !owner_postconfirmacion_valido {
+        return EstadoRetiroIntent::Indeterminado;
+    }
+
+    match confirmacion {
+        Ok(false) if intento.is_ok() => EstadoRetiroIntent::Eliminado,
+        Ok(false) => EstadoRetiroIntent::Ausente,
+        Ok(true) | Err(super::lector_intent_canonico::ErrorLecturaIntent::Io) => {
+            EstadoRetiroIntent::Indeterminado
+        }
+        Err(super::lector_intent_canonico::ErrorLecturaIntent::Discrepancia) => {
+            EstadoRetiroIntent::Conflicto
+        }
+    }
+}
+
+fn retirar_nombre_plataforma(parent: &File, nombre: &OsStr, archivo: File) -> Result<(), ()> {
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        use std::os::fd::AsRawFd;
+        use std::os::unix::ffi::OsStrExt;
+
+        let nombre = CString::new(nombre.as_bytes()).map_err(|_| ())?;
+        // SAFETY: name is an internal validated component under the retained
+        // parent. External name races remain possible between check and call;
+        // the validated source handle stays open across unlinkat.
+        let resultado = unsafe { libc::unlinkat(parent.as_raw_fd(), nombre.as_ptr(), 0) };
+        drop(archivo);
+        if resultado == 0 { Ok(()) } else { Err(()) }
+    }
+    #[cfg(windows)]
+    {
+        use std::mem::size_of;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Wdk::Storage::FileSystem::{
+            FILE_DISPOSITION_INFORMATION, FileDispositionInformation, NtSetInformationFile,
+        };
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+
+        let _ = (parent, nombre);
+        let mut disposicion = FILE_DISPOSITION_INFORMATION { DeleteFile: true };
+        let mut estado_io = IO_STATUS_BLOCK::default();
+        // SAFETY: this handle was opened with DELETE and the typed reader
+        // validated its native identity, scope and full intent record.
+        let estado = unsafe {
+            NtSetInformationFile(
+                archivo.as_raw_handle() as HANDLE,
+                &mut estado_io,
+                (&mut disposicion as *mut FILE_DISPOSITION_INFORMATION).cast(),
+                size_of::<FILE_DISPOSITION_INFORMATION>() as u32,
+                FileDispositionInformation,
+            )
+        };
+        drop(archivo);
+        if estado >= 0 { Ok(()) } else { Err(()) }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (parent, nombre);
+        drop(archivo);
+        Err(())
+    }
 }
 
 fn validar_vinculo_owner(
