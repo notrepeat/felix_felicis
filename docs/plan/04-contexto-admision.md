@@ -2,12 +2,13 @@
 
 **Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
 valores de datos en memoria con codecs privados. El lifecycle documenta las
-primitivas de lectura canónica y escritura temporal ya implementadas, pero aún
-no hay contexto canónico publicado, cleanup ni caller de producción. El valor
-no es prueba ni autoridad de admisión: una recuperación futura debe revalidarlo
-antes de volver a aceptar `New` después de perder el backup. El estado global
-sigue en 4/9 fases; U7 y fase 04 permanecen parciales. Replay y decoder aún no
-tienen caller desde apply/producción ni cierran esas fases.
+primitivas de lectura, creación temporal, verificación y publicación canónica ya
+implementadas. Falta el caller de producción que las coordine, además de
+cleanup y preflight global de huérfanos. El valor no es prueba ni autoridad de
+admisión: una recuperación futura debe revalidarlo antes de volver a aceptar
+`New` después de perder el backup. El estado global sigue en 4/9 fases; U7 y
+fase 04 permanecen parciales. Replay y decoder aún no tienen caller desde
+apply/producción ni cierran esas fases.
 
 ## Decisión
 
@@ -78,9 +79,14 @@ el envelope antes de crear o escribir el sibling temporal exclusivo
 lock visible. El helper crea sin seguir enlaces, valida el mismo handle y su
 scope, escribe y sincroniza; devuelve un recibo opaco con el lease retenido y
 datos de identidad, longitud y digest. Un error tras crear el archivo conserva
-el temporal y no devuelve recibo; un retry choca con `create_new`. No hay
-publicación del canonical, cleanup ni preflight global de huérfanos, y el
-resultado no autoriza recovery. El gate remoto rechaza solo prefijos UNC
+el temporal y no devuelve recibo; un retry choca con `create_new`. La
+verificación reabre el temporal y comprueba identidad y contenido. La
+publicación hace un único rename sin reemplazo y devuelve un recibo sin borrow
+del lock solo si confirma el canonical, su identidad, scope y contenido, y la
+ausencia del temporal. Un error de publicación no demuestra que el rename no
+tuvo efecto; no hay retry ni cleanup automático. El recibo publicado liga datos
+al owner original, pero no autoriza recovery ni cleanup. El preflight global de
+huérfanos sigue pendiente. El gate remoto rechaza solo prefijos UNC
 explícitos en Windows; no detecta unidades mapeadas ni todos los mounts. El
 wire y wrapper interior no cambian. El filtro focal local del codec exterior
 pasó 10/10 pruebas en Windows. `bc38412` incorpora un preflight
@@ -120,8 +126,8 @@ consulta el filesystem, no conserva rutas o handles y no es capability. El
 codec serializa el envelope, pero no liga el resultado a un journal observado ni
 ofrece lifecycle. El decoder de `FELIX-ADMCTX` sigue sin ligarlo por sí mismo a
 un journal. `FELIX-ADMCTX` v1 y `felix-journal-v1` permanecen sin cambios. El
-lease puede crear un auxiliar temporal, pero no publica el canonical ni hay
-caller de publicación o recovery.
+lease ya puede crear, verificar y publicar el auxiliar canonical; aún no hay
+caller que coordine esas primitivas con el journal o recovery.
 
 ## Lifecycle y gates para publicación y recovery
 
@@ -131,18 +137,22 @@ define el lifecycle propuesto y las primitivas implementadas. El dueño conserva
 el parent como handle de filesystem. Emite leases secuenciales del journal y
 del contexto desde ese parent, revalidando identidad, scope y lock visible. El
 lease de contexto lee el sibling canónico y crea/sincroniza un temporal
-exclusivo; su recibo opaco conserva el lease y los datos del archivo. El error
-posterior a la creación conserva el temporal, sin cleanup. La publicación del
-canonical, el cleanup, un preflight global de huérfanos y el caller que ordene
-contexto → journal `Prepared` → primer rename siguen pendientes. El framing
-exterior y sus codecs ya están implementados; el diseño también fija cortes,
-preservación de huérfanos y límites de durabilidad. Los leases habilitan solo
-storage y no un caller de producción ni una decisión de recovery.
+exclusivo; su recibo temporal conserva el lease y los datos del archivo. La
+verificación reabre el temporal y la publicación intenta un único rename sin
+reemplazo, luego confirma el canonical desde el parent retenido. El recibo
+publicado no conserva el borrow del lock y solo liga identidad, scope y datos;
+no da autoridad de recovery ni cleanup. Si la confirmación falla, el error no
+demuestra que el rename no tuvo efecto y la operación no reintenta ni limpia.
+El cleanup, el preflight global de huérfanos y el caller que ordene contexto →
+journal `Prepared` → primer rename siguen pendientes. El framing exterior y sus
+codecs ya están implementados; el diseño también fija cortes, preservación de
+huérfanos y límites de durabilidad. Las primitivas de storage no son un caller
+de producción ni una decisión de recovery.
 
 El encoder y decoder exterior son codecs puros, mantienen `felix-journal-v1`
 sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un
-caller. La publicación y recovery context-aware requieren otra revisión. En
-particular, antes de integrarlos se debe demostrar el
+caller. La orquestación y el recovery context-aware requieren otra revisión.
+En particular, antes de integrarlos se debe demostrar el
 dispatch entre transacciones nuevas y journals v1 legacy: los journals legacy
 sin auxiliar siguen exactamente el recovery actual. El codec y el binding no
 son autoridad para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar el
@@ -184,6 +194,27 @@ warnings`, formato, frontera pública y diffcheck también terminaron verdes. So
 filtros focales y checks locales, no una suite de tests del workspace ni CI para
 este commit. El CI remoto verificado de `4460ba0` (run `38845533059`) terminó
 verde en Linux y Windows, pero cubre la base anterior y no incluye `7ff9e0f`.
+
+El commit local `679c2c2` añade una prueba de pipeline de storage con fixture
+sintética: publica contexto y journal `Prepared`, suelta y readquiere el lock
+en el mismo proceso, reabre ambos por leases secuenciales y llama al replay
+puro. Comprueba identidades y bytes, y que un journal cambiado o motor/policy
+incompatibles no alteren los archivos. No observa `New` instalado ni demuestra
+recovery, reinicio o coordinación de un caller. El filtro reproducible es:
+
+```text
+cargo test --locked -p universo-okf --lib publica_y_reabre_contexto_y_journal_prepared_para_replay_puro
+```
+
+En ese commit, los filtros locales fueron Windows: contexto 21/21 y admisión
+40/40; Linux: contexto 22/22 y admisión 40/40. Clippy de workspace con
+warnings denegados terminó verde en ambos sistemas; formato, chequeo de frontera
+y diffcheck terminaron verdes en Windows. El último CI remoto disponible
+corresponde a `8c12e197dd51150905a5871559c52f53472b12ee` (run `38849833617`):
+sus suites de workspace reportaron Linux 834/0/9 y Windows 822/0/9 en 38
+targets, además de 7 pruebas Python por sistema. Ese CI precede y no cubre
+`33c7d52`, `86569b3` ni
+`679c2c2`.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
