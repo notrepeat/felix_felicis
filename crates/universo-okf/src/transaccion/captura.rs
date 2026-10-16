@@ -26,6 +26,7 @@ use super::inventario::{
 use super::journal::RawTreeDigest;
 use super::limites::PRESUPUESTO_BYTES_RAW;
 use super::lock::LockEscritura;
+use super::replay::semantica_archivada::{POLICY_ID_V1, VERSION_MOTOR_V1};
 use super::snapshot::{
     EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_digest_raw_tree,
     calcular_token_snapshot, validar_presupuesto_configuracion,
@@ -322,6 +323,17 @@ pub(crate) fn capturar_snapshot_raw_anclado(
     Ok(captura)
 }
 
+/// Captura y materializa usando el único perfil semántico archivado soportado.
+/// Los tags resultantes describen datos; no prueban admisión ni conceden autoridad.
+pub(crate) fn capturar_snapshot_soportado_anclado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let captura =
+        capturar_snapshot_raw_anclado(raiz, configuracion, VERSION_MOTOR_V1, POLICY_ID_V1)?;
+    materializar(captura)
+}
+
 /// Captura desde el handle root, compara CAS antes de validar procedencia o
 /// parsear configuración, y materializa desde los buffers ya capturados.
 pub(crate) fn capturar_snapshot_con_cas_anclado(
@@ -335,6 +347,22 @@ pub(crate) fn capturar_snapshot_con_cas_anclado(
         capturar_snapshot_raw_anclado_sin_validar(raiz, configuracion, version_motor, policy_id)?;
     super::snapshot::comparar_snapshot_esperado(esperado, captura.token)?;
     materializar(captura)
+}
+
+/// Mantiene el orden CAS existente: comparar el token antes de validar
+/// procedencia raw o materializar/parsing la configuración.
+pub(crate) fn capturar_snapshot_soportado_con_cas_anclado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    capturar_snapshot_con_cas_anclado(
+        raiz,
+        configuracion,
+        VERSION_MOTOR_V1,
+        POLICY_ID_V1,
+        esperado,
+    )
 }
 
 /// Abre el root desde la ubicación protegida por el lock y ejecuta el CAS
@@ -1003,6 +1031,7 @@ mod tests {
         ErrorLockEscritura, LockEscritura, serializar_forks_y_reacquisiciones_test,
     };
     use crate::transaccion::raiz::UbicacionRaiz;
+    use crate::transaccion::replay::semantica_archivada::{POLICY_ID_V1, VERSION_MOTOR_V1};
     use std::collections::HashMap;
     use std::fs;
     use tempfile::tempdir;
@@ -1814,6 +1843,96 @@ ignorados = ["ignored.md"]
         assert_eq!(snapshot.estructura().nodos().count(), 1);
         assert!(!debug_config.contains("PRIVATE-CANARY"));
         assert!(!format!("{snapshot:?}").contains("PRIVATE-CANARY"));
+    }
+
+    // Prueba datos y tags de captura; no ejercita exclusión por lock ni integración owner.
+    #[test]
+    fn captura_soportada_anclada_fija_tags_y_usa_config_y_inventario_capturados() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let auxiliar_raw = [0x00_u8, 0xff, 0x7f];
+        fs::write(root.join("auxiliar.bin"), auxiliar_raw).unwrap();
+        fs::create_dir(root.join("vacio")).unwrap();
+
+        let source = temp.path().join("config-source");
+        fs::create_dir(&source).unwrap();
+        let manifest = source.join("manifest.toml");
+        let invariants = source.join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(&manifest).unwrap(),
+            fs::read(&invariants).unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+        fs::remove_file(&manifest).unwrap();
+        fs::remove_file(&invariants).unwrap();
+        fs::remove_dir(&source).unwrap();
+        assert!(!source.exists());
+
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let raiz_anclada = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let snapshot = capturar_snapshot_soportado_anclado(&raiz_anclada, configuracion).unwrap();
+
+        assert_eq!(snapshot.version_motor(), VERSION_MOTOR_V1);
+        assert_eq!(snapshot.policy_id(), POLICY_ID_V1);
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert!(snapshot.identidad_root().is_some());
+
+        let auxiliar = snapshot
+            .entradas()
+            .iter()
+            .find(|entrada| entrada.ruta() == "auxiliar.bin")
+            .expect("el inventario incluye el archivo auxiliar");
+        assert_eq!(auxiliar.tipo(), TipoEntradaSnapshot::Archivo);
+        assert_eq!(auxiliar.bytes(), Some(auxiliar_raw.as_slice()));
+        assert!(snapshot.entradas().iter().any(|entrada| {
+            entrada.ruta() == "vacio" && entrada.tipo() == TipoEntradaSnapshot::Directorio
+        }));
+        assert!(snapshot.entradas().iter().any(|entrada| {
+            entrada.ruta() == "knowledge/a.md"
+                && entrada.tipo() == TipoEntradaSnapshot::Archivo
+                && entrada.bytes() == Some(b"---\ntype: a\ntitle: A\n---\n".as_slice())
+        }));
+    }
+
+    #[test]
+    fn cas_soportado_anclado_devuelve_stale_antes_de_parsear_configuracion() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        let documento = b"---\ntype: a\ntitle: A\n---\n";
+        fs::write(root.join("knowledge/a.md"), documento).unwrap();
+
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let raiz_anclada = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let valida =
+            ConfigRawCapturada::nueva(MANIFIESTO.as_bytes(), b"\n".as_slice(), None, None).unwrap();
+        let esperado = capturar_snapshot_soportado_anclado(&raiz_anclada, valida.clone())
+            .unwrap()
+            .token();
+        let antes = inventario_para_assertions(&root);
+        let invalida = ConfigRawCapturada::nueva(
+            b"PRIVATE-CANARY invalid manifest".as_slice(),
+            b"PRIVATE-CANARY invalid invariants".as_slice(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let error = capturar_snapshot_soportado_con_cas_anclado(&raiz_anclada, invalida, esperado)
+            .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(error.to_string(), "stale");
+        assert!(!format!("{error:?} {error}").contains("PRIVATE-CANARY"));
+        assert_eq!(inventario_para_assertions(&root), antes);
+        assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), documento);
     }
 
     #[test]
