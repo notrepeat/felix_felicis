@@ -255,3 +255,6 @@ fn stage_unknown_bloquea_consistencia_c_y_se_preserva() {
     assert_eq!(fs::read(&intent_path).unwrap(), intent_bytes);
     assert!(id_archivo(&intent_path) == intent_id);
 }
+
+#[path = "publicar_intent_lector_consistencia_c_retiro_tests.rs"]
+mod retiro_intent_c_tests;

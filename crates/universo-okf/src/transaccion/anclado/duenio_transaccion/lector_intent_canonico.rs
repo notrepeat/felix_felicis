@@ -750,6 +750,69 @@ fn validar_gate_reconciliacion_c(
     Ok(())
 }
 
+impl<'owner, 'lock> ObservacionIntentConsistenciaRootC<'owner, 'lock> {
+    /// Retira el intent solo tras reconstruir C desde una observación fresca.
+    /// El resultado owner-bound es intermedio y no asegura un estado final.
+    #[allow(dead_code)]
+    pub(super) fn retirar_intent_tras_consistencia_root_c(
+        self,
+    ) -> Result<
+        super::intent_retiro::ResultadoRetiroIntent<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    > {
+        self.retirar_intent_tras_consistencia_root_c_con(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn retirar_intent_tras_consistencia_root_c_con_prueba<F>(
+        self,
+        despues_de_c_fresca: F,
+    ) -> Result<
+        super::intent_retiro::ResultadoRetiroIntent<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    >
+    where
+        F: FnOnce(),
+    {
+        self.retirar_intent_tras_consistencia_root_c_con(despues_de_c_fresca)
+    }
+
+    fn retirar_intent_tras_consistencia_root_c_con<F>(
+        self,
+        despues_de_c_fresca: F,
+    ) -> Result<
+        super::intent_retiro::ResultadoRetiroIntent<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    >
+    where
+        F: FnOnce(),
+    {
+        let ObservacionIntentConsistenciaRootC {
+            _intent: intent_inicial,
+            ..
+        } = self;
+        let c_fresca = intent_inicial
+            .observar_reconciliacion_c_sin_sidecars()?
+            .observar_consistencia_root_c()?;
+
+        despues_de_c_fresca();
+
+        let lease = c_fresca
+            ._intent
+            .abrir_lease_retiro()?
+            .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let resultado = lease.retirar();
+        match resultado.estado() {
+            super::intent_retiro::EstadoRetiroIntent::Eliminado
+            | super::intent_retiro::EstadoRetiroIntent::Ausente => Ok(resultado),
+            super::intent_retiro::EstadoRetiroIntent::Conflicto
+            | super::intent_retiro::EstadoRetiroIntent::Indeterminado => {
+                Err(ErrorDuenioTransaccionAnclado::NoVerificable)
+            }
+        }
+    }
+}
+
 impl<'owner, 'lock> ObservacionIntentConReplayYInventario<'owner, 'lock> {
     /// Retira el Journal observado y solo devuelve B si una lectura nueva la valida.
     ///
