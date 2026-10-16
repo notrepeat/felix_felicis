@@ -145,6 +145,18 @@ mod tests {
     }
 
     #[test]
+    fn native_v1_golden_bytes_match_encoder_and_parser() {
+        #[cfg(unix)]
+        let golden = r#"{"schema":"felix-journal-v1","transaction_id":"0123456789abcdef0123456789abcdef","state":"prepared","parent":{"platform":"unix-v1","device":7,"inode":1},"old":{"identity":{"platform":"unix-v1","device":7,"inode":2},"digest":{"version":"felix-raw-tree-sha256-v1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"new":{"identity":{"platform":"unix-v1","device":7,"inode":3},"digest":{"version":"felix-raw-tree-sha256-v1","hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}"#;
+        #[cfg(windows)]
+        let golden = r#"{"schema":"felix-journal-v1","transaction_id":"0123456789abcdef0123456789abcdef","state":"prepared","parent":{"platform":"windows-v1","volume":7,"file_id":"00000000000000000000000000000001"},"old":{"identity":{"platform":"windows-v1","volume":7,"file_id":"00000000000000000000000000000002"},"digest":{"version":"felix-raw-tree-sha256-v1","hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"new":{"identity":{"platform":"windows-v1","volume":7,"file_id":"00000000000000000000000000000003"},"digest":{"version":"felix-raw-tree-sha256-v1","hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}}"#;
+
+        let record = record();
+        assert_eq!(record.encode().unwrap().as_slice(), golden.as_bytes());
+        assert_eq!(Journal::parse(golden.as_bytes()).unwrap(), record);
+    }
+
+    #[test]
     fn maximum_valid_record_round_trips_below_the_wire_limit() {
         let record = maximum_valid_record();
         let bytes = record.encode().unwrap();
