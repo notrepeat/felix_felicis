@@ -14,6 +14,9 @@ use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 use tempfile::tempdir;
 
+#[path = "contexto_admision_tests/contexto_canonico_tests.rs"]
+mod contexto_canonico_tests;
+
 fn frame(transaction_id: &str, parent: DirectoryIdentity) -> Vec<u8> {
     codec::codificar(&envelope(transaction_id, parent)).unwrap()
 }

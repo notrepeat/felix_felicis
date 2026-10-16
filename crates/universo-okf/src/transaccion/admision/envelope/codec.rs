@@ -17,6 +17,7 @@ const VERSION: u16 = 1;
 const HEADER_BYTES: usize = MAGIC.len() + 2 + 8;
 const JOURNAL_LENGTH_BYTES: usize = 4;
 const CONTEXT_LENGTH_BYTES: usize = 8;
+pub(crate) const MAX_ENVELOPE_FRAME_BYTES: usize = MAX_CODEC_BYTES;
 
 #[allow(dead_code)]
 mod decodificar;

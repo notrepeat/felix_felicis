@@ -26,6 +26,7 @@ pub(crate) enum ErrorContextoAdmisionAnclado {
     ScopeUnverified,
     NameInvalid,
     EntryRejected,
+    CanonicalUnverified,
     TemporaryExists,
     TemporaryUnverified,
     PublicationUnverified,
@@ -42,6 +43,7 @@ impl ErrorContextoAdmisionAnclado {
             Self::ScopeUnverified => "admission_context_scope_unverified",
             Self::NameInvalid => "admission_context_name_invalid",
             Self::EntryRejected => "admission_context_entry_rejected",
+            Self::CanonicalUnverified => "admission_context_canonical_unverified",
             Self::TemporaryExists => "admission_context_temporary_exists",
             Self::TemporaryUnverified => "admission_context_temporary_unverified",
             Self::PublicationUnverified => "admission_context_publication_unverified",
@@ -128,6 +130,19 @@ impl ContextoAdmisionAnclado<'_> {
         evidencia::leer(&mut archivo, identidad)
             .map(Some)
             .map_err(ErrorContextoAdmisionAnclado::Codec)
+    }
+
+    /// Reabre y contrasta el frame raw con evidencia medida antes.
+    /// Revalida parent y lock antes y después; no decodifica ni concede cleanup.
+    #[allow(dead_code)] // El consumidor futuro de Context aún no está integrado.
+    pub(super) fn verificar_canonico_con_evidencia(
+        &self,
+        evidencia: &EvidenciaLecturaContexto,
+    ) -> Result<File, ErrorContextoAdmisionAnclado> {
+        self.revalidar_parent_y_lock()?;
+        let archivo = verificacion::verificar_canonico(self, evidencia)?;
+        self.revalidar_parent_y_lock()?;
+        Ok(archivo)
     }
 
     fn abrir_canonico(
