@@ -181,5 +181,12 @@ fn mapear_error(error: ErrorDirectorioAnclado) -> ErrorContextoAdmisionAnclado {
 }
 
 #[cfg(all(test, any(target_os = "linux", windows)))]
+pub(crate) fn publicar_temporal_para_fixture(
+    verificado: verificacion::ContextoTemporalVerificado<'_>,
+) -> Result<(), ErrorContextoAdmisionAnclado> {
+    verificado.publicar().map(|_| ())
+}
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "contexto_admision_tests.rs"]
 mod tests;

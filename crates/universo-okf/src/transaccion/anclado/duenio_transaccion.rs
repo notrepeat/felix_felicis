@@ -199,6 +199,10 @@ fn mapear_error(_error: ErrorDirectorioAnclado) -> ErrorDuenioTransaccionAnclado
     ErrorDuenioTransaccionAnclado::NoVerificable
 }
 
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/fixture_root_replay.rs"]
+pub(super) mod fixture_root_replay;
+
 #[path = "duenio_transaccion/observar_root.rs"]
 mod observar_root;
 
