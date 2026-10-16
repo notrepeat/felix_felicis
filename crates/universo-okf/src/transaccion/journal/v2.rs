@@ -1,8 +1,12 @@
-//! Modelo interno v2. No parsea bytes ni abre archivos.
+//! Journal interno v2: modelo y codec puro; no abre archivos.
 
 use std::fmt;
 
 use super::{ArtifactFingerprint, DirectoryIdentity, JournalError, JournalState, is_lower_hex};
+
+mod codec;
+
+pub(crate) const MAX_JOURNAL_V2_BYTES: usize = 1024;
 
 const SCHEMA_V2: &str = "felix-journal-v2";
 
@@ -24,6 +28,14 @@ pub(crate) struct JournalV2 {
 }
 
 impl JournalV2 {
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, JournalV2Error> {
+        codec::encode(self)
+    }
+
+    pub(crate) fn parse(bytes: &[u8]) -> Result<Self, JournalV2Error> {
+        codec::parse(bytes)
+    }
+
     pub(crate) fn new(
         transaction_id: impl Into<String>,
         parent: DirectoryIdentity,
