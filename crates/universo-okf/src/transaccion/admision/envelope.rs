@@ -10,6 +10,7 @@ use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journa
 use crate::transaccion::replay::new_esperado::{
     ErrorNewEsperado, NewEsperado, calcular_new_esperado,
 };
+use crate::transaccion::replay::semantica_archivada::calcular_new_esperado_soportado;
 
 use super::ContextoAdmision;
 
@@ -47,6 +48,20 @@ impl EnvelopeContextoAdmision {
         }
 
         calcular_new_esperado(&self.contexto, journal, motor_soportado, policy_soportada)
+            .map_err(ErrorEnvelopeAdmision::Replay)
+    }
+
+    /// Resuelve el perfil archivado del contexto y reproduce solo una pareja
+    /// semántica soportada. El `NewEsperado` devuelto sigue siendo un dato.
+    pub(crate) fn validar_replay_soportado(
+        &self,
+        journal: &Journal,
+    ) -> Result<NewEsperado, ErrorEnvelopeAdmision> {
+        if !self.vinculo.coincide(journal) {
+            return Err(ErrorEnvelopeAdmision::VinculoJournalNoCoincide);
+        }
+
+        calcular_new_esperado_soportado(&self.contexto, journal)
             .map_err(ErrorEnvelopeAdmision::Replay)
     }
 }
@@ -123,6 +138,7 @@ pub(crate) mod tests {
     use crate::transaccion::captura::{ConfigRawCapturada, materializar_snapshot_desde_entradas};
     use crate::transaccion::journal::{JournalState, RawTreeDigest};
     use crate::transaccion::replay::reproponer;
+    use crate::transaccion::replay::semantica_archivada::{POLICY_ID_V1, VERSION_MOTOR_V1};
     use crate::transaccion::snapshot::{EntradaSnapshot, calcular_digest_raw_tree};
     use crate::transaccion::stage::{inventario_objetivo_para_replay, planificar_staging};
     use universo_core::{Delta, ResultadoPropuesta};
@@ -133,6 +149,14 @@ pub(crate) mod tests {
     const DOCUMENTO: &[u8] = b"---\ntype: a\ntitle: Index\nparent: \"\"\n---\nindex\n";
 
     pub(crate) fn contexto(invariantes: &[u8]) -> ContextoAdmision {
+        contexto_con_tags(invariantes, MOTOR, POLICY)
+    }
+
+    fn contexto_con_tags(
+        invariantes: &[u8],
+        version_motor: &str,
+        policy_id: &str,
+    ) -> ContextoAdmision {
         let entradas = vec![
             EntradaSnapshot::directorio("knowledge"),
             EntradaSnapshot::archivo("knowledge/index.md", DOCUMENTO),
@@ -140,12 +164,17 @@ pub(crate) mod tests {
         let configuracion =
             ConfigRawCapturada::nueva(MANIFIESTO.as_bytes(), invariantes, None, None).unwrap();
         let snapshot =
-            materializar_snapshot_desde_entradas(entradas, configuracion, MOTOR, POLICY).unwrap();
+            materializar_snapshot_desde_entradas(entradas, configuracion, version_motor, policy_id)
+                .unwrap();
         ContextoAdmision::capturar(&snapshot, &Delta::nuevo([], []).unwrap()).unwrap()
     }
 
-    fn digest_new(contexto: &ContextoAdmision) -> RawTreeDigest {
-        let reproducida = reproponer(contexto, MOTOR, POLICY).unwrap();
+    fn digest_new_con_tags(
+        contexto: &ContextoAdmision,
+        version_motor: &str,
+        policy_id: &str,
+    ) -> RawTreeDigest {
+        let reproducida = reproponer(contexto, version_motor, policy_id).unwrap();
         let ResultadoPropuesta::Admitida(candidato) = &reproducida.resultado else {
             panic!("la propuesta fixture debe ser admitida");
         };
@@ -154,6 +183,10 @@ pub(crate) mod tests {
         let plan = planificar_staging(&reproducida.snapshot, &documentos).unwrap();
         let entradas = inventario_objetivo_para_replay(&plan).unwrap();
         calcular_digest_raw_tree(&entradas).unwrap()
+    }
+
+    fn digest_new(contexto: &ContextoAdmision) -> RawTreeDigest {
+        digest_new_con_tags(contexto, MOTOR, POLICY)
     }
 
     pub(super) fn identidad(seed: u64) -> DirectoryIdentity {
@@ -181,12 +214,20 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn journal_valido(contexto: &ContextoAdmision) -> Journal {
+        journal_valido_con_tags(contexto, MOTOR, POLICY)
+    }
+
+    fn journal_valido_con_tags(
+        contexto: &ContextoAdmision,
+        version_motor: &str,
+        policy_id: &str,
+    ) -> Journal {
         let digest_old = calcular_digest_raw_tree(&contexto.entradas_base()).unwrap();
         journal(
             "0123456789abcdef0123456789abcdef",
             identidad(1),
             fingerprint(2, digest_old),
-            fingerprint(3, digest_new(contexto)),
+            fingerprint(3, digest_new_con_tags(contexto, version_motor, policy_id)),
         )
     }
 
@@ -342,5 +383,97 @@ pub(crate) mod tests {
                 .codigo(),
             "replay_engine_policy_mismatch"
         );
+    }
+
+    #[test]
+    fn replay_soportado_reproduce_new_con_tags_archivados() {
+        let contexto = contexto_con_tags(b"\n", VERSION_MOTOR_V1, POLICY_ID_V1);
+        let journal = journal_valido_con_tags(&contexto, VERSION_MOTOR_V1, POLICY_ID_V1);
+        let envelope = EnvelopeContextoAdmision::ligar(contexto, &journal);
+
+        let esperado = envelope.validar_replay_soportado(&journal).unwrap();
+
+        assert_eq!(esperado.transaction_id(), journal.transaction_id());
+        assert!(esperado.parent() == journal.parent());
+        assert!(esperado.old() == journal.old());
+        assert!(esperado.new_fingerprint() == journal.new_fingerprint());
+        assert!(esperado.entradas().iter().any(|entrada| {
+            entrada.ruta() == "knowledge/index.md" && entrada.bytes().is_some()
+        }));
+    }
+
+    #[test]
+    fn replay_soportado_rechaza_motor_o_policy_desconocidos_y_generic_sigue_como_dato() {
+        let variantes = [
+            ("felix_felicis:proposal-semantics/v-next", POLICY_ID_V1),
+            (VERSION_MOTOR_V1, "felix_felicis:admission-policy/v-next"),
+        ];
+
+        for (version_motor, policy_id) in variantes {
+            let contexto = contexto_con_tags(b"\n", version_motor, policy_id);
+            let journal = journal_valido_con_tags(&contexto, version_motor, policy_id);
+            let envelope = EnvelopeContextoAdmision::ligar(contexto, &journal);
+
+            assert_eq!(
+                envelope
+                    .validar_replay_soportado(&journal)
+                    .unwrap_err()
+                    .codigo(),
+                "replay_engine_policy_mismatch"
+            );
+            assert!(
+                envelope
+                    .validar_replay(&journal, version_motor, policy_id)
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn replay_soportado_rechaza_binding_distinto_sin_consumir_el_original() {
+        let contexto = contexto_con_tags(b"\n", VERSION_MOTOR_V1, POLICY_ID_V1);
+        let journal = journal_valido_con_tags(&contexto, VERSION_MOTOR_V1, POLICY_ID_V1);
+        let envelope = EnvelopeContextoAdmision::ligar(contexto, &journal);
+        let envelope_bytes = codec::codificar(&envelope).unwrap();
+        let journal_bytes = journal.encode().unwrap();
+        let otro_journal = Journal::new(
+            "1123456789abcdef0123456789abcdef",
+            journal.parent().clone(),
+            journal.old().clone(),
+            journal.new_fingerprint().clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            envelope
+                .validar_replay_soportado(&otro_journal)
+                .unwrap_err()
+                .codigo(),
+            "admission_envelope_journal_mismatch"
+        );
+        assert!(envelope.validar_replay_soportado(&journal).is_ok());
+        assert_eq!(codec::codificar(&envelope).unwrap(), envelope_bytes);
+        assert_eq!(journal.encode().unwrap(), journal_bytes);
+    }
+
+    #[test]
+    fn replay_soportado_no_deriva_new_de_una_propuesta_no_admitida() {
+        let contexto = contexto_con_tags(
+            b"(not (Type @knowledge/index a))",
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        );
+        let digest_old = calcular_digest_raw_tree(&contexto.entradas_base()).unwrap();
+        let journal = journal(
+            "0123456789abcdef0123456789abcdef",
+            identidad(1),
+            fingerprint(2, digest_old),
+            fingerprint(3, RawTreeDigest::from_hex("a".repeat(64)).unwrap()),
+        );
+        let envelope = EnvelopeContextoAdmision::ligar(contexto, &journal);
+
+        let error = envelope.validar_replay_soportado(&journal).unwrap_err();
+
+        assert_eq!(error.codigo(), "new_proposal_not_admitted");
     }
 }

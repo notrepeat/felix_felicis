@@ -6,6 +6,7 @@
 
 #[allow(dead_code)]
 pub(crate) mod new_esperado;
+pub(crate) mod semantica_archivada;
 
 use std::fmt;
 
