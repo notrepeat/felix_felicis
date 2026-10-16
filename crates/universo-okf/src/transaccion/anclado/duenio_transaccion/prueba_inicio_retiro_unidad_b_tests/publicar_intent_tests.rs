@@ -117,3 +117,6 @@ fn renombrar_real(parent: &File, source: &File, from: &OsStr, to: &OsStr) -> Res
 
 #[path = "publicar_intent_p2_tests.rs"]
 mod p2_tests;
+
+#[path = "publicar_intent_lector_tests.rs"]
+mod lector_tests;

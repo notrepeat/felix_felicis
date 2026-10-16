@@ -1,0 +1,184 @@
+//! Lector file-bound del intent canónico; observa datos sin conceder recovery.
+
+use std::ffi::OsStr;
+use std::fmt;
+use std::fs::File;
+use std::io::Read;
+use std::sync::Arc;
+
+use super::super::abrir::abrir_entrada_relativa;
+use super::super::intent_persistido::{IntentRetiroPersistido, MAX_INTENT_BYTES};
+use super::super::{
+    ErrorDirectorioAnclado, IdentidadArchivo, IdentidadDirectorio, ScopeFilesystem,
+    TipoEntradaAnclada, identidad_archivo, scope_filesystem, validar_componente,
+};
+use super::observar_siblings_nuevo_flujo::{
+    PresenciaSiblingNuevoFlujo, nombre_intent_retiro, observar_sibling,
+};
+use super::{DuenioTransaccionAnclado, ErrorDuenioTransaccionAnclado};
+
+/// Observación file-bound que retiene el préstamo mutable del owner.
+///
+/// Los campos son datos de observación; no forman una prueba normal de replay.
+#[must_use = "la observación retiene el owner mientras se usa"]
+pub(super) struct ObservacionIntentCanonico<'owner, 'lock> {
+    _owner: &'owner mut DuenioTransaccionAnclado<'lock>,
+    _autoridad: Arc<()>,
+    _identidad_parent: IdentidadDirectorio,
+    _scope_parent: ScopeFilesystem,
+    _identidad_intent: IdentidadArchivo,
+    _registro: IntentRetiroPersistido,
+    _archivo: File,
+}
+
+impl fmt::Debug for ObservacionIntentCanonico<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionIntentCanonico { .. }")
+    }
+}
+
+impl<'lock> DuenioTransaccionAnclado<'lock> {
+    /// Lee y vincula el intent canónico desde el parent retenido por el owner.
+    ///
+    /// Las comprobaciones son secuenciales. No eliminan entradas ni constituyen
+    /// una garantía frente a cambios concurrentes de procesos externos.
+    pub(super) fn observar_intent_canonico<'owner>(
+        &'owner mut self,
+    ) -> Result<ObservacionIntentCanonico<'owner, 'lock>, ErrorDuenioTransaccionAnclado> {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let ubicacion = self._lock.ubicacion();
+        let basename = ubicacion
+            .ruta()
+            .file_name()
+            .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        validar_componente(basename).map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+
+        let nombre_intent = nombre_intent_retiro(basename)?;
+        let nombre_intent_temporal =
+            super::super::contexto_admision::nombre_temporal_sibling(&nombre_intent)
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let nombre_journal_temporal = ubicacion.nombre_journal_temporal();
+        validar_componente(&nombre_journal_temporal)
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let nombre_contexto = super::super::contexto_admision::nombre_canonico(basename)
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let nombre_contexto_temporal =
+            super::super::contexto_admision::nombre_temporal_sibling(&nombre_contexto)
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+
+        validar_temporales_ausentes(
+            &parent,
+            self.scope_parent,
+            [
+                &nombre_intent_temporal,
+                &nombre_journal_temporal,
+                &nombre_contexto_temporal,
+            ],
+        )?;
+
+        let archivo = abrir_entrada_relativa(&parent, &nombre_intent, TipoEntradaAnclada::Archivo)
+            .map_err(mapear_error)?;
+        let (identidad_intent, scope_intent) = validar_archivo_intent(&archivo, self.scope_parent)?;
+        let limite = u64::try_from(MAX_INTENT_BYTES)
+            .ok()
+            .and_then(|maximo| maximo.checked_add(1))
+            .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let mut bytes = Vec::with_capacity(MAX_INTENT_BYTES + 1);
+        (&archivo)
+            .take(limite)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        if bytes.len() > MAX_INTENT_BYTES {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        let registro = IntentRetiroPersistido::decode(&bytes)
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        registro
+            .validar_vinculo_archivo_intent(identidad_intent, scope_intent)
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+
+        let parent_final = self
+            .parent_revalidado()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        validar_temporales_ausentes(
+            &parent_final,
+            self.scope_parent,
+            [
+                &nombre_intent_temporal,
+                &nombre_journal_temporal,
+                &nombre_contexto_temporal,
+            ],
+        )?;
+        let identidad_parent_journal = self
+            .identidad_parent
+            .journal_identity()
+            .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        if registro.journal().parent() != &identidad_parent_journal {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        let archivo_final =
+            abrir_entrada_relativa(&parent_final, &nombre_intent, TipoEntradaAnclada::Archivo)
+                .map_err(mapear_error)?;
+        let (identidad_final, scope_final) =
+            validar_archivo_intent(&archivo_final, self.scope_parent)?;
+        if identidad_final != identidad_intent || scope_final != scope_intent {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        let autoridad = Arc::clone(&self._autoridad);
+        let identidad_parent = self.identidad_parent;
+        let scope_parent = self.scope_parent;
+        Ok(ObservacionIntentCanonico {
+            _owner: self,
+            _autoridad: autoridad,
+            _identidad_parent: identidad_parent,
+            _scope_parent: scope_parent,
+            _identidad_intent: identidad_intent,
+            _registro: registro,
+            _archivo: archivo_final,
+        })
+    }
+}
+
+fn validar_temporales_ausentes(
+    parent: &File,
+    scope_parent: ScopeFilesystem,
+    nombres: [&OsStr; 3],
+) -> Result<(), ErrorDuenioTransaccionAnclado> {
+    for nombre in nombres {
+        if observar_sibling(parent, nombre, scope_parent)? != PresenciaSiblingNuevoFlujo::Ausente {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+    }
+    Ok(())
+}
+
+fn validar_archivo_intent(
+    archivo: &File,
+    scope_esperado: ScopeFilesystem,
+) -> Result<(IdentidadArchivo, ScopeFilesystem), ErrorDuenioTransaccionAnclado> {
+    let metadata = archivo
+        .metadata()
+        .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || super::super::metadata_es_reparse(&metadata)
+    {
+        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+    }
+    let scope = scope_filesystem(archivo).map_err(mapear_error)?;
+    if scope != scope_esperado {
+        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+    }
+    let identidad =
+        identidad_archivo(archivo).map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+    Ok((identidad, scope))
+}
+
+fn mapear_error(_error: ErrorDirectorioAnclado) -> ErrorDuenioTransaccionAnclado {
+    ErrorDuenioTransaccionAnclado::NoVerificable
+}

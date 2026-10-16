@@ -306,6 +306,11 @@ mod observar_root;
 #[path = "duenio_transaccion/observar_siblings_nuevo_flujo.rs"]
 mod observar_siblings_nuevo_flujo;
 
+// El reconciliador incremental será el primer consumidor productivo.
+#[allow(dead_code)]
+#[path = "duenio_transaccion/lector_intent_canonico.rs"]
+mod lector_intent_canonico;
+
 #[path = "duenio_transaccion/observer.rs"]
 mod observer;
 
