@@ -1,24 +1,29 @@
 # Lifecycle del contexto privado de admisión
 
 **Estado:** están implementados los leases de lectura canónica, la creación
-exclusiva y verificación del temporal, y la publicación canónica confirmada; el
-flujo de transacción sigue incompleto. Ya existe
-un DTO privado, versionado y acotado para serializar campos de identidad de
-archivo observados en un handle; su codec no reconstruye una identidad física
-ni entrega autoridad. Este dato no es un intent de retiro.
-El codec puro `FELIX-RETIRE` v1 del commit local
-`4bf47893870be24bce8c35ec692aa402cbe4e6fe` representa un Journal `Committed`,
-tres identidades como DTO, el scope del parent y la longitud/SHA-256 del
-contexto, con un máximo total de 1536 bytes. La base pasó 3/3 pruebas focales
-en Windows y Linux. La cobertura complementaria de
-`6e1349246b71ed5acb82cab7927bcde1cc84b738` llevó el filtro a 7/7 por sistema;
-formato, clippy, frontera, diffcheck y limpieza Linux también terminaron verdes.
-Existe un writer temporal privado de intent y un verificador que reabre el
-nombre exacto desde el parent retenido y contrasta tipo, scope, ID, longitud,
-bytes, SHA-256 y EOF en el mismo handle. Esa verificación solo acredita el
-archivo observado: no revalida Journal/contexto/replay/root ni el inventario,
-y no publica, reconcilia o retira. Sigue pendiente el lector/reconciliador de
-un intent persistido tras reiniciar; ambos pasos se describen al final de esta nota.
+exclusiva y verificación del temporal, y la publicación canónica confirmada del
+contexto; el flujo de transacción sigue incompleto. Ya existe un DTO privado,
+versionado y acotado para serializar campos de identidad de archivo observados
+en un handle; su codec no reconstruye una identidad física ni entrega autoridad.
+Este dato no es un intent de retiro. El codec puro `FELIX-RETIRE` v1 del commit
+local `4bf47893870be24bce8c35ec692aa402cbe4e6fe` representa un Journal
+`Committed`, tres identidades como DTO, el scope del parent y la longitud/SHA-256
+del contexto, con un máximo total de 1536 bytes. La base pasó 3/3 pruebas focales
+en Windows y Linux; la cobertura complementaria de
+`6e1349246b71ed5acb82cab7927bcde1cc84b738` llevó el filtro a 7/7 por sistema.
+Formato, clippy, frontera, diffcheck y limpieza Linux también terminaron verdes.
+Existe un writer temporal privado de intent y un verificador que reabre su nombre
+exacto desde el parent retenido y contrasta tipo, scope, ID, longitud, bytes,
+SHA-256 y EOF en el mismo handle. P1 añade un publicador privado que revalida la
+observación completa justo antes del syscall y confirma por postcondiciones ID,
+scope, frame, EOF y ausencia del temporal, incluso ante error reportado por el
+syscall. Hace un solo `NOREPLACE`, sin retry, y entrega un recibo ligado al owner;
+no limpia ni aplica. P2 prueba la revalidación secuencial y el gate del callback/syscall; no hace atómica la publicación y siguen existiendo carreras externas.
+Siguen pendientes el lector canónico y la reconciliación tras reiniciar, así como
+el retiro del Journal, del intent y del contexto, además del caller productivo; el lector debe bloquear y
+preservar un `intent.tmp` residual, sin republicarlo. Ambos pasos se describen al
+final de esta nota.
+
 También existe `DuenioTransaccionAnclado::desde_lock`: retiene el lock y el
 parent, captura identidad, scope y autoridad, y exige que el lock sibling
 visible corresponda al handle del guard. El dueño emite leases secuenciales
@@ -212,7 +217,7 @@ y el temporal añade `.tmp`. No acepta rutas ni nombres del caller:
 | Contexto publicado | `.<basename>.felix.admctx` | Sibling que la primitiva publica y confirma; el lease lector decodifica el frame. |
 | Temporal de contexto | `.<basename>.felix.admctx.tmp` | Creación exclusiva y fuente que se verifica antes de publicar. |
 | Intent de retiro | `.<basename>.felix.admctx-retire` | El observer comprueba presencia, sin leer ni parsear el contenido. |
-| Temporal del intent | `.<basename>.felix.admctx-retire.tmp` | El creador privado lo escribe bajo una prueba de inicio; faltan verificación visible y reconciliación. |
+| Temporal del intent | `.<basename>.felix.admctx-retire.tmp` | El writer lo crea bajo una prueba de inicio y P1 lo publica tras revalidar; un residual que encuentre el futuro lector bloquea y se preserva, sin republicación ni retry. La verificación de reinicio y reconciliación siguen pendientes. |
 
 El observer informa hechos de presencia secuenciales bajo el lock. Solo la
 ausencia observada se clasifica como `Ausente`; los errores de tipo, reparse,
@@ -295,6 +300,48 @@ namespace o `transaction_id`; resolver un huérfano requiere una
 decisión/capability específica. Un error posterior a un unlink puede dejar
 cleanup incompleto; el dueño futuro solo reintentará o confirmará la identidad
 que posee.
+
+## Publicación privada del intent (ed5, P1 y P2; commits locales)
+
+`ed5` (`ed5be1e1f62d615c391e1f66a8d167dfc1e14d68`, 36 de churn) extrae la
+revalidación del mismo archivo. P1 (`ee6a1fdb6f88801c983a26dfeb27038427e57740`,
+329 de churn) revalida toda la observación antes de publicar. En Windows reabre la fuente con acceso `DELETE` y valida ID, scope y frame en el handle que usa para el rename;
+en Linux reabre el nombre exacto de la fuente inmediatamente antes del rename, con una carrera externa residual. Ambos caminos ejecutan un único rename `NOREPLACE`,
+sin retry. Se cierra la fuente antes de confirmar ID canónico, scope, frame,
+EOF y ausencia del temporal, también cuando el syscall devuelve error. El recibo
+retiene owner y proof, no implementa `Clone` y su `Debug` redacciona; esta unidad
+no hace cleanup ni apply.
+
+P1 pasó 3 pruebas: publicación exitosa; canónico canary ya presente en destino,
+con una llamada al syscall real `NOREPLACE` que rechaza por destino ocupado y
+conserva ambos archivos; y rename real seguido por error inyectado, confirmado
+mediante postcondiciones. P2 (`790011750d4d45d5f8d910dae524b04e0c3132d5`, 348
+altas) pasó 4 pruebas: canónico aparecido después de observar hace que la llamada
+al publicador retorne antes del callback/syscall (cero llamadas al callback/syscall,
+no cero llamadas al publicador); error inyectado sin efecto de rename hace una
+llamada al callback y no simula un error real del SO; mutaciones de Journal,
+contexto o root invalidan antes del syscall; y el move del parent publica desde
+el parent retenido con contador 1 y decoys intactos, sin invalidar. El filtro
+owner fue ed5 81/86, P1 84/89 y P2 88/93 en Windows/Linux; P1 contexto pasó
+24/25. Linux ejerce el move real con decoys; en Windows sharing impide mover el
+parent y los decoys no se ejercitan.
+
+Formato, clippy workspace con todos los targets y `-D warnings`, chequeo de
+frontera y diffcheck pasaron en ambos sistemas para las tres unidades; limpieza
+Linux pasó. El CI publicado anterior, base
+`af7d318417b0cdd35b6bdf7710be3d3a1288bf89`, run `38888277606`, terminó SUCCESS:
+Linux 957/0/9 y Windows 940/0/9 en 38 resúmenes por sistema, más 7 pruebas
+Python por sistema y demo. Excluye los tres commits locales. Rollback: P2, P1,
+`ed5`, manteniendo el lector de contexto, writer de intent y recovery legacy.
+Los siguientes pasos de código son el lector file-bound del intent y el
+reconciliador. También queda pendiente el retiro del Journal, del intent y del contexto. Para Journal ausente y contexto presente, o ambos ausentes, la
+observación de root/backup/stage necesitará un helper privado que derive esos
+nombres del Journal completo almacenado en el intent, revalide el parent retenido
+y mantenga `root_new_validated=false`; ese dato no concede autoridad ni suplanta
+la carga canónica que exige el observer normal. El gate del lector será intent
+canónico presente, intent temporal ausente y ambos temporales de Journal/contexto
+ausentes. U7 y fase 04 siguen parciales; no se afirma dirsync, tolerancia a
+pérdida de energía, cobertura general de montajes ni recovery completo.
 
 ## Alcance y gates
 
@@ -575,10 +622,11 @@ Linux también terminó correctamente. El CI exacto
 de la base `92986a21cbba38af2af8557f326c9aaf04fcce3d` (run `38885487075`)
 terminó SUCCESS con Linux 948 pass/0 fail/9 ignored y Windows 931/0/9 en 38
 resúmenes, además de 7 pruebas Python por sistema y el demo; precede y excluye
-A+B. El rollback retira B2, luego B1 y finalmente A, preservando el writer y
-verificador del archivo, la tabla legacy y el recovery. La observación especial
-no publica ni reconcilia el intent; el futuro publicador debe volver a
-revalidarla inmediatamente antes del syscall. Publicación, reconciliación,
+A+B. El rollback de aquella ronda retiraba B2, luego B1 y finalmente A, preservando el
+writer y verificador del archivo, la tabla legacy y el recovery. En esa unidad,
+la observación especial no publicaba ni reconciliaba el intent y el publicador
+seguía pendiente. P1 implementa la revalidación inmediatamente antes del syscall
+y la publicación confirmada; P2 cubre las carreras observadas. Reconciliación,
 cleanup y caller productivo siguen pendientes. U7 y fase 04 siguen parciales;
 el progreso global permanece en 4/9.
 

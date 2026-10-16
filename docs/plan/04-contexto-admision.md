@@ -2,34 +2,42 @@
 
 **Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
 valores de datos en memoria con codecs privados. El lifecycle documenta las
-primitivas de lectura, creación temporal, verificación y publicación canónica del
-contexto ya implementadas. También existen un writer privado del intent
-temporal y un verificador de solo archivo que reabre su nombre exacto desde el
-parent retenido. El token conserva el `File` de lectura y el proof. El
-verificador comprueba en el mismo handle tipo, scope, ID, longitud, bytes,
-SHA-256 y EOF; no revalida Journal/contexto/replay/root ni publica el intent o
-autoriza cleanup. El dueño observa el root raw desde el parent retenido y devuelve
-la huella como dato. `capturar_snapshot_soportado` y su variante CAS capturan
-desde ese root abierto bajo el lock retenido y devuelven un `Snapshot` de datos.
-El CAS compara el token antes de validar procedencia o parsear, pero no ejecuta
-recovery ni se conecta a apply. Los tags fijos del snapshot no avalan la
-propuesta: su admisión debe verificarse por separado. Ya existe un coordinador
-privado que carga journal y contexto con leases secuenciales, valida el replay y
-compara esa huella con `NewEsperado`; devuelve datos de comparación, no una
-decisión de recovery. El observer del inventario carga el journal canónico y
-clasifica root, backup y stage con `root_new_validated=false`; devuelve solo
-datos. Por separado, el observer de siblings comprueba seis nombres desde el
-parent retenido. La emisión
-y revalidación de la prueba opaca exigen que el intent canónico y su temporal
-estén ausentes; el observer no lee su contenido. Esa ruta estricta no se relaja
-por la verificación de archivo del intent descrita más abajo. Una ruta especial
-separada vuelve a comprobar Journal, contexto, replay, root e inventario mientras
-el intent temporal está presente; tampoco publica ni relaja el gate normal. La
-extensión local `36bd34a55cddcb53bb6c4154f83474635c49ebd5` y sus resultados
-están registrados abajo. Falta el caller de
-producción que aplique la tabla vigente, además de cleanup y preflight global
-de huérfanos. Ni el resultado de comparación ni el inventario son prueba o
-autoridad de admisión. La identidad persistida de archivo tiene ahora un DTO
+primitivas de lectura, creación temporal y publicación canónica confirmada del
+contexto.
+
+También existen el writer privado del intent temporal y su verificador
+de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
+tipo, scope, ID, longitud, bytes, SHA-256 y EOF en el mismo handle.
+La publicación privada del intent revalida la observación completa justo antes
+del syscall y confirma el resultado por postcondiciones. En Windows reabre la fuente con acceso `DELETE` y valida ID, scope y frame en el handle que usa para el rename;
+en Linux reabre el nombre de fuente justo antes del rename, con la carrera externa residual documentada.
+Hace un solo intento `NOREPLACE`, sin retry; cierra la fuente antes de confirmar
+ID canónico, scope, frame, EOF y ausencia del temporal incluso si el syscall
+reporta error. Su recibo conserva owner y proof, no es clonable y redacciona su
+`Debug`. Esta unidad no limpia ni aplica.
+El dueño observa el root raw desde el parent retenido y devuelve la huella como
+dato. `capturar_snapshot_soportado` y su variante CAS capturan desde ese root
+abierto bajo el lock retenido y devuelven un `Snapshot` de datos. El CAS compara
+el token antes de validar procedencia o parsear, pero no ejecuta recovery ni se
+conecta a apply. Los tags fijos del snapshot no avalan la propuesta: su admisión debe verificarse por separado.
+Ya existe un coordinador privado que carga journal y contexto
+con leases secuenciales, valida el replay y compara esa huella con `NewEsperado`;
+devuelve datos de comparación, no una decisión de recovery. El observer del
+inventario carga el journal canónico y clasifica root, backup y stage con
+`root_new_validated=false`; devuelve solo datos. Por separado, el observer de
+siblings comprueba seis nombres desde el parent retenido. La emisión y
+revalidación de la prueba opaca exigen que el intent canónico y su temporal estén
+ausentes; ese observer no lee su contenido. La ruta especial vuelve a comprobar
+Journal, contexto, replay, root e inventario mientras el intent temporal existe;
+El publicador revalida secuencialmente antes del syscall; P2 prueba que un canónico aparecido tras observar evita la llamada al callback/syscall.
+Eso no vuelve atómica la publicación ni elimina las carreras de escritores externos. El lector canónico y reconciliador
+de reinicio siguen pendientes; su gate debe preservar y bloquear ante un
+`intent.tmp` residual, sin republicarlo ni reintentar. También siguen pendientes
+la retirada del Journal, el intent y el contexto, el cleanup y el caller de producción que
+aplique la tabla vigente. Ni el resultado de comparación ni el inventario son
+prueba o autoridad de admisión.
+
+La identidad persistida de archivo tiene ahora un DTO
 versionado y acotado que solo convierte desde una identidad observada en un
 handle; sigue siendo dato, no prueba de retiro ni autoridad. La unidad A añade
 una prueba opaca que solo confirma replay admitido y huella root coincidente en
@@ -821,12 +829,46 @@ El CI exacto de la base publicada
 `92986a21cbba38af2af8557f326c9aaf04fcce3d` (run `38885487075`) terminó SUCCESS:
 Linux 948 pass/0 fail/9 ignored y Windows 931/0/9 en 38 resúmenes por sistema,
 más 7 pruebas Python por sistema y el demo. Ese CI es anterior y excluye A+B.
-El rollback retira B2 antes de B1; después retira la extracción A, preservando
-el writer/verificador de archivo y el recovery legacy. La observación completa
-especial ya revalida Journal, contexto, replay, root e inventario con el intent
-temporal presente; repetirla dentro del publicador inmediatamente antes del
-syscall, publicar, reconciliar, limpiar y añadir un caller productivo siguen
-pendientes. U7 y fase 04 siguen parciales; el progreso global permanece en 4/9.
+El rollback de aquella ronda retiraba B2 antes de B1 y luego la extracción A,
+preservando el writer/verificador de archivo y el recovery legacy. En esa unidad,
+la observación completa especial revalidaba Journal, contexto, replay, root e
+inventario con el intent temporal presente, pero el publicador aún estaba
+pendiente. P1 y P2 implementan y verifican esa publicación privada, sin cleanup,
+reconciliación ni caller productivo. U7 y fase 04 siguen parciales; el progreso
+global permanece en 4/9.
+
+## Publicación privada del intent (ed5, P1 y P2; commits locales)
+
+| Unidad | SHA | churn | Filtro focal owner Windows/Linux |
+|---|---|---:|---:|
+| `ed5`, revalidación del mismo archivo | `ed5be1e1f62d615c391e1f66a8d167dfc1e14d68` | 36 (29+/7-) | 81/86 |
+| P1, publicador privado | `ee6a1fdb6f88801c983a26dfeb27038427e57740` | 329 (328+/1-) | 84/89; contexto 24/25 |
+| P2, pruebas de carrera | `790011750d4d45d5f8d910dae524b04e0c3132d5` | 348 altas | 88/93 |
+
+P1 cubre publicación exitosa; un canónico canary ya presente en el destino deja
+que se invoque una vez el syscall real `NOREPLACE`, que rechaza el rename por
+ocupación y conserva ambos archivos; y un rename real seguido por error inyectado
+cuyo resultado se confirma mediante postcondiciones. P2 confirma que si aparece
+un canónico después de observar, la llamada al publicador revalida y retorna
+antes del callback/syscall (cero llamadas al callback/syscall, no cero llamadas
+al publicador). El error de syscall inyectado sin efecto de rename hace una sola
+llamada al callback; es una inyección, no un fallo real del SO. Las mutaciones de
+Journal, contexto o root invalidan antes del syscall. El move real del parent no
+invalida: publica desde el parent retenido con contador 1 y decoys intactos. Linux
+ejercita ese move con decoys; en Windows el sharing impide mover el parent y los
+decoys no se ejercitan.
+
+En las tres unidades pasaron formato, clippy de workspace con todos los targets
+y `-D warnings`, chequeo de frontera y diffcheck en Windows y Linux; la limpieza
+Linux también pasó. El CI publicado anterior, base
+`af7d318417b0cdd35b6bdf7710be3d3a1288bf89`, run `38888277606`, terminó SUCCESS
+con Linux 957/0/9 y Windows 940/0/9, 38 resúmenes por sistema, 7 pruebas Python
+por sistema y demo. Ese CI no incluye `ed5`, P1 ni P2. El rollback local es P2,
+luego P1 y luego `ed5`, preservando el lector de contexto, el writer del intent
+y el recovery legacy. El estado global sigue en 4/9: quedan el lector y
+reconciliador, retiro del Journal, del intent y del contexto, cleanup, caller productivo y recovery
+completo; fase 04/U7 siguen parciales. No hay garantía de dirsync, pérdida de
+energía ni cobertura general de montajes.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
