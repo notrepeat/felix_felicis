@@ -60,11 +60,12 @@ de compatibilidad para un futuro archivo auxiliar.
 
 El contexto, replay, `NewEsperado` y framing `FELIX-ADMCTX` v1 siguen siendo
 crate-private y experimentales; el encoder actual calcula una cuota de 512 MiB
-que incluye su propio framing. El envelope exterior combinado propuesto, que
-también incluye journal y encuadre, está especificado en el documento lifecycle
-y aún no está implementado. Su futuro encoder deberá pasar al codec interior
-solo la cuota restante, antes de reservar; el wrapper actual conserva su
-comportamiento. `bc38412` incorpora un preflight lector con vistas
+que incluye su propio framing. El envelope exterior combinado, que también
+incluye journal y encuadre, sigue experimental. Su encoder puro en memoria está
+implementado en `admision/envelope/codec.rs` y pasa al codec interior solo la
+cuota restante antes de reservar. El decoder exterior, I/O y callers siguen
+pendientes; el wire y wrapper interior no cambian. `bc38412` incorpora un
+preflight lector con vistas
 prestadas, cubierto con pruebas de robustez en `ef79ea7`. El decoder owned ya
 está implementado en memoria: reconstruye las entradas raw por ruta, tipo y bytes;
 revalida los marcadores de configuración contra las entradas; parsea y
@@ -111,9 +112,9 @@ journal → contexto. También fija cortes, preservación de huérfanos y límit
 durabilidad. Es diseño para un futuro flujo; no autoriza I/O ni un caller de
 producción.
 
-El codec exterior puede avanzar como unidad pura en memoria, manteniendo
-`felix-journal-v1` sin cambios. Persistencia y recovery context-aware requieren
-otra revisión. En particular, antes de integrarlos se debe demostrar el
+El encoder exterior es una unidad pura en memoria, mantiene `felix-journal-v1`
+sin cambios y no tiene I/O ni caller. El decoder, persistencia y recovery
+context-aware requieren otra revisión. En particular, antes de integrarlos se debe demostrar el
 dispatch entre transacciones nuevas y journals v1 legacy: los journals legacy
 sin auxiliar siguen exactamente el recovery actual. El codec y el binding no
 son autoridad para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar el
@@ -129,7 +130,8 @@ el progreso global permanece en 4/9.
 El candidato exacto `aa814e3c28231bb83934a1275328594fa8853649` está publicado en
 `origin/codex/plan-demostracion`. El CI exacto `38764635021` terminó SUCCESS
 en ambos jobs, Linux y Windows, y en todos sus pasos; el operador verificó los
-logs. No se atribuye una causa a fallos históricos por el resultado actual.
+logs. Corresponde al SHA aa814e3 y no cubre el encoder local posterior sin
+commit. No se atribuye una causa a fallos históricos por el resultado actual.
 
 La verificación local más reciente, reportada sobre ese SHA, registró en
 Windows 783 passed/0 failed/9 ignored para workspace, recovery 78/0/3,
@@ -137,6 +139,11 @@ diagnósticos 2/2 y filtros focales 37/37. `cargo fmt`, clippy con warnings
 denegados y el chequeo de frontera pública terminaron verdes. La repetición de
 runtime nativo en WSL se canceló ante la orden de detener; no cuenta como
 resultado ni como runtime Linux exitoso.
+
+En este worktree posterior, sin SHA ni CI propios, el filtro del encoder
+exterior terminó 3/3, el filtro del codec interior 2/2 y
+`cargo fmt --all -- --check` terminó con exit 0. Son pruebas focales en memoria;
+no ejercitan persistencia, I/O ni recovery context-aware.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

@@ -13,6 +13,9 @@ use crate::transaccion::replay::new_esperado::{
 
 use super::ContextoAdmision;
 
+#[allow(dead_code)]
+pub(crate) mod codec;
+
 /// Contexto raw asociado por consistencia a las identidades de un journal.
 ///
 /// Es un valor en memoria sin rutas, handles ni lifecycle de publicación.

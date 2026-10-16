@@ -135,12 +135,12 @@ confirma la identidad que posee.
 
 ## Alcance y gates
 
-- El outer codec es una unidad separada de código puro en memoria. Debe probar
-  roundtrip determinista, tamaño inclusivo, truncamiento, magic/versión,
-  longitudes inválidas, bytes sobrantes, journal no canónico o no `Prepared`, y
-  binding a los metadatos inmutables mientras acepta el avance de fase.
-  `FELIX-ADMCTX` v1 conserva su wire. El nuevo módulo vive bajo
-  `admision/envelope/`; sus funciones siguen `pub(crate)`.
+- El encoder exterior es una unidad pura en memoria, implementada en
+  `admision/envelope/codec.rs`; sus pruebas cubren determinismo entre fases,
+  cuota inclusiva y errores redactados. El decoder futuro probará roundtrip,
+  truncamiento, framing, journal no canónico o no `Prepared`, y binding. No hay
+  I/O ni caller. `FELIX-ADMCTX` v1 conserva su wire; las funciones siguen
+  `pub(crate)`.
 - Si encoder y decoder con sus pruebas superan 400 líneas de churn, se separan
   en dos commits por comportamiento: primero codificación canónica con límite
   combinado; después preflight/decode y pruebas de corrupción/binding. Cada

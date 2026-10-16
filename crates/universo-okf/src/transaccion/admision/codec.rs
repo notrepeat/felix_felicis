@@ -23,7 +23,7 @@ use super::ContextoAdmision;
 const MAGIC: &[u8; 12] = b"FELIX-ADMCTX";
 const VERSION: u16 = 1;
 const HEADER_BYTES: usize = MAGIC.len() + 2 + 8 + 4;
-const MAX_CODEC_BYTES: usize = 512 * 1024 * 1024;
+pub(super) const MAX_CODEC_BYTES: usize = 512 * 1024 * 1024;
 
 /// Codifica un contexto válido en un framing privado y determinista.
 ///
@@ -31,7 +31,17 @@ const MAX_CODEC_BYTES: usize = 512 * 1024 * 1024;
 /// raw y los marcadores de procedencia de configuración; no se incluyen
 /// identidad de filesystem, token ni digest, que se recalculan al reconstruir.
 pub(crate) fn codificar(contexto: &ContextoAdmision) -> Result<Vec<u8>, ErrorCodecAdmision> {
-    let (longitud, entradas) = precalcular_tamano(contexto, MAX_CODEC_BYTES)?;
+    codificar_con_limite(contexto, MAX_CODEC_BYTES)
+}
+
+/// Codifica respetando el límite combinado que reserva el framing exterior.
+/// La validación del tamaño precede a la reserva del buffer de salida.
+pub(super) fn codificar_con_limite(
+    contexto: &ContextoAdmision,
+    limite: usize,
+) -> Result<Vec<u8>, ErrorCodecAdmision> {
+    let limite = limite.min(MAX_CODEC_BYTES);
+    let (longitud, entradas) = precalcular_tamano(contexto, limite)?;
     let longitud_u64 = u64::try_from(longitud).map_err(|_| ErrorCodecAdmision::LongitudExcedida)?;
     let count = u32::try_from(entradas.len()).map_err(|_| ErrorCodecAdmision::LongitudExcedida)?;
     let configuracion = contexto.configuracion();
