@@ -130,8 +130,8 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
 
     /// Emite un lease del Journal que conserva el scope capturado por el dueño.
     ///
-    /// Este entrypoint privado queda preparado para el futuro consumidor
-    /// estricto; los leases existentes siguen usando `journal_temporal`.
+    /// Emite el lease estricto del Journal usado por el consumidor privado
+    /// A→Journal→B. Los leases legacy conservan `journal_temporal`.
     #[allow(dead_code)]
     pub(super) fn journal_temporal_estricto(
         &mut self,

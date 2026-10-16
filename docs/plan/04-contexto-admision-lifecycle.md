@@ -26,16 +26,21 @@ retenido con decoys intactos. Windows no ejercita ese move porque sharing lo
 bloquea. El rename `NOREPLACE` es una operación atómica de namespace; las
 comprobaciones secuenciales alrededor de él no forman un snapshot ni cierran
 las carreras de escritores externos.
-El lector file-bound del intent canónico ya está implementado y exige que el
-temporal del intent y los temporales de Journal y contexto estén ausentes. Retiene
-el owner y el handle final validado, pero no congela los bytes ni el nombre; su
-resultado es una observación puntual, no una prueba de replay. Puede observar el
-intent aunque falte el Journal canónico o el contexto; esa ausencia no explica su
-causa ni autoriza cleanup. La reconciliación tras reiniciar, el retiro del
-Journal, del intent y del contexto, además del caller productivo, siguen
-pendientes. Un `intent.tmp` residual bloquea y se preserva, sin republicación ni
-retry. El detalle se desarrolla en «Reapertura interproceso y extensión C de
-consistencia».
+El lector file-bound del intent canónico exige el intent presente y los
+temporales de Intent, Journal y Context ausentes. Retiene owner y handle final
+validado, sin congelar bytes ni nombre; emite una observación puntual, no una
+prueba de replay. Puede observar el Intent aunque falte el Journal canónico o
+Context; la ausencia no explica su causa ni autoriza cleanup.
+
+El consumidor privado A→Journal→B revalida A, intenta retirar Journal una vez
+por el lease estricto y devuelve solo B si una nueva observación supera su gate.
+Los errores de conflicto o indeterminación no se toman como prueba de que la
+eliminación no tuvo efecto ni producen retry. El corte no retira Context o
+Intent, no completa recovery y aún no tiene caller productivo. Un `intent.tmp`
+residual bloquea y se preserva, sin republicación ni retry. El harness y C se
+describen en «Reapertura interproceso y extensión C de consistencia»; el lease
+y el consumidor se detallan en «Lease estricto del Journal y secuencia privada
+A → Journal → B».
 
 El harness `602700b` vuelve a abrir tres fixtures sintéticas A/B/C desde procesos
 hijo después de soltar owner y lock. El hijo exige PID distinto, readquiere lock
@@ -369,10 +374,11 @@ Linux 957/0/9 y Windows 940/0/9 en 38 resúmenes por sistema, más 7 pruebas
 Python por sistema y demo. Excluye los tres commits locales. Rollback: P2, P1,
 `ed5`, manteniendo el lector de contexto, writer de intent y recovery legacy.
 Al cerrar P2, aún estaba pendiente el lector file-bound. El lector y el helper
-de inventario descritos a continuación son posteriores a ese checkpoint; no
-completan una fase. También siguen pendientes reconciliación, retiro del Journal,
-del intent y del contexto, cleanup y caller productivo. U7 y fase 04 siguen
-parciales; no se afirma dirsync, tolerancia a pérdida de energía, cobertura
+de inventario descritos a continuación son posteriores a ese checkpoint y no
+completan una fase. En ese punto seguían pendientes la reconciliación, el retiro
+del Journal, del intent y del contexto, cleanup y caller productivo; el corte
+posterior A→Journal→B intenta retirar Journal de forma privada, pero no completa
+la reconciliación ni retira Context o Intent. U7 y fase 04 siguen parciales; no se afirma dirsync, tolerancia a pérdida de energía, cobertura
 general de montajes ni recovery completo.
 
 ## Lector file-bound e inventario con Journal almacenado
@@ -531,12 +537,14 @@ parte de la observación C. C no infiere historia ni autoriza borrar o recrear
 archivos.
 
 Las pruebas añadidas cubren los estados cerrados B y C y preservación en los
-rechazos. El rollback por
-dependencia retira C, después las pruebas extra B y por último B core. Siguen
-pendientes reconciliación durable, dispatch, cleanup, retiro del Journal, del
-intent y del Context, y caller productivo. El estado permanece en 4/9, con fase
-04 y U7 parciales; no se afirma snapshot externo, garantía de dirsync, tolerancia
-a pérdida de energía, cobertura general de mounts ni recovery completo.
+rechazos. El rollback por dependencia retira C, después las pruebas extra de B
+y por último B core. En ese freeze aún faltaban reconciliación durable, dispatch,
+cleanup y el retiro del Journal, del Intent y del Context, además del caller
+productivo. El corte A→Journal→B descrito más adelante intenta retirar Journal
+de forma privada, pero no completa la reconciliación ni retira Context o Intent.
+El estado permanece en 4/9, con fase 04 y U7 parciales; no afirma snapshot
+externo, garantía de dirsync, tolerancia a pérdida de energía, cobertura general
+de mounts ni recovery completo.
 
 ## Reapertura interproceso y extensión C de consistencia
 
@@ -604,6 +612,54 @@ harness de coordinación ni la extensión C; el pase local descrito aquí no
 sustituye un CI de esos commits publicados. El progreso global sigue en 4/9;
 fase 04 y U7 continúan parciales. No se afirma snapshot externo, dirsync,
 durabilidad ante power loss, cobertura general de mounts ni recovery completo.
+
+## Lease estricto del Journal y secuencia privada A → Journal → B
+
+U1 (`1d5302b70de0f57db18baad1346fa0c5e9aba639`, 259 líneas de churn) añade
+la emisión del lease estricto del Journal y su lectura con scope. Los
+constructores legacy conservan `None` y no consultan el probe. El camino
+estricto valida ID y scope del parent, y la lectura comprueba el scope del
+archivo en el mismo handle abierto.
+
+U2 (`dee43d028ec3cb42a5a406885733141ba000d645`, 324 líneas) extiende el helper
+de borrado existente: valida el scope de la fuente en el handle final que
+comprueba su identidad y el Journal, y confirma con una lectura estricta. Añade
+el seam por llamada y pruebas de éxito, rechazo y preservación. Los scopes
+negativos son datos sintéticos; no requieren ni representan mounts montados.
+
+La suite completa de la biblioteca `universo-okf` se ejecutó con
+`cargo test --locked --offline -p universo-okf --lib`: Windows 640 passed, 0
+failed, 5 ignored; Linux 660 passed, 0 failed, 5 ignored. Formato, clippy de
+workspace con todos los targets y `-D warnings`, frontera pública y diffcheck
+terminaron con exit 0 en ambos sistemas; producto y cleanup Linux también
+terminaron con exit 0. El wrapper exterior Linux devolvió exit 2 por el CR final
+de `exit 0\r`. Un smoke separado con LF terminó 0, sin reinterpretar la salida
+del wrapper previo. Estas cifras son del freeze U1/U2, previo a añadir A.
+
+El consumidor privado A→Journal→B vuelve a validar A antes de pedir el lease
+estricto con la identidad nativa y el Journal completo. Intenta retirar Journal
+una vez; si el resultado es `Eliminado` o `Ausente`, exige que una observación B
+nueva pase su gate antes de devolverla. `Conflicto` o `Indeterminado` terminan
+en `NoVerificable`; un error nunca se toma como prueba de que la eliminación no
+tuvo efecto. El consumidor no retira Context o Intent, no hace apply y aún no
+tiene caller productivo. Las observaciones son secuenciales y no establecen un
+snapshot, causalidad histórica ni garantías de power loss.
+
+El consumidor A quedó en el commit `05daf482006570fa01e51a2dae2e31c4fb809845`
+(317 líneas de churn: 74 fuente, 240 pruebas y 3 wiring). El filtro owner pasó
+Windows 129/0/0 y Linux 134/0/0. Formato, clippy workspace, frontera pública
+y diffcheck de archivos rastreados y nuevos terminaron con exit 0 en ambos
+sistemas; producto, cleanup, runner reutilizable y wrapper Linux terminaron con
+exit 0 usando archivos UTF-8 sin BOM y LF. Los logs son
+`strict-a-remove-20261016-windows.log` y
+`strict-a-remove-20261016-linux.log`. Este resultado corresponde al freeze A;
+el wrapper exit 2 por CR final del freeze U1/U2 está documentado por separado. La
+base CI publicada `f5845df6962d1e8e7a902d1975daab6a6a92e85b`, run
+`38920132266`, terminó SUCCESS con Linux 1009/0/9 y Windows 992/0/9, 38
+resúmenes Cargo, 7 pruebas Python, demos, 4 estados y 16 salidas por sistema.
+Ese CI precede y no cubre U1, U2 ni A. El rollback es A, luego U2 y finalmente
+U1, preservando constructores legacy y recovery existente. El estado sigue en
+4/9; U7 y fase 04 permanecen parciales.
 
 ## Alcance y gates
 

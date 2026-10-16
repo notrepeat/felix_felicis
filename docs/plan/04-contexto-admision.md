@@ -50,7 +50,32 @@ retiene el owner y el `File` final. Ese handle retiene el objeto observado, pero
 no congela sus bytes ni garantiza que el nombre siga ligado a él; el resultado
 es una observación puntual frente a cambios externos.
 
-El lector no exige que existan los nombres canónicos de Journal o contexto y no explica por qué pueden faltar. No crea una prueba normal de replay: esa prueba sigue exigiendo que intent canónico y temporal estén ausentes. El helper privado de inventario recibe un `&Journal` completo como dato; A, B y la extensión de consistencia C lo usan sin atribuir autoridad al origen del registro. Deriva backup desde la ubicación interna del owner y stage desde `Journal.transaction_id`, tras revalidar parent, guard, scope y binding del parent. Observa el root con su huella nativa completa (identidad y digest raw) y clasifica presencia o ausencia de backup y stage como datos; mantiene `root_new_validated=false`. El wrapper normal sigue cargando primero el Journal canónico. La C base sigue siendo namespace-only; una extensión separada compara la huella actual del root con el `New` del Journal almacenado, sin replay ni cleanup. Ni estas observaciones ni la del intent autorizan reconciliación o apply. La reconciliación de reinicio y la retirada del Journal, el intent y el contexto siguen pendientes, junto con el caller productivo que aplique la tabla vigente. Un `intent.tmp` residual bloquea y se preserva; no se republica ni se reintenta.
+El lector no exige que existan los nombres canónicos de Journal o contexto y no
+explica por qué podrían faltar. Puede emitir una observación file-bound del
+Intent aunque falte cualquiera de esos nombres. La prueba normal de replay
+sigue exigiendo que Intent canónico y temporal estén ausentes; el reader no
+fabrica esa prueba.
+
+El helper privado de inventario recibe el Journal completo solo como dato. A,
+B y la extensión de consistencia C lo usan sin atribuir autoridad al origen del
+registro. Deriva backup de la ubicación interna del owner y stage de
+`Journal.transaction_id` después de revalidar parent, guard, scope y binding
+del parent. Observa el root con huella nativa completa (identidad y digest raw),
+clasifica backup y stage como datos de presencia o ausencia y conserva
+`root_new_validated=false`. El wrapper normal sigue cargando primero el Journal
+canónico.
+
+La C base sigue siendo namespace-only. Una extensión separada compara la
+huella actual del root con el `New` del Journal almacenado, sin replay ni
+cleanup. Estas observaciones no autorizan reconciliación o apply.
+
+El consumidor privado A→Journal→B revalida la observación A completa antes de
+intentar retirar el Journal una vez mediante el lease estricto. Solo tras un
+resultado `Eliminado` o `Ausente` observa B y devuelve esa observación si su
+gate completo pasa; `Conflicto` o `Indeterminado` no se convierten en prueba de
+que no hubo efecto ni habilitan retry. El consumidor no retira Context o Intent,
+no completa recovery ni tiene caller productivo. Un `intent.tmp` residual
+bloquea y se preserva; no se republica ni se reintenta.
 
 La observación local A solo acepta Journal, contexto e intent canónicos presentes,
 con los tres temporales ausentes. Vincula el Journal completo y la identidad
@@ -895,8 +920,9 @@ por sistema y demo. Ese CI no incluye `ed5`, P1 ni P2. El rollback local es P2,
 luego P1 y luego `ed5`, preservando el lector de contexto, el writer del intent
 y el recovery legacy. Al cerrar P2, el progreso global permanecía en 4/9; el
 lector file-bound y el helper de inventario descritos en el bloque siguiente no
-completan una fase. Siguen pendientes la reconciliación, el retiro del Journal,
-del intent y del contexto, cleanup, caller productivo y recovery completo; fase
+completan una fase. En ese punto seguían pendientes la reconciliación y el retiro
+del Journal, del intent y del contexto, cleanup, caller productivo y recovery
+completo; fase
 04/U7 siguen parciales. No hay garantía de dirsync, pérdida de energía ni
 cobertura general de montajes.
 
@@ -1118,6 +1144,60 @@ extensión C; los gates locales corresponden a los freezes indicados arriba y
 no sustituyen un CI del lote publicado. El estado global permanece en 4/9;
 fase 04 y U7 siguen parciales. No se afirman snapshot externo, dirsync, power
 loss, cobertura general de mounts ni recovery completo.
+
+## Lease estricto del Journal y secuencia privada A → Journal → B
+
+U1 (`1d5302b70de0f57db18baad1346fa0c5e9aba639`, 259 líneas de churn) añade
+la emisión del lease estricto del Journal y su lectura con scope. Los
+constructores legacy conservan `None` y no consultan el probe. El camino estricto
+valida ID y scope del parent, y la lectura comprueba el scope del archivo en el
+mismo handle abierto.
+
+U2 (`dee43d028ec3cb42a5a406885733141ba000d645`, 324 líneas) extiende el helper
+de borrado existente: valida el scope de la fuente en el handle final que
+comprueba su identidad y el Journal, y confirma con una lectura estricta. Añade
+el seam por llamada y pruebas de éxito, rechazo y preservación. Los scopes
+negativos son datos sintéticos; no requieren ni representan mounts montados.
+
+Los gates de U1/U2 pasaron la suite completa de la biblioteca con
+`cargo test --locked --offline -p universo-okf --lib`: Windows 640 passed, 0
+failed, 5 ignored; Linux 660 passed, 0 failed, 5 ignored. Formato, clippy de
+workspace con todos los targets y `-D warnings`, frontera pública y diffcheck
+terminaron con exit 0 en ambos sistemas; producto y cleanup Linux también
+terminaron con exit 0. El wrapper exterior Linux reportó exit 2 por el CR final
+de `exit 0\r`; un smoke separado con LF terminó 0 y no cambia el resultado de
+esa invocación anterior. Estos resultados corresponden al freeze U1/U2 y no se
+atribuyen al consumidor A añadido después.
+
+El consumidor privado A→Journal→B usa la observación A completa recién
+revalidada, conserva owner, parent y scope, y pasa al lease estricto solo la
+identidad nativa medida y el Journal completo. Intenta la eliminación una vez.
+Ante `Eliminado` o `Ausente`, vuelve a observar B y solo devuelve B si supera su
+propio gate; ante `Conflicto` o `Indeterminado`, retorna `NoVerificable` sin
+reintentar ni tratar el error como prueba de que no hubo efecto. No retira
+Context ni Intent, no aplica una fila de recovery y todavía no tiene caller
+productivo. La comprobación es secuencial: no afirma snapshot frente a escritores
+externos, durabilidad ante power loss ni recuperación completa.
+
+El consumidor A quedó en el commit `05daf482006570fa01e51a2dae2e31c4fb809845`,
+con 317 líneas de churn: 74 de fuente, 240 de pruebas y 3 de wiring. El filtro
+owner pasó Windows 129/0/0 y Linux 134/0/0. Formato, clippy workspace,
+frontera pública y diffcheck de archivos rastreados y nuevos terminaron con
+exit 0 en ambos sistemas; producto, cleanup, runner reutilizable y wrapper Linux
+terminaron con exit 0 usando archivos UTF-8 sin BOM y LF. Los logs son
+`strict-a-remove-20261016-windows.log` y
+`strict-a-remove-20261016-linux.log`. Esta evidencia local corresponde al commit
+indicado; el resultado previo de U1/U2 con wrapper exit 2 por CR final permanece
+separado y no se reinterpreta con el wrapper limpio de A.
+
+El CI exacto de la base publicada
+`f5845df6962d1e8e7a902d1975daab6a6a92e85b` (run `38920132266`) terminó SUCCESS:
+Linux 1009/0/9 y Windows 992/0/9, con 38 resúmenes Cargo, 7 pruebas Python,
+demos, 4 estados y 16 salidas por sistema. Esa base precede y excluye U1, U2 y
+A. El rollback del lote nuevo sigue las dependencias: retirar primero A,
+después U2 y por último U1; los constructores legacy y el recovery existente
+se conservan. El progreso global permanece en 4/9; fase 04 y U7 siguen
+parciales.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
