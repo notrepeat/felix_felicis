@@ -2,7 +2,7 @@ use super::super::super::metadata_directorio;
 use super::super::{ErrorRenombrarAnclado, IdentidadDirectorio, mapear_error_directorio};
 #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 use crate::transaccion::anclado::renombrar_noreplace::invocar_renameat2;
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
 use crate::transaccion::anclado::renombrar_noreplace::{
     CausaRenombrarNoReemplazo, ErrorRenombrarNoReemplazo,
 };
@@ -115,9 +115,29 @@ where
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn mapear_error_noreplace(error: ErrorRenombrarNoReemplazo) -> ErrorRenombrarAnclado {
     match error.causa() {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         CausaRenombrarNoReemplazo::Io => ErrorRenombrarAnclado::Io,
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         CausaRenombrarNoReemplazo::DestinoExistente => ErrorRenombrarAnclado::DestinoExistente,
         CausaRenombrarNoReemplazo::OperacionAmbigua => ErrorRenombrarAnclado::OperacionAmbigua,
+    }
+}
+
+#[cfg(windows)]
+fn mapear_error_noreplace(error: ErrorRenombrarNoReemplazo) -> ErrorRenombrarAnclado {
+    #[cfg(test)]
+    if let Some((ntstatus, io_status)) = error.diagnostico_ntstatus() {
+        registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
+            etapa: EtapaRenombrarWindows::NtSetInformationFile,
+            raw_os_error: None,
+            ntstatus: Some(ntstatus),
+            io_status: Some(io_status),
+        });
+    }
+
+    match error.causa() {
+        CausaRenombrarNoReemplazo::OperacionAmbigua => ErrorRenombrarAnclado::OperacionAmbigua,
+        CausaRenombrarNoReemplazo::ComponenteInvalido => ErrorRenombrarAnclado::ComponenteInvalido,
     }
 }
 
@@ -175,16 +195,8 @@ pub(super) fn renombrar_plataforma(
 ) -> Result<(), ErrorRenombrarAnclado> {
     use fs_at::OpenOptions as OpenOptionsAt;
     use fs_at::os::windows::OpenOptionsExt;
-    use std::mem::{offset_of, size_of};
-    use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::AsRawHandle;
     use std::path::Path;
-    use windows_sys::Wdk::Storage::FileSystem::{
-        FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
-    };
-    use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES};
-    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
     #[cfg(test)]
     limpiar_diagnostico_renombrar_windows();
@@ -255,61 +267,12 @@ pub(super) fn renombrar_plataforma(
         return Err(ErrorRenombrarAnclado::IdentidadNoCoincide);
     }
 
-    let utf16: Vec<u16> = destino.encode_wide().collect();
-    let offset = offset_of!(FILE_RENAME_INFORMATION, FileName);
-    let nombre_bytes = utf16
-        .len()
-        .checked_mul(size_of::<u16>())
-        .ok_or(ErrorRenombrarAnclado::ComponenteInvalido)?;
-    let byte_len = size_of::<FILE_RENAME_INFORMATION>()
-        .checked_add(nombre_bytes)
-        .ok_or(ErrorRenombrarAnclado::ComponenteInvalido)?;
-    let bytes =
-        u32::try_from(nombre_bytes).map_err(|_| ErrorRenombrarAnclado::ComponenteInvalido)?;
-    let words = byte_len.div_ceil(size_of::<usize>());
-    let mut storage = vec![0usize; words];
-    let rename_info = storage.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
-    // SAFETY: `storage` is usize-aligned and sized to contain the fixed header
-    // plus the encoded name. The pointers are valid for these writes.
-    unsafe {
-        (*rename_info).Anonymous.ReplaceIfExists = false;
-        (*rename_info).RootDirectory = parent.as_raw_handle() as HANDLE;
-        (*rename_info).FileNameLength = bytes;
-        std::ptr::copy_nonoverlapping(
-            utf16.as_ptr(),
-            storage.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(),
-            utf16.len(),
-        );
-    }
-    // SAFETY: the source handle has DELETE access, RootDirectory is the retained
-    // parent, ReplaceIfExists=false, and this aligned buffer contains a relative
-    // UTF-16 component matching FILE_RENAME_INFORMATION. The handle is opened
-    // synchronously by fs_at, so the operation completes before this buffer ends.
-    let mut io_status = IO_STATUS_BLOCK::default();
-    let status = unsafe {
-        NtSetInformationFile(
-            fuente_renombrable.as_raw_handle() as HANDLE,
-            &mut io_status,
-            rename_info.cast(),
-            u32::try_from(byte_len).map_err(|_| ErrorRenombrarAnclado::ComponenteInvalido)?,
-            FileRenameInformation,
-        )
-    };
-    #[cfg(test)]
-    let io_status_code = unsafe { io_status.Anonymous.Status };
-    if status < 0 {
-        #[cfg(test)]
-        registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
-            etapa: EtapaRenombrarWindows::NtSetInformationFile,
-            raw_os_error: None,
-            ntstatus: Some(status),
-            io_status: Some(io_status_code),
-        });
-        // NTSTATUS never leaves the primitive. A failed rename syscall can
-        // still have moved the directory, so recovery must reconcile it.
-        return Err(ErrorRenombrarAnclado::OperacionAmbigua);
-    }
-    Ok(())
+    crate::transaccion::anclado::renombrar_noreplace::renombrar_windows(
+        parent,
+        &fuente_renombrable,
+        destino,
+    )
+    .map_err(mapear_error_noreplace)
 }
 
 #[cfg(all(test, windows))]
@@ -353,16 +316,6 @@ fn registrar_diagnostico_renombrar_windows(diagnostico: DiagnosticoRenombrarWind
 #[cfg(all(test, windows))]
 fn tomar_diagnostico_renombrar_windows() -> Option<DiagnosticoRenombrarWindows> {
     ULTIMO_DIAGNOSTICO_RENOMBRAR_WINDOWS.with(|ultimo| ultimo.take())
-}
-
-#[cfg(all(test, windows))]
-fn registrar_diagnostico_ntstatus_prueba(ntstatus: i32, io_status: i32) {
-    registrar_diagnostico_renombrar_windows(DiagnosticoRenombrarWindows {
-        etapa: EtapaRenombrarWindows::NtSetInformationFile,
-        raw_os_error: None,
-        ntstatus: Some(ntstatus),
-        io_status: Some(io_status),
-    });
 }
 
 #[cfg(all(test, windows))]

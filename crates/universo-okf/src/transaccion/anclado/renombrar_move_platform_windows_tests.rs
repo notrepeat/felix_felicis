@@ -1,9 +1,11 @@
 use super::super::ErrorRenombrarAnclado;
 use super::{
     DiagnosticoRenombrarWindows, EtapaRenombrarWindows, limpiar_diagnostico_renombrar_windows,
-    registrar_diagnostico_ntstatus_prueba, renombrar_plataforma,
-    tomar_diagnostico_renombrar_windows,
+    mapear_error_noreplace, renombrar_plataforma, tomar_diagnostico_renombrar_windows,
 };
+use crate::transaccion::anclado::renombrar_noreplace::renombrar_windows_con;
+use fs_at::OpenOptions as OpenOptionsAt;
+use fs_at::os::windows::OpenOptionsExt as FsAtOpenOptionsExt;
 use std::ffi::OsStr;
 use std::fs::OpenOptions;
 use std::os::windows::fs::OpenOptionsExt;
@@ -11,8 +13,9 @@ use std::path::Path;
 use tempfile::tempdir;
 use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE,
+    DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FILE_TRAVERSE,
 };
 
 fn abrir_directorio(
@@ -103,8 +106,37 @@ fn nt_set_information_failure_diagnostic_preserves_both_native_status_values() {
     limpiar_diagnostico_renombrar_windows();
     let ntstatus = 0xC0000043_u32 as i32;
     let io_status = 0xC0000022_u32 as i32;
+    let temp = tempdir().unwrap();
+    let source_path = temp.path().join("source.bin");
+    std::fs::write(&source_path, b"source canary").unwrap();
+    let parent_access = FILE_READ_ATTRIBUTES
+        | FILE_LIST_DIRECTORY
+        | FILE_TRAVERSE
+        | FILE_ADD_FILE
+        | FILE_ADD_SUBDIRECTORY;
+    let parent = abrir_directorio(temp.path(), Some(parent_access), None);
+    let mut opciones = OpenOptionsAt::default();
+    opciones
+        .desired_access(FILE_READ_ATTRIBUTES | DELETE)
+        .follow(false);
+    let source = opciones
+        .open_at(&parent, Path::new("source.bin"))
+        .expect("open test source for rename");
 
-    registrar_diagnostico_ntstatus_prueba(ntstatus, io_status);
+    let error = renombrar_windows_con(
+        &parent,
+        &source,
+        OsStr::new("destination.bin"),
+        |_, status, _, _| {
+            status.Anonymous.Status = io_status;
+            ntstatus
+        },
+    )
+    .expect_err("the injected native failure is retained internally");
+    assert_eq!(
+        mapear_error_noreplace(error),
+        ErrorRenombrarAnclado::OperacionAmbigua
+    );
     assert_eq!(
         tomar_diagnostico_renombrar_windows(),
         Some(DiagnosticoRenombrarWindows {
