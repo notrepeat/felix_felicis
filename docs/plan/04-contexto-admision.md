@@ -5,13 +5,25 @@ con codecs privados. El lifecycle documenta las
 primitivas de lectura, creación temporal, publicación canónica, verificación raw y
 retiro estricto del contexto; el flujo de transacción sigue incompleto.
 
-La estrategia de formato adoptada para flujos nuevos es un Journal v2 paralelo,
-con `schema=felix-journal-v2`, el kind `context_required` y cuota propia,
-preservando Journal v1 y sus bytes. La etiqueta `kind=context_required` fija la
-dirección de ese dato; serialización, framing, bytes y cualquier otro tag siguen
-pendientes. El payload, las versiones de envelope, el selector, los codecs, el I/O
-y el clasificador previo al dispatcher aún deben diseñarse e implementarse; no hay
-caller productivo activo.
+La estrategia adoptada para flujos nuevos conserva Journal v1 y añade un
+Journal v2 paralelo con `schema=felix-journal-v2`, kind cerrado
+`context_required` y cuota propia de 1024 bytes. El modelo y el codec canónico
+JSON están en el árbol local; el codec exige schema y kind exactos, rechaza
+campos duplicados o desconocidos, valida identidades nativas y devuelve errores
+fijos redactados. Los vectores dorados sintéticos de v1 se añadieron sin cambiar
+sus cuerpos ni bytes.
+
+Las pruebas del encoder real midieron un Journal v2 nativo máximo de 722 bytes
+en Windows y 665 en Linux; ambos caben en 1024. Las unidades 1A, 1B y 2 cerraron
+sus gates locales. Unidad 3 (`e83fd1f695f5af20474c42f00fcc704029cdf44c`, sobre
+`ccb390a4`) también cerró sus gates: el selector pasó 6/0/0 en Windows y Linux,
+el filtro Journal v2 12/0/0 en ambos y la compatibilidad del codec v1 10/0/0 en
+Windows y 9/0/0 en Linux. Formato, clippy, frontera y diff semántico terminaron
+en 0 en ambos sistemas; cleanup Linux terminó en 0. El selector clasifica el
+schema una sola vez y conserva la variante tipada v1/v2; no autoriza recovery.
+El CI remoto completo citado abajo es anterior a las unidades locales 0–3 y no
+las acredita. No hay codecs ni lectores de envelope exterior v2 ni caller de
+apply o recovery.
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -243,22 +255,36 @@ Los journals v1 existentes no contienen contexto de replay y no se
 reinterpretan como si lo tuvieran. En particular, la ausencia o pérdida del
 contexto no autoriza a omitir la validación de `New` ni a aceptar `Committed`. Si una recuperación
 futura requiere replay y falta evidencia, debe fallar cerrada y conservar los
-artefactos para decisión manual. La estrategia adoptada es un formato paralelo de
-Journal v2 para transacciones nuevas, con `schema=felix-journal-v2`,
-`kind=context_required` y cuota propia, preservando v1 sin migrar ni inferir el
-significado de journals existentes.
+artefactos para decisión manual. La estrategia adoptada es un formato paralelo de Journal v2 para flujos nuevos,
+con `schema=felix-journal-v2`, `kind=context_required` y cuota propia de 1024
+bytes. El modelo valida transaction ID de 32 hex minúsculas, `old != new`,
+transiciones y sucesores; los errores DTO usan un mapeo fijo y redactado. El
+codec estricto usa JSON canónico, orden fijo y campos cerrados; no hay fallback
+entre schemas ni proyección de `JournalV2` a v1.
 
-Los frames exteriores `FELIX-ADMENV` v1 y `FELIX-RETIRE` v1 contienen Journal v1
-canónico y son estrictos: nunca aceptan v2 bajo framing v1. `FELIX-ADMCTX` v1 es
-un frame interior distinto; solo podrá conservarse dentro de un envelope exterior
-v2 si su semántica permanece igual. Un flujo que contenga Journal v2 requiere la
-versión exterior correspondiente. La serialización, framing, bytes y cualquier
-otro tag siguen por definir; `kind=context_required` es la dirección ya elegida.
+La Unidad 0 añade vectores literales de compatibilidad para Journal v1 sin
+modificar sus bytes. Las unidades 1A/1B y Unidad 2 tienen gates locales cerrados;
+Unidad 2 midió un máximo de 722 bytes en Windows y 665 en Linux. Unidad 3
+(`e83fd1f695f5af20474c42f00fcc704029cdf44c`) cerró sus filtros locales: selector
+6/0/0 y Journal v2 12/0/0 en ambos sistemas; codec v1 10/0/0 en Windows y
+9/0/0 en Linux. Formato, clippy, frontera y diff semántico terminaron en 0 en
+ambos sistemas; cleanup Linux terminó en 0. El selector privado selecciona por
+schema una sola vez y conserva la variante v1/v2; solo clasifica datos y no
+acredita el recovery legacy ni una operación de filesystem.
 
-El payload, el selector, los codecs, el I/O y el clasificador puro de schema/kind
-previo al dispatcher existente quedan por implementar. El dispatcher actual
-conserva sus responsabilidades mutantes; la estrategia no activa un caller
-productivo de apply o recovery.
+Los frames exteriores `FELIX-ADMENV` v1 y `FELIX-RETIRE` v1 permanecen estrictos
+y nunca aceptan Journal v2 bajo framing v1. `FELIX-ADMCTX` v1 es un frame
+interior distinto. El diseño de ADMENV2/RETIRE2 existe solo como draft privado;
+no hay codec ni lector exterior v2 integrado. Tampoco hay una extensión tipada
+de replay/binding owner-bound v2 para `&JournalV2`; un consumidor futuro debe
+verificar `kind` sin proyección a v1 ni booleano del caller antes de un
+dispatcher. El selector de schema no demuestra el recovery legacy ni su
+comportamiento sobre el filesystem.
+
+El selector es solo clasificación de datos. El Journal, su kind, el Context y
+los resultados de binding no conceden autoridad; no se activan apply ni recovery.
+Los journals legacy v1 se conservan sin migrarlos ni inferirles contexto, y la
+ruta v1 sin auxiliares mantiene su comportamiento actual.
 
 ## Vínculo de replay y leases de datos
 
@@ -311,23 +337,27 @@ no da autoridad de recovery ni cleanup. Si la confirmación falla, el error no
 demuestra que el rename no tuvo efecto y la operación no reintenta ni limpia.
 El cleanup, el preflight global de huérfanos y el caller que ordene contexto →
 journal `Prepared` → primer rename siguen pendientes. El framing exterior v1 y sus
-codecs ya están implementados; los codecs de Journal v2 siguen pendientes. El
-diseño también fija cortes, preservación de huérfanos y límites de durabilidad. Las primitivas de storage no son un caller
-de producción ni una decisión de recovery.
+codecs ya están implementados. El modelo y codec de Journal v2, y el selector de
+schema, están integrados localmente y tienen gates cerrados según la evidencia
+de esta sección; el CI remoto citado no cubre esos commits. Los codecs y lectores
+de envelope exterior v2, la extensión tipada de replay/binding owner-bound v2 y
+el caller de producción siguen pendientes. Las primitivas de storage no son una
+decisión de recovery.
 
 El encoder y decoder exteriores v1 son codecs puros, mantienen
 `felix-journal-v1` sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un
 caller. La orquestación y el recovery context-aware requieren otra revisión.
 La secuencia privada `Croot→Intent→observación final` produce datos
-observacionales; no implementa Journal v2, nuevas versiones de envelope, codecs,
-I/O ni el clasificador puro previo al dispatcher. La estrategia v2 está
-adoptada, pero estas piezas y el caller de apply o recovery siguen pendientes.
-En particular, antes de integrarlos se debe demostrar el
-dispatch entre transacciones nuevas y journals v1 legacy: los journals legacy
-sin auxiliar siguen exactamente el recovery actual. El codec y el binding no
-son autoridad para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar el
-backup. Sigue bloqueada la frontera real de mount, bind mount o FUSE para
-cleanup de `PartialOld`; no se cambia el contrato ni la capability del backup.
+observacionales; no implementa envelopes v2, lectores v2, I/O ni caller de apply
+o recovery. El modelo, codec y selector de Journal v2 están en el árbol local y
+cerraron gates locales. Falta una extensión tipada de replay/binding owner-bound
+v2 que preserve `kind` antes de un futuro dispatcher; el selector solo clasifica
+bytes y no prueba el recovery legacy ni operaciones de filesystem. Los journals
+legacy sin auxiliar mantienen el recovery actual;
+no se infiere contexto ni se convierte v1 a v2. El codec y el binding no son
+autoridad para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar backup.
+Sigue bloqueada la frontera real de mount, bind mount o FUSE para cleanup de
+`PartialOld`; no se cambia el contrato ni la capability del backup.
 
 `Committed` mantiene los requisitos de la tabla vigente. No se salta su
 validación por retirar un auxiliar futuro. Fase 04 y U7 continúan parciales;
@@ -335,7 +365,7 @@ el progreso global permanece en 4/9.
 
 ## Evidencia de verificación
 
-Los cinco CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los seis CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -346,10 +376,12 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `c30c704` | `38967692704` | `1037/0/9` | `1056/0/9` |
 | `f4bdfcd` | `38971406899` | `1049/0/9` | `1068/0/9` |
 | `1b4b25e` | `38973980033` | `1057/0/9` | `1076/0/9` |
+| `203bb6b` | `38978377109` | `1064/0/9` | `1083/0/9` |
 
-El CI acreditado al preparar este lote es run `38973980033` de
-`1b4b25e`. No cubre Unit6, Unit5-C ni este lote documental; sus cierres
-locales no se atribuyen a ese CI.
+El último CI remoto completo acreditado para esta nota es run `38978377109` de
+`203bb6b`: Windows `1064/0/9` y Linux `1083/0/9`. Cada job terminó con 38
+suites Cargo y 7 pruebas Python. Ese CI es anterior a los cambios locales de
+Unidad 0, 1A, 1B, 2 y 3; no los acredita ni sustituye sus gates focales.
 
 La prueba integrada de Unit6 (`5a270ca1686bb66169de6916b8a1d824da27ad09`, +86 líneas Rust) recorre con
 fixture sintética la cadena privada A → retiro Journal/B → retiro Context →
@@ -375,7 +407,20 @@ Unit5-C (`000c7b724545d2bb92f6e1c922122df4d72dda80`, parent `5a270ca`) añade +3
 Rust, seis funciones nuevas y siete fixtures. Sus gates locales cerraron Windows
 173/0/0 y Linux 178/0/0; formato, clippy de workspace con `-D warnings`, frontera y diff
 semántico terminaron en 0. Cleanup Linux terminó en 0; la verificación usó nombres
-y artefactos frescos. Unit6, Unit5-C y este lote documental todavía no tienen CI propio.
+y artefactos frescos.
+
+### Estado local de Journal v2
+
+| Corte | Estado verificado |
+|---|---|
+| Unidad 0, commit local `3872b28` | Vectores literales sintéticos Unix/Windows añadidos para Journal v1; no se cambió su codec ni bytes. El CI remoto citado es anterior. |
+| Unidad 1A, `3cb5a9f`; Unidad 1B, `eb9282d` | Gates locales aprobados en Windows y Linux según recibos; no cubiertos por el CI remoto citado. |
+| Unidad 2, `ccb390a`, modelo y codec | Filtros v2 `12/0/0` en ambos sistemas; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff `0`; cleanup Linux `0`. Encoder máximo observado: 722 bytes Windows y 665 Linux, ambos bajo la cuota propia de 1024. |
+| Unidad 3, `e83fd1f695f5af20474c42f00fcc704029cdf44c`, selector puro | Selector `6/0/0` y Journal v2 `12/0/0` en Windows y Linux; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff semántico `0` en ambos sistemas; cleanup Linux `0`. Solo clasifica datos v1/v2. |
+
+Las unidades locales posteriores a `203bb6b` aún no tienen CI remoto propio; el
+CI de esa base no las acredita. El selector no activa recovery, caller, envelope
+v2 ni I/O. Los gates locales aquí enumerados sí quedaron cerrados.
 
 ### Registro histórico detallado
 

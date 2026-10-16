@@ -43,6 +43,20 @@ crate-private y no tienen caller desde apply/producción.
 La secuencia privada `Croot→retiro de Intent→observación final` owner-bound se
 resume en [04-contexto-admision.md](04-contexto-admision.md); sigue sin caller
 de apply o recovery.
+
+La estrategia paralela Journal v2 conserva v1. Sus vectores dorados v1, modelo,
+codec y selector canónico están en el árbol local; el Journal v2 tiene cuota
+propia de 1024 bytes y su encoder máximo midió 722 bytes en Windows y 665 en
+Linux. Las unidades 1A, 1B y 2 cerraron gates locales. Unidad 3
+(`e83fd1f695f5af20474c42f00fcc704029cdf44c`, sobre `ccb390a4`) pasó selector
+6/0/0 y Journal v2 12/0/0 en ambos sistemas, y compatibilidad codec v1 10/0/0
+en Windows y 9/0/0 en Linux; formato, clippy, frontera y diff semántico
+terminaron en 0 en ambos sistemas, y cleanup Linux terminó en 0. El CI remoto
+citado en 04-contexto-admision es anterior y no cubre estas unidades locales.
+No hay ADMENV2/RETIRE2 ni lectores de envelope exterior v2, extensión tipada de
+replay/binding owner-bound v2 ni caller de apply o recovery. El avance global
+permanece en 4/9; U7 y fase 04 siguen parciales.
+
 Hay tres tests interproceso en cortes diferentes. `b990c72` termina con código
 86 en `RestoreOld`, después de restaurar y reobservar `Old` y antes de retirar
 el journal; el proceso padre permanece vivo, readquiere el lock y en su
