@@ -476,7 +476,6 @@ fn validar_gate_reconciliacion_b(
 /// Observación de intent presente con Journal y Context canónicos ausentes.
 /// Conserva solo el intent; no infiere la causa de las ausencias.
 #[must_use = "la observación conserva el intent file-bound y el owner"]
-// El consumidor futuro de esta observación aún no forma parte del corte C.
 #[allow(dead_code)]
 pub(super) struct ObservacionIntentConJournalYContextoAusentes<'owner, 'lock> {
     _intent: ObservacionIntentCanonico<'owner, 'lock>,
@@ -491,7 +490,6 @@ impl fmt::Debug for ObservacionIntentConJournalYContextoAusentes<'_, '_> {
 impl<'owner, 'lock> ObservacionIntentCanonico<'owner, 'lock> {
     /// Revalida intent y ausencia de ambos sidecars sin observar su contenido.
     /// El dato no autoriza recovery, cleanup ni aplicación.
-    // El consumidor que usará este dato todavía no se integra.
     #[allow(dead_code)]
     pub(super) fn observar_reconciliacion_c_sin_sidecars(
         self,
@@ -507,6 +505,77 @@ impl<'owner, 'lock> ObservacionIntentCanonico<'owner, 'lock> {
 
         Ok(ObservacionIntentConJournalYContextoAusentes {
             _intent: intent_final,
+        })
+    }
+}
+
+/// Observación puntual de C que coteja root con el Journal almacenado como dato.
+/// No incluye replay, admisión, decisión de recovery ni autoridad de limpieza.
+/// Las comprobaciones son secuenciales y no forman un snapshot externo.
+#[must_use = "la observación conserva el intent file-bound y el owner"]
+#[allow(dead_code)]
+pub(super) struct ObservacionIntentConsistenciaRootC<'owner, 'lock> {
+    _intent: ObservacionIntentCanonico<'owner, 'lock>,
+    _journal: crate::transaccion::journal::Journal,
+    _inventario: crate::transaccion::journal::recovery::RecoveryInventory,
+}
+
+impl fmt::Debug for ObservacionIntentConsistenciaRootC<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionIntentConsistenciaRootC { .. }")
+    }
+}
+
+impl<'owner, 'lock> ObservacionIntentConJournalYContextoAusentes<'owner, 'lock> {
+    /// Compara el inventario puntual con el descriptor retenido en el intent.
+    /// La igualdad de root usa identidad nativa y digest raw completos.
+    /// No atribuye la ausencia de sidecars a una operación autorizada.
+    #[allow(dead_code)]
+    pub(super) fn observar_consistencia_root_c(
+        self,
+    ) -> Result<ObservacionIntentConsistenciaRootC<'owner, 'lock>, ErrorDuenioTransaccionAnclado>
+    {
+        let intent_inicial = self._intent.revalidar()?;
+        let (journal, inventario) = {
+            let registro = &intent_inicial._registro;
+            let owner = &mut *intent_inicial._owner;
+            validar_gate_reconciliacion_c(owner)?;
+
+            let journal = registro.journal().clone();
+            let parent_esperado = owner
+                .identidad_parent
+                .journal_identity()
+                .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            if journal.state() != crate::transaccion::journal::JournalState::Committed
+                || journal.parent() != &parent_esperado
+            {
+                return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+            }
+
+            let inventario = owner
+                .observar_inventario_recovery_con_journal_datos(&journal)
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            use crate::transaccion::journal::recovery::ArtifactState;
+            // New requiere identidad nativa y digest raw completos.
+            if inventario.root != ArtifactState::New
+                || inventario.backup != ArtifactState::Absent
+                || inventario.stage != ArtifactState::Absent
+                || inventario.root_new_validated
+            {
+                return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+            }
+            validar_gate_reconciliacion_c(owner)?;
+
+            (journal, inventario)
+        };
+
+        let intent_final = intent_inicial.revalidar()?;
+        validar_gate_reconciliacion_c(&mut *intent_final._owner)?;
+
+        Ok(ObservacionIntentConsistenciaRootC {
+            _intent: intent_final,
+            _journal: journal,
+            _inventario: inventario,
         })
     }
 }
