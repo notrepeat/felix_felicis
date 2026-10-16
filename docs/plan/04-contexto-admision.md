@@ -18,13 +18,22 @@ quedó verificada en `996ec93f91da61a33e6130b4f5a858de70ef79a1`; sus resultados
 y límites están registrados abajo. Falta el caller de
 producción que aplique la tabla vigente, además de cleanup y preflight global
 de huérfanos. Ni el resultado de comparación ni el inventario son prueba o
-autoridad de admisión. La unidad A añade una prueba opaca que solo
-confirma replay admitido y huella root coincidente en `Installed` o `Committed`;
-no prueba que un caller instaló `New` ni elige una fila de recovery. Una
-recuperación futura debe revalidar el root antes de volver a aceptar `New`
-después de perder el backup. El estado global sigue en 4/9 fases; U7 y fase 04
-permanecen parciales. Replay y decoder aún no tienen caller desde
-apply/producción ni cierran esas fases.
+autoridad de admisión. La unidad A añade una prueba opaca que solo confirma
+replay admitido y huella root coincidente en `Installed` o `Committed`; no
+prueba que un caller instaló `New` ni elige una fila de recovery. La unidad
+local `69f3842e9b208aeadaf7721d84a9fc0d07b541af` añade
+`PruebaReplayAdmitidoRootCoincidente::revalidar(self)`: consume la prueba y
+solo la reemite tras revalidar el mismo owner, lock, parent y scope, comprobar
+los cuatro siblings, recargar el ID y el Journal completo, releer identidad,
+longitud y SHA-256 del contexto, repetir el replay soportado y observar que
+root aún coincide. Sus pruebas cubren reemisión sin cambios e invalidación
+ante avance sintético `Installed`→`Committed`, un frame distinto de igual
+longitud y reemplazo del canónico por bytes iguales con ID distinto. La
+igualdad del Journal compara el registro completo semánticamente, no hashea sus
+bytes; la longitud y SHA-256 corresponden al frame crudo del contexto. Aún no
+observa backup ni stage, ni selecciona una fila. El estado
+global sigue en 4/9 fases; U7 y fase 04 permanecen parciales. Replay y decoder
+aún no tienen caller desde apply/producción ni cierran esas fases.
 
 ## Decisión
 
@@ -414,11 +423,25 @@ journal/contexto se sueltan antes de devolverla. No retiene el envelope ni el
 una fase sintética en el Journal; no simulan una transición real de apply ni
 demuestran que un caller instaló `New`.
 
-Antes de usar una prueba futura, el mismo owner debe revalidar guard, parent y
-scope, observar los cuatro siblings y recargar el ID y registro completo/fase
-del journal. También debe releer el ID, longitud y SHA-256 del contexto,
-comprobar binding y replay soportados, y observar root, backup y stage antes
-de elegir cualquier fila. Esas revalidaciones y la decisión siguen pendientes.
+El método local `PruebaReplayAdmitidoRootCoincidente::revalidar(self)`
+consume y reemite la prueba solo después de revalidar guard, parent y scope,
+observar los cuatro siblings, y recargar el ID y Journal completo, incluida su
+fase. También compara la identidad, longitud y SHA-256 del contexto, vuelve a
+comprobar binding y replay soportados, y exige que la huella del root siga
+coincidiendo. La igualdad del Journal es semántica del registro completo; el
+SHA-256 se calcula sobre el frame crudo del contexto. Los tests usan fixtures
+sintéticas y preservan el storage. El commit local
+`69f3842e9b208aeadaf7721d84a9fc0d07b541af` pasó filtros focales Windows
+(owner 51/51, contexto 24/24, envelope 24/24) y Linux (owner 54/54, contexto
+25/25, envelope 24/24). Formato, clippy de workspace con todos los targets y
+warnings denegados, frontera pública y diffcheck pasaron en ambos sistemas; la
+limpieza del `TMPDIR` Linux terminó con exit 0. El CI de
+`7a7273f42f61a391e0eb28d0d9226820c2d3956d` registrado abajo es anterior y no
+cubre este commit. Esta revalidación no observa backup ni stage, no decide una
+fila y no concede autoridad. Sigue pendiente un consumidor que inspeccione el
+inventario completo y aplique una fila permitida por la tabla vigente. El
+rollback de esta unidad retira el método de revalidación, su wiring y el test
+nuevo, conservando el productor original y el observer.
 
 La unidad A `b3b16c646d64b4ad7629af2494e84bd8dcbecd7d`
 pasó localmente owner 34/34, contexto 24/24 y envelope 24/24 en Windows; Linux
@@ -497,6 +520,12 @@ La nota histórica de rollback de las unidades de prueba de la attestation sigue
 aplicando por separado: revertir B (`0f2187c`) quita solo su cobertura y wiring,
 conservando A (`b3b16c6`); revertir A retira su productor, prueba y
 wiring/reexport, sin alterar el journal v1 ni el recovery legacy.
+
+El CI remoto exacto de la base publicada `7a7273f42f61a391e0eb28d0d9226820c2d3956d`
+(run `38868788132`) terminó SUCCESS en Linux y Windows. En 38 targets reportó
+Linux 897 pass/0 fail/9 ignored y Windows 882 pass/0 fail/9 ignored, además de
+7 pruebas Python por sistema. Es una base previa: no incluye
+`69f3842e9b208aeadaf7721d84a9fc0d07b541af`.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

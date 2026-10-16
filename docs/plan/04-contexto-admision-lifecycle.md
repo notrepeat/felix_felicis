@@ -21,12 +21,27 @@ completo (con su fingerprint `New`), no el lease ni el envelope/`NewEsperado`
 completos: los leases secuenciales de journal y contexto se sueltan antes de
 devolverla. El binding del envelope liga metadatos de la transacción, no su
 fase; los fixtures escriben el Journal en fases sintéticas y no demuestran una
-transición real de apply ni que un caller haya instalado `New`. Antes de usar
-una prueba futura, el mismo owner debe revalidar guard, parent y scope, observar
-los cuatro siblings y recargar el ID y registro completo/fase del journal;
-también debe releer el ID, longitud y SHA-256 del contexto, comprobar binding y
-replay soportados, y observar root, backup y stage antes de elegir cualquier
-fila. Esas revalidaciones y la decisión siguen pendientes.
+transición real de apply ni que un caller haya instalado `New`. La unidad local
+`69f3842e9b208aeadaf7721d84a9fc0d07b541af` añade
+`PruebaReplayAdmitidoRootCoincidente::revalidar(self)`,
+que consume la prueba y solo la reemite después de revalidar el mismo owner,
+guard, parent y scope; comprobar los cuatro siblings; y recargar el ID y el
+Journal completo, incluida su fase. Relee identidad, longitud y SHA-256 del
+contexto, comprueba binding y replay soportados de nuevo y exige que root siga
+coincidiendo. Sus tests cubren reemisión sin cambios e invalidación ante avance sintético de
+`Installed` a `Committed`, frame cambiado de igual longitud con el mismo ID y
+reemplazo canónico de bytes iguales con ID distinto. La igualdad del Journal
+es semántica del registro completo, no una comparación de hash de bytes; el
+SHA-256 se calcula sobre el frame crudo del contexto. Los filtros focales
+pasaron Windows: owner 51/51, contexto 24/24 y envelope 24/24; Linux: owner
+54/54, contexto 25/25 y envelope 24/24. Formato, clippy de workspace con todos
+los targets y warnings denegados, frontera pública y diffcheck pasaron en ambos
+sistemas; la limpieza del `TMPDIR` Linux terminó con exit 0. El CI de
+`7a7273f42f61a391e0eb28d0d9226820c2d3956d` es anterior y no cubre esta unidad.
+Esta revalidación no observa backup ni stage, no escoge una fila y no da
+autoridad; sigue pendiente el consumidor que observe el inventario completo y
+aplique solo una fila autorizada. Su rollback retira el método, el wiring y el
+test nuevo, conservando el productor original y el observer.
 La unidad `66e8419f63ffd409eaf687fc7aa54183613ac19c` añade métodos de captura
 fija sobre el root abierto desde el parent retenido y bajo el lock. Los gates
 locales de esa unidad pasaron; el detalle y sus límites están en la evidencia
@@ -332,6 +347,12 @@ que posee.
 - `sync_all` del archivo y cortes de terminación de proceso no demuestran
   durabilidad del directorio, pérdida de energía, caída del SO ni garantías de
   `fsync` del filesystem. El diseño no declara esas propiedades.
+
+- El CI remoto exacto de la base publicada `7a7273f42f61a391e0eb28d0d9226820c2d3956d`
+  (run `38868788132`) terminó SUCCESS: Linux 897 pass/0 fail/9 ignored y
+  Windows 882 pass/0 fail/9 ignored en 38 targets, más 7 pruebas Python por
+  sistema. Ese CI precede y no cubre la unidad local
+  `69f3842e9b208aeadaf7721d84a9fc0d07b541af`.
 
 El lifecycle documentado no cierra fase 04 ni U7, no agrega callers de
 producción y no cambia el progreso global de 4/9.
