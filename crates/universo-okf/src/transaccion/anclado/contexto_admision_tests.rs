@@ -1081,3 +1081,96 @@ fn confirma_rename_aplicado_aunque_el_syscall_devuelva_error_y_no_reintenta() {
     assert!(!temporal.exists());
     assert_eq!(format!("{publicado:?}"), "ReciboContextoPublicado { .. }");
 }
+
+#[test]
+fn evidencia_de_lectura_canonica_resume_bytes_y_handle_observados() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let esperado = frame("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let canonico = contexto_path(&ubicacion);
+    fs::write(&canonico, &esperado).unwrap();
+    let identidad_esperada = identidad_archivo(&File::open(&canonico).unwrap()).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.contexto_admision().unwrap();
+
+    let (_envelope, evidencia) = lease.leer_canonico_con_evidencia().unwrap().unwrap();
+
+    let digest_esperado: [u8; 32] = Sha256::digest(&esperado).into();
+    assert_eq!(evidencia.identidad_archivo, identidad_esperada);
+    assert_eq!(evidencia.longitud, u64::try_from(esperado.len()).unwrap());
+    assert_eq!(evidencia.sha256, digest_esperado);
+    assert_eq!(fs::read(&canonico).unwrap(), esperado);
+    assert_eq!(format!("{evidencia:?}"), "EvidenciaLecturaContexto { .. }");
+}
+
+#[test]
+fn evidencia_cambia_si_muta_el_contenido_in_place_con_el_mismo_id() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let identidad_parent = parent_identity(&parent);
+    let primero = frame("0123456789abcdef0123456789abcdef", identidad_parent.clone());
+    let segundo = frame("1123456789abcdef0123456789abcdef", identidad_parent);
+    let canonico = contexto_path(&ubicacion);
+    fs::write(&canonico, &primero).unwrap();
+    let identidad_antes = identidad_archivo(&File::open(&canonico).unwrap()).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.contexto_admision().unwrap();
+    let (_, evidencia_primera) = lease.leer_canonico_con_evidencia().unwrap().unwrap();
+
+    fs::write(&canonico, &segundo).unwrap();
+    let identidad_despues = identidad_archivo(&File::open(&canonico).unwrap()).unwrap();
+    let (_, evidencia_segunda) = lease.leer_canonico_con_evidencia().unwrap().unwrap();
+
+    let digest_primero: [u8; 32] = Sha256::digest(&primero).into();
+    let digest_segundo: [u8; 32] = Sha256::digest(&segundo).into();
+    assert_eq!(identidad_despues, identidad_antes);
+    assert_eq!(evidencia_primera.identidad_archivo, identidad_antes);
+    assert_eq!(evidencia_segunda.identidad_archivo, identidad_antes);
+    assert_eq!(evidencia_primera.sha256, digest_primero);
+    assert_eq!(evidencia_segunda.sha256, digest_segundo);
+    assert_ne!(evidencia_primera.sha256, evidencia_segunda.sha256);
+    assert_eq!(
+        evidencia_segunda.longitud,
+        u64::try_from(segundo.len()).unwrap()
+    );
+    assert_eq!(fs::read(&canonico).unwrap(), segundo);
+}
+
+#[test]
+fn error_de_lectura_con_evidencia_preserva_bytes_y_no_devuelve_evidencia() {
+    for trailing in [false, true] {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let (ubicacion, _) = ubicacion(&parent, true);
+        let mut bytes = frame("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+        if trailing {
+            bytes.push(0);
+        } else {
+            bytes[0] ^= 1;
+        }
+        let canonico = contexto_path(&ubicacion);
+        fs::write(&canonico, &bytes).unwrap();
+        let identidad_antes = identidad_archivo(&File::open(&canonico).unwrap()).unwrap();
+        let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+        let mut owner =
+            super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock)
+                .unwrap();
+        let lease = owner.contexto_admision().unwrap();
+
+        let error = lease.leer_canonico_con_evidencia().unwrap_err();
+
+        assert!(matches!(error, ErrorContextoAdmisionAnclado::Codec(_)));
+        assert_eq!(error.codigo(), "admission_envelope_framing_invalid");
+        assert_eq!(fs::read(&canonico).unwrap(), bytes);
+        assert_eq!(
+            identidad_archivo(&File::open(&canonico).unwrap()).unwrap(),
+            identidad_antes
+        );
+    }
+}

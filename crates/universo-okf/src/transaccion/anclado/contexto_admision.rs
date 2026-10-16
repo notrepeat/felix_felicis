@@ -85,6 +85,8 @@ pub(crate) struct ContextoAdmisionAnclado<'lock> {
     _autoridad: Arc<()>,
 }
 
+#[path = "contexto_admision/evidencia.rs"]
+mod evidencia;
 #[path = "contexto_admision/publicar.rs"]
 mod publicar;
 #[path = "contexto_admision/temporal.rs"]
@@ -98,6 +100,36 @@ impl ContextoAdmisionAnclado<'_> {
     pub(crate) fn leer_canonico(
         &self,
     ) -> Result<Option<RegistroContextoAdmisionLeido>, ErrorContextoAdmisionAnclado> {
+        let Some((mut archivo, identidad)) = self.abrir_canonico()? else {
+            return Ok(None);
+        };
+        let envelope = crate::transaccion::admision::envelope::codec::leer(&mut archivo)
+            .map_err(ErrorContextoAdmisionAnclado::Codec)?;
+        Ok(Some((envelope, identidad)))
+    }
+
+    /// Lee el mismo frame acotado y devuelve evidencia de sus bytes observados.
+    /// El digest y la identidad son datos; no autentican ni conceden autoridad.
+    pub(crate) fn leer_canonico_con_evidencia(
+        &self,
+    ) -> Result<
+        Option<(
+            EnvelopeContextoAdmision,
+            evidencia::EvidenciaLecturaContexto,
+        )>,
+        ErrorContextoAdmisionAnclado,
+    > {
+        let Some((mut archivo, identidad)) = self.abrir_canonico()? else {
+            return Ok(None);
+        };
+        evidencia::leer(&mut archivo, identidad)
+            .map(Some)
+            .map_err(ErrorContextoAdmisionAnclado::Codec)
+    }
+
+    fn abrir_canonico(
+        &self,
+    ) -> Result<Option<(File, IdentidadArchivo)>, ErrorContextoAdmisionAnclado> {
         let identidad_parent = metadata_directorio(&self.parent)
             .map_err(|_| ErrorContextoAdmisionAnclado::ParentUnverified)?;
         if identidad_parent != self.identidad_parent {
@@ -105,7 +137,7 @@ impl ContextoAdmisionAnclado<'_> {
         }
         validar_scope(&self.parent, self.scope_parent)?;
 
-        let mut archivo =
+        let archivo =
             match abrir_entrada_relativa(&self.parent, &self.nombre, TipoEntradaAnclada::Archivo) {
                 Ok(archivo) => archivo,
                 Err(ErrorDirectorioAnclado::EntradaAusente) => return Ok(None),
@@ -114,9 +146,7 @@ impl ContextoAdmisionAnclado<'_> {
         validar_scope(&archivo, self.scope_parent)?;
         let identidad =
             identidad_archivo(&archivo).map_err(|_| ErrorContextoAdmisionAnclado::Io)?;
-        let envelope = crate::transaccion::admision::envelope::codec::leer(&mut archivo)
-            .map_err(ErrorContextoAdmisionAnclado::Codec)?;
-        Ok(Some((envelope, identidad)))
+        Ok(Some((archivo, identidad)))
     }
 }
 
