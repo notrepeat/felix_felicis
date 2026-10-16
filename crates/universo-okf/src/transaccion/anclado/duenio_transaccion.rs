@@ -209,6 +209,9 @@ mod comparar_root_replay;
 #[path = "duenio_transaccion/observar_root.rs"]
 mod observar_root;
 
+#[path = "duenio_transaccion/observar_siblings_nuevo_flujo.rs"]
+mod observar_siblings_nuevo_flujo;
+
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion_tests.rs"]
 mod tests;
