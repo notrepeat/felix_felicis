@@ -169,6 +169,24 @@ impl<'owner, 'lock> LeaseIntentRetiro<'owner, 'lock> {
     /// Intenta una sola retirada y conserva owner, autoridad y registro como datos.
     #[allow(dead_code)]
     pub(super) fn retirar(self) -> ResultadoRetiroIntent<'owner, 'lock> {
+        self.retirar_con_intento(retirar_nombre_plataforma)
+    }
+
+    #[cfg(test)]
+    pub(super) fn retirar_con_intento_para_test<F>(
+        self,
+        intento: F,
+    ) -> ResultadoRetiroIntent<'owner, 'lock>
+    where
+        F: FnOnce(&File, &OsStr, File) -> Result<(), ()>,
+    {
+        self.retirar_con_intento(intento)
+    }
+
+    fn retirar_con_intento<F>(self, intento: F) -> ResultadoRetiroIntent<'owner, 'lock>
+    where
+        F: FnOnce(&File, &OsStr, File) -> Result<(), ()>,
+    {
         let LeaseIntentRetiro {
             _owner,
             _autoridad,
@@ -178,15 +196,14 @@ impl<'owner, 'lock> LeaseIntentRetiro<'owner, 'lock> {
             _registro,
             _archivo,
         } = self;
-        let estado = intentar_retirar_intent(
-            _owner,
-            &_autoridad,
-            _identidad_parent,
-            _scope_parent,
-            _identidad_intent,
-            &_registro,
-            _archivo,
-        );
+        let contexto = ContextoIntentoRetiro {
+            autoridad: &_autoridad,
+            identidad_parent: _identidad_parent,
+            scope_parent: _scope_parent,
+            identidad_intent: _identidad_intent,
+            registro_esperado: &_registro,
+        };
+        let estado = intentar_retirar_intent(_owner, contexto, _archivo, intento);
         resultado_retiro(
             _owner,
             _autoridad,
@@ -198,15 +215,30 @@ impl<'owner, 'lock> LeaseIntentRetiro<'owner, 'lock> {
     }
 }
 
-fn intentar_retirar_intent(
-    owner: &mut DuenioTransaccionAnclado<'_>,
-    autoridad: &Arc<()>,
+struct ContextoIntentoRetiro<'a> {
+    autoridad: &'a Arc<()>,
     identidad_parent: IdentidadDirectorio,
     scope_parent: ScopeFilesystem,
     identidad_intent: IdentidadArchivo,
-    registro: &IntentRetiroPersistido,
+    registro_esperado: &'a IntentRetiroPersistido,
+}
+
+fn intentar_retirar_intent<F>(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+    contexto: ContextoIntentoRetiro<'_>,
     archivo_anterior: File,
-) -> EstadoRetiroIntent {
+    intento: F,
+) -> EstadoRetiroIntent
+where
+    F: FnOnce(&File, &OsStr, File) -> Result<(), ()>,
+{
+    let ContextoIntentoRetiro {
+        autoridad,
+        identidad_parent,
+        scope_parent,
+        identidad_intent,
+        registro_esperado,
+    } = contexto;
     // Igual que Context/Journal, solo rechaza raíces remotas reconocidas lexicalmente.
     if super::super::journal_temporal::raiz_es_remota(owner._lock.raiz_canonica()) {
         return EstadoRetiroIntent::Conflicto;
@@ -231,7 +263,7 @@ fn intentar_retirar_intent(
         scope_parent,
         identidad_parent,
         identidad_intent,
-        registro,
+        registro_esperado,
     ) {
         Ok(Some(fuente)) => fuente,
         Ok(None) => {
@@ -279,7 +311,7 @@ fn intentar_retirar_intent(
     };
 
     drop(archivo_anterior);
-    let intento = retirar_nombre_plataforma(&parent_accion, &nombres.canonico, fuente.archivo);
+    let intento = intento(&parent_accion, &nombres.canonico, fuente.archivo);
     drop(parent_accion);
     let contexto = ContextoConfirmacionRetiro {
         autoridad,
@@ -287,7 +319,7 @@ fn intentar_retirar_intent(
         scope_parent,
         nombres: &nombres,
         identidad_intent,
-        registro_esperado: registro,
+        registro_esperado,
     };
     confirmar_retiro(owner, contexto, intento)
 }
