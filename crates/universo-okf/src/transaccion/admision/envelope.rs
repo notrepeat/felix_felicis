@@ -116,7 +116,7 @@ impl fmt::Display for ErrorEnvelopeAdmision {
 impl std::error::Error for ErrorEnvelopeAdmision {}
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
 
     use crate::serializar::serializar_candidato;
@@ -132,7 +132,7 @@ pub(super) mod tests {
     const MANIFIESTO: &str = "version = \"envelope-test/1\"\n\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n\n[nodos.disco]\n\"Patrón\" = \"pattern\"\n\n[layout]\ndirectorios = [\"knowledge\"]\nsin_iota = []\nignorados = []\nparent_key = \"parent\"\n";
     const DOCUMENTO: &[u8] = b"---\ntype: a\ntitle: Index\nparent: \"\"\n---\nindex\n";
 
-    pub(super) fn contexto(invariantes: &[u8]) -> ContextoAdmision {
+    pub(crate) fn contexto(invariantes: &[u8]) -> ContextoAdmision {
         let entradas = vec![
             EntradaSnapshot::directorio("knowledge"),
             EntradaSnapshot::archivo("knowledge/index.md", DOCUMENTO),

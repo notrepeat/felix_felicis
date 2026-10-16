@@ -121,6 +121,28 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         )
     }
 
+    /// Emite un lease de lectura del contexto canónico desde el mismo parent.
+    ///
+    /// Revalida identidad, scope y lock visible antes de ceder el lease. Los
+    /// bytes leídos siguen siendo datos, no autorización de recovery.
+    pub(crate) fn contexto_admision(
+        &mut self,
+    ) -> Result<
+        super::contexto_admision::ContextoAdmisionAnclado<'_>,
+        super::contexto_admision::ErrorContextoAdmisionAnclado,
+    > {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| super::contexto_admision::ErrorContextoAdmisionAnclado::OwnerUnverified)?;
+        super::contexto_admision::desde_parent_retenido(
+            &mut *self._lock,
+            parent,
+            self.identidad_parent,
+            self.scope_parent,
+            Arc::clone(&self._autoridad),
+        )
+    }
+
     fn parent_revalidado(&self) -> Result<File, super::journal_temporal::ErrorJournalAnclado> {
         use super::journal_temporal::ErrorJournalAnclado;
 

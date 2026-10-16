@@ -21,6 +21,8 @@ use super::raiz::{UbicacionRaiz, validar_basename_prospectivo};
 mod abrir;
 mod clasificar;
 #[allow(dead_code)]
+pub(crate) mod contexto_admision;
+#[allow(dead_code)]
 pub(crate) mod duenio_transaccion;
 mod identidad_archivo;
 pub(crate) mod journal_temporal;
