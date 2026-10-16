@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 mod codec;
 pub(crate) mod recovery;
+pub(crate) mod v2;
 
 const SCHEMA_V1: &str = "felix-journal-v1";
 const RAW_TREE_DIGEST_V1: &str = "felix-raw-tree-sha256-v1";
