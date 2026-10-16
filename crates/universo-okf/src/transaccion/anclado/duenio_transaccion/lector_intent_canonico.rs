@@ -670,3 +670,74 @@ impl<'owner, 'lock> ObservacionIntentConReplayYInventario<'owner, 'lock> {
             .observar_reconciliacion_b_sin_journal()
     }
 }
+
+impl<'owner, 'lock> ObservacionIntentConReplayYInventarioSinJournal<'owner, 'lock> {
+    /// Retira Context tras una observación B nueva y solo devuelve C fresco.
+    /// El intento no demuestra causalidad ni autoriza limpiar el intent.
+    #[allow(dead_code)]
+    pub(super) fn retirar_contexto_y_observar_c_sin_sidecars(
+        self,
+    ) -> Result<
+        ObservacionIntentConJournalYContextoAusentes<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    > {
+        self.retirar_contexto_y_observar_c_sin_sidecars_con(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn retirar_contexto_y_observar_c_sin_sidecars_con_prueba<F>(
+        self,
+        despues_de_b_fresca: F,
+    ) -> Result<
+        ObservacionIntentConJournalYContextoAusentes<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    >
+    where
+        F: FnOnce(),
+    {
+        self.retirar_contexto_y_observar_c_sin_sidecars_con(despues_de_b_fresca)
+    }
+
+    fn retirar_contexto_y_observar_c_sin_sidecars_con<F>(
+        self,
+        despues_de_b_fresca: F,
+    ) -> Result<
+        ObservacionIntentConJournalYContextoAusentes<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    >
+    where
+        F: FnOnce(),
+    {
+        let ObservacionIntentConReplayYInventarioSinJournal {
+            _intent: intent_inicial,
+            ..
+        } = self;
+        let b_fresca = intent_inicial.observar_reconciliacion_b_sin_journal()?;
+
+        despues_de_b_fresca();
+
+        let ObservacionIntentConReplayYInventarioSinJournal {
+            _intent: intent_fresca,
+            _evidencia_contexto: evidencia_contexto_fresca,
+            ..
+        } = b_fresca;
+        let resultado = {
+            let owner = &mut *intent_fresca._owner;
+            let lease = owner
+                .contexto_admision()
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            lease.eliminar_canonico(&evidencia_contexto_fresca)
+        };
+
+        match resultado {
+            super::super::contexto_admision::ResultadoEliminacionContextoAnclado::Eliminado
+            | super::super::contexto_admision::ResultadoEliminacionContextoAnclado::Ausente => {}
+            super::super::contexto_admision::ResultadoEliminacionContextoAnclado::Conflicto(_)
+            | super::super::contexto_admision::ResultadoEliminacionContextoAnclado::Indeterminado(
+                _,
+            ) => return Err(ErrorDuenioTransaccionAnclado::NoVerificable),
+        }
+
+        intent_fresca.observar_reconciliacion_c_sin_sidecars()
+    }
+}

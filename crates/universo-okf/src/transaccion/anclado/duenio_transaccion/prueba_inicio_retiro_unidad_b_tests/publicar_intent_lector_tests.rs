@@ -178,3 +178,6 @@ mod reopen_process_tests;
 
 #[path = "publicar_intent_lector_retirar_journal_tests.rs"]
 mod retirar_journal_tests;
+
+#[path = "publicar_intent_lector_retirar_contexto_tests.rs"]
+mod retirar_contexto_tests;
