@@ -1,5 +1,7 @@
 //! Prueba fresca y estricta para comenzar el retiro experimental.
 
+#[cfg(test)]
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -120,6 +122,39 @@ pub(super) struct ObservacionIntentTemporalCompleta<'owner, 'lock> {
 impl fmt::Debug for ObservacionIntentTemporalCompleta<'_, '_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ObservacionIntentTemporalCompleta { .. }")
+    }
+}
+
+/// Recibo puntual de publicación confirmada. Mantiene el mismo proof/owner;
+/// no ofrece cleanup, recovery ni reintento.
+pub(super) struct IntentPublicado<'owner, 'lock> {
+    _escrito: IntentTemporalEscrito<'owner, 'lock>,
+}
+
+impl fmt::Debug for IntentPublicado<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("IntentPublicado { .. }")
+    }
+}
+
+impl<'owner, 'lock> ObservacionIntentTemporalCompleta<'owner, 'lock> {
+    /// Revalida y publica el intent con una sola operación no-replace.
+    pub(super) fn publicar_intent(
+        self,
+    ) -> Result<IntentPublicado<'owner, 'lock>, ErrorPruebaReplayRootCoincidente> {
+        publicar_intent::publicar(self)
+    }
+
+    /// Seam privado de pruebas para simular resultados ambiguos del syscall.
+    #[cfg(test)]
+    pub(super) fn publicar_intent_con<R>(
+        self,
+        renombrar: R,
+    ) -> Result<IntentPublicado<'owner, 'lock>, ErrorPruebaReplayRootCoincidente>
+    where
+        R: FnOnce(&File, &File, &OsStr, &OsStr) -> Result<(), ()>,
+    {
+        publicar_intent::publicar_con(self, renombrar)
     }
 }
 
@@ -289,3 +324,6 @@ impl<'owner, 'lock> IntentTemporalEscrito<'owner, 'lock> {
         Ok(archivo)
     }
 }
+
+#[path = "prueba_inicio_retiro/publicar_intent.rs"]
+mod publicar_intent;

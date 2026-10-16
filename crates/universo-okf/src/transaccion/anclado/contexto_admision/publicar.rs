@@ -70,7 +70,7 @@ impl<'lock> ContextoTemporalVerificado<'lock> {
     }
 }
 
-pub(super) fn renombrar_no_reemplazar(
+pub(in crate::transaccion::anclado) fn renombrar_no_reemplazar(
     parent: &File,
     _fuente: &File,
     _nombre_temporal: &OsStr,

@@ -89,6 +89,7 @@ pub(crate) struct ContextoAdmisionAnclado<'lock> {
 mod evidencia;
 #[path = "contexto_admision/publicar.rs"]
 mod publicar;
+pub(super) use publicar::renombrar_no_reemplazar;
 #[path = "contexto_admision/temporal.rs"]
 mod temporal;
 #[path = "contexto_admision/verificacion.rs"]

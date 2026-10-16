@@ -320,3 +320,6 @@ fn revalidacion_completa_rechaza_reemplazo_mismo_frame_con_id_distinto() {
 
 #[path = "unidad_b2_tests.rs"]
 mod unidad_b2_tests;
+
+#[path = "prueba_inicio_retiro_unidad_b_tests/publicar_intent_tests.rs"]
+mod publicar_intent_tests;
