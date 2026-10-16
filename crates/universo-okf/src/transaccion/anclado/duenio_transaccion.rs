@@ -306,6 +306,9 @@ mod observar_root;
 #[path = "duenio_transaccion/observar_siblings_nuevo_flujo.rs"]
 mod observar_siblings_nuevo_flujo;
 
+#[path = "duenio_transaccion/observer.rs"]
+mod observer;
+
 #[path = "duenio_transaccion/prueba_root_coincidente.rs"]
 mod prueba_root_coincidente;
 
