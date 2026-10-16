@@ -13,8 +13,10 @@ privado que carga journal y contexto con leases secuenciales, valida el replay y
 compara esa huella con `NewEsperado`; devuelve datos de comparación, no una
 decisión de recovery. Falta el caller de producción que aplique la tabla
 vigente, además de cleanup y preflight global de huérfanos. El valor no es
-prueba ni autoridad de admisión:
-una recuperación futura debe revalidarlo antes de volver a aceptar `New`
+prueba ni autoridad de admisión. La unidad A añade una prueba opaca que solo
+confirma replay admitido y huella root coincidente en `Installed` o `Committed`;
+no prueba que un caller instaló `New` ni elige una fila de recovery. Una
+recuperación futura debe revalidar el root antes de volver a aceptar `New`
 después de perder el backup. El estado global sigue en 4/9 fases; U7 y fase 04
 permanecen parciales. Replay y decoder aún no tienen caller desde
 apply/producción ni cierran esas fases.
@@ -332,8 +334,9 @@ focales Envelope 10/10 y replay 8/8 en Windows y Linux. Clippy de workspace
 con todos los targets y `-D warnings`, formato, frontera pública y diffcheck
 pasaron en ambos sistemas; Linux usó un `TMPDIR` válido y lo retiró al
 terminar. El CI remoto exacto de la base anterior que se detalla a continuación
-no cubre esta unidad; el CI remoto específico de este SHA aún no se ha
-registrado.
+no cubría esta unidad. En aquella revisión todavía no se había registrado un
+CI remoto específico para el selector; el CI posterior de `e8ac035` lo verificó,
+en esta sección.
 
 El CI remoto exacto de `66633e407d44aaf9c106ac5bb5f71ba2f5b27cbd` (run
 `38857168736`) terminó SUCCESS en Linux y Windows. Las suites de workspace en
@@ -368,9 +371,80 @@ Windows bloqueó el rename por sharing y la prueba informó que no ejercitó el
 decoy. El cleanup del harness se registró por separado. Una primera salida
 agregada de Linux terminó con exit 1 sin diagnóstico; la repetición controlada
 por etapas y cleanup terminó con exit 0. La salida inicial se conserva aparte,
-sin atribuirla al producto ni inventar una causa. El CI remoto
-exacto más reciente registrado, `e8ac0353d353e6fafb8d520c540efb223adbde21`
-(run `38858628837`), no cubre esta unidad.
+sin atribuirla al producto ni inventar una causa. En esa revisión, el CI remoto
+consultado era `e8ac0353d353e6fafb8d520c540efb223adbde21` (run
+`38858628837`); no cubría esta unidad.
+
+La unidad local `43b2599548a33d41c4534dd70283a107f7ca3582` añade la
+comparación soportada bajo el owner: carga journal y contexto por leases
+secuenciales, resuelve los tags cerrados sin strings esperados de un caller,
+valida binding/replay y compara la huella raw completa. Sus filtros focales
+registraron owner 30/30 en Windows y 32/32 en Linux, y envelope 24/24 en ambos;
+fmt, clippy de workspace, frontera pública y diffcheck también terminaron
+verdes en ambos sistemas. El coordinador sigue devolviendo datos, no autoridad
+de recovery.
+
+La unidad `8ea2193fbccd6cb20892b420707311145160be3d` añade evidencia de lectura
+canónica (identidad de archivo, longitud y SHA-256) calculada durante la misma
+lectura acotada del handle. Sus filtros registraron contexto 24/24 en Windows,
+25/25 en Linux y envelope 24/24 en ambos; fmt, clippy de workspace, frontera
+pública, diffcheck y cleanup terminaron verdes. La evidencia es dato: no es
+autenticación, permiso ni autoridad de recovery.
+
+El CI remoto exacto del commit publicado
+`b69941b7206bc27873d17487ab34e0193ca34123` (run `38861852735`) terminó SUCCESS
+en Linux y Windows. Las suites de workspace en 38 targets reportaron Linux
+874 pass/0 fail/9 ignored y Windows 860 pass/0 fail/9 ignored, además de 7
+pruebas Python por sistema. En ese punto, el CI cubre la captura anclada del
+owner `66e8419` y sus antecedentes. Es anterior y no cubre el comparador local
+`43b2599`, la evidencia de lectura `8ea2193`, la unidad A `b3b16c6` ni la
+unidad B local `0f2187c2759573f1d86747efbcc61589e31ea6de`.
+
+La unidad A solo emite su prueba opaca cuando el replay soportado resulta
+`Admitida`, la fase del Journal es `Installed` o `Committed` y el root raw
+coincide con `NewEsperado`. Conserva el `Journal` completo, incluido su
+fingerprint `New`, y un préstamo mutable del mismo owner; los leases de
+journal/contexto se sueltan antes de devolverla. No retiene el envelope ni el
+`NewEsperado` completo. Los tests construyen un envelope ligado y luego fijan
+una fase sintética en el Journal; no simulan una transición real de apply ni
+demuestran que un caller instaló `New`.
+
+Antes de usar una prueba futura, el mismo owner debe revalidar guard, parent y
+scope, observar los cuatro siblings y recargar el ID y registro completo/fase
+del journal. También debe releer el ID, longitud y SHA-256 del contexto,
+comprobar binding y replay soportados, y observar root, backup y stage antes
+de elegir cualquier fila. Esas revalidaciones y la decisión siguen pendientes.
+
+La unidad A `b3b16c646d64b4ad7629af2494e84bd8dcbecd7d`
+pasó localmente owner 34/34, contexto 24/24 y envelope 24/24 en Windows; Linux
+owner 36/36, contexto 25/25 y envelope 24/24. Formato, clippy de workspace con
+todos los targets y warnings denegados, frontera pública y diffcheck pasaron;
+la limpieza del harness terminó correctamente. El CI remoto registrado arriba
+precede A y no la cubre.
+La unidad B de pruebas `0f2187c2759573f1d86747efbcc61589e31ea6de` tiene 161
+líneas de churn real y pasó sus gates focales: Windows owner 39/39, contexto
+24/24 y envelope 24/24; Linux owner 41/41, contexto 25/25 y envelope 24/24.
+Formato, clippy de workspace con todos los targets y warnings denegados,
+frontera pública y diffcheck terminaron verdes en ambos sistemas; la limpieza
+del harness Linux terminó con exit 0. Cubre temporales presentes, canónicos
+ausentes, tags no soportados, root ausente reteniendo el original y contenido
+alterado con el mismo ID. Una compilación inicial detectó un movimiento de
+`PathBuf` en dos aserciones; se corrigió tomando la referencia antes de los
+gates verdes. El CI remoto b699 es anterior y no cubre B. Ninguna de estas
+pruebas habilita una fila, cleanup, apply ni recovery.
+
+Los filtros focales reproducibles, ejecutados por separado en Windows y Linux, son:
+
+```text
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion
+cargo test --locked --offline -p universo-okf --lib transaccion::anclado::contexto_admision
+cargo test --locked --offline -p universo-okf --lib transaccion::admision::envelope
+```
+
+Son fixtures sintéticas del filesystem bajo el lock cooperante; no ejecutan apply
+ni recovery. El rollback de B revierte su commit y quita solo la extensión de
+pruebas auxiliares/wiring, conservando A. El rollback de A retira su productor,
+test y wiring/reexport; no altera el journal v1 ni las rutas legacy de recovery.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

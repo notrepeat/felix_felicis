@@ -14,6 +14,19 @@ autoridad de recovery o cleanup. El método privado `comparar_root_replay` ya
 reúne esas lecturas secuenciales y devuelve la relación entre `NewEsperado` y el
 root raw como datos, sin elegir una fila de recovery ni modificar archivos. Aún
 no existe un caller productivo que consuma ese resultado para apply o recovery.
+La unidad local `b3b16c6` añade una prueba opaca limitada a replay admitido y
+root coincidente en `Installed` o `Committed`; tampoco habilita filas ni se
+conecta al recovery. Retiene un préstamo mutable del mismo owner y el Journal
+completo (con su fingerprint `New`), no el lease ni el envelope/`NewEsperado`
+completos: los leases secuenciales de journal y contexto se sueltan antes de
+devolverla. El binding del envelope liga metadatos de la transacción, no su
+fase; los fixtures escriben el Journal en fases sintéticas y no demuestran una
+transición real de apply ni que un caller haya instalado `New`. Antes de usar
+una prueba futura, el mismo owner debe revalidar guard, parent y scope, observar
+los cuatro siblings y recargar el ID y registro completo/fase del journal;
+también debe releer el ID, longitud y SHA-256 del contexto, comprobar binding y
+replay soportados, y observar root, backup y stage antes de elegir cualquier
+fila. Esas revalidaciones y la decisión siguen pendientes.
 La unidad `66e8419f63ffd409eaf687fc7aa54183613ac19c` añade métodos de captura
 fija sobre el root abierto desde el parent retenido y bajo el lock. Los gates
 locales de esa unidad pasaron; el detalle y sus límites están en la evidencia
@@ -214,6 +227,26 @@ que posee.
   lectura no liga el envelope al journal observado. Ningún resultado del codec
   habilita por sí mismo `KeepNew`, `Committed`, aceptación de un `New`
   observado ni limpieza del backup.
+- La unidad A `b3b16c646d64b4ad7629af2494e84bd8dcbecd7d` pasó localmente sus
+  filtros: owner 34/34, contexto 24/24 y envelope 24/24 en Windows; owner
+  36/36, contexto 25/25 y envelope 24/24 en Linux. Formato, clippy de workspace
+  con todos los targets y warnings denegados, frontera pública, diffcheck y
+  limpieza del harness terminaron verdes. El CI remoto b69941b es anterior y
+  en ese punto cubría la captura anclada del owner `66e8419` y sus antecedentes.
+  No cubre el comparador local `43b2599`, la evidencia de lectura `8ea2193`, A
+  ni B.
+  La prueba solo representa replay admitido en `Installed` o `Committed` junto
+  con la huella observada; no activa una fila de recovery. La cobertura
+  complementaria de siblings `0f2187c2759573f1d86747efbcc61589e31ea6de` tiene
+  161 líneas de churn real y pasó filtros focales: Windows owner 39/39,
+  contexto 24/24 y envelope 24/24; Linux owner 41/41, contexto 25/25 y envelope
+  24/24. Formato, clippy de workspace con todos los targets y warnings
+  denegados, frontera pública y diffcheck terminaron verdes en ambos sistemas;
+  la limpieza del harness Linux terminó con exit 0. Cubre temporales presentes,
+  canónicos ausentes, tags no soportados, root ausente reteniendo el original y
+  contenido root distinto con el mismo ID. Una compilación inicial detectó un
+  movimiento de `PathBuf` en dos aserciones; se corrigió tomando la referencia.
+  El CI b69941b es anterior y no incluye esta unidad.
 - El observer raw del root y `comparar_root_replay` devuelven datos bajo el lock,
   no autoridad. La fixture local prepara un `New` raw real, reabre journal y
   contexto tras readquirir el lock en el mismo proceso y compara el replay con
