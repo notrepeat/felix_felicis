@@ -6,11 +6,19 @@ use crate::transaccion::admision::envelope::{
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::raiz::UbicacionRaiz;
+use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::path::Path;
 use tempfile::tempdir;
 
 fn frame(transaction_id: &str, parent: DirectoryIdentity) -> Vec<u8> {
+    codec::codificar(&envelope(transaction_id, parent)).unwrap()
+}
+
+pub(super) fn envelope(
+    transaction_id: &str,
+    parent: DirectoryIdentity,
+) -> EnvelopeContextoAdmision {
     // Storage fixture con parent real; las fingerprints sintéticas no prueban admisión.
     let old = ArtifactFingerprint::new(
         identity(2),
@@ -21,11 +29,7 @@ fn frame(transaction_id: &str, parent: DirectoryIdentity) -> Vec<u8> {
         RawTreeDigest::from_hex("b".repeat(64)).unwrap(),
     );
     let journal = Journal::new(transaction_id, parent, old, new).unwrap();
-    codec::codificar(&EnvelopeContextoAdmision::ligar(
-        envelope_fixtures::contexto(b"\n"),
-        &journal,
-    ))
-    .unwrap()
+    EnvelopeContextoAdmision::ligar(envelope_fixtures::contexto(b"\n"), &journal)
 }
 
 fn identity(seed: u64) -> DirectoryIdentity {
@@ -51,6 +55,13 @@ fn ubicacion(parent: &Path, crear_root: bool) -> (UbicacionRaiz, std::path::Path
 fn contexto_path(ubicacion: &UbicacionRaiz) -> std::path::PathBuf {
     let parent = ubicacion.ruta().parent().unwrap();
     parent.join(nombre_canonico(ubicacion.ruta().file_name().unwrap()).unwrap())
+}
+
+fn temporal_contexto_path(ubicacion: &UbicacionRaiz) -> std::path::PathBuf {
+    let parent = ubicacion.ruta().parent().unwrap();
+    let mut nombre = nombre_canonico(ubicacion.ruta().file_name().unwrap()).unwrap();
+    nombre.push(".tmp");
+    parent.join(nombre)
 }
 
 fn parent_identity(path: &Path) -> DirectoryIdentity {
@@ -317,4 +328,195 @@ fn lease_de_contexto_rechaza_lock_sustituido_con_bytes_iguales() {
         lock_bytes.as_slice()
     );
     assert_eq!(fs::read(&canonico).unwrap(), bytes_contexto);
+}
+
+#[test]
+fn crea_temporal_exclusivo_y_devuelve_recibo_redactado_con_datos_del_archivo() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let esperado = codec::codificar(&envelope).unwrap();
+    let temporal = temporal_contexto_path(&ubicacion);
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.contexto_admision().unwrap();
+
+    let recibo = lease.crear_temporal(&envelope).unwrap();
+
+    assert_eq!(fs::read(&temporal).unwrap(), esperado);
+    assert!(!contexto_path(&ubicacion).exists());
+    assert_eq!(recibo.datos.longitud, esperado.len());
+    let digest_esperado: [u8; 32] = Sha256::digest(&esperado).into();
+    assert_eq!(recibo.datos.digest, digest_esperado);
+    let archivo = File::open(&temporal).unwrap();
+    assert_eq!(
+        recibo.datos.identidad_archivo,
+        identidad_archivo(&archivo).unwrap()
+    );
+    let debug = format!("{recibo:?}");
+    assert_eq!(debug, "ReciboContextoTemporal { .. }");
+    let temporal_text = temporal.to_string_lossy();
+    assert!(!debug.contains(temporal_text.as_ref()));
+    assert!(!debug.contains("0123456789abcdef0123456789abcdef"));
+}
+
+#[test]
+fn error_de_codificacion_no_crea_ni_modifica_el_temporal() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let temporal = temporal_contexto_path(&ubicacion);
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.contexto_admision().unwrap();
+
+    let error = lease
+        .crear_temporal_con(&envelope, |_| {
+            assert!(!temporal.exists());
+            Err(codec::ErrorCodecEnvelopeAdmision::ReservaFallida)
+        })
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        ErrorContextoAdmisionAnclado::Codec(codec::ErrorCodecEnvelopeAdmision::ReservaFallida)
+    );
+    assert!(!temporal.exists());
+    assert!(!contexto_path(&ubicacion).exists());
+}
+
+#[test]
+fn rechaza_lock_sustituido_despues_del_lease_antes_de_crear_temporal() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let temporal = temporal_contexto_path(&ubicacion);
+    let lock_path = ubicacion.lock().as_path().to_path_buf();
+    let lock_bytes = b"same temporal lock bytes, different file identity";
+    fs::write(&lock_path, lock_bytes).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let identidad_guard = lock.identidad_archivo_lock().unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.contexto_admision().unwrap();
+    let desplazado = temp.path().join("temporal-original-lock-canary");
+
+    if let Err(error) = fs::rename(&lock_path, &desplazado) {
+        #[cfg(windows)]
+        {
+            assert!(
+                matches!(error.raw_os_error(), Some(5) | Some(32) | Some(33)),
+                "{error}"
+            );
+            assert!(lock_path.is_file());
+            assert!(!desplazado.exists());
+            drop(lease);
+            drop(owner);
+            drop(lock);
+            let visible = File::open(&lock_path).unwrap();
+            assert_eq!(identidad_archivo(&visible).unwrap(), identidad_guard);
+            assert_eq!(
+                fs::read(&lock_path).unwrap().as_slice(),
+                lock_bytes.as_slice()
+            );
+            assert!(!temporal.exists());
+            eprintln!(
+                "Windows bloqueó la sustitución del lock; no se ejercitó el rechazo antes de crear el temporal."
+            );
+            return;
+        }
+        #[cfg(not(windows))]
+        panic!("no se pudo desplazar el lock de prueba: {error}");
+    }
+
+    fs::write(&lock_path, lock_bytes).unwrap();
+    let visible = File::open(&lock_path).unwrap();
+    assert_ne!(identidad_archivo(&visible).unwrap(), identidad_guard);
+
+    let error = lease.crear_temporal(&envelope).unwrap_err();
+
+    assert_eq!(error, ErrorContextoAdmisionAnclado::OwnerUnverified);
+    assert!(!temporal.exists());
+    drop(visible);
+    drop(owner);
+    drop(lock);
+    assert_eq!(
+        fs::read(&lock_path).unwrap().as_slice(),
+        lock_bytes.as_slice()
+    );
+    assert_eq!(
+        fs::read(&desplazado).unwrap().as_slice(),
+        lock_bytes.as_slice()
+    );
+}
+
+#[test]
+fn crea_temporal_en_parent_capturado_y_preserva_namespace_decoy() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let moved_parent = temp.path().join("parent-moved");
+    let (ubicacion, root) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let esperado = codec::codificar(&envelope).unwrap();
+    let temporal = temporal_contexto_path(&ubicacion);
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.contexto_admision().unwrap();
+
+    if let Err(error) = fs::rename(&parent, &moved_parent) {
+        #[cfg(windows)]
+        {
+            assert!(
+                matches!(error.raw_os_error(), Some(5) | Some(32)),
+                "{error}"
+            );
+            assert!(root.is_dir());
+            assert!(!moved_parent.exists());
+            drop(lease);
+            drop(owner);
+            drop(lock);
+            eprintln!(
+                "Windows bloqueó el rename del parent bajo el lock; no se ejercitó el decoy."
+            );
+            return;
+        }
+        #[cfg(not(windows))]
+        panic!("no se pudo mover el parent de prueba: {error}");
+    }
+
+    fs::create_dir(&parent).unwrap();
+    fs::create_dir(parent.join("bundle")).unwrap();
+    let decoy_temporal = temporal_contexto_path(&ubicacion);
+    let temporal_canary = b"preserve decoy temporary";
+    fs::write(&decoy_temporal, temporal_canary).unwrap();
+    let ruta_lock = ubicacion.lock();
+    let lock_name = ruta_lock.as_path().file_name().unwrap().to_os_string();
+    let lock_canary = b"preserve decoy lock";
+    let decoy_lock = parent.join(lock_name);
+    fs::write(&decoy_lock, lock_canary).unwrap();
+
+    let recibo = lease.crear_temporal(&envelope).unwrap();
+    let temporal_real = moved_parent.join(temporal.file_name().unwrap());
+
+    assert_eq!(fs::read(&temporal_real).unwrap(), esperado);
+    assert_eq!(
+        fs::read(&decoy_temporal).unwrap().as_slice(),
+        temporal_canary.as_slice()
+    );
+    assert_eq!(
+        fs::read(&decoy_lock).unwrap().as_slice(),
+        lock_canary.as_slice()
+    );
+    assert_eq!(recibo.datos.longitud, esperado.len());
+    assert_eq!(
+        recibo.datos.identidad_archivo,
+        identidad_archivo(&File::open(&temporal_real).unwrap()).unwrap()
+    );
+    assert!(root.exists());
 }

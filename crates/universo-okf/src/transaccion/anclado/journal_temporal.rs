@@ -371,6 +371,10 @@ pub(super) fn desde_parent_retenido<'lock>(
     })
 }
 
+pub(super) fn raiz_es_remota(ruta: &Path) -> bool {
+    publicar::raiz_es_remota(ruta)
+}
+
 #[cfg(windows)]
 fn acceso_temporal_creacion() -> u32 {
     use windows_sys::Win32::Foundation::GENERIC_WRITE;

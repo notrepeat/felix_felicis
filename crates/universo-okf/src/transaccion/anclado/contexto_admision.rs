@@ -26,6 +26,8 @@ pub(crate) enum ErrorContextoAdmisionAnclado {
     ScopeUnverified,
     NameInvalid,
     EntryRejected,
+    TemporaryExists,
+    RemoteUnsupported,
     Io,
     Codec(ErrorCodecEnvelopeAdmision),
 }
@@ -38,6 +40,8 @@ impl ErrorContextoAdmisionAnclado {
             Self::ScopeUnverified => "admission_context_scope_unverified",
             Self::NameInvalid => "admission_context_name_invalid",
             Self::EntryRejected => "admission_context_entry_rejected",
+            Self::TemporaryExists => "admission_context_temporary_exists",
+            Self::RemoteUnsupported => "admission_context_remote_unsupported",
             Self::Io => "admission_context_io",
             Self::Codec(error) => error.codigo(),
         }
@@ -76,6 +80,9 @@ pub(crate) struct ContextoAdmisionAnclado<'lock> {
     nombre: OsString,
     _autoridad: Arc<()>,
 }
+
+#[path = "contexto_admision/temporal.rs"]
+mod temporal;
 
 impl ContextoAdmisionAnclado<'_> {
     /// Devuelve ausencia observada o el frame y la identidad real del archivo.
