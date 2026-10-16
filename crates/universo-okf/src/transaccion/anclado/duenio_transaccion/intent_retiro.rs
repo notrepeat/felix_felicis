@@ -234,7 +234,23 @@ fn intentar_retirar_intent(
         registro,
     ) {
         Ok(Some(fuente)) => fuente,
-        Ok(None) => return EstadoRetiroIntent::Conflicto,
+        Ok(None) => {
+            drop(archivo_anterior);
+            drop(parent);
+            return if validar_owner_y_temporales(
+                owner,
+                autoridad,
+                identidad_parent,
+                scope_parent,
+                &nombres,
+            )
+            .is_ok()
+            {
+                EstadoRetiroIntent::Ausente
+            } else {
+                EstadoRetiroIntent::Conflicto
+            };
+        }
         Err(error) => {
             return match error {
                 super::lector_intent_canonico::ErrorLecturaIntent::Io => {
