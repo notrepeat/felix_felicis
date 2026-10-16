@@ -123,27 +123,83 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
 }
 
 impl PruebaReplayAdmitidoRootCoincidente<'_, '_> {
-    /// Consume la prueba anterior y la reemite solo si persisten los datos
-    /// exactos que la sustentaron bajo el mismo owner y guard.
-    pub(super) fn revalidar(self) -> Result<Self, ErrorPruebaReplayRootCoincidente> {
-        let Self {
-            _owner,
-            _autoridad,
-            identidad_parent,
-            scope_parent,
-            identidad_archivo_journal,
-            journal,
-            evidencia_contexto,
-        } = self;
+    fn comprobar_vinculo_owner(&self) -> Result<(), ErrorPruebaReplayRootCoincidente> {
+        if !Arc::ptr_eq(&self._autoridad, &self._owner._autoridad)
+            || self.identidad_parent != self._owner.identidad_parent
+            || self.scope_parent != self._owner.scope_parent
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+        Ok(())
+    }
 
-        if !Arc::ptr_eq(&_autoridad, &_owner._autoridad)
-            || identidad_parent != _owner.identidad_parent
-            || scope_parent != _owner.scope_parent
+    /// Recomprueba Journal, contexto, replay y root sin decidir la admisión.
+    /// El caller debe aplicar primero el gate de namespace que le corresponde.
+    fn comprobar_artefactos(&mut self) -> Result<(), ErrorPruebaReplayRootCoincidente> {
+        self.comprobar_vinculo_owner()?;
+
+        let (identidad_journal_actual, journal_actual) = {
+            let lease = self
+                ._owner
+                .journal_temporal()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+            lease
+                .cargar_canonico()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+                .ok_or(ErrorPruebaReplayRootCoincidente)?
+        };
+        if identidad_journal_actual != self.identidad_archivo_journal
+            || journal_actual != self.journal
+            || !matches!(
+                journal_actual.state(),
+                JournalState::Installed | JournalState::Committed
+            )
         {
             return Err(ErrorPruebaReplayRootCoincidente);
         }
 
-        let siblings = _owner
+        let (envelope, evidencia_actual) = {
+            let lease = self
+                ._owner
+                .contexto_admision()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+            lease
+                .leer_canonico_con_evidencia()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+                .ok_or(ErrorPruebaReplayRootCoincidente)?
+        };
+        if evidencia_actual.identidad_archivo != self.evidencia_contexto.identidad_archivo
+            || evidencia_actual.longitud != self.evidencia_contexto.longitud
+            || evidencia_actual.sha256 != self.evidencia_contexto.sha256
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let replay = envelope
+            .validar_replay_soportado(&journal_actual)
+            .map_err(mapear_error_replay)?;
+        let root_observado = self
+            ._owner
+            .observar_root_raw()
+            .map_err(|_| ErrorPruebaReplayRootCoincidente)?
+            .ok_or(ErrorPruebaReplayRootCoincidente)?;
+        if root_observado != *replay.new_fingerprint() {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        Ok(())
+    }
+
+    /// Consume la prueba anterior y la reemite solo si persisten los datos
+    /// exactos que la sustentaron bajo el mismo owner y guard.
+    pub(super) fn revalidar(self) -> Result<Self, ErrorPruebaReplayRootCoincidente> {
+        let mut prueba = self;
+        // Mantiene el orden existente: identidad de autoridad/owner/parent/scope
+        // se comprueba antes de observar cualquiera de los seis nombres.
+        prueba.comprobar_vinculo_owner()?;
+
+        let siblings = prueba
+            ._owner
             .observar_siblings_nuevo_flujo()
             .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
         if siblings.journal() != PresenciaSiblingNuevoFlujo::Presente
@@ -156,61 +212,8 @@ impl PruebaReplayAdmitidoRootCoincidente<'_, '_> {
             return Err(ErrorPruebaReplayRootCoincidente);
         }
 
-        let (identidad_journal_actual, journal_actual) = {
-            let lease = _owner
-                .journal_temporal()
-                .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
-            lease
-                .cargar_canonico()
-                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
-                .ok_or(ErrorPruebaReplayRootCoincidente)?
-        };
-        if identidad_journal_actual != identidad_archivo_journal || journal_actual != journal {
-            return Err(ErrorPruebaReplayRootCoincidente);
-        }
-        if !matches!(
-            journal_actual.state(),
-            JournalState::Installed | JournalState::Committed
-        ) {
-            return Err(ErrorPruebaReplayRootCoincidente);
-        }
-
-        let (envelope, evidencia_actual) = {
-            let lease = _owner
-                .contexto_admision()
-                .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
-            lease
-                .leer_canonico_con_evidencia()
-                .map_err(|_| ErrorPruebaReplayRootCoincidente)?
-                .ok_or(ErrorPruebaReplayRootCoincidente)?
-        };
-        if evidencia_actual.identidad_archivo != evidencia_contexto.identidad_archivo
-            || evidencia_actual.longitud != evidencia_contexto.longitud
-            || evidencia_actual.sha256 != evidencia_contexto.sha256
-        {
-            return Err(ErrorPruebaReplayRootCoincidente);
-        }
-
-        let replay = envelope
-            .validar_replay_soportado(&journal_actual)
-            .map_err(mapear_error_replay)?;
-        let root_observado = _owner
-            .observar_root_raw()
-            .map_err(|_| ErrorPruebaReplayRootCoincidente)?
-            .ok_or(ErrorPruebaReplayRootCoincidente)?;
-        if root_observado != *replay.new_fingerprint() {
-            return Err(ErrorPruebaReplayRootCoincidente);
-        }
-
-        Ok(Self {
-            _owner,
-            _autoridad,
-            identidad_parent,
-            scope_parent,
-            identidad_archivo_journal,
-            journal,
-            evidencia_contexto,
-        })
+        prueba.comprobar_artefactos()?;
+        Ok(prueba)
     }
 }
 
