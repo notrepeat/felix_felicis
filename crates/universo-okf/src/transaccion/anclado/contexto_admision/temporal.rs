@@ -30,6 +30,28 @@ impl fmt::Debug for ReciboContextoTemporal<'_> {
     }
 }
 
+impl<'lock> ReciboContextoTemporal<'lock> {
+    /// Reabre y verifica el mismo temporal bajo el lock, sin publicarlo.
+    ///
+    /// El handle resultante conserva el lease y los derechos necesarios para
+    /// una publicación futura; un error nunca borra ni renombra el sibling.
+    pub(crate) fn verificar(
+        self,
+    ) -> Result<super::verificacion::ContextoTemporalVerificado<'lock>, ErrorContextoAdmisionAnclado>
+    {
+        self._lease.revalidar_parent_y_lock()?;
+        let nombre_temporal = nombre_temporal(&self._lease.nombre)?;
+        let archivo =
+            super::verificacion::verificar_archivo(&self._lease, &nombre_temporal, &self.datos)?;
+        Ok(super::verificacion::ContextoTemporalVerificado {
+            _lease: self._lease,
+            archivo,
+            nombre_temporal,
+            datos: self.datos,
+        })
+    }
+}
+
 impl<'lock> ContextoAdmisionAnclado<'lock> {
     /// Codifica y sincroniza un temporal exclusivo bajo el parent retenido.
     ///
