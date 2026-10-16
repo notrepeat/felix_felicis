@@ -4,6 +4,7 @@
 //! y contexto, y observa el root raw. Sus resultados son datos, no autoridad de
 //! recovery; el token de scope no demuestra una frontera general de mounts.
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
@@ -159,8 +160,25 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         let basename = ruta_root
             .file_name()
             .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
-        let basename = validar_componente(basename).map_err(mapear_error)?;
+        self.abrir_sibling_lectura_desde_parent(parent, basename)
+    }
 
+    fn abrir_sibling_lectura(
+        &self,
+        nombre: &OsStr,
+    ) -> Result<Option<DirectorioAnclado>, ErrorDuenioTransaccionAnclado> {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        self.abrir_sibling_lectura_desde_parent(parent, nombre)
+    }
+
+    fn abrir_sibling_lectura_desde_parent(
+        &self,
+        parent: File,
+        nombre: &OsStr,
+    ) -> Result<Option<DirectorioAnclado>, ErrorDuenioTransaccionAnclado> {
+        let basename = validar_componente(nombre).map_err(mapear_error)?;
         let identidad_parent = metadata_directorio(&parent).map_err(mapear_error)?;
         let scope_parent = scope_filesystem(&parent).map_err(mapear_error)?;
         if identidad_parent != self.identidad_parent || scope_parent != self.scope_parent {
