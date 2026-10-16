@@ -472,3 +472,58 @@ fn validar_gate_reconciliacion_b(
     }
     Ok(())
 }
+
+/// Observación de intent presente con Journal y Context canónicos ausentes.
+/// Conserva solo el intent; no infiere la causa de las ausencias.
+#[must_use = "la observación conserva el intent file-bound y el owner"]
+// El consumidor futuro de esta observación aún no forma parte del corte C.
+#[allow(dead_code)]
+pub(super) struct ObservacionIntentConJournalYContextoAusentes<'owner, 'lock> {
+    _intent: ObservacionIntentCanonico<'owner, 'lock>,
+}
+
+impl fmt::Debug for ObservacionIntentConJournalYContextoAusentes<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionIntentConJournalYContextoAusentes { .. }")
+    }
+}
+
+impl<'owner, 'lock> ObservacionIntentCanonico<'owner, 'lock> {
+    /// Revalida intent y ausencia de ambos sidecars sin observar su contenido.
+    /// El dato no autoriza recovery, cleanup ni aplicación.
+    // El consumidor que usará este dato todavía no se integra.
+    #[allow(dead_code)]
+    pub(super) fn observar_reconciliacion_c_sin_sidecars(
+        self,
+    ) -> Result<
+        ObservacionIntentConJournalYContextoAusentes<'owner, 'lock>,
+        ErrorDuenioTransaccionAnclado,
+    > {
+        let intent_inicial = self.revalidar()?;
+        validar_gate_reconciliacion_c(&mut *intent_inicial._owner)?;
+
+        let intent_final = intent_inicial.revalidar()?;
+        validar_gate_reconciliacion_c(&mut *intent_final._owner)?;
+
+        Ok(ObservacionIntentConJournalYContextoAusentes {
+            _intent: intent_final,
+        })
+    }
+}
+
+fn validar_gate_reconciliacion_c(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+) -> Result<(), ErrorDuenioTransaccionAnclado> {
+    let siblings = owner.observar_siblings_nuevo_flujo()?;
+    use PresenciaSiblingNuevoFlujo::Ausente;
+    if siblings.journal() != Ausente
+        || siblings.contexto() != Ausente
+        || siblings.intent_retiro() != PresenciaSiblingNuevoFlujo::Presente
+        || siblings.journal_temporal() != Ausente
+        || siblings.contexto_temporal() != Ausente
+        || siblings.intent_retiro_temporal() != Ausente
+    {
+        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+    }
+    Ok(())
+}
