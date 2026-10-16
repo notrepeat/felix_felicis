@@ -52,6 +52,19 @@ es una observación puntual frente a cambios externos.
 
 El lector no exige que existan los nombres canónicos de Journal o contexto y no explica por qué pueden faltar. No crea una prueba normal de replay: esa prueba sigue exigiendo que intent canónico y temporal estén ausentes. El helper privado de inventario recibe un `&Journal` completo como dato; un futuro consumidor puede pasárselo desde el intent, pero el helper no atribuye autoridad a su origen. Deriva backup desde la ubicación interna del owner y stage desde `Journal.transaction_id`, tras revalidar parent, guard, scope y binding del parent. Observa el root con su huella nativa completa (identidad y digest raw) y clasifica presencia o ausencia de backup y stage como datos; mantiene `root_new_validated=false`. El wrapper normal sigue cargando primero el Journal canónico. Ni esa observación ni la del intent autorizan reconciliación, cleanup o apply. La reconciliación de reinicio y la retirada del Journal, el intent y el contexto siguen pendientes, junto con el caller productivo que aplique la tabla vigente. Un `intent.tmp` residual bloquea y se preserva; no se republica ni se reintenta.
 
+La observación local A solo acepta Journal, contexto e intent canónicos presentes,
+con los tres temporales ausentes. Vincula el Journal completo y la identidad
+nativa, longitud y SHA-256 del Context con el intent, valida el replay soportado
+y exige root `New` con backup/stage ausentes. Devuelve datos y mantiene
+`root_new_validated=false`; no emite una prueba normal ni decide o ejecuta
+recovery. El filtro owner pasó 111/111 en Windows y 116/116 en Linux; formato,
+clippy de workspace con todos los targets y `-D warnings`, frontera pública y
+diffcheck pasaron en ambos sistemas, y la limpieza Linux terminó con exit 0.
+La unidad A está en el commit local `04edb1095cfa499502a9f511407b3d497110d4ca`
+(370 líneas de churn); su cobertura adicional está en
+`5041550131e4f1399cf1e7f6a54b4fdeb9f12f6e` (252 líneas). Esta evidencia se
+obtuvo localmente antes de publicar el lote.
+
 La identidad persistida de archivo tiene ahora un DTO
 versionado y acotado que solo convierte desde una identidad observada en un
 handle; sigue siendo dato, no prueba de retiro ni autoridad. La unidad A añade
@@ -918,6 +931,75 @@ pruebas Python y el demo por sistema. Es anterior y no cubre la API pura
 `734871f998a05a3bea017d012eb7d2b5a7ed7451` ni las unidades locales posteriores.
 El estado global permanece en 4/9; U7 y fase 04 siguen parciales. No hay garantía de
 dirsync, pérdida de energía, cobertura general de montajes o recovery completo.
+
+## Comparadores, revalidación y observación coordinada A
+
+La comparación de identidad nativa y scope del propio intent ya estaba en la
+API pura de `2bfbca587565c310b633904a013ec25ed251e821`. El commit local
+`ca0b726bab54c99169903b6a1520ddc95bbc64ba`, con 182 líneas de churn, añade los
+comparadores del Journal (ID nativo y registro semántico completo) y del Context
+(ID nativo, longitud y SHA-256). Solo aceptan datos observados por el caller: no
+abren archivos, reconstruyen identidades nativas ni convierten el Journal
+almacenado en permiso. El filtro focal pasó 17/17 en Windows y Linux.
+
+El commit local `1632fef5ae7df5d1a7f3f75b6292de5b527da92e` tuvo 157 líneas de
+churn y añade `ObservacionIntentCanonico::revalidar(self)`. Consume una
+observación, comprueba owner/Arc, parent y scope antes de volver a leer el
+nombre canónico, mantiene el `File` original durante la lectura nueva y solo
+devuelve la observación fresca si coinciden ID, registro completo, parent,
+scope y Arc. Compara datos secuenciales; no congela contenido ni namespace.
+El filtro owner pasó 102/102 en Windows y 107/107 en Linux.
+
+La unidad coordinada A es el commit local
+`04edb1095cfa499502a9f511407b3d497110d4ca` (370 líneas de churn: 132 de
+lector, 235 de pruebas y 3 de wiring). La cobertura adicional es
+`5041550131e4f1399cf1e7f6a54b4fdeb9f12f6e` (252 líneas: 250 de pruebas y 2 de
+wiring). Esta evidencia se obtuvo localmente antes de publicar el lote.
+
+La unidad A integrada en el árbol local compone esa lectura con el Journal y el
+Context canónicos. Vuelve a validar Intent y los seis nombres sibling,
+comprueba el ID y el Journal semántico completo, vincula el Context por ID,
+longitud y SHA-256, ejecuta el replay soportado y compara la huella completa de
+`New` con el Journal. El inventario debe observar root `New`, backup/stage
+`Absent` y conservar `root_new_validated=false`. El resultado privado retiene
+la observación final de Intent y los datos de Journal, Context, huella e
+inventario; no es clonable, redacciona `Debug` y no autoriza cleanup, apply ni
+una decisión de recovery.
+
+La observación independiente del Intent puede emitirse con Journal o Context
+ausente, pero A exige ambos canónicos. Sus pruebas integradas hacen que A falle
+cerrado en esos estados sin recrearlos; también cubren Journal reemplazado por
+bytes iguales con ID distinto, Context de mismo ID y longitud con SHA distinta,
+Context válido con binding actualizado, root `Unknown`, stage `Unknown`, backup
+`Old`, tags de replay no soportados y el rechazo de la prueba normal mientras el
+Intent está presente. El filtro owner de A pasó 111/111 en Windows y 116/116
+en Linux. Formato, clippy de workspace con todos los targets y `-D warnings`,
+frontera pública y diffcheck pasaron en ambos sistemas; la limpieza del harness
+Linux terminó con exit 0. El detalle de commits y churn está registrado arriba.
+
+La ausencia de Context no demuestra que un Journal v1 corresponda a una
+transacción legacy ni que el sidecar sea huérfano: v1 no distingue si la
+admisión requería Context, y el runner legacy puede retirar Journal y dejar
+Context. A no intenta inferir ese historial. Un dispatch durable necesitará una
+versión nueva o un discriminador explícito ligado a la identidad; hasta entonces
+no hay caller productivo de la observación.
+
+Las primeras ejecuciones de clippy en Windows y Linux encontraron el mismo
+import sin uso en una prueba de API; se quitó sin cambiar conducta. Los filtros
+17/17 de API y owner 102/102 Windows, 107/107 Linux de revalidación pasaron
+sobre sus freezes y no se repitieron por ese ajuste de import. Los filtros de A pasaron
+111/111 en Windows y 116/116 en Linux. Formato, clippy de workspace con todos
+los targets y `-D warnings`, frontera pública y diffcheck quedaron verdes en
+ambos sistemas; limpieza del harness Linux terminó con exit 0. El CI exacto
+de la base publicada `2c54c7a15071958a51679075d7a3de8d1cb7c519` (run
+`38907971410`) terminó SUCCESS con Linux 977/0/9 y Windows 960/0/9 en 38
+resúmenes Cargo por sistema, además de 7 pruebas Python y el demo por sistema.
+Ese CI precede y no cubre los commits `ca0b` y `1632`, ni A y su cobertura.
+El rollback previsto para el lote sigue dependencias: cobertura extra, unidad A,
+revalidación, comparadores. El progreso global permanece en 4/9; fase 04 y U7
+siguen parciales. No se declara snapshot frente a escritores externos, dirsync,
+tolerancia a pérdida de energía, cobertura general de montajes ni recovery
+completo.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
