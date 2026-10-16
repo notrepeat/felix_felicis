@@ -541,3 +541,6 @@ fn parent_movido_con_decoys_reabre_desde_el_handle_retenido() {
     assert_eq!(fs::read(&temporary_path).unwrap(), b"intent decoy canary");
     assert_eq!(fs::read(&decoy_lock).unwrap(), bytes_lock);
 }
+
+#[path = "prueba_inicio_retiro_unidad_b_tests.rs"]
+mod unidad_b_tests;

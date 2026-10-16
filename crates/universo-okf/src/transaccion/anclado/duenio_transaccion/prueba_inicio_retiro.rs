@@ -5,6 +5,7 @@ use std::io::Read;
 
 use sha2::{Digest, Sha256};
 
+use crate::transaccion::anclado::duenio_transaccion::observar_siblings_nuevo_flujo::PresenciaSiblingNuevoFlujo;
 use crate::transaccion::journal::JournalState;
 use crate::transaccion::journal::recovery::ArtifactState;
 
@@ -105,6 +106,78 @@ impl<'owner, 'lock> PruebaInicioRetiroContexto<'owner, 'lock> {
             _inicio: PruebaInicioRetiroContexto { _prueba: prueba },
             datos,
             frame_esperado,
+        })
+    }
+}
+
+/// Revalidación puntual completa mientras el intent temporal está presente.
+/// Retiene el mismo proof y owner, pero no habilita publicación ni cleanup.
+pub(super) struct ObservacionIntentTemporalCompleta<'owner, 'lock> {
+    _verificado: IntentTemporalVerificado<'owner, 'lock>,
+}
+
+impl fmt::Debug for ObservacionIntentTemporalCompleta<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionIntentTemporalCompleta { .. }")
+    }
+}
+
+impl<'owner, 'lock> IntentTemporalVerificado<'owner, 'lock> {
+    /// Cierra el handle anterior y vuelve a comprobar todos los datos y nombres
+    /// requeridos para una observación Committed con intent temporal exacto.
+    /// El resultado sigue siendo puntual y no autoriza una mutación.
+    pub(super) fn revalidar_completo(
+        self,
+    ) -> Result<ObservacionIntentTemporalCompleta<'owner, 'lock>, ErrorPruebaReplayRootCoincidente>
+    {
+        let IntentTemporalVerificado {
+            mut _escrito,
+            _archivo,
+        } = self;
+        drop(_archivo);
+
+        {
+            let prueba = &mut _escrito._inicio._prueba;
+            prueba.comprobar_vinculo_owner()?;
+            let siblings = prueba
+                ._owner
+                .observar_siblings_nuevo_flujo()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+            if siblings.journal() != PresenciaSiblingNuevoFlujo::Presente
+                || siblings.journal_temporal() != PresenciaSiblingNuevoFlujo::Ausente
+                || siblings.contexto() != PresenciaSiblingNuevoFlujo::Presente
+                || siblings.contexto_temporal() != PresenciaSiblingNuevoFlujo::Ausente
+                || siblings.intent_retiro() != PresenciaSiblingNuevoFlujo::Ausente
+                || siblings.intent_retiro_temporal() != PresenciaSiblingNuevoFlujo::Presente
+            {
+                return Err(ErrorPruebaReplayRootCoincidente);
+            }
+        }
+
+        let mut verificado = _escrito.verificar_temporal()?;
+        {
+            let prueba = &mut verificado._escrito._inicio._prueba;
+            prueba.comprobar_artefactos()?;
+            if prueba.journal.state() != JournalState::Committed {
+                return Err(ErrorPruebaReplayRootCoincidente);
+            }
+
+            let (journal_observado, inventario) = prueba
+                ._owner
+                .observar_inventario_recovery_anclado()
+                .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+            if journal_observado != prueba.journal
+                || inventario.root_new_validated
+                || inventario.root != ArtifactState::New
+                || inventario.backup != ArtifactState::Absent
+                || inventario.stage != ArtifactState::Absent
+            {
+                return Err(ErrorPruebaReplayRootCoincidente);
+            }
+        }
+
+        Ok(ObservacionIntentTemporalCompleta {
+            _verificado: verificado,
         })
     }
 }
