@@ -452,5 +452,19 @@ que posee.
   sistema. Ese CI precede y no cubre la unidad local
   `69f3842e9b208aeadaf7721d84a9fc0d07b541af`.
 
+La factory local `656c9b97b94c9c68454742be205c9d7512e1aa08`
+`PruebaReplayAdmitidoRootCoincidente::preparar_retiro_contexto` consume y
+revalida la prueba, exige Journal `Committed` sin cambios, root `New` y backup
+y stage `Absent`, y conserva el mismo préstamo del owner. Devuelve una prueba
+privada de inicio ligada al owner; no crea el intent ni escribe, retira o
+habilita cleanup. Sus fixtures
+de filesystem bajo lock cubren éxito `Committed`, rechazo de `Installed`,
+backup `Old`, stage presente y contexto modificado. El filtro focal pasó
+Windows 63/63 y Linux 68/68; formato, clippy de workspace, frontera pública,
+diffcheck y cleanup Linux terminaron verdes. El CI de la base
+`968b70c9bea07c8203152e4180ae4d91d942920e` (run `38878921722`) precede y no
+cubre esta unidad. El rollback retira la factory y sus tests/wiring, dejando
+intacto el consumidor, la prueba previa y la tabla legacy.
+
 El lifecycle documentado no cierra fase 04 ni U7, no agrega callers de
 producción y no cambia el progreso global de 4/9.

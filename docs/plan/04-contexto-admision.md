@@ -45,7 +45,12 @@ consumidora local ahora revalida la prueba y observa el inventario para devolver
 la decisión y los pasos existentes de `Keep New` como datos privados. Sus
 filtros focales locales pasaron en Windows y Linux; el CI base citado más abajo
 es anterior y no cubre esta unidad. No ejecuta pasos ni concede autoridad o
-capability.
+capability. La factory local
+`656c9b97b94c9c68454742be205c9d7512e1aa08` consume esa prueba y vuelve a exigir
+`Committed`, igualdad semántica del Journal completo, root `New` y backup/stage
+ausentes. Retiene la misma prueba y el préstamo del owner; devuelve una prueba
+privada de inicio ligada al owner para una futura unidad. No crea un intent,
+escribe, retira ni ofrece autoridad de cleanup.
 
 ## Decisión
 
@@ -655,6 +660,27 @@ pass/0 fail/9 ignored, más 7 pruebas Python por sistema. El rollback de
 pruebas/wiring, restaurando el preflight previo de cuatro; el codec de datos
 `FELIX-RETIRE` y el recovery legacy permanecen intactos. Esta unidad no cambia
 4/9: U7 y fase 04 siguen parciales.
+
+La factory `PruebaReplayAdmitidoRootCoincidente::preparar_retiro_contexto`
+del commit local `656c9b97b94c9c68454742be205c9d7512e1aa08` consume y revalida
+la prueba; después exige Journal `Committed` sin cambios, root `New` y backup y
+stage `Absent`. Su wrapper conserva la prueba no clonable y el préstamo del
+owner. Las fixtures bajo lock prueban el caso válido, el rechazo de `Installed`,
+backup `Old` coherente aunque la tabla de conservación lo admita, stage presente
+y contexto modificado; los rechazos preservan los IDs y bytes observados. Son
+fixtures sintéticas de filesystem, no ejecución de apply o retiro.
+
+El commit añadió 188 líneas en cuatro paths. El filtro focal
+`cargo test --locked --offline -p universo-okf --lib transaccion::anclado::duenio_transaccion`
+pasó Windows 63/63 y Linux 68/68. Formato, clippy de workspace con todos los
+targets y `-D warnings`, frontera pública y diffcheck pasaron en ambos sistemas;
+la limpieza del harness Linux terminó con exit 0. El CI exacto de la base
+`968b70c9bea07c8203152e4180ae4d91d942920e` (run `38878921722`) es anterior y
+no cubre esta factory: en 38 targets reportó Linux 926 pass/0 fail/9 ignored y
+Windows 909 pass/0 fail/9 ignored, además de 7 pruebas Python por sistema. El
+rollback retira solo la factory y sus tests/wiring, conservando el consumidor,
+la prueba y revalidación, el observer y la tabla legacy. No cambia 4/9; U7 y
+fase 04 siguen parciales.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
