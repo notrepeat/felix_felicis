@@ -20,10 +20,13 @@ use super::raiz::{UbicacionRaiz, validar_basename_prospectivo};
 
 mod abrir;
 mod clasificar;
+mod identidad_archivo;
 pub(crate) mod journal_temporal;
 mod limpieza;
 mod operaciones;
 pub(crate) mod renombrar;
+
+pub(crate) use identidad_archivo::{IdentidadArchivo, identidad_archivo};
 
 pub(super) use clasificar::{TipoEntradaAnclada, clasificar_entrada_sin_seguir};
 #[cfg(test)]

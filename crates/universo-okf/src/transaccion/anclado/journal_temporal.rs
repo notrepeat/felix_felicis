@@ -18,6 +18,7 @@ use super::{
 use crate::transaccion::journal::{Journal, JournalError, MAX_JOURNAL_BYTES};
 use crate::transaccion::lock::LockEscritura;
 
+use super::IdentidadArchivo;
 /// Error estable y redactado para operaciones sobre archivos del journal.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorJournalAnclado {
@@ -147,18 +148,7 @@ impl std::error::Error for ErrorJournalAnclado {}
 
 /// File identity captured from an opened handle. Its representation is secret.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct IdentidadArchivoJournal {
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-    #[cfg(windows)]
-    volume: u64,
-    #[cfg(windows)]
-    file_id: [u8; 16],
-    #[cfg(not(any(unix, windows)))]
-    _unsupported: PhantomData<()>,
-}
+pub(crate) struct IdentidadArchivoJournal(IdentidadArchivo);
 
 impl fmt::Debug for IdentidadArchivoJournal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -390,28 +380,9 @@ fn validar_archivo_regular(handle: &File) -> Result<(), ErrorJournalAnclado> {
 }
 
 fn identidad_archivo(handle: &File) -> Result<IdentidadArchivoJournal, ErrorJournalAnclado> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = handle.metadata().map_err(|_| ErrorJournalAnclado::Io)?;
-        Ok(IdentidadArchivoJournal {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        })
-    }
-    #[cfg(windows)]
-    {
-        let identidad = super::identidad_windows(handle).map_err(|_| ErrorJournalAnclado::Io)?;
-        Ok(IdentidadArchivoJournal {
-            volume: identidad.volumen,
-            file_id: identidad.id_archivo,
-        })
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = handle;
-        Err(ErrorJournalAnclado::Io)
-    }
+    super::identidad_archivo(handle)
+        .map(IdentidadArchivoJournal)
+        .map_err(|_| ErrorJournalAnclado::Io)
 }
 
 fn mapear_error_directorio(error: ErrorDirectorioAnclado) -> ErrorJournalAnclado {
