@@ -94,6 +94,8 @@ mod temporal;
 #[path = "contexto_admision/verificacion.rs"]
 mod verificacion;
 
+pub(crate) use evidencia::EvidenciaLecturaContexto;
+
 impl ContextoAdmisionAnclado<'_> {
     /// Devuelve ausencia observada o el frame y la identidad real del archivo.
     /// No contrasta su binding con el journal observado ni reproduce admisión.
