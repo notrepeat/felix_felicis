@@ -76,6 +76,191 @@ impl ResultadoRetiroIntent<'_, '_> {
     }
 }
 
+/// Observación fresca después del intento; conserva el resultado y su owner.
+#[must_use = "la observación mantiene el owner mientras se consume"]
+#[allow(dead_code)]
+pub(super) struct ObservacionFinalRetiroIntent<'owner, 'lock> {
+    _retiro: ResultadoRetiroIntent<'owner, 'lock>,
+    _siblings_antes: super::observar_siblings_nuevo_flujo::ObservacionSiblingsNuevoFlujo,
+    _siblings_despues: super::observar_siblings_nuevo_flujo::ObservacionSiblingsNuevoFlujo,
+    _inventario: crate::transaccion::journal::recovery::RecoveryInventory,
+}
+
+impl fmt::Debug for ObservacionFinalRetiroIntent<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionFinalRetiroIntent { .. }")
+    }
+}
+
+impl ObservacionFinalRetiroIntent<'_, '_> {
+    #[cfg(test)]
+    pub(super) fn observacion_coherente_para_test(&self) -> bool {
+        let inventario = &self._inventario;
+        self._retiro.owner_binding_coincide_para_test()
+            && matches!(
+                self._retiro.estado,
+                EstadoRetiroIntent::Eliminado | EstadoRetiroIntent::Ausente
+            )
+            && siblings_ausentes(&self._siblings_antes)
+            && siblings_ausentes(&self._siblings_despues)
+            && inventario.root == crate::transaccion::journal::recovery::ArtifactState::New
+            && inventario.backup == crate::transaccion::journal::recovery::ArtifactState::Absent
+            && inventario.stage == crate::transaccion::journal::recovery::ArtifactState::Absent
+            && !inventario.root_new_validated
+    }
+}
+
+impl<'owner, 'lock> ResultadoRetiroIntent<'owner, 'lock> {
+    /// Observa el estado después del retiro sin inferir quién causó ausencia.
+    #[allow(dead_code)]
+    pub(super) fn observar_estado_final_tras_retiro(
+        self,
+    ) -> Result<ObservacionFinalRetiroIntent<'owner, 'lock>, ErrorDuenioTransaccionAnclado> {
+        self.observar_estado_final_tras_retiro_con(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_estado_final_tras_retiro_con_prueba<F>(
+        self,
+        despues_de_inventario: F,
+    ) -> Result<ObservacionFinalRetiroIntent<'owner, 'lock>, ErrorDuenioTransaccionAnclado>
+    where
+        F: FnOnce(),
+    {
+        self.observar_estado_final_tras_retiro_con(despues_de_inventario)
+    }
+
+    fn observar_estado_final_tras_retiro_con<F>(
+        self,
+        despues_de_inventario: F,
+    ) -> Result<ObservacionFinalRetiroIntent<'owner, 'lock>, ErrorDuenioTransaccionAnclado>
+    where
+        F: FnOnce(),
+    {
+        let ResultadoRetiroIntent {
+            _owner,
+            _autoridad,
+            _identidad_parent,
+            _scope_parent,
+            _registro,
+            estado,
+        } = self;
+        if !matches!(
+            estado,
+            EstadoRetiroIntent::Eliminado | EstadoRetiroIntent::Ausente
+        ) {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        let (siblings_antes, inventario, siblings_despues) = {
+            let contexto = ContextoResultadoFinalRetiro {
+                autoridad: &_autoridad,
+                identidad_parent: _identidad_parent,
+                scope_parent: _scope_parent,
+                registro: &_registro,
+            };
+            validar_owner_resultado_final(&mut *_owner, &contexto)?;
+            let siblings_antes = observar_siblings_ausentes(&mut *_owner)?;
+            let journal = _registro.journal().clone();
+            let parent = _identidad_parent
+                .journal_identity()
+                .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            if journal.state() != crate::transaccion::journal::JournalState::Committed
+                || journal.parent() != &parent
+            {
+                return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+            }
+            let inventario = _owner
+                .observar_inventario_recovery_con_journal_datos(&journal)
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+            if inventario.root != crate::transaccion::journal::recovery::ArtifactState::New
+                || inventario.backup != crate::transaccion::journal::recovery::ArtifactState::Absent
+                || inventario.stage != crate::transaccion::journal::recovery::ArtifactState::Absent
+                || inventario.root_new_validated
+            {
+                return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+            }
+
+            despues_de_inventario();
+
+            let siblings_despues = observar_siblings_ausentes(&mut *_owner)?;
+            validar_owner_resultado_final(&mut *_owner, &contexto)?;
+            (siblings_antes, inventario, siblings_despues)
+        };
+
+        Ok(ObservacionFinalRetiroIntent {
+            _retiro: ResultadoRetiroIntent {
+                _owner,
+                _autoridad,
+                _identidad_parent,
+                _scope_parent,
+                _registro,
+                estado,
+            },
+            _siblings_antes: siblings_antes,
+            _siblings_despues: siblings_despues,
+            _inventario: inventario,
+        })
+    }
+}
+
+struct ContextoResultadoFinalRetiro<'a> {
+    autoridad: &'a Arc<()>,
+    identidad_parent: IdentidadDirectorio,
+    scope_parent: ScopeFilesystem,
+    registro: &'a IntentRetiroPersistido,
+}
+
+fn validar_owner_resultado_final(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+    contexto: &ContextoResultadoFinalRetiro<'_>,
+) -> Result<(), ErrorDuenioTransaccionAnclado> {
+    let parent_esperado = contexto
+        .identidad_parent
+        .journal_identity()
+        .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+    let journal = contexto.registro.journal();
+    if !Arc::ptr_eq(contexto.autoridad, &owner._autoridad)
+        || contexto.identidad_parent != owner.identidad_parent
+        || contexto.scope_parent != owner.scope_parent
+        || journal.state() != crate::transaccion::journal::JournalState::Committed
+        || journal.parent() != &parent_esperado
+    {
+        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+    }
+    drop(
+        owner
+            .parent_revalidado()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?,
+    );
+    Ok(())
+}
+
+fn observar_siblings_ausentes(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+) -> Result<
+    super::observar_siblings_nuevo_flujo::ObservacionSiblingsNuevoFlujo,
+    ErrorDuenioTransaccionAnclado,
+> {
+    let siblings = owner.observar_siblings_nuevo_flujo()?;
+    if !siblings_ausentes(&siblings) {
+        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+    }
+    Ok(siblings)
+}
+
+fn siblings_ausentes(
+    siblings: &super::observar_siblings_nuevo_flujo::ObservacionSiblingsNuevoFlujo,
+) -> bool {
+    use super::observar_siblings_nuevo_flujo::PresenciaSiblingNuevoFlujo::Ausente;
+    siblings.journal() == Ausente
+        && siblings.journal_temporal() == Ausente
+        && siblings.contexto() == Ausente
+        && siblings.contexto_temporal() == Ausente
+        && siblings.intent_retiro() == Ausente
+        && siblings.intent_retiro_temporal() == Ausente
+}
+
 /// Reabre el nombre interno y compara los datos observados con el mismo owner.
 /// La lectura es puntual y no congela bytes ni namespace frente a terceros.
 pub(super) fn abrir_lease_retiro<'owner, 'lock>(

@@ -258,3 +258,6 @@ fn stage_unknown_bloquea_consistencia_c_y_se_preserva() {
 
 #[path = "publicar_intent_lector_consistencia_c_retiro_tests.rs"]
 mod retiro_intent_c_tests;
+
+#[path = "publicar_intent_lector_consistencia_c_final_tests.rs"]
+mod observacion_final_intent_tests;
