@@ -144,6 +144,46 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
     }
 }
 
+impl<'owner, 'lock> ObservacionIntentCanonico<'owner, 'lock> {
+    /// Consume la observación y vuelve a leer el nombre bajo el mismo owner.
+    /// La lectura nueva se compara por datos; el handle retenido no congela bytes.
+    /// El consumidor de reconciliación se integrará en una unidad posterior.
+    #[allow(dead_code)]
+    pub(super) fn revalidar(self) -> Result<Self, ErrorDuenioTransaccionAnclado> {
+        let Self {
+            _owner: owner,
+            _autoridad: autoridad_original,
+            _identidad_parent: identidad_parent_original,
+            _scope_parent: scope_parent_original,
+            _identidad_intent: identidad_intent_original,
+            _registro: registro_original,
+            _archivo: archivo_original,
+        } = self;
+
+        if !Arc::ptr_eq(&autoridad_original, &owner._autoridad)
+            || identidad_parent_original != owner.identidad_parent
+            || scope_parent_original != owner.scope_parent
+        {
+            drop(archivo_original);
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        let observacion_nueva = owner.observar_intent_canonico()?;
+        if observacion_nueva._identidad_intent != identidad_intent_original
+            || observacion_nueva._registro != registro_original
+            || observacion_nueva._identidad_parent != identidad_parent_original
+            || observacion_nueva._scope_parent != scope_parent_original
+            || !Arc::ptr_eq(&observacion_nueva._autoridad, &autoridad_original)
+        {
+            drop(archivo_original);
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        drop(archivo_original);
+        Ok(observacion_nueva)
+    }
+}
+
 fn validar_temporales_ausentes(
     parent: &File,
     scope_parent: ScopeFilesystem,
