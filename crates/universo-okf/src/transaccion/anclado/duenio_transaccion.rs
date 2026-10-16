@@ -1,9 +1,8 @@
 //! Dueño en memoria del lock y el parent de una transacción.
 //!
-//! Esta base todavía no crea leases ni persiste evidencia. Solo fija una vez
-//! el parent y comprueba que el lock visible sea el mismo archivo que conserva
-//! el guard, bajo el modelo de escritores Felix cooperantes. El token de scope
-//! disponible no demuestra una frontera general de mounts.
+//! Conserva en memoria el parent y puede emitir un lease secuencial del journal
+//! tras revalidar su scope y el lock visible. No persiste contexto; el token de
+//! scope no demuestra una frontera general de mounts.
 
 use std::fmt;
 use std::fs::File;
@@ -101,6 +100,69 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
             scope_parent,
             _autoridad: autoridad,
         })
+    }
+
+    /// Emite un lease del journal desde el mismo parent retenido por el dueño.
+    ///
+    /// Revalida parent, scope y lock sibling antes de clonar el handle. El
+    /// préstamo mutable del dueño impide mantener dos leases a la vez.
+    pub(crate) fn journal_temporal(
+        &mut self,
+    ) -> Result<
+        super::journal_temporal::JournalTemporalAnclado<'_>,
+        super::journal_temporal::ErrorJournalAnclado,
+    > {
+        use super::journal_temporal::ErrorJournalAnclado;
+
+        let identidad_parent =
+            metadata_directorio(&self.parent).map_err(|_| ErrorJournalAnclado::ParentChanged)?;
+        if identidad_parent != self.identidad_parent {
+            return Err(ErrorJournalAnclado::ParentChanged);
+        }
+        let scope_parent = scope_filesystem(&self.parent)
+            .map_err(|_| ErrorJournalAnclado::ParentScopeUnverified)?;
+        if scope_parent != self.scope_parent {
+            return Err(ErrorJournalAnclado::ParentScopeUnverified);
+        }
+
+        let ruta_lock = self._lock.ubicacion().lock();
+        let nombre_lock = ruta_lock
+            .as_path()
+            .file_name()
+            .ok_or(ErrorJournalAnclado::Io)?
+            .to_os_string();
+        validar_componente(&nombre_lock).map_err(|_| ErrorJournalAnclado::Io)?;
+        let lock_visible =
+            abrir_entrada_relativa(&self.parent, &nombre_lock, TipoEntradaAnclada::Archivo)
+                .map_err(|error| match error {
+                    ErrorDirectorioAnclado::EnlaceNoPermitido => {
+                        ErrorJournalAnclado::ReparseNotAllowed
+                    }
+                    ErrorDirectorioAnclado::TipoNoAdmitido => {
+                        ErrorJournalAnclado::RegularFileRequired
+                    }
+                    _ => ErrorJournalAnclado::Io,
+                })?;
+        let identidad_visible =
+            identidad_archivo(&lock_visible).map_err(|_| ErrorJournalAnclado::Io)?;
+        let identidad_guard = self
+            ._lock
+            .identidad_archivo_lock()
+            .map_err(|_| ErrorJournalAnclado::Io)?;
+        if identidad_visible != identidad_guard {
+            return Err(ErrorJournalAnclado::IdentityMismatch);
+        }
+
+        let parent = self
+            .parent
+            .try_clone()
+            .map_err(|_| ErrorJournalAnclado::Io)?;
+        super::journal_temporal::desde_parent_retenido(
+            &mut *self._lock,
+            parent,
+            self.identidad_parent,
+            Arc::clone(&self._autoridad),
+        )
     }
 }
 

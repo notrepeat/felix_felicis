@@ -35,6 +35,7 @@ pub(crate) enum ErrorJournalAnclado {
     RemoteUnsupported,
     ParentIdentityUnavailable,
     ParentIdentityMismatch,
+    ParentScopeUnverified,
     InvalidJournal(JournalError),
 }
 
@@ -54,6 +55,7 @@ impl ErrorJournalAnclado {
             Self::RemoteUnsupported => "journal_remote_unsupported",
             Self::ParentIdentityUnavailable => "journal_parent_identity_unavailable",
             Self::ParentIdentityMismatch => "journal_parent_identity_mismatch",
+            Self::ParentScopeUnverified => "journal_parent_scope_unverified",
             Self::InvalidJournal(error) => error.code(),
         }
     }
@@ -175,29 +177,9 @@ impl<'lock> JournalTemporalAnclado<'lock> {
     pub(crate) fn desde_lock(lock: &'lock mut LockEscritura) -> Result<Self, ErrorJournalAnclado> {
         let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
             .map_err(mapear_error_directorio)?;
-        let nombre = lock.ubicacion().nombre_journal_temporal();
-        validar_componente(&nombre).map_err(mapear_error_directorio)?;
-        let nombre_journal = lock
-            .ubicacion()
-            .journal()
-            .as_path()
-            .file_name()
-            .ok_or(ErrorJournalAnclado::Io)?
-            .to_os_string();
-        validar_componente(&nombre_journal).map_err(mapear_error_directorio)?;
-        let raiz_remota = publicar::raiz_es_remota(lock.raiz_canonica());
         let identidad_parent = ancla.identidad_parent();
         let autoridad = lock.autoridad();
-        Ok(Self {
-            _lock: lock,
-            parent: ancla.parent,
-            identidad_parent,
-            nombre,
-            nombre_journal,
-            raiz_remota,
-            _autoridad: autoridad,
-            _vida_lock: PhantomData,
-        })
+        desde_parent_retenido(lock, ancla.parent, identidad_parent, autoridad)
     }
 
     /// Crea el singleton de forma exclusiva, escribe y sincroniza el archivo.
@@ -358,6 +340,35 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         }
         Ok(())
     }
+}
+
+pub(super) fn desde_parent_retenido<'lock>(
+    lock: &'lock mut LockEscritura,
+    parent: File,
+    identidad_parent: IdentidadDirectorio,
+    autoridad: Arc<()>,
+) -> Result<JournalTemporalAnclado<'lock>, ErrorJournalAnclado> {
+    let ubicacion = lock.ubicacion();
+    let nombre = ubicacion.nombre_journal_temporal();
+    validar_componente(&nombre).map_err(mapear_error_directorio)?;
+    let ruta_journal = ubicacion.journal();
+    let nombre_journal = ruta_journal
+        .as_path()
+        .file_name()
+        .ok_or(ErrorJournalAnclado::Io)?
+        .to_os_string();
+    validar_componente(&nombre_journal).map_err(mapear_error_directorio)?;
+    let raiz_remota = publicar::raiz_es_remota(lock.raiz_canonica());
+    Ok(JournalTemporalAnclado {
+        _lock: lock,
+        parent,
+        identidad_parent,
+        nombre,
+        nombre_journal,
+        raiz_remota,
+        _autoridad: autoridad,
+        _vida_lock: PhantomData,
+    })
 }
 
 #[cfg(windows)]

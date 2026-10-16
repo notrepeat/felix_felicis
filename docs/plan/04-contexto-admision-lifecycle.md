@@ -4,7 +4,9 @@
 `DuenioTransaccionAnclado::desde_lock` como scaffold en memoria: retiene el lock,
 abre solo el parent con derechos transaccionales, captura identidad, scope y
 autoridad, y exige que el lock sibling visible tenga la identidad del handle del
-guard. Aún no crea leases ni guarda contexto. El flujo futuro conservaría el
+guard. El dueño ya emite leases secuenciales del journal desde una copia del
+mismo parent retenido, tras revalidar su identidad, scope y lock visible; aún no
+crea lease del contexto ni persiste contexto. El flujo futuro conservaría el
 contexto en un sibling privado, publicado antes del journal `Prepared`, y no
 ejecutaría rename destructivo hasta confirmar ambos. Al terminar retiraría
 primero el journal y después el contexto.
@@ -41,13 +43,16 @@ siguen parciales.
    512 MiB. El dueño lo escribe en el temporal privado, sincroniza el archivo,
    lo publica sin reemplazo y reabre el nombre canónico por el parent retenido
    para confirmar identidad, tipo y bytes.
-4. Solo después de confirmar el contexto, publica y confirma el journal
-   `Prepared` con su capability existente. Solo después de confirmar el
+4. Solo después de confirmar el contexto, obtiene un lease secuencial del
+   journal, publica y confirma `Prepared`. Ese lease desde el parent retenido
+   ya está implementado como primitiva de storage, pero no hay caller que
+   conecte el orden contexto → journal → rename. Solo después de confirmar el
    journal puede empezar el primer cambio destructivo (`root` → backup).
 5. El mismo contexto se conserva sin modificaciones a través de las fases del
    journal de ese nuevo flujo y de cualquier retry. Un futuro recovery
    context-aware leería ambos siblings bajo un nuevo `&mut LockEscritura`,
-   uno por lease secuencial. Comprueba que ambos nombres se observaron por el
+   mediante leases secuenciales: el lease del journal está disponible y el del
+   contexto sigue pendiente. Comprueba que ambos nombres se observaron por el
    mismo handle de parent y que su identidad real coincide con la identidad
    esperada del parent/root; después compara el binding del envelope con el
    journal. El binding serializado solo no acredita esas identidades. Luego
