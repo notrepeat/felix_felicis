@@ -729,3 +729,206 @@ fn verifica_desde_parent_capturado_y_preserva_temporal_decoy() {
     );
     assert!(!contexto_path(&ubicacion).exists());
 }
+
+#[test]
+fn publica_contexto_y_libera_el_lock_para_el_lease_secuencial_del_journal() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let esperado = codec::codificar(&envelope).unwrap();
+    let temporal = temporal_contexto_path(&ubicacion);
+    let canonico = contexto_path(&ubicacion);
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let verificado = crear_recibo(&mut owner, &envelope).verificar().unwrap();
+
+    let publicado = verificado.publicar().unwrap();
+
+    assert_eq!(fs::read(&canonico).unwrap(), esperado);
+    assert!(!temporal.exists());
+    assert_eq!(format!("{publicado:?}"), "ReciboContextoPublicado { .. }");
+    let journal = owner.journal_temporal().unwrap();
+    drop(journal);
+}
+
+#[test]
+fn publicar_usa_el_parent_capturado_y_preserva_decoys_del_namespace() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let moved_parent = temp.path().join("parent-moved");
+    let (ubicacion, root) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let esperado = codec::codificar(&envelope).unwrap();
+    let temporal = temporal_contexto_path(&ubicacion);
+    let canonico = contexto_path(&ubicacion);
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let verificado = crear_recibo(&mut owner, &envelope).verificar().unwrap();
+
+    if let Err(error) = fs::rename(&parent, &moved_parent) {
+        #[cfg(windows)]
+        {
+            assert!(
+                matches!(error.raw_os_error(), Some(5) | Some(32) | Some(33)),
+                "{error}"
+            );
+            assert!(root.is_dir());
+            assert!(!moved_parent.exists());
+            drop(verificado);
+            drop(owner);
+            drop(lock);
+            assert!(temporal.is_file());
+            assert!(!canonico.exists());
+            eprintln!("Windows bloqueó el rename del parent; no se ejercitó el decoy.");
+            return;
+        }
+        #[cfg(not(windows))]
+        panic!("no se pudo mover el parent de prueba: {error}");
+    }
+
+    fs::create_dir(&parent).unwrap();
+    fs::create_dir(parent.join("bundle")).unwrap();
+    let decoy_temporal = temporal_contexto_path(&ubicacion);
+    let decoy_canonico = contexto_path(&ubicacion);
+    let temporal_canary = b"preserve decoy temporary";
+    let canonico_canary = b"preserve decoy context";
+    fs::write(&decoy_temporal, temporal_canary).unwrap();
+    fs::write(&decoy_canonico, canonico_canary).unwrap();
+
+    let publicado = verificado.publicar().unwrap();
+
+    let nombre_temporal = temporal.file_name().unwrap();
+    let nombre_canonico = canonico.file_name().unwrap();
+    assert_eq!(
+        fs::read(moved_parent.join(nombre_canonico)).unwrap(),
+        esperado
+    );
+    assert!(!moved_parent.join(nombre_temporal).exists());
+    assert_eq!(fs::read(&decoy_temporal).unwrap(), temporal_canary);
+    assert_eq!(fs::read(&decoy_canonico).unwrap(), canonico_canary);
+    assert!(root.exists());
+    assert_eq!(format!("{publicado:?}"), "ReciboContextoPublicado { .. }");
+}
+
+#[test]
+fn canonic_conflictivo_no_reemplaza_ni_limpia_el_temporal() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let esperado = codec::codificar(&envelope).unwrap();
+    let canary = b"preserve canonical canary";
+    let canonico = contexto_path(&ubicacion);
+    let temporal = temporal_contexto_path(&ubicacion);
+    fs::write(&canonico, canary).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let verificado = crear_recibo(&mut owner, &envelope).verificar().unwrap();
+
+    let error = verificado.publicar().unwrap_err();
+
+    assert_eq!(error, ErrorContextoAdmisionAnclado::PublicationUnverified);
+    assert_eq!(error.codigo(), "admission_context_publication_unverified");
+    assert_eq!(fs::read(&canonico).unwrap(), canary);
+    assert_eq!(fs::read(&temporal).unwrap(), esperado);
+}
+
+#[test]
+fn publicar_rechaza_basename_temporal_sustituido_despues_de_verificar() {
+    use std::cell::Cell;
+
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let moved = temp.path().join("original-temporal");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let esperado = codec::codificar(&envelope).unwrap();
+    let temporal = temporal_contexto_path(&ubicacion);
+    let canonico = contexto_path(&ubicacion);
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let verificado = crear_recibo(&mut owner, &envelope).verificar().unwrap();
+    let identidad_original = verificado.datos.identidad_archivo;
+
+    if let Err(error) = fs::rename(&temporal, &moved) {
+        #[cfg(windows)]
+        {
+            assert!(
+                matches!(error.raw_os_error(), Some(5) | Some(32) | Some(33)),
+                "{error}"
+            );
+            drop(verificado);
+            drop(owner);
+            drop(lock);
+            assert_eq!(fs::read(&temporal).unwrap(), esperado);
+            assert!(!moved.exists());
+            eprintln!(
+                "Windows bloqueó sustituir el temporal abierto; no se ejercitó el rechazo por ID."
+            );
+            return;
+        }
+        #[cfg(not(windows))]
+        panic!("no se pudo desplazar el temporal de prueba: {error}");
+    }
+    fs::write(&temporal, &esperado).unwrap();
+    let decoy = File::open(&temporal).unwrap();
+    assert_ne!(identidad_archivo(&decoy).unwrap(), identidad_original);
+    drop(decoy);
+    let llamadas = Cell::new(0);
+
+    let error = verificado
+        .publicar_con(|_, _, _, _| {
+            llamadas.set(llamadas.get() + 1);
+            Ok(())
+        })
+        .unwrap_err();
+
+    assert_eq!(error, ErrorContextoAdmisionAnclado::TemporaryUnverified);
+    assert_eq!(llamadas.get(), 0);
+    drop(owner);
+    drop(lock);
+    assert_eq!(fs::read(&moved).unwrap(), esperado);
+    assert_eq!(fs::read(&temporal).unwrap(), esperado);
+    assert!(!canonico.exists());
+}
+
+#[test]
+fn confirma_rename_aplicado_aunque_el_syscall_devuelva_error_y_no_reintenta() {
+    use std::cell::Cell;
+
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let envelope = envelope("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let esperado = codec::codificar(&envelope).unwrap();
+    let temporal = temporal_contexto_path(&ubicacion);
+    let canonico = contexto_path(&ubicacion);
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let verificado = crear_recibo(&mut owner, &envelope).verificar().unwrap();
+    let llamadas = Cell::new(0);
+
+    let publicado = verificado
+        .publicar_con(|parent, fuente, nombre_temporal, nombre_canonico| {
+            llamadas.set(llamadas.get() + 1);
+            super::publicar::renombrar_no_reemplazar(
+                parent,
+                fuente,
+                nombre_temporal,
+                nombre_canonico,
+            )?;
+            Err(())
+        })
+        .unwrap();
+
+    assert_eq!(llamadas.get(), 1);
+    assert_eq!(fs::read(&canonico).unwrap(), esperado);
+    assert!(!temporal.exists());
+    assert_eq!(format!("{publicado:?}"), "ReciboContextoPublicado { .. }");
+}

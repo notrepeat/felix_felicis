@@ -91,7 +91,7 @@ impl<'lock> ContextoAdmisionAnclado<'lock> {
         })
     }
 
-    fn revalidar_parent_y_lock(&self) -> Result<(), ErrorContextoAdmisionAnclado> {
+    pub(super) fn revalidar_parent_y_lock(&self) -> Result<(), ErrorContextoAdmisionAnclado> {
         let identidad = metadata_directorio(&self.parent)
             .map_err(|_| ErrorContextoAdmisionAnclado::ParentUnverified)?;
         if identidad != self.identidad_parent {

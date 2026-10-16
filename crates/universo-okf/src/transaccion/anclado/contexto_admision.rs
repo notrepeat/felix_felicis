@@ -28,6 +28,7 @@ pub(crate) enum ErrorContextoAdmisionAnclado {
     EntryRejected,
     TemporaryExists,
     TemporaryUnverified,
+    PublicationUnverified,
     RemoteUnsupported,
     Io,
     Codec(ErrorCodecEnvelopeAdmision),
@@ -43,6 +44,7 @@ impl ErrorContextoAdmisionAnclado {
             Self::EntryRejected => "admission_context_entry_rejected",
             Self::TemporaryExists => "admission_context_temporary_exists",
             Self::TemporaryUnverified => "admission_context_temporary_unverified",
+            Self::PublicationUnverified => "admission_context_publication_unverified",
             Self::RemoteUnsupported => "admission_context_remote_unsupported",
             Self::Io => "admission_context_io",
             Self::Codec(error) => error.codigo(),
@@ -83,6 +85,8 @@ pub(crate) struct ContextoAdmisionAnclado<'lock> {
     _autoridad: Arc<()>,
 }
 
+#[path = "contexto_admision/publicar.rs"]
+mod publicar;
 #[path = "contexto_admision/temporal.rs"]
 mod temporal;
 #[path = "contexto_admision/verificacion.rs"]
