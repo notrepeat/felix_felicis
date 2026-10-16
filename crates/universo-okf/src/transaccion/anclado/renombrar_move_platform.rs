@@ -1,5 +1,11 @@
 use super::super::super::metadata_directorio;
 use super::super::{ErrorRenombrarAnclado, IdentidadDirectorio, mapear_error_directorio};
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+use crate::transaccion::anclado::renombrar_noreplace::invocar_renameat2;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use crate::transaccion::anclado::renombrar_noreplace::{
+    CausaRenombrarNoReemplazo, ErrorRenombrarNoReemplazo,
+};
 use std::ffi::OsStr;
 use std::fs::File;
 
@@ -13,7 +19,8 @@ pub(super) fn renombrar_plataforma(
 ) -> Result<(), ErrorRenombrarAnclado> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let operar = |parent: &File, fuente: &std::ffi::CStr, destino: &std::ffi::CStr| {
-        renombrar_noreplace(parent, fuente, destino, invocar_renameat2)
+        crate::transaccion::anclado::renombrar_noreplace::renombrar_unix(parent, fuente, destino)
+            .map_err(mapear_error_noreplace)
     };
     #[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
     let operar = |_: &File, _: &std::ffi::CStr, _: &std::ffi::CStr| {
@@ -89,7 +96,7 @@ where
     operar(parent, &fuente, &destino)
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
 fn renombrar_noreplace<I>(
     parent: &File,
     fuente: &std::ffi::CStr,
@@ -99,52 +106,18 @@ fn renombrar_noreplace<I>(
 where
     I: FnOnce(&File, &std::ffi::CStr, &std::ffi::CStr) -> (libc::c_long, Option<i32>),
 {
-    // Production and tests share this policy point. Unsupported renameat2
-    // must remain fail-closed; never retry or fall back to replace-capable renameat.
-    let (resultado, error) = invocar(parent, fuente, destino);
-    if resultado == 0 {
-        return Ok(());
-    }
-
-    Err(mapear_error_renameat2(error))
+    crate::transaccion::anclado::renombrar_noreplace::renombrar_unix_con(
+        parent, fuente, destino, invocar,
+    )
+    .map_err(mapear_error_noreplace)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn invocar_renameat2(
-    parent: &File,
-    fuente: &std::ffi::CStr,
-    destino: &std::ffi::CStr,
-) -> (libc::c_long, Option<i32>) {
-    use std::os::fd::AsRawFd;
-
-    // SAFETY: both NUL-terminated names are single components relative to the
-    // retained parent descriptor. The kernel performs the no-replace check and
-    // rename atomically; there is deliberately no renameat fallback.
-    let resultado = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            parent.as_raw_fd(),
-            fuente.as_ptr(),
-            parent.as_raw_fd(),
-            destino.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    let error = (resultado != 0)
-        .then(std::io::Error::last_os_error)
-        .and_then(|error| error.raw_os_error());
-    (resultado, error)
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn mapear_error_renameat2(error: Option<i32>) -> ErrorRenombrarAnclado {
-    match error {
-        Some(libc::EEXIST) => ErrorRenombrarAnclado::DestinoExistente,
-        // An unavailable syscall or unsupported flag fails closed. In
-        // particular, neither condition may fall back to replace-capable renameat.
-        Some(libc::ENOSYS | libc::EINVAL) => ErrorRenombrarAnclado::Io,
-        // Preserve conservative recovery for errors whose effect is uncertain.
-        _ => ErrorRenombrarAnclado::OperacionAmbigua,
+fn mapear_error_noreplace(error: ErrorRenombrarNoReemplazo) -> ErrorRenombrarAnclado {
+    match error.causa() {
+        CausaRenombrarNoReemplazo::Io => ErrorRenombrarAnclado::Io,
+        CausaRenombrarNoReemplazo::DestinoExistente => ErrorRenombrarAnclado::DestinoExistente,
+        CausaRenombrarNoReemplazo::OperacionAmbigua => ErrorRenombrarAnclado::OperacionAmbigua,
     }
 }
 

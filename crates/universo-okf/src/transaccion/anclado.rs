@@ -30,6 +30,8 @@ pub(crate) mod journal_temporal;
 mod limpieza;
 mod operaciones;
 pub(crate) mod renombrar;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+mod renombrar_noreplace;
 
 pub(crate) use identidad_archivo::{IdentidadArchivo, identidad_archivo};
 
