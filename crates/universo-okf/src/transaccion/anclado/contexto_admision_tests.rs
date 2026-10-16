@@ -163,12 +163,8 @@ fn lease_lee_el_parent_capturado_y_preserva_el_decoy_del_namespace() {
     fs::create_dir(parent.join("bundle")).unwrap();
     let decoy_context_path = contexto_path(&ubicacion);
     fs::write(&decoy_context_path, decoy).unwrap();
-    let lock_name = ubicacion
-        .lock()
-        .as_path()
-        .file_name()
-        .unwrap()
-        .to_os_string();
+    let ruta_lock = ubicacion.lock();
+    let lock_name = ruta_lock.as_path().file_name().unwrap().to_os_string();
     fs::write(parent.join(lock_name), b"decoy lock").unwrap();
 
     let lease = owner.contexto_admision().unwrap();
@@ -188,4 +184,137 @@ fn lease_lee_el_parent_capturado_y_preserva_el_decoy_del_namespace() {
     assert_eq!(fs::read(&decoy_context_path).unwrap().as_slice(), decoy);
     assert!(moved_parent.join("bundle").is_dir());
     assert!(root.exists());
+}
+
+#[test]
+fn error_de_codec_no_se_convierte_en_ausencia_y_preserva_bytes_redactados() {
+    let transaction_id = "0123456789abcdef0123456789abcdef";
+    for truncar in [false, true] {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let (ubicacion, _) = ubicacion(&parent, true);
+        let mut bytes = frame(transaction_id, parent_identity(&parent));
+        if truncar {
+            bytes.pop();
+        } else {
+            bytes[0] ^= 1;
+        }
+        let canonico = contexto_path(&ubicacion);
+        fs::write(&canonico, &bytes).unwrap();
+        let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+        let mut owner =
+            super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock)
+                .unwrap();
+        let lease = owner.contexto_admision().unwrap();
+        let lease_debug = format!("{lease:?}");
+        assert_eq!(lease_debug, "ContextoAdmisionAnclado { .. }");
+        assert!(!lease_debug.contains(canonico.to_string_lossy().as_ref()));
+        assert!(!lease_debug.contains(transaction_id));
+
+        let error = lease.leer_canonico().unwrap_err();
+
+        assert!(matches!(error, ErrorContextoAdmisionAnclado::Codec(_)));
+        assert_eq!(error.codigo(), "admission_envelope_framing_invalid");
+        assert_eq!(error.to_string(), error.codigo());
+        let debug = format!("{error:?}");
+        assert!(!debug.contains(transaction_id));
+        assert!(!debug.contains(canonico.to_string_lossy().as_ref()));
+        assert_eq!(fs::read(&canonico).unwrap(), bytes);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_canonico_no_se_sigue_y_preserva_el_target_y_el_enlace() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let target = temp.path().join("target-canary");
+    let link = contexto_path(&ubicacion);
+    fs::write(&target, b"outside target canary").unwrap();
+    symlink(&target, &link).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.contexto_admision().unwrap();
+
+    let error = lease.leer_canonico().unwrap_err();
+
+    assert_eq!(error, ErrorContextoAdmisionAnclado::EntryRejected);
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&link).unwrap(), target);
+    assert_eq!(fs::read(&target).unwrap(), b"outside target canary");
+}
+
+#[test]
+fn lease_de_contexto_rechaza_lock_sustituido_con_bytes_iguales() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let bytes_contexto = frame("0123456789abcdef0123456789abcdef", parent_identity(&parent));
+    let canonico = contexto_path(&ubicacion);
+    fs::write(&canonico, &bytes_contexto).unwrap();
+    let lock_path = ubicacion.lock().as_path().to_path_buf();
+    let lock_bytes = b"same context lock bytes, different identity";
+    fs::write(&lock_path, lock_bytes).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let identidad_guard = lock.identidad_archivo_lock().unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let desplazado = temp.path().join("original-lock-canary");
+
+    if let Err(error) = fs::rename(&lock_path, &desplazado) {
+        #[cfg(windows)]
+        {
+            assert!(
+                matches!(error.raw_os_error(), Some(5) | Some(32) | Some(33)),
+                "{error}"
+            );
+            assert!(lock_path.is_file());
+            assert!(!desplazado.exists());
+            drop(owner);
+            drop(lock);
+            let visible = File::open(&lock_path).unwrap();
+            assert_eq!(identidad_archivo(&visible).unwrap(), identidad_guard);
+            assert_eq!(
+                fs::read(&lock_path).unwrap().as_slice(),
+                lock_bytes.as_slice()
+            );
+            assert_eq!(fs::read(&canonico).unwrap(), bytes_contexto);
+            eprintln!(
+                "Windows bloqueó la sustitución del lock; no se ejercitó el rechazo por identidad."
+            );
+            return;
+        }
+        #[cfg(not(windows))]
+        panic!("no se pudo desplazar el lock de prueba: {error}");
+    }
+
+    fs::write(&lock_path, lock_bytes).unwrap();
+    let visible = File::open(&lock_path).unwrap();
+    assert_ne!(identidad_archivo(&visible).unwrap(), identidad_guard);
+
+    let error = owner.contexto_admision().unwrap_err();
+
+    assert_eq!(error, ErrorContextoAdmisionAnclado::OwnerUnverified);
+    assert_eq!(error.codigo(), "admission_context_owner_unverified");
+    drop(visible);
+    drop(owner);
+    drop(lock);
+    assert_eq!(
+        fs::read(&lock_path).unwrap().as_slice(),
+        lock_bytes.as_slice()
+    );
+    assert_eq!(
+        fs::read(&desplazado).unwrap().as_slice(),
+        lock_bytes.as_slice()
+    );
+    assert_eq!(fs::read(&canonico).unwrap(), bytes_contexto);
 }
