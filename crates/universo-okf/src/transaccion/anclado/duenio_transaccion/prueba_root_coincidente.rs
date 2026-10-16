@@ -65,6 +65,8 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
             || siblings.journal_temporal() != PresenciaSiblingNuevoFlujo::Ausente
             || siblings.contexto() != PresenciaSiblingNuevoFlujo::Presente
             || siblings.contexto_temporal() != PresenciaSiblingNuevoFlujo::Ausente
+            || siblings.intent_retiro() != PresenciaSiblingNuevoFlujo::Ausente
+            || siblings.intent_retiro_temporal() != PresenciaSiblingNuevoFlujo::Ausente
         {
             return Err(ErrorPruebaReplayRootCoincidente);
         }
@@ -146,6 +148,8 @@ impl PruebaReplayAdmitidoRootCoincidente<'_, '_> {
             || siblings.journal_temporal() != PresenciaSiblingNuevoFlujo::Ausente
             || siblings.contexto() != PresenciaSiblingNuevoFlujo::Presente
             || siblings.contexto_temporal() != PresenciaSiblingNuevoFlujo::Ausente
+            || siblings.intent_retiro() != PresenciaSiblingNuevoFlujo::Ausente
+            || siblings.intent_retiro_temporal() != PresenciaSiblingNuevoFlujo::Ausente
         {
             return Err(ErrorPruebaReplayRootCoincidente);
         }

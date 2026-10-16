@@ -3,7 +3,7 @@
 //! Solo informa ausencia o presencia de un archivo regular cuyo handle coincide
 //! con el scope esperado. No lee payload ni concede autoridad de transacción.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 
 use super::super::abrir::abrir_entrada_relativa;
@@ -20,7 +20,7 @@ pub(crate) enum PresenciaSiblingNuevoFlujo {
     Presente,
 }
 
-/// Hechos de presencia de los cuatro siblings reservados para el flujo nuevo.
+/// Hechos de presencia de los seis siblings reservados para el flujo nuevo.
 /// No son permiso, dispatch ni autoridad de cleanup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ObservacionSiblingsNuevoFlujo {
@@ -28,6 +28,8 @@ pub(crate) struct ObservacionSiblingsNuevoFlujo {
     journal_temporal: PresenciaSiblingNuevoFlujo,
     contexto: PresenciaSiblingNuevoFlujo,
     contexto_temporal: PresenciaSiblingNuevoFlujo,
+    intent_retiro: PresenciaSiblingNuevoFlujo,
+    intent_retiro_temporal: PresenciaSiblingNuevoFlujo,
 }
 
 impl ObservacionSiblingsNuevoFlujo {
@@ -46,10 +48,18 @@ impl ObservacionSiblingsNuevoFlujo {
     pub(crate) fn contexto_temporal(&self) -> PresenciaSiblingNuevoFlujo {
         self.contexto_temporal
     }
+
+    pub(crate) fn intent_retiro(&self) -> PresenciaSiblingNuevoFlujo {
+        self.intent_retiro
+    }
+
+    pub(crate) fn intent_retiro_temporal(&self) -> PresenciaSiblingNuevoFlujo {
+        self.intent_retiro_temporal
+    }
 }
 
 impl DuenioTransaccionAnclado<'_> {
-    /// Observa los cuatro nombres sibling internos desde el parent retenido.
+    /// Observa los seis nombres sibling internos desde el parent retenido.
     ///
     /// Solo una ausencia reportada por la primitiva de apertura se registra
     /// como `Ausente`; cualquier error de nombre, tipo, scope o identidad falla
@@ -84,6 +94,10 @@ impl DuenioTransaccionAnclado<'_> {
         let nombre_contexto_temporal =
             super::super::contexto_admision::nombre_temporal_sibling(&nombre_contexto)
                 .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let nombre_intent_retiro = nombre_intent_retiro(basename)?;
+        let nombre_intent_retiro_temporal =
+            super::super::contexto_admision::nombre_temporal_sibling(&nombre_intent_retiro)
+                .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
 
         let identidad_scope = self.scope_parent;
         Ok(ObservacionSiblingsNuevoFlujo {
@@ -95,8 +109,23 @@ impl DuenioTransaccionAnclado<'_> {
                 &nombre_contexto_temporal,
                 identidad_scope,
             )?,
+            intent_retiro: observar_sibling(&parent, &nombre_intent_retiro, identidad_scope)?,
+            intent_retiro_temporal: observar_sibling(
+                &parent,
+                &nombre_intent_retiro_temporal,
+                identidad_scope,
+            )?,
         })
     }
+}
+
+fn nombre_intent_retiro(basename: &OsStr) -> Result<OsString, ErrorDuenioTransaccionAnclado> {
+    validar_componente(basename).map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+    let mut nombre = OsString::from(".");
+    nombre.push(basename);
+    nombre.push(".felix.admctx-retire");
+    validar_componente(&nombre).map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+    Ok(nombre)
 }
 
 /// Abre un sibling no-follow y valida el scope y la identidad del handle.
