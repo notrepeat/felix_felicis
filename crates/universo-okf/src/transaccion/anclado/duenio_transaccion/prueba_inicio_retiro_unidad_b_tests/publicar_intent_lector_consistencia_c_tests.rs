@@ -261,3 +261,6 @@ mod retiro_intent_c_tests;
 
 #[path = "publicar_intent_lector_consistencia_c_final_tests.rs"]
 mod observacion_final_intent_tests;
+
+#[path = "publicar_intent_lector_consistencia_c_postinventory_tests.rs"]
+mod observacion_final_postinventory_tests;
