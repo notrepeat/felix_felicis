@@ -6,13 +6,11 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::File;
-use std::io::Read;
 use std::sync::Arc;
 
-use crate::transaccion::anclado::intent_persistido::{IntentRetiroPersistido, MAX_INTENT_BYTES};
+use crate::transaccion::anclado::intent_persistido::IntentRetiroPersistido;
 use crate::transaccion::anclado::{
-    ErrorDirectorioAnclado, IdentidadArchivo, IdentidadDirectorio, ScopeFilesystem,
-    TipoEntradaAnclada, validar_componente,
+    IdentidadArchivo, IdentidadDirectorio, ScopeFilesystem, validar_componente,
 };
 
 use super::observar_siblings_nuevo_flujo::nombre_intent_retiro;
@@ -60,7 +58,10 @@ pub(super) fn abrir_lease_retiro<'owner, 'lock>(
         .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
     validar_temporales(owner.scope_parent, &parent, &nombres)?;
 
-    let Some(archivo_sonda) = abrir_sonda(&parent, &nombres.canonico)? else {
+    let Some(archivo_sonda) =
+        super::lector_intent_canonico::abrir_intent_canonico(&parent, &nombres.canonico)
+            .map_err(super::lector_intent_canonico::mapear_error_lectura_intent)?
+    else {
         validar_vinculo_owner(
             owner,
             &autoridad_observada,
@@ -85,45 +86,18 @@ pub(super) fn abrir_lease_retiro<'owner, 'lock>(
     #[cfg(not(windows))]
     let archivo_final = archivo_sonda;
 
-    let (identidad_final, scope_final) =
-        super::lector_intent_canonico::validar_archivo_intent(&archivo_final, owner.scope_parent)?;
-    if identidad_final != identidad_intent_observada {
-        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
-    }
-
-    let metadata = archivo_final
-        .metadata()
-        .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
-    if metadata.len()
-        > u64::try_from(MAX_INTENT_BYTES)
-            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?
-    {
-        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
-    }
-    let limite = u64::try_from(MAX_INTENT_BYTES)
-        .ok()
-        .and_then(|maximo| maximo.checked_add(1))
-        .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
-    let mut bytes = Vec::new();
-    (&archivo_final)
-        .take(limite)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
-    if bytes.len() > MAX_INTENT_BYTES {
-        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
-    }
-
-    let registro = IntentRetiroPersistido::decode(&bytes)
-        .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
-    registro
-        .validar_vinculo_archivo_intent(identidad_final, scope_final)
-        .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
-    let identidad_parent_journal = identidad_parent_observada
-        .journal_identity()
-        .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
-    if registro.journal().parent() != &identidad_parent_journal || registro != registro_observado {
-        return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
-    }
+    let leido = super::lector_intent_canonico::leer_intent_canonico(
+        archivo_final,
+        owner.scope_parent,
+        identidad_parent_observada,
+        Some((identidad_intent_observada, &registro_observado)),
+        super::super::scope_filesystem,
+    )
+    .map_err(super::lector_intent_canonico::mapear_error_lectura_intent)?;
+    let identidad_final = leido.identidad;
+    let _scope_final = leido.scope;
+    let registro = leido.registro;
+    let archivo_final = leido.archivo;
 
     validar_vinculo_owner(
         owner,
@@ -174,22 +148,6 @@ fn validar_temporales(
         scope_parent,
         nombres.temporales(),
     )
-}
-
-fn abrir_sonda(
-    parent: &File,
-    nombre: &OsStr,
-) -> Result<Option<File>, ErrorDuenioTransaccionAnclado> {
-    let archivo = match super::super::abrir::abrir_entrada_relativa(
-        parent,
-        nombre,
-        TipoEntradaAnclada::Archivo,
-    ) {
-        Ok(archivo) => archivo,
-        Err(ErrorDirectorioAnclado::EntradaAusente) => return Ok(None),
-        Err(_) => return Err(ErrorDuenioTransaccionAnclado::NoVerificable),
-    };
-    Ok(Some(archivo))
 }
 
 #[cfg(windows)]
