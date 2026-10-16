@@ -160,3 +160,6 @@ mod revalidar_tests;
 
 #[path = "publicar_intent_lector_parent_tests.rs"]
 mod parent_binding_tests;
+
+#[path = "publicar_intent_lector_reconciliar_a_tests.rs"]
+mod reconciliar_a_tests;
