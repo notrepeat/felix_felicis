@@ -2,10 +2,10 @@
 
 use std::fmt;
 
-use crate::transaccion::admision::envelope::ErrorEnvelopeAdmision;
+use crate::transaccion::admision::envelope::{EnvelopeContextoAdmision, ErrorEnvelopeAdmision};
 use crate::transaccion::anclado::contexto_admision::ErrorContextoAdmisionAnclado;
 use crate::transaccion::anclado::journal_temporal::ErrorJournalAnclado;
-use crate::transaccion::journal::ArtifactFingerprint;
+use crate::transaccion::journal::{ArtifactFingerprint, Journal};
 
 use super::{DuenioTransaccionAnclado, ErrorDuenioTransaccionAnclado};
 
@@ -99,6 +99,28 @@ impl DuenioTransaccionAnclado<'_> {
         motor_soportado: &str,
         policy_soportada: &str,
     ) -> Result<ComparacionRootReplay, ErrorComparacionRootReplay> {
+        let (journal, envelope) = self.cargar_journal_y_envelope()?;
+        let replay = envelope
+            .validar_replay(&journal, motor_soportado, policy_soportada)
+            .map_err(ErrorComparacionRootReplay::Envelope)?;
+        self.comparar_fingerprint_root(replay.new_fingerprint().clone())
+    }
+
+    /// Selecciona el par archivado cerrado sin aceptar tags del llamador.
+    /// El resultado sigue siendo una comparación de datos, no recovery.
+    pub(crate) fn comparar_root_replay_soportado(
+        &mut self,
+    ) -> Result<ComparacionRootReplay, ErrorComparacionRootReplay> {
+        let (journal, envelope) = self.cargar_journal_y_envelope()?;
+        let replay = envelope
+            .validar_replay_soportado(&journal)
+            .map_err(ErrorComparacionRootReplay::Envelope)?;
+        self.comparar_fingerprint_root(replay.new_fingerprint().clone())
+    }
+
+    fn cargar_journal_y_envelope(
+        &mut self,
+    ) -> Result<(Journal, EnvelopeContextoAdmision), ErrorComparacionRootReplay> {
         let journal = {
             let lease = self
                 .journal_temporal()
@@ -120,10 +142,13 @@ impl DuenioTransaccionAnclado<'_> {
                 .ok_or(ErrorComparacionRootReplay::ContextoAusente)?;
             envelope
         };
-        let replay = envelope
-            .validar_replay(&journal, motor_soportado, policy_soportada)
-            .map_err(ErrorComparacionRootReplay::Envelope)?;
-        let esperado = replay.new_fingerprint().clone();
+        Ok((journal, envelope))
+    }
+
+    fn comparar_fingerprint_root(
+        &mut self,
+        esperado: ArtifactFingerprint,
+    ) -> Result<ComparacionRootReplay, ErrorComparacionRootReplay> {
         let observado = self
             .observar_root_raw()
             .map_err(ErrorComparacionRootReplay::Owner)?;

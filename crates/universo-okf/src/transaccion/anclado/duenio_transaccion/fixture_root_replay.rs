@@ -45,12 +45,21 @@ pub(super) fn materializar(root: &Path, entradas: &[EntradaSnapshot]) {
 }
 
 pub(super) fn preparar(parent: &Path) -> FixturePublicada {
+    preparar_con_tags(parent, fixtures::MOTOR, fixtures::POLICY)
+}
+
+pub(super) fn preparar_con_tags(
+    parent: &Path,
+    motor_soportado: &str,
+    policy_soportada: &str,
+) -> FixturePublicada {
     fs::create_dir_all(parent).unwrap();
     let root = parent.join("bundle");
     fs::create_dir(&root).unwrap();
     let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
-    let contexto = fixtures::contexto(b"\n");
-    let fixture_journal = fixtures::journal_valido(&contexto);
+    let contexto = fixtures::contexto_con_tags(b"\n", motor_soportado, policy_soportada);
+    let fixture_journal =
+        fixtures::journal_valido_con_tags(&contexto, motor_soportado, policy_soportada);
     let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
     let mut owner = super::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
     let identidad_parent = owner.identidad_parent.journal_identity().unwrap();
@@ -64,8 +73,8 @@ pub(super) fn preparar(parent: &Path) -> FixturePublicada {
     let new = calcular_new_esperado(
         &contexto,
         &journal_provisional,
-        fixtures::MOTOR,
-        fixtures::POLICY,
+        motor_soportado,
+        policy_soportada,
     )
     .unwrap();
     let entradas = new.entradas().to_vec();

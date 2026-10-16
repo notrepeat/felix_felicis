@@ -152,7 +152,7 @@ pub(crate) mod tests {
         contexto_con_tags(invariantes, MOTOR, POLICY)
     }
 
-    fn contexto_con_tags(
+    pub(crate) fn contexto_con_tags(
         invariantes: &[u8],
         version_motor: &str,
         policy_id: &str,
@@ -217,7 +217,7 @@ pub(crate) mod tests {
         journal_valido_con_tags(contexto, MOTOR, POLICY)
     }
 
-    fn journal_valido_con_tags(
+    pub(crate) fn journal_valido_con_tags(
         contexto: &ContextoAdmision,
         version_motor: &str,
         policy_id: &str,
