@@ -112,6 +112,16 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         super::journal_temporal::JournalTemporalAnclado<'_>,
         super::journal_temporal::ErrorJournalAnclado,
     > {
+        let parent = self.parent_revalidado()?;
+        super::journal_temporal::desde_parent_retenido(
+            &mut *self._lock,
+            parent,
+            self.identidad_parent,
+            Arc::clone(&self._autoridad),
+        )
+    }
+
+    fn parent_revalidado(&self) -> Result<File, super::journal_temporal::ErrorJournalAnclado> {
         use super::journal_temporal::ErrorJournalAnclado;
 
         let identidad_parent =
@@ -153,16 +163,7 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
             return Err(ErrorJournalAnclado::IdentityMismatch);
         }
 
-        let parent = self
-            .parent
-            .try_clone()
-            .map_err(|_| ErrorJournalAnclado::Io)?;
-        super::journal_temporal::desde_parent_retenido(
-            &mut *self._lock,
-            parent,
-            self.identidad_parent,
-            Arc::clone(&self._autoridad),
-        )
+        self.parent.try_clone().map_err(|_| ErrorJournalAnclado::Io)
     }
 }
 
