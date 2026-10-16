@@ -6,6 +6,14 @@ flujo de transacción sigue incompleto. Ya existe
 un DTO privado, versionado y acotado para serializar campos de identidad de
 archivo observados en un handle; su codec no reconstruye una identidad física
 ni entrega autoridad. Este dato no es un intent de retiro.
+El codec puro `FELIX-RETIRE` v1 del commit local
+`4bf47893870be24bce8c35ec692aa402cbe4e6fe` representa un Journal `Committed`,
+tres identidades como DTO, el scope del parent y la longitud/SHA-256 del
+contexto, con un máximo total de 1536 bytes. La base pasó 3/3 pruebas focales
+en Windows y Linux. La cobertura complementaria de
+`6e1349246b71ed5acb82cab7927bcde1cc84b738` llevó el filtro a 7/7 por sistema;
+formato, clippy, frontera, diffcheck y limpieza Linux también terminaron verdes.
+No hay todavía escritor, lector de archivo persistido, reconciliación ni retiro.
 También existe `DuenioTransaccionAnclado::desde_lock`: retiene el lock y el
 parent, captura identidad, scope y autoridad, y exige que el lock sibling
 visible corresponda al handle del guard. El dueño emite leases secuenciales
@@ -267,6 +275,18 @@ que posee.
   deja el DTO base; retirar también el DTO y su wiring no altera los codecs de
   journal/contexto ni recovery legacy. El detalle está en
   [04-contexto-admision.md](04-contexto-admision.md#evidencia-de-verificación).
+- El codec puro `FELIX-RETIRE` v1 de `4bf47893870be24bce8c35ec692aa402cbe4e6fe`
+  tuvo churn 396; la cobertura `6e1349246b71ed5acb82cab7927bcde1cc84b738`
+  añadió 157 líneas. El filtro focal exacto
+  `cargo test --locked --offline -p universo-okf --lib transaccion::anclado::intent_persistido`
+  pasó 7/7 en Windows y Linux; formato, clippy de workspace con todos los
+  targets y `-D warnings`, frontera y diffcheck pasaron en ambos, y limpieza
+  Linux terminó con exit 0. El CI `0fac7be` (run `38875241340`) es anterior y
+  no cubre el codec; sus cifras históricas son Linux 914/0/9, Windows 899/0/9
+  en 38 resúmenes y 7 pruebas Python por sistema. Revertir las pruebas deja el
+  codec base; revertir también la base solo retira el DTO experimental y wiring,
+  sin alterar journal/contexto v1 ni recovery legacy. El registro es aún un
+  codec de datos: no se persiste ni concede permiso de cleanup.
 - Si encoder y decoder con sus pruebas superan 400 líneas de churn, se separan
   en dos commits por comportamiento: primero codificación canónica con límite
   combinado; después preflight/decode y pruebas de corrupción/binding. Cada

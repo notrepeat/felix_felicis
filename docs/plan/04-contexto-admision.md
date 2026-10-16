@@ -145,8 +145,17 @@ público estable ni compatibilidad futura.
 `IdentidadArchivoPersistida` es un DTO privado separado del journal y del
 envelope. Su frame `FELIX-FILEID` es versionado, canónico y acotado; conserva
 campos de una identidad observada en un handle y no convierte bytes serializados
-de vuelta a identidad física. Este codec no implementa un intent de retiro ni
-habilita borrar un sibling. No es autenticación, recibo ni autoridad.
+de vuelta a identidad física. El DTO no basta para autorizar el retiro de un
+sibling. El commit local `4bf47893870be24bce8c35ec692aa402cbe4e6fe` añade un
+codec binario puro `FELIX-RETIRE` v1 para un registro experimental: incorpora un
+Journal canónico en fase `Committed`, tres DTO de identidad, el scope del parent
+y la longitud y SHA-256 del frame de contexto. El límite total es 1536 bytes;
+el decoder rechaza magic o versiones desconocidas, secciones malformadas o no
+canónicas y bytes extra con errores redactados; el constructor exige Journal
+`Committed` y longitud de contexto entre 1 y la cuota del envelope. Solo
+serializa datos: no crea ni
+abre el archivo de intent, no reconstruye identidades físicas y no autoriza
+retiro, recovery o cleanup.
 
 Los journals v1 existentes no contienen contexto de replay y no se reinterpretan
 como si lo tuvieran. En particular, la ausencia o pérdida del contexto no
@@ -585,6 +594,23 @@ adicionales. Revertir las pruebas `afa924c` vuelve al DTO de `4598a3a`; retirar
 también ese DTO y su wiring no cambia los codecs del journal o del contexto ni
 el recovery legacy. La unidad no cambia el estado global: 4/9 sigue siendo el
 progreso y U7/fase 04 siguen parciales.
+
+El codec `FELIX-RETIRE` v1 de `4bf47893870be24bce8c35ec692aa402cbe4e6fe`
+tuvo 396 líneas de churn y pasó 3/3 pruebas focales en Windows y Linux. Las
+pruebas complementarias de `6e1349246b71ed5acb82cab7927bcde1cc84b738` añaden
+157 líneas y elevan el filtro focal a 7/7 en ambos sistemas. También pasaron
+formato, clippy de workspace con todos los targets y `-D warnings`, chequeo de
+frontera y diffcheck en ambos; la limpieza del harness Linux terminó con exit
+0. El comando reproducible es
+`cargo test --locked --offline -p universo-okf --lib transaccion::anclado::intent_persistido`.
+Las pruebas abarcan roundtrip canónico, versión/fase/cuotas, truncamiento en
+cada frontera, corrupción de magic/identidades y journal desconocido o no
+canónico. El CI remoto exacto `0fac7be` (run `38875241340`) es anterior: Linux
+914/0/9 y Windows 899/0/9 en 38 resúmenes, más 7 pruebas Python por sistema; no
+cubre estas unidades. Revertir `6e134924` conserva el codec base; retirar luego
+`4bf4789` elimina el DTO y su wiring sin cambiar los codecs de journal/contexto
+ni el recovery legacy. El intent aún no se crea, descubre, reconcilia ni retira
+desde el filesystem.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
