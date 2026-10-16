@@ -33,7 +33,12 @@ igualdad del Journal compara el registro completo semánticamente, no hashea sus
 bytes; la longitud y SHA-256 corresponden al frame crudo del contexto. Aún no
 observa backup ni stage, ni selecciona una fila. El estado
 global sigue en 4/9 fases; U7 y fase 04 permanecen parciales. Replay y decoder
-aún no tienen caller desde apply/producción ni cierran esas fases.
+aún no tienen caller desde apply/producción ni cierran esas fases. Una unidad
+consumidora local ahora revalida la prueba y observa el inventario para devolver
+la decisión y los pasos existentes de `Keep New` como datos privados. Sus
+filtros focales locales pasaron en Windows y Linux; el CI base citado más abajo
+es anterior y no cubre esta unidad. No ejecuta pasos ni concede autoridad o
+capability.
 
 ## Decisión
 
@@ -438,10 +443,36 @@ warnings denegados, frontera pública y diffcheck pasaron en ambos sistemas; la
 limpieza del `TMPDIR` Linux terminó con exit 0. El CI de
 `7a7273f42f61a391e0eb28d0d9226820c2d3956d` registrado abajo es anterior y no
 cubre este commit. Esta revalidación no observa backup ni stage, no decide una
-fila y no concede autoridad. Sigue pendiente un consumidor que inspeccione el
-inventario completo y aplique una fila permitida por la tabla vigente. El
-rollback de esta unidad retira el método de revalidación, su wiring y el test
-nuevo, conservando el productor original y el observer.
+fila y no concede autoridad. El consumidor descrito a continuación pasó sus
+filtros locales en Windows y Linux; todavía no tiene CI propio.
+
+La unidad consumidora `b94ef7026de087539ed2a1ef39f3b6d5c16e1260` añade
+`observar_fila_conservar_new(self)` sobre la prueba revalidada y contiene 396
+altas. Vuelve a observar el journal y el inventario bajo el mismo owner, exige
+que el registro completo no haya cambiado, y considera solo `Installed` o
+`Committed` con root `New`, stage ausente y backup `Absent` u `Old`. Marca
+`root_new_validated` únicamente en una copia local del inventario para
+consultar `decide_recovery`; compara la decisión y la secuencia exacta de pasos
+esperados para cada fase. Devuelve una observación privada con la prueba y esos
+datos; no ejecuta pasos ni ofrece una capability de mutación, cleanup, apply o
+dispatch. Sus fixtures cubren ambos estados elegibles y backup ausente/Old,
+además del rechazo con preservación para stage presente, `PartialOld` y backup
+`Unknown`. Una primera compilación reportó E0277 en dos payloads del fixture y
+un import sin uso; se corrigieron los argumentos como slices y se retiró el
+import sin quitar cobertura. Los filtros focales pasaron Windows owner 55/55,
+contexto 24/24 y envelope 24/24; Linux owner 58/58, contexto 25/25 y envelope
+24/24. Formato, clippy de workspace con todos los targets y warnings
+denegados, frontera pública y diffcheck pasaron en ambos sistemas; la limpieza
+del `TMPDIR` Linux terminó con exit 0. El CI base
+`22c9869915367e5d32ea8d9899c410c57dc0a810` (run `38870400830`, Linux 901
+pass/0 fail/9 ignored, Windows 886/0/9 en 38 targets y 7 pruebas Python por
+sistema) es anterior y no cubre esta unidad. El rollback retira el tipo y
+método consumidor, imports, wiring y tests nuevos, conservando el productor,
+la prueba/revalidación, el observer y la tabla legacy. El rollback de
+`69f3842` se conserva como límite separado: como el consumidor depende de
+`revalidar`, primero se revierte el consumidor; después se revierte el método,
+wiring y tests de revalidación, conservando la prueba original, el observer y
+la tabla legacy.
 
 La unidad A `b3b16c646d64b4ad7629af2494e84bd8dcbecd7d`
 pasó localmente owner 34/34, contexto 24/24 y envelope 24/24 en Windows; Linux

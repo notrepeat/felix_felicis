@@ -39,9 +39,26 @@ los targets y warnings denegados, frontera pública y diffcheck pasaron en ambos
 sistemas; la limpieza del `TMPDIR` Linux terminó con exit 0. El CI de
 `7a7273f42f61a391e0eb28d0d9226820c2d3956d` es anterior y no cubre esta unidad.
 Esta revalidación no observa backup ni stage, no escoge una fila y no da
-autoridad; sigue pendiente el consumidor que observe el inventario completo y
-aplique solo una fila autorizada. Su rollback retira el método, el wiring y el
-test nuevo, conservando el productor original y el observer.
+autoridad. La unidad `b94ef7026de087539ed2a1ef39f3b6d5c16e1260` añade
+`observar_fila_conservar_new`: revalida la prueba, inspecciona el inventario
+bajo el mismo owner y devuelve datos de la decisión y los pasos existentes
+para `Installed` o `Committed` con root `New`, stage ausente y backup `Absent`
+u `Old`. No ejecuta esos pasos ni concede capability de recovery, cleanup,
+apply o dispatch. Los filtros focales pasaron Windows owner 55/55, contexto
+24/24 y envelope 24/24; Linux owner 58/58, contexto 25/25 y envelope 24/24.
+Formato, clippy de workspace con todos los targets y warnings denegados,
+frontera pública y diffcheck pasaron en ambos sistemas; la limpieza del
+`TMPDIR` Linux terminó con exit 0. La compilación inicial detectó E0277 en dos
+payloads y un import sin uso; se corrigieron los slices y el import sin quitar
+cobertura. El CI `22c9869915367e5d32ea8d9899c410c57dc0a810` (run
+`38870400830`) es anterior y no cubre este commit. La verificación local está
+completa, pero esta unidad todavía no tiene CI propio. El caller productivo sigue
+pendiente. El rollback retira el consumidor y sus tests/wiring, conservando la
+prueba original, su revalidación, el observer y la tabla legacy. El rollback de
+`69f3842` permanece aparte: primero se retira este consumidor porque depende de
+`revalidar`; luego se revierten el método, wiring y tests de revalidación,
+conservando la prueba original, el observer y la tabla legacy. Véase
+`04-contexto-admision.md` para condiciones completas y límites.
 La unidad `66e8419f63ffd409eaf687fc7aa54183613ac19c` añade métodos de captura
 fija sobre el root abierto desde el parent retenido y bajo el lock. Los gates
 locales de esa unidad pasaron; el detalle y sus límites están en la evidencia
@@ -119,7 +136,9 @@ siguen parciales.
    contexto en leases secuenciales, valida el replay con los parámetros de
    motor y policy recibidos y compara la huella completa del root observado con
    `NewEsperado`. Devuelve `Ausente`, `Coincide` o `Diferente` junto a los datos
-   comparados; no decide recovery ni apply. Los valores de motor y policy son
+   comparados; no decide recovery ni apply. La observación consumidora local
+   consulta después la tabla vigente y devuelve la decisión y los pasos como
+   datos privados, sin ejecutarlos. Los valores de motor y policy son
    parámetros explícitos de esa comparación, no una identidad de evaluador
    soportada por un caller productivo. El caller que consuma esa observación y
    aplique únicamente una fila permitida por la tabla vigente sigue pendiente.
