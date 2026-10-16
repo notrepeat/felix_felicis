@@ -7,6 +7,9 @@ use crate::transaccion::admision::envelope::ErrorEnvelopeAdmision;
 use crate::transaccion::anclado::contexto_admision::EvidenciaLecturaContexto;
 use crate::transaccion::anclado::journal_temporal::IdentidadArchivoJournal;
 use crate::transaccion::anclado::{IdentidadDirectorio, ScopeFilesystem};
+use crate::transaccion::journal::recovery::{
+    ArtifactState, RecoveryDecision, RecoveryInventory, RecoveryStep, decide_recovery,
+};
 use crate::transaccion::journal::{Journal, JournalState};
 
 use super::DuenioTransaccionAnclado;
@@ -207,6 +210,86 @@ impl PruebaReplayAdmitidoRootCoincidente<'_, '_> {
 
 fn mapear_error_replay(_error: ErrorEnvelopeAdmision) -> ErrorPruebaReplayRootCoincidente {
     ErrorPruebaReplayRootCoincidente
+}
+
+/// Observación privada y secuencial de la fila que conservaría `New`.
+/// No ejecuta la decisión ni concede una capability de mutación.
+pub(super) struct ObservacionConservarNew<'owner, 'lock> {
+    prueba: PruebaReplayAdmitidoRootCoincidente<'owner, 'lock>,
+    decision: RecoveryDecision,
+    pasos: &'static [RecoveryStep],
+}
+
+impl fmt::Debug for ObservacionConservarNew<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionConservarNew { .. }")
+    }
+}
+
+impl<'owner, 'lock> PruebaReplayAdmitidoRootCoincidente<'owner, 'lock> {
+    /// Revalida la prueba y deriva la fila de conservación solo desde la
+    /// observación actual del journal y sus siblings bajo el mismo owner.
+    pub(super) fn observar_fila_conservar_new(
+        self,
+    ) -> Result<ObservacionConservarNew<'owner, 'lock>, ErrorPruebaReplayRootCoincidente> {
+        let prueba = self.revalidar()?;
+        let (journal_observado, inventario) = prueba
+            ._owner
+            .observar_inventario_recovery_anclado()
+            .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+        if journal_observado != prueba.journal || inventario.root_new_validated {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let fase = journal_observado.state();
+        if !matches!(fase, JournalState::Installed | JournalState::Committed)
+            || inventario.root != ArtifactState::New
+            || inventario.stage != ArtifactState::Absent
+            || !matches!(
+                inventario.backup,
+                ArtifactState::Absent | ArtifactState::Old
+            )
+        {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        let inventario_validado = RecoveryInventory {
+            root_new_validated: true,
+            ..inventario
+        };
+        let (decision_esperada, pasos_esperados): (RecoveryDecision, &'static [RecoveryStep]) =
+            match fase {
+                JournalState::Installed => (
+                    RecoveryDecision::KeepValidatedNewAndCommit,
+                    &[
+                        RecoveryStep::RemoveKnownStage,
+                        RecoveryStep::RemoveKnownBackup,
+                        RecoveryStep::PersistCommitted,
+                        RecoveryStep::RemoveJournal,
+                    ],
+                ),
+                JournalState::Committed => (
+                    RecoveryDecision::KeepValidatedCommittedNew,
+                    &[
+                        RecoveryStep::RemoveKnownStage,
+                        RecoveryStep::RemoveKnownBackup,
+                        RecoveryStep::RemoveJournal,
+                    ],
+                ),
+                _ => return Err(ErrorPruebaReplayRootCoincidente),
+            };
+        let decision = decide_recovery(fase, inventario_validado);
+        let pasos = decision.steps(inventario_validado);
+        if decision != decision_esperada || pasos != pasos_esperados {
+            return Err(ErrorPruebaReplayRootCoincidente);
+        }
+
+        Ok(ObservacionConservarNew {
+            prueba,
+            decision,
+            pasos,
+        })
+    }
 }
 
 #[cfg(all(test, any(target_os = "linux", windows)))]

@@ -18,6 +18,9 @@ mod aux_tests;
 #[path = "prueba_root_coincidente_revalidacion_tests.rs"]
 mod revalidation_tests;
 
+#[path = "prueba_root_coincidente_conservar_new_tests.rs"]
+mod conservar_new_tests;
+
 struct Storage {
     bytes_contexto: Vec<u8>,
     bytes_journal: Vec<u8>,
