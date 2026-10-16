@@ -18,10 +18,13 @@ quedó verificada en `996ec93f91da61a33e6130b4f5a858de70ef79a1`; sus resultados
 y límites están registrados abajo. Falta el caller de
 producción que aplique la tabla vigente, además de cleanup y preflight global
 de huérfanos. Ni el resultado de comparación ni el inventario son prueba o
-autoridad de admisión. La unidad A añade una prueba opaca que solo confirma
-replay admitido y huella root coincidente en `Installed` o `Committed`; no
-prueba que un caller instaló `New` ni elige una fila de recovery. La unidad
-local `69f3842e9b208aeadaf7721d84a9fc0d07b541af` añade
+autoridad de admisión. La identidad persistida de archivo tiene ahora un DTO
+versionado y acotado que solo convierte desde una identidad observada en un
+handle; sigue siendo dato, no prueba de retiro ni autoridad. La unidad A añade
+una prueba opaca que solo confirma replay admitido y huella root coincidente en
+`Installed` o `Committed`; no prueba que un caller instaló `New` ni elige una
+fila de recovery. La unidad local
+`69f3842e9b208aeadaf7721d84a9fc0d07b541af` añade
 `PruebaReplayAdmitidoRootCoincidente::revalidar(self)`: consume la prueba y
 solo la reemite tras revalidar el mismo owner, lock, parent y scope, comprobar
 los cuatro siblings, recargar el ID y el Journal completo, releer identidad,
@@ -138,6 +141,12 @@ interpretan semánticamente al decodificar, no autentican el contexto. El
 encoder de `fb45b09` no reconstruía ni reevaluaba el contexto al leerlo; esa
 función llegó en `3e9b5cd`. El framing y el encoder no establecen formato
 público estable ni compatibilidad futura.
+
+`IdentidadArchivoPersistida` es un DTO privado separado del journal y del
+envelope. Su frame `FELIX-FILEID` es versionado, canónico y acotado; conserva
+campos de una identidad observada en un handle y no convierte bytes serializados
+de vuelta a identidad física. Este codec no implementa un intent de retiro ni
+habilita borrar un sibling. No es autenticación, recibo ni autoridad.
 
 Los journals v1 existentes no contienen contexto de replay y no se reinterpretan
 como si lo tuvieran. En particular, la ausencia o pérdida del contexto no
@@ -557,6 +566,25 @@ El CI remoto exacto de la base publicada `7a7273f42f61a391e0eb28d0d9226820c2d395
 Linux 897 pass/0 fail/9 ignored y Windows 882 pass/0 fail/9 ignored, además de
 7 pruebas Python por sistema. Es una base previa: no incluye
 `69f3842e9b208aeadaf7721d84a9fc0d07b541af`.
+
+La unidad `4598a3a0c7dc1f4665e6493f8a513e355f313505` añade el DTO versionado
+de identidad persistida y su conversión unidireccional desde una identidad de
+archivo observada en un handle. Tiene 386 líneas de churn real. El filtro
+focal `cargo test --locked --offline -p universo-okf --lib transaccion::anclado::identidad_archivo`
+pasó 8/8 en Windows y Linux para la unidad base, y 11/11 en ambos con las
+pruebas complementarias; formato, clippy de workspace con todos los
+targets y `-D warnings`, frontera pública y diffcheck terminaron verdes.
+El commit `afa924c19534cc3b10059c47d256d514b538521b` añade 109 líneas de pruebas
+para valores máximos, lecturas cortas, `Interrupted` y errores de I/O en header,
+payload y EOF. El filtro focal pasó 11/11 en ambos sistemas; formato, clippy,
+frontera pública y diffcheck pasaron en ambos, y la limpieza del harness Linux
+terminó con exit 0. El CI remoto exacto de `8e87735` (run `38872303821`) reportó
+Linux 905 pass/0 fail/9 ignored y Windows 890/0/9 en 38 targets, además de
+7 pruebas Python por sistema. Es anterior y no cubre el DTO ni las pruebas
+adicionales. Revertir las pruebas `afa924c` vuelve al DTO de `4598a3a`; retirar
+también ese DTO y su wiring no cambia los codecs del journal o del contexto ni
+el recovery legacy. La unidad no cambia el estado global: 4/9 sigue siendo el
+progreso y U7/fase 04 siguen parciales.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

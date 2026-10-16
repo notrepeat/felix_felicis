@@ -3,11 +3,15 @@
 **Estado:** están implementados los leases de lectura canónica, la creación
 exclusiva y verificación del temporal, y la publicación canónica confirmada; el
 flujo de transacción sigue incompleto. Ya existe
-`DuenioTransaccionAnclado::desde_lock`: retiene el lock y el parent, captura
-identidad, scope y autoridad, y exige que el lock sibling visible corresponda
-al handle del guard. El dueño emite leases secuenciales del journal y del
-contexto desde ese parent retenido. El lease de lectura abre el sibling
-canónico sin seguir enlaces, comprueba el handle y decodifica el frame. El dueño
+un DTO privado, versionado y acotado para serializar campos de identidad de
+archivo observados en un handle; su codec no reconstruye una identidad física
+ni entrega autoridad. Este dato no es un intent de retiro.
+También existe `DuenioTransaccionAnclado::desde_lock`: retiene el lock y el
+parent, captura identidad, scope y autoridad, y exige que el lock sibling
+visible corresponda al handle del guard. El dueño emite leases secuenciales
+del journal y del contexto desde ese parent retenido. El lease de lectura abre
+el sibling canónico sin seguir enlaces, comprueba el handle y decodifica el
+frame. El dueño
 también abre el root relativo al mismo parent en modo de lectura y devuelve su
 huella raw opcional como dato; no declara que `New` esté instalado ni concede
 autoridad de recovery o cleanup. El método privado `comparar_root_replay` ya
@@ -248,6 +252,21 @@ que posee.
   inválido y corrupción inner. El reader genérico sobre `Read` exige EOF y no
   abre rutas ni se conecta a un caller. `FELIX-ADMCTX` v1 conserva su wire; las
   funciones siguen `pub(crate)`.
+- `IdentidadArchivoPersistida` usa un frame `FELIX-FILEID` privado, canónico y
+  acotado. La conversión hacia el DTO parte de una identidad observada en un
+  handle; el codec no convierte bytes de vuelta a identidad física, ni produce
+  recibo, autenticación o autoridad. La unidad `4598a3a0c7dc1f4665e6493f8a513e355f313505`
+  tuvo 386 líneas de churn y pasó el filtro focal 8/8 en Windows y Linux, además
+  de formato, clippy de workspace con todos los targets y `-D warnings`, frontera
+  pública y diffcheck. Las pruebas complementarias `afa924c19534cc3b10059c47d256d514b538521b`
+  añadieron 109 líneas y pasaron 11/11 en ambos sistemas; cubren máximos,
+  lecturas cortas, `Interrupted` y errores de I/O en header, payload y EOF. Sus
+  checks de formato, clippy, frontera pública y diffcheck pasaron en ambos; la
+  limpieza del harness Linux terminó con exit 0. El CI exacto `8e87735`
+  (run `38872303821`) es anterior y no cubre estas unidades. Revertir las pruebas
+  deja el DTO base; retirar también el DTO y su wiring no altera los codecs de
+  journal/contexto ni recovery legacy. El detalle está en
+  [04-contexto-admision.md](04-contexto-admision.md#evidencia-de-verificación).
 - Si encoder y decoder con sus pruebas superan 400 líneas de churn, se separan
   en dos commits por comportamiento: primero codificación canónica con límite
   combinado; después preflight/decode y pruebas de corrupción/binding. Cada
