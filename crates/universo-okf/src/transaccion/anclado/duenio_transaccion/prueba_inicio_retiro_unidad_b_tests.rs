@@ -317,3 +317,6 @@ fn revalidacion_completa_rechaza_reemplazo_mismo_frame_con_id_distinto() {
     assert_eq!(fs::read(&temporary_intent).unwrap(), bytes_originales);
     assert!(id_archivo(&temporary_intent) == id_reemplazo);
 }
+
+#[path = "unidad_b2_tests.rs"]
+mod unidad_b2_tests;
