@@ -84,6 +84,42 @@ impl IntentRetiroPersistido {
         Ok(())
     }
 
+    /// Compara identidad nativa y Journal completo por igualdad semántica; no hace I/O.
+    /// Su consumidor de reconciliación se integrará en una unidad posterior.
+    #[allow(dead_code)]
+    pub(super) fn validar_vinculo_journal(
+        &self,
+        identidad: IdentidadArchivo,
+        journal: &Journal,
+    ) -> Result<(), ErrorIntentRetiroPersistido> {
+        let identidad_observada = IdentidadArchivoPersistida::try_from(identidad)
+            .map_err(|_| ErrorIntentRetiroPersistido)?;
+        if identidad_observada != self.identidad_journal || journal != &self.journal {
+            return Err(ErrorIntentRetiroPersistido);
+        }
+        Ok(())
+    }
+
+    /// Compara identidad nativa, longitud y digest recibidos; no hace I/O.
+    /// Su consumidor de reconciliación se integrará en una unidad posterior.
+    #[allow(dead_code)]
+    pub(super) fn validar_vinculo_contexto(
+        &self,
+        identidad: IdentidadArchivo,
+        longitud: u64,
+        digest: [u8; 32],
+    ) -> Result<(), ErrorIntentRetiroPersistido> {
+        let identidad_observada = IdentidadArchivoPersistida::try_from(identidad)
+            .map_err(|_| ErrorIntentRetiroPersistido)?;
+        if identidad_observada != self.identidad_contexto
+            || longitud != self.longitud_contexto
+            || digest != self.digest_contexto
+        {
+            return Err(ErrorIntentRetiroPersistido);
+        }
+        Ok(())
+    }
+
     fn new(
         journal: Journal,
         identidad_intent: IdentidadArchivoPersistida,
@@ -311,6 +347,7 @@ mod tests {
     };
 
     mod extra_tests;
+    mod journal_contexto_tests;
 
     fn directorio(id: u64) -> DirectoryIdentity {
         #[cfg(unix)]
