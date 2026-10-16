@@ -19,6 +19,7 @@ use super::journal::DirectoryIdentity;
 use super::raiz::{UbicacionRaiz, validar_basename_prospectivo};
 
 mod abrir;
+mod archivo_temporal;
 mod clasificar;
 #[allow(dead_code)]
 pub(crate) mod contexto_admision;
