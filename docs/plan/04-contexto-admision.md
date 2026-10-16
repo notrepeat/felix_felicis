@@ -3,12 +3,17 @@
 **Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
 valores de datos en memoria con codecs privados. El lifecycle documenta las
 primitivas de lectura, creación temporal, verificación y publicación canónica ya
-implementadas. El dueño también observa el root raw desde el parent retenido y
-devuelve la huella como dato. Ya existe un coordinador privado que carga journal
-y contexto con leases secuenciales, valida el replay y compara esa huella con
-`NewEsperado`; devuelve datos de comparación, no una decisión de recovery. Falta
-el caller de producción que aplique la tabla vigente, además de cleanup y
-preflight global de huérfanos. El valor no es prueba ni autoridad de admisión:
+implementadas. El dueño observa el root raw desde el parent retenido y devuelve
+la huella como dato. `capturar_snapshot_soportado` y su variante CAS capturan
+desde ese root abierto bajo el lock retenido y devuelven un `Snapshot` de datos.
+El CAS compara el token antes de validar procedencia o parsear, pero no ejecuta
+recovery ni se conecta a apply. Los tags fijos del snapshot no avalan la
+propuesta: su admisión debe verificarse por separado. Ya existe un coordinador
+privado que carga journal y contexto con leases secuenciales, valida el replay y
+compara esa huella con `NewEsperado`; devuelve datos de comparación, no una
+decisión de recovery. Falta el caller de producción que aplique la tabla
+vigente, además de cleanup y preflight global de huérfanos. El valor no es
+prueba ni autoridad de admisión:
 una recuperación futura debe revalidarlo antes de volver a aceptar `New`
 después de perder el backup. El estado global sigue en 4/9 fases; U7 y fase 04
 permanecen parciales. Replay y decoder aún no tienen caller desde
@@ -335,6 +340,37 @@ El CI remoto exacto de `66633e407d44aaf9c106ac5bb5f71ba2f5b27cbd` (run
 38 targets reportaron Linux 864 pass/0 fail/9 ignored y Windows 850 pass/0
 fail/9 ignored, además de 7 pruebas Python por sistema. Esta es la base previa
 al selector cerrado de tags; el run no cubre la unidad `8c6893a`.
+
+El CI remoto exacto de `e8ac0353d353e6fafb8d520c540efb223adbde21` (run
+`38858628837`) terminó SUCCESS en Linux y Windows. Las suites de workspace en
+38 targets reportaron Linux 868 pass/0 fail/9 ignored y Windows 854 pass/0
+fail/9 ignored, además de 7 pruebas Python por sistema. Ese CI precede y no
+cubre la captura anclada a través del owner descrita a continuación.
+
+La captura fija `f2e76f8ccafae2b0be422be6cf1600e42b150f01` pasó sus filtros
+locales de captura en Windows 37/0/1 y Linux 36/0/1; formato, clippy de
+workspace, frontera pública y diffcheck terminaron verdes en ambos sistemas.
+Esos filtros prueban la captura desde un `DirectorioAnclado`, sin integración
+con el owner ni con un caller.
+
+El refactor `3cf8b605a643fb11949eb35785e1bbbdaef33864` conserva el parent ya
+retenido y comparte la apertura read-only del root, revalidando lock, identidad
+y scope antes de abrirlo. Sus filtros focales del owner pasaron Windows 24/24
+y Linux 26/26; fmt, clippy, frontera pública y diffcheck individuales también
+terminaron verdes.
+
+La unidad `66e8419f63ffd409eaf687fc7aa54183613ac19c` integra la captura fija
+desde el owner. Los filtros locales pasaron owner 28/28 y captura 37/0/1
+(pass/fail/ignored) en Windows, y owner 30/30 y captura 36/0/1 en Linux. Fmt,
+clippy de workspace, frontera pública y diffcheck terminaron verdes en ambos
+sistemas. Linux movió el parent y capturó el root original, distinto del decoy;
+Windows bloqueó el rename por sharing y la prueba informó que no ejercitó el
+decoy. El cleanup del harness se registró por separado. Una primera salida
+agregada de Linux terminó con exit 1 sin diagnóstico; la repetición controlada
+por etapas y cleanup terminó con exit 0. La salida inicial se conserva aparte,
+sin atribuirla al producto ni inventar una causa. El CI remoto
+exacto más reciente registrado, `e8ac0353d353e6fafb8d520c540efb223adbde21`
+(run `38858628837`), no cubre esta unidad.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

@@ -14,6 +14,14 @@ autoridad de recovery o cleanup. El método privado `comparar_root_replay` ya
 reúne esas lecturas secuenciales y devuelve la relación entre `NewEsperado` y el
 root raw como datos, sin elegir una fila de recovery ni modificar archivos. Aún
 no existe un caller productivo que consuma ese resultado para apply o recovery.
+La unidad `66e8419f63ffd409eaf687fc7aa54183613ac19c` añade métodos de captura
+fija sobre el root abierto desde el parent retenido y bajo el lock. Los gates
+locales de esa unidad pasaron; el detalle y sus límites están en la evidencia
+de `04-contexto-admision.md`. El CAS compara el token antes de validar
+procedencia o parsear, sin ejecutar ni sustituir un recovery previo. El
+`Snapshot` es dato: sus tags no avalan la propuesta, no es admisión y no habilita
+apply o recovery. En el replay posterior, la policy valida la propuesta y solo
+deriva `NewEsperado` si resulta `Admitida`.
 
 El lease codifica el envelope con la cuota combinada antes de crear o escribir
 `.<basename>.felix.admctx.tmp`; revalida parent, scope y la identidad del lock
@@ -236,10 +244,13 @@ que posee.
   Envelope 10/10 y replay 8/8 en Windows y Linux; clippy de workspace con todos
   los targets y `-D warnings`, formato, frontera pública y diffcheck pasaron en
   ambos sistemas. Linux usó y retiró un `TMPDIR` válido. Esta entrada no
-  anticipa el decode wire ni implementa una factoría fija, caller productivo,
-  apply, dispatch o recovery. El CI remoto específico de esta unidad aún no se
-  ha registrado. El detalle de sus filtros locales, los tags y la evidencia
-  exacta del CI base están en [04-contexto-admision.md](04-contexto-admision.md).
+  anticipa el decode wire. La captura fija del owner produce un `Snapshot` de
+  datos y no convierte los tags en aval de admisión. No hay caller productivo,
+  apply, dispatch o recovery. El CI exacto de `e8ac035` (run `38858628837`)
+  cubre este selector y está descrito en
+  [04-contexto-admision.md](04-contexto-admision.md); no cubre la captura fija
+  del owner `66e8419`. El detalle de los filtros
+  locales, los tags y la evidencia del CI están en esa nota.
 - Antes de conectar el recovery nuevo, debe diseñarse y probarse el dispatch
   entre transacciones nuevas y journals v1 legacy. Un v1 sin contexto mantiene
   su camino actual; la ausencia de sidecar no se usa para reinterpretarlo como
