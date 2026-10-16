@@ -171,3 +171,5 @@ mod reconciliar_b_extra_tests;
 mod reconciliar_b_tests;
 #[path = "publicar_intent_lector_reconciliar_c_tests.rs"]
 mod reconciliar_c_tests;
+#[path = "publicar_intent_lector_reopen_process_tests.rs"]
+mod reopen_process_tests;
