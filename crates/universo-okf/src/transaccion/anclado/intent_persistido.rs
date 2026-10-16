@@ -258,6 +258,8 @@ mod tests {
         VERSION,
     };
 
+    mod extra_tests;
+
     fn directorio(id: u64) -> DirectoryIdentity {
         #[cfg(unix)]
         {
