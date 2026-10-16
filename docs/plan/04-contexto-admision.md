@@ -50,7 +50,7 @@ retiene el owner y el `File` final. Ese handle retiene el objeto observado, pero
 no congela sus bytes ni garantiza que el nombre siga ligado a él; el resultado
 es una observación puntual frente a cambios externos.
 
-El lector no exige que existan los nombres canónicos de Journal o contexto y no explica por qué pueden faltar. No crea una prueba normal de replay: esa prueba sigue exigiendo que intent canónico y temporal estén ausentes. El helper privado de inventario recibe un `&Journal` completo como dato; un futuro consumidor puede pasárselo desde el intent, pero el helper no atribuye autoridad a su origen. Deriva backup desde la ubicación interna del owner y stage desde `Journal.transaction_id`, tras revalidar parent, guard, scope y binding del parent. Observa el root con su huella nativa completa (identidad y digest raw) y clasifica presencia o ausencia de backup y stage como datos; mantiene `root_new_validated=false`. El wrapper normal sigue cargando primero el Journal canónico. Ni esa observación ni la del intent autorizan reconciliación, cleanup o apply. La reconciliación de reinicio y la retirada del Journal, el intent y el contexto siguen pendientes, junto con el caller productivo que aplique la tabla vigente. Un `intent.tmp` residual bloquea y se preserva; no se republica ni se reintenta.
+El lector no exige que existan los nombres canónicos de Journal o contexto y no explica por qué pueden faltar. No crea una prueba normal de replay: esa prueba sigue exigiendo que intent canónico y temporal estén ausentes. El helper privado de inventario recibe un `&Journal` completo como dato; A, B y la extensión de consistencia C lo usan sin atribuir autoridad al origen del registro. Deriva backup desde la ubicación interna del owner y stage desde `Journal.transaction_id`, tras revalidar parent, guard, scope y binding del parent. Observa el root con su huella nativa completa (identidad y digest raw) y clasifica presencia o ausencia de backup y stage como datos; mantiene `root_new_validated=false`. El wrapper normal sigue cargando primero el Journal canónico. La C base sigue siendo namespace-only; una extensión separada compara la huella actual del root con el `New` del Journal almacenado, sin replay ni cleanup. Ni estas observaciones ni la del intent autorizan reconciliación o apply. La reconciliación de reinicio y la retirada del Journal, el intent y el contexto siguen pendientes, junto con el caller productivo que aplique la tabla vigente. Un `intent.tmp` residual bloquea y se preserva; no se republica ni se reintenta.
 
 La observación local A solo acepta Journal, contexto e intent canónicos presentes,
 con los tres temporales ausentes. Vincula el Journal completo y la identidad
@@ -1052,6 +1052,72 @@ primero C, luego la cobertura extra de B y finalmente B core, preservando A,
 los comparadores, el lector y el flujo legacy. El progreso global permanece en
 4/9; fase 04 y U7 siguen parciales. No se declaran garantías de dirsync,
 pérdida de energía, mounts generales ni recovery completo.
+
+## Reapertura interproceso y consistencia observacional C
+
+El commit `602700b` añade un harness de reapertura normal en otro proceso (296
+líneas de churn). El padre prepara fixtures sintéticas para A, B y C, suelta
+owner y lock antes de lanzar un hijo y exige PID distinto. Cada hijo readquiere
+lock y owner, observa el estado asignado y emite su marcador; el padre comprueba
+status, que se ejecutó un test, el marcador esperado y la preservación de bytes,
+IDs, ausencias y root. El filtro focal pasó 1/1 en Windows y Linux. Es
+reapertura normal entre procesos, no terminación abrupta, reboot, power loss ni
+recuperación durable.
+
+La coordinación posterior de los tests está en
+`b3aba292f246927ebe68f0847b9ff3279cd5f6c7` (3 archivos, 16 altas y 3 bajas;
+19 líneas de churn). `preparar_con_tags` adquiere el mutex test-only antes de
+abrir el lock del fixture y conserva su guard hasta que se descarta
+`FixturePublicada`. Dos tests de contexto y el test de identidad de restart que
+readquieren directamente el lock conservan una guard local durante ese ciclo.
+No se cambia el lock de producción. El fallo previo del filtro owner de Linux
+`writer_lock_busy` al readquirir en
+`revalidar_tests::mismo_frame_con_id_canonico_nuevo_falla_y_preserva_ambos_archivos`
+(128 pasaron, 1 falló) es compatible con la hipótesis de interferencia durante
+una reapertura; la causa no quedó demostrada. El pase completo posterior
+tampoco demuestra esa causa.
+
+La extensión C es un tipo separado que consume y revalida la observación C base.
+Con Journal y Context ausentes y los tres temporales ausentes, toma el Journal
+completo almacenado en el intent solo como descriptor de datos y usa el helper de
+inventario para comparar la huella nativa completa del root con
+`journal.new_fingerprint()`. Exige root `New`, backup y stage `Absent`, conserva
+`root_new_validated=false` y vuelve a validar C antes de devolver el dato. No lee
+payload de Context, no ejecuta replay ni infiere quién retiró los sidecars. No
+retira ni recrea archivos y no ofrece permiso de cleanup o apply. Sus fixtures
+cubren estado base, root recreado con el mismo árbol y otro ID, backup `Old` y
+stage `Unknown`, con preservación en los rechazos. El commit
+`6c02f721484ab484a6d76cfed33a647d708e8f83` tiene 3 paths y 332 líneas de churn
+(330 altas y 2 bajas).
+
+Para revertir este lote, retirar primero la extensión C de `6c02f72` (método,
+tipo, tests y wiring) y después la reapertura interproceso de `602700b` (test y
+wiring), conservando los observers A/B/C base, los comparadores y el lector.
+La coordinación de tests `b3aba29` es una corrección independiente: también
+protege fixtures frente a forks ya existentes y no depende de C ni del harness
+nuevo. Si luego se revierten los observers base, retirar primero el harness
+nuevo; para el orden restante, seguir el registro histórico B/C anterior sin
+reescribirlo.
+
+La primera compilación del filtro C en Windows encontró `E0425` por una
+referencia a `root` sin binding; se corrigió para usar
+`fixture.publicada.root` antes de la ejecución siguiente. La suite completa de
+la biblioteca de `universo-okf`, ejecutada con
+`cargo test --locked --offline -p universo-okf --lib` y paralelismo
+predeterminado, terminó Windows 632/0/5 (637 tests) y Linux 652/0/5
+(657 tests). Formato, clippy del workspace con todos los
+targets y `-D warnings`, frontera pública y diffcheck terminaron con exit 0 en
+ambos sistemas; el cleanup y la salida del runner Linux también fueron 0. Esta
+evidencia se obtuvo localmente antes de publicar el lote.
+
+El CI exacto de la base publicada `a69d6c877a297053991eb0f0ee06806808f7221a`
+(run `38914774277`) terminó SUCCESS: Linux 1004/0/9 y Windows 987/0/9, con 38
+resúmenes Cargo, 7 pruebas Python, demos, 4 estados y 16 salidas por sistema.
+Esa base precede y no cubre `602700b`, el harness de coordinación ni la
+extensión C; los gates locales corresponden a los freezes indicados arriba y
+no sustituyen un CI del lote publicado. El estado global permanece en 4/9;
+fase 04 y U7 siguen parciales. No se afirman snapshot externo, dirsync, power
+loss, cobertura general de mounts ni recovery completo.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

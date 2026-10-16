@@ -34,7 +34,19 @@ intent aunque falte el Journal canónico o el contexto; esa ausencia no explica 
 causa ni autoriza cleanup. La reconciliación tras reiniciar, el retiro del
 Journal, del intent y del contexto, además del caller productivo, siguen
 pendientes. Un `intent.tmp` residual bloquea y se preserva, sin republicación ni
-retry. El detalle se describe al final de esta nota.
+retry. El detalle se desarrolla en «Reapertura interproceso y extensión C de
+consistencia».
+
+El harness `602700b` vuelve a abrir tres fixtures sintéticas A/B/C desde procesos
+hijo después de soltar owner y lock. El hijo exige PID distinto, readquiere lock
+y owner y observa el estado; el padre verifica salida, marcador y preservación.
+Es reapertura normal entre procesos, no una prueba de crash, reboot o power loss.
+La extensión C, descrita en «Reapertura interproceso y extensión C de
+consistencia», agrega una comparación de consistencia con el root actual,
+separada del observer base namespace-only. El freeze actual incluye coordinación
+test-only de los ciclos de readquisición y pasó la suite completa de la
+biblioteca `universo-okf --lib` en Windows y Linux; ese pase no demuestra la
+causa del `writer_lock_busy` previo.
 
 La observación local A agrega una lectura coordinada de Intent, Journal y
 Context para un estado cerrado, pero no completa la reconciliación ni cambia el
@@ -525,6 +537,73 @@ pendientes reconciliación durable, dispatch, cleanup, retiro del Journal, del
 intent y del Context, y caller productivo. El estado permanece en 4/9, con fase
 04 y U7 parciales; no se afirma snapshot externo, garantía de dirsync, tolerancia
 a pérdida de energía, cobertura general de mounts ni recovery completo.
+
+## Reapertura interproceso y extensión C de consistencia
+
+El commit `602700b` añade 296 líneas de churn para probar tres reaperturas
+normales desde un proceso hijo: A, B y C. El padre prepara fixtures sintéticas,
+conserva sus IDs/bytes/árbol esperados, suelta owner y lock y lanza el test hijo
+con modo, root y PID en el entorno de ese `Command`. El hijo debe tener PID
+distinto, readquiere lock y owner, ejecuta la observación correspondiente y
+emite un marcador específico. El padre requiere status exitoso, que se haya
+ejecutado un test, el marcador esperado y preservación de IDs, bytes, ausencias
+y root. El filtro focal pasó 1/1 por sistema. La prueba cubre reapertura normal
+en otro proceso; no demuestra crash recovery, reboot ni power loss.
+
+La coordinación posterior de tests está en
+`b3aba292f246927ebe68f0847b9ff3279cd5f6c7` (3 paths, 16 altas y 3 bajas; 19
+líneas de churn). `preparar_con_tags` toma el mutex test-only antes de abrir el
+lock del fixture y retiene su guard en `FixturePublicada` hasta que se descarta.
+Los dos tests de contexto y el test de identidad de restart que readquieren el
+lock directamente toman guard local durante ese ciclo. No se modifica el lock
+de producción. El filtro owner de Linux anterior registró 128 pass y 1 fail:
+`writer_lock_busy` al readquirir en
+`revalidar_tests::mismo_frame_con_id_canonico_nuevo_falla_y_preserva_ambos_archivos`.
+La posible interferencia entre fixtures y reapertura motivó la coordinación,
+pero no se demostró que causara el fallo. El pase verde posterior valida su
+freeze, no identifica retroactivamente la causa.
+
+La extensión C conserva el observer base namespace-only. Su tipo separado
+consume y revalida C, requiere Journal y Context canónicos ausentes y los tres
+temporales ausentes, y usa el Journal completo del intent solo como dato.
+Observa la huella nativa completa del root con el helper de inventario y la
+compara con `journal.new_fingerprint()`; exige root `New`, backup/stage
+`Absent` y `root_new_validated=false`. Revalida C al final. No reproduce
+Context, no afirma que el Journal causó la ausencia observada y no autoriza
+retiro, recreación, cleanup o apply. Los tests cubren baseline, root con el
+mismo árbol y otro ID, backup `Old` y stage `Unknown`, preservando artefactos en
+los rechazos. La unidad está en
+`6c02f721484ab484a6d76cfed33a647d708e8f83` (3 paths; 330 altas, 2 bajas; 332
+líneas de churn).
+
+Para revertir este lote, retirar primero la extensión C de `6c02f72` (método,
+tipo, tests y wiring) y después la reapertura interproceso de `602700b` (test y
+wiring), conservando los observers A/B/C base, los comparadores y el lector.
+La coordinación de tests `b3aba29` es una corrección independiente: también
+protege fixtures frente a forks ya existentes y no depende de C ni del harness
+nuevo. Si luego se revierten los observers base, retirar primero el harness
+nuevo; para el orden restante, seguir el registro histórico B/C anterior sin
+reescribirlo.
+
+La primera compilación del filtro C en Windows falló por `E0425`: la prueba
+refería un `root` inexistente. Se corrigió antes de la ejecución posterior. La
+suite completa de la biblioteca de `universo-okf`, ejecutada con
+`cargo test --locked --offline -p universo-okf --lib` y paralelismo
+predeterminado, terminó Windows 632 passed, 0 failed, 5 ignored de 637, y Linux
+652 passed, 0 failed, 5 ignored de 657.
+Formato, clippy del workspace con todos los targets y `-D warnings`, frontera
+pública y diffcheck terminaron con exit 0 en ambos sistemas; cleanup y salida
+del runner Linux fueron 0. Esta evidencia se obtuvo localmente antes de
+publicar el lote.
+
+El CI exacto de la base publicada
+`a69d6c877a297053991eb0f0ee06806808f7221a` (run `38914774277`) terminó SUCCESS
+con Linux 1004/0/9 y Windows 987/0/9, 38 resúmenes Cargo, 7 pruebas Python,
+demos, 4 estados y 16 salidas por sistema. Precede y no cubre `602700b`, el
+harness de coordinación ni la extensión C; el pase local descrito aquí no
+sustituye un CI de esos commits publicados. El progreso global sigue en 4/9;
+fase 04 y U7 continúan parciales. No se afirma snapshot externo, dirsync,
+durabilidad ante power loss, cobertura general de mounts ni recovery completo.
 
 ## Alcance y gates
 
