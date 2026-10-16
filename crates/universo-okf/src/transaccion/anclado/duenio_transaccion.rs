@@ -315,3 +315,7 @@ mod prueba_root_coincidente;
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion_tests.rs"]
 mod tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/observer_namespace_tests.rs"]
+mod observer_namespace_tests;

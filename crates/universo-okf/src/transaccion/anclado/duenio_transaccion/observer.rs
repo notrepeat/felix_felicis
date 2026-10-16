@@ -96,3 +96,7 @@ impl DuenioTransaccionAnclado<'_> {
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "observer_tests.rs"]
 mod tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "observer_storage_edges_tests.rs"]
+mod storage_edges_tests;
