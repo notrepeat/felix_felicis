@@ -1,4 +1,4 @@
-//! Reapertura y verificación de un temporal ya creado, sin publicarlo.
+//! Reapertura y verificación raw de archivos anclados, sin publicarlos.
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -49,15 +49,24 @@ pub(super) fn verificar_archivo(
 }
 
 /// Contrasta el canónico raw en el mismo handle sin decodificarlo.
+/// Conserva el error U1 para una ausencia observada.
 pub(super) fn verificar_canonico(
     lease: &ContextoAdmisionAnclado<'_>,
     evidencia: &EvidenciaLecturaContexto,
 ) -> Result<File, ErrorContextoAdmisionAnclado> {
-    let mut archivo = abrir_sibling(
-        &lease.parent,
-        &lease.nombre,
-        ErrorContextoAdmisionAnclado::CanonicalUnverified,
-    )?;
+    verificar_canonico_opcional(lease, evidencia)?
+        .ok_or(ErrorContextoAdmisionAnclado::CanonicalUnverified)
+}
+
+/// Observa la ausencia solo cuando el nombre no existe; discrepancias siguen
+/// siendo errores y nunca se convierten en una ausencia aparente.
+pub(super) fn verificar_canonico_opcional(
+    lease: &ContextoAdmisionAnclado<'_>,
+    evidencia: &EvidenciaLecturaContexto,
+) -> Result<Option<File>, ErrorContextoAdmisionAnclado> {
+    let Some(mut archivo) = abrir_sibling_opcional(&lease.parent, &lease.nombre)? else {
+        return Ok(None);
+    };
     validar_archivo_regular(&archivo)?;
     super::validar_scope(&archivo, lease.scope_parent)?;
     let identidad =
@@ -66,15 +75,22 @@ pub(super) fn verificar_canonico(
         return Err(ErrorContextoAdmisionAnclado::CanonicalUnverified);
     }
     verificar_evidencia_raw(&mut archivo, evidencia)?;
-    Ok(archivo)
+    Ok(Some(archivo))
 }
 
-#[cfg(windows)]
 fn abrir_sibling(
     parent: &File,
     nombre: &OsStr,
     ausencia: ErrorContextoAdmisionAnclado,
 ) -> Result<File, ErrorContextoAdmisionAnclado> {
+    abrir_sibling_opcional(parent, nombre)?.ok_or(ausencia)
+}
+
+#[cfg(windows)]
+fn abrir_sibling_opcional(
+    parent: &File,
+    nombre: &OsStr,
+) -> Result<Option<File>, ErrorContextoAdmisionAnclado> {
     use fs_at::OpenOptions as OpenOptionsAt;
     use fs_at::os::windows::OpenOptionsExt;
     use std::path::Path;
@@ -84,26 +100,22 @@ fn abrir_sibling(
     opciones
         .desired_access(FILE_READ_DATA | FILE_READ_ATTRIBUTES | DELETE)
         .follow(false);
-    opciones
-        .open_at(parent, Path::new(nombre))
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                ausencia
-            } else {
-                ErrorContextoAdmisionAnclado::Io
-            }
-        })
+    match opciones.open_at(parent, Path::new(nombre)) {
+        Ok(archivo) => Ok(Some(archivo)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(ErrorContextoAdmisionAnclado::Io),
+    }
 }
 
 #[cfg(not(windows))]
-fn abrir_sibling(
+fn abrir_sibling_opcional(
     parent: &File,
     nombre: &OsStr,
-    ausencia: ErrorContextoAdmisionAnclado,
-) -> Result<File, ErrorContextoAdmisionAnclado> {
-    super::abrir_entrada_relativa(parent, nombre, super::TipoEntradaAnclada::Archivo).map_err(
-        |error| match error {
-            super::ErrorDirectorioAnclado::EntradaAusente => ausencia,
+) -> Result<Option<File>, ErrorContextoAdmisionAnclado> {
+    match super::abrir_entrada_relativa(parent, nombre, super::TipoEntradaAnclada::Archivo) {
+        Ok(archivo) => Ok(Some(archivo)),
+        Err(super::ErrorDirectorioAnclado::EntradaAusente) => Ok(None),
+        Err(error) => Err(match error {
             super::ErrorDirectorioAnclado::EnlaceNoPermitido
             | super::ErrorDirectorioAnclado::TipoNoAdmitido => {
                 ErrorContextoAdmisionAnclado::EntryRejected
@@ -112,8 +124,8 @@ fn abrir_sibling(
                 ErrorContextoAdmisionAnclado::NameInvalid
             }
             _ => ErrorContextoAdmisionAnclado::Io,
-        },
-    )
+        }),
+    }
 }
 
 fn validar_archivo_regular(archivo: &File) -> Result<(), ErrorContextoAdmisionAnclado> {
@@ -265,3 +277,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "verificacion_tests.rs"]
+mod verificacion_tests;
