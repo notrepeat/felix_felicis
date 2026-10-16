@@ -485,6 +485,47 @@ writer/publicador y recovery legacy. La cifra de avance continúa en
 externos, dirsync, tolerancia a pérdida de energía, cobertura general de
 montajes ni recovery completo.
 
+## Observaciones file-bound B y C
+
+B core (`10c34f80e4e5a4d30a948d35f35e02a9e5d64c7e`, 232 líneas de churn), B
+cobertura (`41d74b4b74a4be4614e0cfdfd8f995975245c3c7`, 223 líneas) y C
+(`c3da8173cbd26c17af81fb5909f90735d6c046fb`, 196 líneas) forman commits
+separados sobre la base publicada `37d29a1e4a8382584b884d127c889228ce139b80`;
+root y revisión independiente aprobaron los freezes. Los gates combinados
+pasaron: owner 119/119 en Windows y 124/124 en Linux; formato, clippy de
+workspace con todos los targets y `-D warnings`, frontera pública y diffcheck
+terminaron con exit 0 en ambos sistemas, y la limpieza Linux terminó con exit
+0. Esta evidencia se obtuvo localmente antes de publicar el lote. El CI exacto
+de esa base (run `38912187461`) terminó SUCCESS con Linux 996/0/9 y Windows
+979/0/9 en 38 resúmenes Cargo, más 7 pruebas Python y el demo por sistema. No
+cubre B ni C, y los gates locales no sustituyen un CI del lote publicado.
+
+B requiere intent y Context canónicos presentes, Journal canónico ausente y
+los tres temporales ausentes. Usa el Journal `Committed` completo del registro
+del intent como dato; valida su vínculo con el parent retenido, el Context por
+identidad nativa/longitud/SHA-256 medidas, el replay soportado y la igualdad de
+la huella `New`. El helper observa root `New`, backup/stage `Absent` y mantiene
+`root_new_validated=false`. B no observa identidad de un Journal canónico ni
+infiere la causa de su ausencia. Revalida intent y gate antes de devolver su
+tipo privado, que no es prueba normal ni autoridad.
+
+C requiere intent presente, Journal y Context canónicos ausentes y los tres
+temporales ausentes. A y B rechazan ese par de ausencias; C emite una observación
+privada diferente que conserva únicamente el intent. No lee payload de los
+sidecars, no retiene sus identidades medidas, no hace replay ni observa el root
+o inventario. Para clasificar nombres presentes, el observer de namespace puede
+abrirlos y medir tipo, scope e identidad antes de rechazar; esos datos no forman
+parte de la observación C. C no infiere historia ni autoriza borrar o recrear
+archivos.
+
+Las pruebas añadidas cubren los estados cerrados B y C y preservación en los
+rechazos. El rollback por
+dependencia retira C, después las pruebas extra B y por último B core. Siguen
+pendientes reconciliación durable, dispatch, cleanup, retiro del Journal, del
+intent y del Context, y caller productivo. El estado permanece en 4/9, con fase
+04 y U7 parciales; no se afirma snapshot externo, garantía de dirsync, tolerancia
+a pérdida de energía, cobertura general de mounts ni recovery completo.
+
 ## Alcance y gates
 
 - El encoder exterior es una unidad pura en memoria, implementada en

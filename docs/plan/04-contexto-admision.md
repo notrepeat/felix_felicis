@@ -1001,6 +1001,58 @@ siguen parciales. No se declara snapshot frente a escritores externos, dirsync,
 tolerancia a pérdida de energía, cobertura general de montajes ni recovery
 completo.
 
+## Observaciones locales B y C
+
+Las unidades B core (`10c34f80e4e5a4d30a948d35f35e02a9e5d64c7e`, 232 líneas de
+churn), B cobertura (`41d74b4b74a4be4614e0cfdfd8f995975245c3c7`, 223 líneas)
+y C (`c3da8173cbd26c17af81fb5909f90735d6c046fb`, 196 líneas) forman commits
+separados sobre la base publicada `37d29a1e4a8382584b884d127c889228ce139b80`.
+El root y la revisión independiente aprobaron los freezes. Los gates
+combinados pasaron: owner 119/119 en Windows y 124/124 en Linux; formato,
+clippy de workspace con todos los targets y `-D warnings`, frontera pública y
+diffcheck terminaron con exit 0 en ambos sistemas, y la limpieza Linux terminó
+con exit 0. Esta evidencia se obtuvo localmente antes de publicar el lote.
+
+B observa el estado cerrado con intent y Context canónicos presentes, Journal
+canónico ausente y los tres temporales ausentes. Toma el Journal `Committed`
+completo del intent solo como dato, exige que su parent coincida con el parent
+retenido, compara Context por ID nativo, longitud y SHA-256 observados en su
+handle, valida el replay soportado y exige que `New` coincida con el Journal.
+El inventario clasifica root `New`, backup/stage `Absent` y conserva
+`root_new_validated=false`. B no observa un ID canónico de Journal ni demuestra
+por qué falta ese archivo. Su resultado privado distinto conserva la observación
+del intent y los datos validados; no es una prueba normal, decisión o permiso.
+
+C observa intent presente con Journal y Context canónicos ausentes y los tres
+temporales ausentes. A y B rechazan cuando faltan ambos sidecars; C devuelve una
+observación privada distinta que retiene solo el intent. No lee payload de
+Journal o Context, no conserva identidades observadas de esos sidecars, no hace
+replay ni observa el root/inventario. El observer del namespace sí puede abrir
+una entrada presente y medir su tipo, scope e identidad para clasificarla antes
+de rechazar el gate; esa medición no se retiene como evidencia en C. La ausencia
+de cualquiera de los sidecars no demuestra su causa ni autoriza cleanup.
+
+Las pruebas incorporadas cubren B con Journal ausente/presente, Context con
+mismo ID y longitud pero SHA distinta, root con árbol igual e identidad nueva,
+backup `Old` y stage `Unknown`; C cubre ambos sidecars ausentes y el rechazo si
+solo Journal o solo Context está presente. En los rechazos se comprueba la
+preservación de los artefactos. El CI exacto de la base publicada
+`37d29a1e4a8382584b884d127c889228ce139b80` (run
+`38912187461`) terminó SUCCESS: Linux 996/0/9 y Windows 979/0/9, con 38
+resúmenes Cargo, 7 pruebas Python y el demo por sistema. Ese CI precede y no
+cubre B ni C; los gates descritos arriba son locales y no sustituyen un CI del
+lote publicado.
+
+La prueba normal sigue exigiendo que el intent canónico y su temporal estén
+ausentes. B y C solo observan estados cerrados bajo el owner y el parent
+retenido; sus comprobaciones son secuenciales y no forman un snapshot ante
+escritores externos. No retiran sidecars o intent, no seleccionan una fila ni
+invocan recovery, cleanup, dispatch o apply. El rollback seguirá dependencias:
+primero C, luego la cobertura extra de B y finalmente B core, preservando A,
+los comparadores, el lector y el flujo legacy. El progreso global permanece en
+4/9; fase 04 y U7 siguen parciales. No se declaran garantías de dirsync,
+pérdida de energía, mounts generales ni recovery completo.
+
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
 identifican por sí solos la causa de los fallos observados entonces.
