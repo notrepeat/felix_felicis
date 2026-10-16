@@ -7,7 +7,13 @@ flujo de transacción sigue incompleto. Ya existe
 identidad, scope y autoridad, y exige que el lock sibling visible corresponda
 al handle del guard. El dueño emite leases secuenciales del journal y del
 contexto desde ese parent retenido. El lease de lectura abre el sibling
-canónico sin seguir enlaces, comprueba el handle y decodifica el frame.
+canónico sin seguir enlaces, comprueba el handle y decodifica el frame. El dueño
+también abre el root relativo al mismo parent en modo de lectura y devuelve su
+huella raw opcional como dato; no declara que `New` esté instalado ni concede
+autoridad de recovery o cleanup. El método privado `comparar_root_replay` ya
+reúne esas lecturas secuenciales y devuelve la relación entre `NewEsperado` y el
+root raw como datos, sin elegir una fila de recovery ni modificar archivos. Aún
+no existe un caller productivo que consuma ese resultado para apply o recovery.
 
 El lease codifica el envelope con la cuota combinada antes de crear o escribir
 `.<basename>.felix.admctx.tmp`; revalida parent, scope y la identidad del lock
@@ -71,12 +77,17 @@ siguen parciales.
 5. El mismo contexto se conservaría sin modificaciones a través de las fases
    del journal de ese nuevo flujo y de cualquier retry. Un futuro recovery
    context-aware leería ambos siblings bajo un nuevo `&mut LockEscritura`,
-   mediante leases secuenciales. Los leases de lectura están disponibles como
-   primitivas; todavía falta el caller que coordine ambas lecturas, contraste el
-   parent y compare el binding del envelope con el journal. El binding
-   serializado solo no acredita esas identidades. Luego, en un flujo futuro,
-   reproduce la admisión y aplica únicamente una fila permitida por la tabla
-   vigente.
+   mediante leases secuenciales. `cargar_canonico` ya vincula el parent del
+   journal al parent retenido; `validar_replay` compara el binding del envelope
+   con el journal. El coordinador privado `comparar_root_replay` carga journal y
+   contexto en leases secuenciales, valida el replay con los parámetros de
+   motor y policy recibidos y compara la huella completa del root observado con
+   `NewEsperado`. Devuelve `Ausente`, `Coincide` o `Diferente` junto a los datos
+   comparados; no decide recovery ni apply. Los valores de motor y policy son
+   parámetros explícitos de esa comparación, no una identidad de evaluador
+   soportada por un caller productivo. El caller que consuma esa observación y
+   aplique únicamente una fila permitida por la tabla vigente sigue pendiente.
+   El binding serializado solo no acredita identidades ni estado instalado.
 6. **Pendiente:** tras observar y validar el estado final autorizado, el dueño
    futuro obtiene la capability del journal, la retira por identidad y
    contenido esperados, y suelta ese lease. Solo después de confirmar la
@@ -195,6 +206,16 @@ que posee.
   lectura no liga el envelope al journal observado. Ningún resultado del codec
   habilita por sí mismo `KeepNew`, `Committed`, aceptación de un `New`
   observado ni limpieza del backup.
+- El observer raw del root y `comparar_root_replay` devuelven datos bajo el lock,
+  no autoridad. La fixture local prepara un `New` raw real, reabre journal y
+  contexto tras readquirir el lock en el mismo proceso y compara el replay con
+  esa observación. Sus filtros focales pasaron; el detalle está en
+  [04-contexto-admision.md](04-contexto-admision.md#evidencia-de-verificación).
+  La unidad de comparación `c3853e03819386d4c4364d57be615f26b2b2766c` también
+  pasó sus filtros focales, clippy de workspace, formato, frontera pública y
+  diffcheck locales; el detalle está en la evidencia anterior. Aún no hay CI que
+  cubra ese coordinador. Ninguna de esas pruebas demuestra instalación de `New`
+  por un caller productivo, recovery ni resistencia a pérdida de energía.
 - Antes de conectar el recovery nuevo, debe diseñarse y probarse el dispatch
   entre transacciones nuevas y journals v1 legacy. Un v1 sin contexto mantiene
   su camino actual; la ausencia de sidecar no se usa para reinterpretarlo como

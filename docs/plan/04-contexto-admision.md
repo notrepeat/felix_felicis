@@ -3,11 +3,15 @@
 **Estado:** decisión de diseño autorizada; `ContextoAdmision` y su envelope son
 valores de datos en memoria con codecs privados. El lifecycle documenta las
 primitivas de lectura, creación temporal, verificación y publicación canónica ya
-implementadas. Falta el caller de producción que las coordine, además de
-cleanup y preflight global de huérfanos. El valor no es prueba ni autoridad de
-admisión: una recuperación futura debe revalidarlo antes de volver a aceptar
-`New` después de perder el backup. El estado global sigue en 4/9 fases; U7 y
-fase 04 permanecen parciales. Replay y decoder aún no tienen caller desde
+implementadas. El dueño también observa el root raw desde el parent retenido y
+devuelve la huella como dato. Ya existe un coordinador privado que carga journal
+y contexto con leases secuenciales, valida el replay y compara esa huella con
+`NewEsperado`; devuelve datos de comparación, no una decisión de recovery. Falta
+el caller de producción que aplique la tabla vigente, además de cleanup y
+preflight global de huérfanos. El valor no es prueba ni autoridad de admisión:
+una recuperación futura debe revalidarlo antes de volver a aceptar `New`
+después de perder el backup. El estado global sigue en 4/9 fases; U7 y fase 04
+permanecen parciales. Replay y decoder aún no tienen caller desde
 apply/producción ni cierran esas fases.
 
 ## Decisión
@@ -37,9 +41,16 @@ auxiliares, overrides de parent y directorios vacíos— y coteja su digest con
 esperados, más `transaction_id`, parent e identidades copiados del journal.
 
 `NewEsperado` no comprueba identidad ni estado de filesystem, no autentica el
-journal y no da una capability de recovery. La capa bajo lock debe contrastar
-el root observado con la identidad y la huella esperadas y aplicar la fila
-admitida por la tabla actual antes de conservar `New` o avanzar `Committed`.
+journal y no da una capability de recovery. `observar_root_raw` abre el root
+relativo al parent retenido en modo de lectura y devuelve una huella opcional
+como dato; no demuestra que `New` esté instalado. El coordinador privado bajo
+lock, `DuenioTransaccionAnclado::comparar_root_replay`,
+carga journal y contexto con leases secuenciales, reproduce el replay con los
+parámetros explícitos de motor y policy y compara identidad y huella completas
+con el root raw observado. Su relación (`Ausente`, `Coincide` o `Diferente`)
+sigue siendo solo un dato; no aplica la tabla vigente ni habilita conservar
+`New` o avanzar `Committed`. El caller productivo que conecte ese resultado con
+apply o recovery sigue pendiente.
 El token, los digests y cualquier attestation guardados son datos para
 comprobar consistencia, no prueba ni autoridad de admisión; si un actor puede
 editar los datos, también puede recalcular digests sin clave. Una huella del
@@ -109,7 +120,7 @@ recuperación futura requiere replay y falta evidencia, debe fallar cerrada y
 conservar los artefactos para decisión manual. Cambiar esa conducta requiere
 una decisión de contrato separada.
 
-## Vínculo puro a journal (sin persistencia)
+## Vínculo de replay y leases de datos
 
 `EnvelopeContextoAdmision` es un valor crate-private en memoria que conserva un
 `ContextoAdmision` junto a una copia de `transaction_id`, parent y huellas
@@ -123,11 +134,13 @@ Esto añade consistencia entre el contexto en memoria y los metadatos del
 journal, no autenticidad ni autoridad: `NewEsperado` sigue copiando los IDs del
 journal y ningún valor prueba por sí solo el estado instalado. El envelope no
 consulta el filesystem, no conserva rutas o handles y no es capability. El
-codec serializa el envelope, pero no liga el resultado a un journal observado ni
-ofrece lifecycle. El decoder de `FELIX-ADMCTX` sigue sin ligarlo por sí mismo a
-un journal. `FELIX-ADMCTX` v1 y `felix-journal-v1` permanecen sin cambios. El
-lease ya puede crear, verificar y publicar el auxiliar canonical; aún no hay
-caller que coordine esas primitivas con el journal o recovery.
+codec y el decoder no ligan el resultado a un journal observado. El coordinador
+privado carga primero el journal canónico y después el contexto, reproduce el
+replay con los parámetros de motor y policy que recibe, y compara el fingerprint
+completo con la observación raw del root. Esos parámetros son entradas explícitas
+del cálculo, no una identidad de evaluador soportada por un caller productivo.
+El coordinador no elige una fila de recovery, no altera archivos ni habilita
+cleanup. `FELIX-ADMCTX` v1 y `felix-journal-v1` permanecen sin cambios.
 
 ## Lifecycle y gates para publicación y recovery
 
@@ -165,18 +178,18 @@ el progreso global permanece en 4/9.
 
 ## Evidencia de verificación
 
-El candidato exacto `aa814e3c28231bb83934a1275328594fa8853649` está publicado en
-`origin/codex/plan-demostracion`. El CI exacto `38764635021` terminó SUCCESS
-en ambos jobs, Linux y Windows, y en todos sus pasos; el operador verificó los
-logs. Corresponde al SHA aa814e3 y no cubre el encoder local posterior sin
-commit. No se atribuye una causa a fallos históricos por el resultado actual.
+En la ronda de `aa814e3c28231bb83934a1275328594fa8853649`, ese candidato estaba
+publicado en `origin/codex/plan-demostracion` y el CI exacto `38764635021`
+terminó SUCCESS en ambos jobs, Linux y Windows, y en todos sus pasos. Ese
+resultado corresponde a esa base y no cubre unidades posteriores. No se
+atribuye una causa a fallos históricos por el resultado actual.
 
-La verificación local más reciente, reportada sobre ese SHA, registró en
-Windows 783 passed/0 failed/9 ignored para workspace, recovery 78/0/3,
-diagnósticos 2/2 y filtros focales 37/37. `cargo fmt`, clippy con warnings
-denegados y el chequeo de frontera pública terminaron verdes. La repetición de
-runtime nativo en WSL se canceló ante la orden de detener; no cuenta como
-resultado ni como runtime Linux exitoso.
+En esa ronda, la verificación local reportada sobre ese SHA registró en Windows
+783 passed/0 failed/9 ignored para workspace, recovery 78/0/3, diagnósticos
+2/2 y filtros focales 37/37. `cargo fmt`, clippy con warnings denegados y el
+chequeo de frontera pública terminaron verdes. La repetición de runtime nativo
+en WSL se canceló ante la orden de detener; no cuenta como resultado ni como
+runtime Linux exitoso.
 
 El CI remoto exacto de `713cec7f629c794c635a6ae8a89b1c1d8a619559` (run
 `38833928734`) terminó SUCCESS en Linux y Windows, en ambos jobs y todos sus
@@ -209,12 +222,66 @@ cargo test --locked -p universo-okf --lib publica_y_reabre_contexto_y_journal_pr
 En ese commit, los filtros locales fueron Windows: contexto 21/21 y admisión
 40/40; Linux: contexto 22/22 y admisión 40/40. Clippy de workspace con
 warnings denegados terminó verde en ambos sistemas; formato, chequeo de frontera
-y diffcheck terminaron verdes en Windows. El último CI remoto disponible
-corresponde a `8c12e197dd51150905a5871559c52f53472b12ee` (run `38849833617`):
+y diffcheck terminaron verdes en Windows. El CI remoto de esa ronda corresponde
+a `8c12e197dd51150905a5871559c52f53472b12ee` (run `38849833617`):
 sus suites de workspace reportaron Linux 834/0/9 y Windows 822/0/9 en 38
-targets, además de 7 pruebas Python por sistema. Ese CI precede y no cubre
-`33c7d52`, `86569b3` ni
-`679c2c2`.
+targets, además de 7 pruebas Python por sistema. Ese CI cubre la base anterior;
+no incluye `33c7d52`, `86569b3` ni `679c2c2`.
+
+El CI remoto exacto de `fad5736030ac86798df75ae16d420c1682a5e915` (run
+`38852225652`) terminó SUCCESS en Linux y Windows. Reportó Linux 845 pass/0 fail/9 ignored y
+Windows 833 pass/0 fail/9 ignored en 38 targets, además de 7 pruebas Python
+por sistema. Este resultado es de `fad5736`; no cubre el observer local
+`3daced9` ni la fixture de pipeline.
+
+La unidad local `3daced9` añadió observación read-only del root anclada al
+parent retenido. Sus filtros focales registraron Windows owner 12/12,
+anclado 18/18 e inventario 17/17; Linux owner 13/13, anclado 17/17 e
+inventario 23/23. Clippy de workspace con warnings denegados, formato,
+frontera pública y diffcheck terminaron verdes en las verificaciones locales.
+La huella observada es un dato; no autoriza admisión, recovery ni cleanup.
+
+La unidad local de fixture prepara un root con el `New` raw esperado, liga el
+journal a su identidad real, publica y reabre ambos siblings bajo un lock
+readquirido en el mismo proceso, y compara el replay con la observación raw.
+El filtro reproducible es:
+
+```text
+cargo test --locked -p universo-okf --lib fixture_prepara_y_reabre_replay_con_root_new_real
+```
+
+Sus filtros focales registraron Windows owner 13/13, contexto 21/21, journal
+59/59 y envelope 20/20; Linux owner 14/14, contexto 22/22, journal 60/60 y
+envelope 20/20. Clippy de workspace con todos los targets y `-D warnings`,
+formato, frontera pública y diffcheck terminaron verdes en ambos sistemas; en
+Linux se fijó un `TMPDIR` nativo corto. La prueba no simula reinicio, pérdida de
+energía, recovery ni un caller de producción, y no prueba una instalación real
+de `New`. La primera compilación se detuvo por visibilidad del método de
+publicación desde la fixture; un seam `cfg(test)` lo resolvió sin ampliar API.
+La revisión también corrigió el lifetime de la ruta, la comparación de la
+identidad opaca y el orden de `rustfmt` antes de los gates verdes. El cleanup del
+harness se registró aparte y no fue un fallo de comportamiento del producto.
+Esta unidad quedó registrada en
+`1f5507ed90ebccd2e4a2946fd48d1d0c985dd08b`.
+
+El commit `c3853e03819386d4c4364d57be615f26b2b2766c`, sobre la base
+`1f5507ed90ebccd2e4a2946fd48d1d0c985dd08b`, añade un coordinador privado de
+solo datos que carga journal y contexto por leases secuenciales, valida su
+binding y replay, y compara la huella completa del root raw. Sus pruebas cubren
+las relaciones `Coincide` y `Ausente`, más dos casos de `Diferente`: mismo ID
+con digest distinto e ID distinto con contenido igual. También comprueban que
+incompatibilidades de motor/policy, binding, parent o siblings faltantes fallan
+cerradas y preservan los archivos observados. Los parámetros de motor y policy
+siguen siendo datos explícitos, sin identidad soportada por un caller de
+producción.
+
+Los filtros focales de esta unidad registraron Windows owner 16/16, contexto
+21/21, journal 59/59 y envelope 20/20; Linux owner 17/17, contexto 22/22,
+journal 60/60 y envelope 20/20. Clippy de workspace con todos los targets y
+`-D warnings` terminó verde en ambos sistemas; formato y diffcheck pasaron en
+ambos, y el chequeo de frontera pública pasó en Linux y Windows. El CI remoto
+aún no cubre esta unidad; el último CI exacto documentado arriba corresponde a
+`fad5736`.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
@@ -230,7 +297,7 @@ identifican por sí solos la causa de los fallos observados entonces.
   esa ronda no había CI remoto asociado.
 
 - El filtro focal de diagnóstico Windows registró 1 passed/1 failed. La
-  suite de recovery también volvió a ejecutarse en la ronda actual; su
+  suite de recovery también volvió a ejecutarse en aquella ronda; su
   resultado está separado abajo. `share_delete_denial_records_source_open_and_success_clears_the_previous_diagnostic`
   reprodujo un bloqueo real al abrir la fuente (`AperturaFuente`,
   `raw_os_error=32`, `ERROR_SHARING_VIOLATION`). Tras cerrar el handle que lo
@@ -329,5 +396,5 @@ causa a partir de su diferencia con la verificación actual.
   sensibles fuera del material inspeccionado.
 - Se reportó el CI histórico `38630887294`; en aquella sesión no pudo
   reconfirmarse porque el acceso remoto quedó bloqueado. El resultado permanece
-  registrado como informado, no verificado; el CI `38764635021` es la
-  verificación exacta más reciente del candidato y tiene estado SUCCESS.
+  registrado como informado, no verificado; en aquella ronda el CI exacto
+  `38764635021` verificó el candidato `aa814e3` con estado SUCCESS.
