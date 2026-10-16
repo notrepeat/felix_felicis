@@ -380,4 +380,113 @@ mod tests {
         assert_eq!(format!("{error:?}"), "ErrorIdentidadArchivoPersistida");
         assert_eq!(error.to_string(), "invalid_persisted_file_identity");
     }
+
+    #[test]
+    fn roundtrip_maximos_unix_y_windows_cabe_en_la_cuota() {
+        let unix = IdentidadArchivoPersistida::sintetica_unix(u64::MAX, u64::MAX);
+        let mut input = Cursor::new(unix.encode().unwrap());
+        assert_eq!(
+            IdentidadArchivoPersistida::decode(&mut input).unwrap(),
+            unix
+        );
+
+        let windows = IdentidadArchivoPersistida::sintetica_windows(u64::MAX, [0x01; 16]);
+        let frame = windows.encode().unwrap();
+        assert!(frame.len() <= MAX_FRAME_BYTES);
+        let mut input = Cursor::new(frame);
+        assert_eq!(
+            IdentidadArchivoPersistida::decode(&mut input).unwrap(),
+            windows
+        );
+    }
+
+    struct LectorConInyecciones {
+        bytes: Vec<u8>,
+        offset: usize,
+        interrupciones_en: Vec<usize>,
+        error_en: Option<usize>,
+    }
+
+    impl LectorConInyecciones {
+        fn con_interrupcion(bytes: Vec<u8>, offset: usize) -> Self {
+            Self {
+                bytes,
+                offset: 0,
+                interrupciones_en: vec![offset],
+                error_en: None,
+            }
+        }
+
+        fn con_error(bytes: Vec<u8>, offset: usize) -> Self {
+            Self {
+                bytes,
+                offset: 0,
+                interrupciones_en: Vec::new(),
+                error_en: Some(offset),
+            }
+        }
+    }
+
+    impl std::io::Read for LectorConInyecciones {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if buffer.is_empty() {
+                return Ok(0);
+            }
+            if let Some(index) = self
+                .interrupciones_en
+                .iter()
+                .position(|offset| *offset == self.offset)
+            {
+                self.interrupciones_en.remove(index);
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            if self.error_en == Some(self.offset) {
+                return Err(std::io::Error::other("reader error canary"));
+            }
+            if self.offset == self.bytes.len() {
+                return Ok(0);
+            }
+
+            let proximo_evento = self
+                .interrupciones_en
+                .iter()
+                .copied()
+                .chain(self.error_en)
+                .filter(|offset| *offset > self.offset)
+                .min()
+                .unwrap_or(self.bytes.len());
+            let cantidad = buffer
+                .len()
+                .min(3)
+                .min(self.bytes.len() - self.offset)
+                .min(proximo_evento - self.offset);
+            buffer[..cantidad].copy_from_slice(&self.bytes[self.offset..self.offset + cantidad]);
+            self.offset += cantidad;
+            Ok(cantidad)
+        }
+    }
+
+    #[test]
+    fn read_corto_reintenta_interrupted_en_header_payload_y_eof() {
+        let identity = IdentidadArchivoPersistida::sintetica_unix(3, 4);
+        let bytes = identity.encode().unwrap();
+        for offset in [0, super::HEADER_BYTES, bytes.len()] {
+            let mut reader = LectorConInyecciones::con_interrupcion(bytes.clone(), offset);
+            assert_eq!(
+                IdentidadArchivoPersistida::decode(&mut reader).unwrap(),
+                identity
+            );
+        }
+    }
+
+    #[test]
+    fn errores_io_en_header_payload_y_eof_fallan_con_error_fijo() {
+        let identity = IdentidadArchivoPersistida::sintetica_unix(3, 4);
+        let bytes = identity.encode().unwrap();
+        for offset in [0, super::HEADER_BYTES, bytes.len()] {
+            let mut reader = LectorConInyecciones::con_error(bytes.clone(), offset);
+            let error = IdentidadArchivoPersistida::decode(&mut reader).unwrap_err();
+            assert_eq!(error.to_string(), "invalid_persisted_file_identity");
+        }
+    }
 }
