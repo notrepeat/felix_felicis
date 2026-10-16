@@ -251,6 +251,84 @@ mod tests {
     }
 
     #[test]
+    fn constructor_maps_typed_dto_validation_errors() {
+        let unsupported_digest = ArtifactFingerprint::new(
+            identity(2),
+            RawTreeDigest {
+                version: "future-digest".to_owned(),
+                hex: "a".repeat(64),
+            },
+        );
+        assert_eq!(
+            JournalV2::new(
+                TRANSACTION_ID,
+                identity(1),
+                unsupported_digest,
+                fingerprint(3, 'b'),
+            )
+            .unwrap_err(),
+            JournalV2Error::DigestVersionUnsupported
+        );
+
+        let invalid_digest = ArtifactFingerprint::new(
+            identity(2),
+            RawTreeDigest {
+                version: "felix-raw-tree-sha256-v1".to_owned(),
+                hex: "A".repeat(64),
+            },
+        );
+        assert_eq!(
+            JournalV2::new(
+                TRANSACTION_ID,
+                identity(1),
+                invalid_digest,
+                fingerprint(3, 'b'),
+            )
+            .unwrap_err(),
+            JournalV2Error::DigestInvalid
+        );
+
+        let invalid_identity = DirectoryIdentity::Windows {
+            volume: 7,
+            file_id: "../secret".to_owned(),
+        };
+        assert_eq!(
+            JournalV2::new(
+                TRANSACTION_ID,
+                identity(1),
+                ArtifactFingerprint::new(
+                    invalid_identity,
+                    RawTreeDigest::from_hex("a".repeat(64)).unwrap()
+                ),
+                fingerprint(3, 'b'),
+            )
+            .unwrap_err(),
+            JournalV2Error::IdentityInvalid
+        );
+
+        #[cfg(unix)]
+        let foreign = DirectoryIdentity::Windows {
+            volume: 7,
+            file_id: "00000000000000000000000000000002".to_owned(),
+        };
+        #[cfg(windows)]
+        let foreign = DirectoryIdentity::Unix {
+            device: 7,
+            inode: 2,
+        };
+        assert_eq!(
+            JournalV2::new(
+                TRANSACTION_ID,
+                foreign,
+                fingerprint(2, 'a'),
+                fingerprint(3, 'b'),
+            )
+            .unwrap_err(),
+            JournalV2Error::PlatformInvalid
+        );
+    }
+
+    #[test]
     fn transitions_are_sequential_and_idempotent() {
         let mut record = record();
         for state in [
