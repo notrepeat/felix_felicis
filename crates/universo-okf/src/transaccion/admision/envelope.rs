@@ -127,8 +127,8 @@ pub(crate) mod tests {
     use crate::transaccion::stage::{inventario_objetivo_para_replay, planificar_staging};
     use universo_core::{Delta, ResultadoPropuesta};
 
-    pub(super) const MOTOR: &str = "engine-envelope/1";
-    pub(super) const POLICY: &str = "policy-envelope/1";
+    pub(crate) const MOTOR: &str = "engine-envelope/1";
+    pub(crate) const POLICY: &str = "policy-envelope/1";
     const MANIFIESTO: &str = "version = \"envelope-test/1\"\n\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n\n[nodos.disco]\n\"Patrón\" = \"pattern\"\n\n[layout]\ndirectorios = [\"knowledge\"]\nsin_iota = []\nignorados = []\nparent_key = \"parent\"\n";
     const DOCUMENTO: &[u8] = b"---\ntype: a\ntitle: Index\nparent: \"\"\n---\nindex\n";
 
@@ -180,7 +180,7 @@ pub(crate) mod tests {
         Journal::new(transaction_id, parent, old, new).unwrap()
     }
 
-    pub(super) fn journal_valido(contexto: &ContextoAdmision) -> Journal {
+    pub(crate) fn journal_valido(contexto: &ContextoAdmision) -> Journal {
         let digest_old = calcular_digest_raw_tree(&contexto.entradas_base()).unwrap();
         journal(
             "0123456789abcdef0123456789abcdef",

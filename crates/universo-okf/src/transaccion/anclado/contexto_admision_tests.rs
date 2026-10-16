@@ -3,7 +3,10 @@ use super::*;
 use crate::transaccion::admision::envelope::{
     EnvelopeContextoAdmision, codec, tests as envelope_fixtures,
 };
-use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
+use crate::transaccion::anclado::journal_temporal::ResultadoPublicacionJournal;
+use crate::transaccion::journal::{
+    ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
+};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::raiz::UbicacionRaiz;
 use sha2::{Digest, Sha256};
@@ -106,6 +109,152 @@ fn reabre_el_contexto_despues_de_soltar_y_readquirir_el_lock_en_el_proceso() {
     let (envelope, _) = lease.leer_canonico().unwrap().unwrap();
 
     assert_eq!(codec::codificar(&envelope).unwrap(), esperado);
+}
+
+#[test]
+fn publica_y_reabre_contexto_y_journal_prepared_para_replay_puro() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let contexto = envelope_fixtures::contexto(b"\n");
+    let fixture = envelope_fixtures::journal_valido(&contexto);
+    let journal = Journal::new(
+        fixture.transaction_id(),
+        parent_identity(&parent),
+        fixture.old().clone(),
+        fixture.new_fingerprint().clone(),
+    )
+    .unwrap();
+    let envelope = EnvelopeContextoAdmision::ligar(contexto, &journal);
+    let bytes_contexto = codec::codificar(&envelope).unwrap();
+    let bytes_journal = journal.encode().unwrap();
+    let ruta_contexto = contexto_path(&ubicacion);
+    let ruta_journal = ubicacion.journal().as_path().to_path_buf();
+
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let id_contexto_publicado = {
+        let temporal = crear_recibo(&mut owner, &envelope);
+        let identidad = temporal.datos.identidad_archivo;
+        let publicado = temporal.verificar().unwrap().publicar().unwrap();
+        assert_eq!(format!("{publicado:?}"), "ReciboContextoPublicado { .. }");
+        identidad
+    };
+    let id_journal_publicado = {
+        let lease = owner.journal_temporal().unwrap();
+        let identidad = lease.crear_nuevo(&bytes_journal).unwrap();
+        assert!(matches!(
+            lease.publicar(identidad, &journal),
+            ResultadoPublicacionJournal::Confirmado { .. }
+        ));
+        identidad
+    };
+    drop(owner);
+    drop(lock);
+
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let (id_journal_reabierto, journal_reabierto, bytes_journal_reabiertos) = {
+        let lease = owner.journal_temporal().unwrap();
+        let (id_bytes, bytes) = lease.abrir_y_leer_canonico().unwrap().unwrap();
+        let (id_record, record) = lease.cargar_canonico().unwrap().unwrap();
+        assert_eq!(id_bytes, id_record);
+        (id_record, record, bytes)
+    };
+    let (envelope_reabierto, id_contexto_reabierto) = {
+        let lease = owner.contexto_admision().unwrap();
+        lease.leer_canonico().unwrap().unwrap()
+    };
+    let esperado = envelope_reabierto
+        .validar_replay(
+            &journal_reabierto,
+            envelope_fixtures::MOTOR,
+            envelope_fixtures::POLICY,
+        )
+        .unwrap();
+
+    assert_eq!(journal_reabierto, journal);
+    assert_eq!(journal_reabierto.state(), JournalState::Prepared);
+    assert_eq!(id_journal_reabierto, id_journal_publicado);
+    assert_eq!(bytes_journal_reabiertos, bytes_journal);
+    assert_eq!(id_contexto_reabierto, id_contexto_publicado);
+    assert_eq!(esperado.transaction_id(), journal.transaction_id());
+    assert!(esperado.parent() == journal.parent());
+    assert!(esperado.old() == journal.old());
+    assert!(esperado.new_fingerprint() == journal.new_fingerprint());
+    assert!(!esperado.entradas().is_empty());
+
+    let identidad_journal_antes_motor =
+        identidad_archivo(&File::open(&ruta_journal).unwrap()).unwrap();
+    for (motor, policy) in [
+        ("engine-unrecognized/1", envelope_fixtures::POLICY),
+        (envelope_fixtures::MOTOR, "policy-unrecognized/1"),
+    ] {
+        let error = envelope_reabierto
+            .validar_replay(&journal_reabierto, motor, policy)
+            .unwrap_err();
+        assert_eq!(error.codigo(), "replay_engine_policy_mismatch");
+    }
+    assert_eq!(fs::read(&ruta_contexto).unwrap(), bytes_contexto);
+    assert_eq!(fs::read(&ruta_journal).unwrap(), bytes_journal);
+    assert_eq!(
+        identidad_archivo(&File::open(&ruta_contexto).unwrap()).unwrap(),
+        id_contexto_reabierto
+    );
+    assert_eq!(
+        identidad_archivo(&File::open(&ruta_journal).unwrap()).unwrap(),
+        identidad_journal_antes_motor
+    );
+
+    let journal_cambiado = Journal::new(
+        "1123456789abcdef0123456789abcdef",
+        journal.parent().clone(),
+        journal.old().clone(),
+        journal.new_fingerprint().clone(),
+    )
+    .unwrap();
+    let bytes_journal_cambiado = journal_cambiado.encode().unwrap();
+    fs::write(&ruta_journal, &bytes_journal_cambiado).unwrap();
+    let (id_journal_cambiado, journal_cambiado, bytes_journal_observados) = {
+        let lease = owner.journal_temporal().unwrap();
+        let (id_bytes, bytes) = lease.abrir_y_leer_canonico().unwrap().unwrap();
+        let (id_record, record) = lease.cargar_canonico().unwrap().unwrap();
+        assert_eq!(id_bytes, id_record);
+        (id_record, record, bytes)
+    };
+    assert_eq!(id_journal_cambiado, id_journal_reabierto);
+    assert_eq!(bytes_journal_observados, bytes_journal_cambiado);
+    let identidad_journal_antes_vinculo =
+        identidad_archivo(&File::open(&ruta_journal).unwrap()).unwrap();
+    let error = envelope_reabierto
+        .validar_replay(
+            &journal_cambiado,
+            envelope_fixtures::MOTOR,
+            envelope_fixtures::POLICY,
+        )
+        .unwrap_err();
+    assert_eq!(error.codigo(), "admission_envelope_journal_mismatch");
+    assert_eq!(fs::read(&ruta_contexto).unwrap(), bytes_contexto);
+    assert_eq!(fs::read(&ruta_journal).unwrap(), bytes_journal_observados);
+    assert_eq!(
+        identidad_archivo(&File::open(&ruta_contexto).unwrap()).unwrap(),
+        id_contexto_reabierto
+    );
+    assert_eq!(
+        identidad_archivo(&File::open(&ruta_journal).unwrap()).unwrap(),
+        identidad_journal_antes_vinculo
+    );
+
+    drop(owner);
+    drop(lock);
+    assert_eq!(fs::read(&ruta_contexto).unwrap(), bytes_contexto);
+    assert_eq!(fs::read(&ruta_journal).unwrap(), bytes_journal_cambiado);
+    assert_eq!(
+        identidad_archivo(&File::open(&ruta_contexto).unwrap()).unwrap(),
+        id_contexto_reabierto
+    );
 }
 
 #[test]
