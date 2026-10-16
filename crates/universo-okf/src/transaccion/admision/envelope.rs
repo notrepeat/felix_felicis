@@ -116,7 +116,7 @@ impl fmt::Display for ErrorEnvelopeAdmision {
 impl std::error::Error for ErrorEnvelopeAdmision {}
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     use crate::serializar::serializar_candidato;
@@ -127,12 +127,12 @@ mod tests {
     use crate::transaccion::stage::{inventario_objetivo_para_replay, planificar_staging};
     use universo_core::{Delta, ResultadoPropuesta};
 
-    const MOTOR: &str = "engine-envelope/1";
-    const POLICY: &str = "policy-envelope/1";
+    pub(super) const MOTOR: &str = "engine-envelope/1";
+    pub(super) const POLICY: &str = "policy-envelope/1";
     const MANIFIESTO: &str = "version = \"envelope-test/1\"\n\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n\n[nodos.disco]\n\"Patrón\" = \"pattern\"\n\n[layout]\ndirectorios = [\"knowledge\"]\nsin_iota = []\nignorados = []\nparent_key = \"parent\"\n";
     const DOCUMENTO: &[u8] = b"---\ntype: a\ntitle: Index\nparent: \"\"\n---\nindex\n";
 
-    fn contexto(invariantes: &[u8]) -> ContextoAdmision {
+    pub(super) fn contexto(invariantes: &[u8]) -> ContextoAdmision {
         let entradas = vec![
             EntradaSnapshot::directorio("knowledge"),
             EntradaSnapshot::archivo("knowledge/index.md", DOCUMENTO),
@@ -156,7 +156,7 @@ mod tests {
         calcular_digest_raw_tree(&entradas).unwrap()
     }
 
-    fn identidad(seed: u64) -> DirectoryIdentity {
+    pub(super) fn identidad(seed: u64) -> DirectoryIdentity {
         #[cfg(windows)]
         {
             DirectoryIdentity::windows(seed, format!("{seed:032x}"))
@@ -167,7 +167,7 @@ mod tests {
         }
     }
 
-    fn fingerprint(id: u64, digest: RawTreeDigest) -> ArtifactFingerprint {
+    pub(super) fn fingerprint(id: u64, digest: RawTreeDigest) -> ArtifactFingerprint {
         ArtifactFingerprint::new(identidad(id), digest)
     }
 
@@ -180,7 +180,7 @@ mod tests {
         Journal::new(transaction_id, parent, old, new).unwrap()
     }
 
-    fn journal_valido(contexto: &ContextoAdmision) -> Journal {
+    pub(super) fn journal_valido(contexto: &ContextoAdmision) -> Journal {
         let digest_old = calcular_digest_raw_tree(&contexto.entradas_base()).unwrap();
         journal(
             "0123456789abcdef0123456789abcdef",

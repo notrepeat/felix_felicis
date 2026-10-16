@@ -18,7 +18,11 @@ const HEADER_BYTES: usize = MAGIC.len() + 2 + 8;
 const JOURNAL_LENGTH_BYTES: usize = 4;
 const CONTEXT_LENGTH_BYTES: usize = 8;
 
+#[allow(dead_code)]
+mod decodificar;
 mod lectura;
+#[allow(dead_code, unused_imports)]
+pub(crate) use decodificar::decodificar;
 
 /// Codifica el vínculo y contexto en un framing único de cuota inclusiva.
 pub(crate) fn codificar(

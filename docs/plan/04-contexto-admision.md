@@ -65,9 +65,11 @@ incluye journal y encuadre, sigue experimental. Su encoder puro en memoria está
 implementado en `admision/envelope/codec.rs` y pasa al codec interior solo la
 cuota restante antes de reservar. El preflight exterior devuelve vistas
 prestadas y valida el framing sin decodificar payloads. El decoder exterior
-semántico, I/O y callers siguen pendientes; el wire y wrapper interior no
-cambian. `bc38412` incorpora un
-preflight lector con vistas
+owned en memoria parsea el journal v1 canónico en `Prepared`, reconstruye el
+contexto interior y liga sus metadatos inmutables. I/O y callers siguen
+pendientes; el wire y wrapper interior no cambian. El filtro focal local del
+codec exterior pasó 10/10 pruebas en Windows. `bc38412` incorpora un preflight
+lector con vistas
 prestadas, cubierto con pruebas de robustez en `ef79ea7`. El decoder owned ya
 está implementado en memoria: reconstruye las entradas raw por ruta, tipo y bytes;
 revalida los marcadores de configuración contra las entradas; parsea y

@@ -137,10 +137,11 @@ confirma la identidad que posee.
 
 - El encoder exterior es una unidad pura en memoria, implementada en
   `admision/envelope/codec.rs`; sus pruebas cubren determinismo entre fases,
-  cuota inclusiva y errores redactados. El decoder futuro probará roundtrip,
-  truncamiento, framing, journal no canónico o no `Prepared`, y binding. No hay
-  I/O ni caller. `FELIX-ADMCTX` v1 conserva su wire; las funciones siguen
-  `pub(crate)`.
+  cuota inclusiva y errores redactados. El decoder owned puro también está
+  implementado; exige journal canónico `Prepared`, reconstruye y liga el
+  contexto, y sus pruebas cubren roundtrip/replay, fases, binding, journal
+  inválido y corrupción inner. No hay I/O ni caller. `FELIX-ADMCTX` v1 conserva
+  su wire; las funciones siguen `pub(crate)`.
 - Si encoder y decoder con sus pruebas superan 400 líneas de churn, se separan
   en dos commits por comportamiento: primero codificación canónica con límite
   combinado; después preflight/decode y pruebas de corrupción/binding. Cada
