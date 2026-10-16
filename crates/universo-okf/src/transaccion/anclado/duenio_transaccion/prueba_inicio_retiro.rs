@@ -1,7 +1,8 @@
 //! Prueba fresca y estricta para comenzar el retiro experimental.
 
 use std::fmt;
-use std::io::Read;
+use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
 
 use sha2::{Digest, Sha256};
 
@@ -206,12 +207,28 @@ impl<'owner, 'lock> IntentTemporalEscrito<'owner, 'lock> {
             super::super::super::contexto_admision::nombre_temporal_sibling(&canonico)
                 .map_err(|_| ErrorPruebaReplayRootCoincidente)?
         };
-        let mut archivo = super::super::super::abrir::abrir_entrada_relativa(
+        let archivo = super::super::super::abrir::abrir_entrada_relativa(
             &parent,
             &nombre_temporal,
             super::super::super::TipoEntradaAnclada::Archivo,
         )
         .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
+
+        let archivo = self.verificar_handle_temporal(archivo)?;
+        Ok(IntentTemporalVerificado {
+            _escrito: self,
+            _archivo: archivo,
+        })
+    }
+
+    /// Devuelve el mismo `File` validado. Un futuro syscall Windows debe usar
+    /// ese handle con los derechos adecuados; Linux renombra por nombre y el
+    /// caller debe comprobar el binding justo antes, con una carrera externa residual.
+    fn verificar_handle_temporal(
+        &self,
+        mut archivo: File,
+    ) -> Result<File, ErrorPruebaReplayRootCoincidente> {
+        let prueba = &self._inicio._prueba;
 
         let metadata = archivo
             .metadata()
@@ -248,8 +265,16 @@ impl<'owner, 'lock> IntentTemporalEscrito<'owner, 'lock> {
             .ok()
             .and_then(|longitud| longitud.checked_add(1))
             .ok_or(ErrorPruebaReplayRootCoincidente)?;
+        loop {
+            match archivo.seek(SeekFrom::Start(0)) {
+                Ok(_) => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => return Err(ErrorPruebaReplayRootCoincidente),
+            }
+        }
         let mut bytes = Vec::with_capacity(longitud_esperada);
-        (&mut archivo)
+        archivo
+            .by_ref()
             .take(limite)
             .read_to_end(&mut bytes)
             .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
@@ -261,9 +286,6 @@ impl<'owner, 'lock> IntentTemporalEscrito<'owner, 'lock> {
             return Err(ErrorPruebaReplayRootCoincidente);
         }
 
-        Ok(IntentTemporalVerificado {
-            _escrito: self,
-            _archivo: archivo,
-        })
+        Ok(archivo)
     }
 }
