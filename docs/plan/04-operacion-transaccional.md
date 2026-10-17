@@ -43,6 +43,15 @@ crate-private y no tienen caller desde apply/producción.
 La secuencia privada `Croot→retiro de Intent→observación final` owner-bound se
 resume en [04-contexto-admision.md](04-contexto-admision.md); sigue sin caller
 de apply o recovery.
+El clasificador privado U1/U2 cerró gates locales: el filtro de U1 fue `3/0/0`
+y el de U2 `6/0/0` en Windows y Linux. Formato, clippy, frontera y diff-check
+terminaron en `0`; cleanup Linux terminó en `0`. Los commits son
+`e2e8feb20eab3d55f1d69014e2dd7f08616cde00` y
+`17e01ca0b388d012d308d5a95b87429d44cf423b`. El CI `b8786e3` (run
+`39011763572`) precede a ambos y no los cubre. El clasificador no es un
+preflight global ni habilita replay, cleanup o caller. Su matriz y evidencia
+están en
+[04-contexto-admision.md](04-contexto-admision.md#clasificador-privado-de-familia-u1u2).
 
 La estrategia paralela Journal v2 conserva v1. Sus vectores dorados v1, modelo,
 codec y selector canónico están en el árbol local; el Journal v2 tiene cuota

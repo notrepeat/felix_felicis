@@ -431,13 +431,34 @@ se resume en la sección Ctx1–Ctx4. Ctx4 cerró sus gates locales y quedó
 en el commit local `190d046` (312 líneas de churn).
 I1A y B1 ya añaden el reader privado file-bound de Intent. B2 cerró gates
 locales en Windows y Linux y quedó en el commit `08ddb0b8`; el CI registrado de
-Context precede a estos cortes. No hay todavía preflight de familia persistida
-ni caller productivo. Fase 04 y U7 continúan parciales; el progreso global
-permanece en 4/9.
+Context precede a estos cortes. No hay todavía preflight global de familia
+persistida ni caller productivo. Fase 04 y U7 continúan parciales; el progreso
+global permanece en 4/9.
+
+## Clasificador privado de familia (U1/U2)
+
+U1 conserva como datos las combinaciones vacío, Journal v1 sin auxiliares y
+Journal v2 con ADMENV2; rechaza Intent y las mezclas. U2 añade las fases de
+retiro A/B/C: A exige igualdad completa de Journal v2, B permite el binding
+estructural ENV2 de `Prepared` con RETIRE2 `Committed`, y C clasifica Intent
+solo como dato sin replay ni cleanup. La matriz U2 acepta seis y rechaza 21 de
+27 combinaciones. Son clasificadores puros privados: no son un preflight global,
+no certifican owner/filesystem y no habilitan caller.
+
+U1 cerró sus gates locales: el filtro focal registró `3/0/0` en Windows y Linux.
+Formato, clippy, frontera y diff-check terminaron en `0`; cleanup Linux también
+terminó en `0`. Quedó en el commit local
+`e2e8feb20eab3d55f1d69014e2dd7f08616cde00`. U2 cerró su filtro focal con
+`6/0/0` en Windows y Linux; formato, clippy, frontera y diff-check terminaron
+en `0`, y cleanup Linux en `0`. Quedó en el commit local
+`17e01ca0b388d012d308d5a95b87429d44cf423b` (101 líneas de churn sobre U1).
+El CI publicado `b8786e3` (run `39011763572`) terminó SUCCESS con Windows
+`1218/0/9` y Linux `1238/0/9`, 38 suites Cargo y 7 pruebas Python por job,
+y demos/controles verdes. Ese CI precede a U1 y U2; no los cubre.
 
 ## Evidencia de verificación
 
-Los catorce CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los quince CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -457,6 +478,7 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `6b26b9a` | `39004162338` | `1194/0/9` | `1214/0/9` |
 | `e79099f` | `39008050182` | `1206/0/9` | `1226/0/9` |
 | `be97f03` | `39009583297` | `1212/0/9` | `1232/0/9` |
+| `b8786e3` | `39011763572` | `1218/0/9` | `1238/0/9` |
 
 El CI `39004162338` corresponde al lote publicado
 `6b26b9a8620f9aceb183b5d32e853a52944931ac`: Windows `1194/0/9` y Linux
