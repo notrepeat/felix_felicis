@@ -5,6 +5,8 @@ use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity};
 
 use super::super::ContextoAdmision;
 
+mod codec;
+
 /// Contexto de admisión ligado estructuralmente a los datos inmutables de JournalV2.
 ///
 /// La coincidencia compara datos; no reproduce el contexto, observa el filesystem
@@ -15,6 +17,11 @@ pub(crate) struct EnvelopeContextoAdmisionV2 {
 }
 
 impl EnvelopeContextoAdmisionV2 {
+    /// Codifica el binding y el Context en el frame exterior privado v2.
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, ErrorCodecEnvelopeContextoAdmisionV2> {
+        codec::encode(self)
+    }
+
     /// Conserva los campos vinculantes completos, incluido el kind cerrado de v2.
     pub(crate) fn ligar(contexto: ContextoAdmision, journal: &JournalV2) -> Self {
         Self {
@@ -35,6 +42,45 @@ impl EnvelopeContextoAdmisionV2 {
         }
     }
 }
+
+/// Error fijo y redactado del encoder exterior ADMENV v2.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ErrorCodecEnvelopeContextoAdmisionV2 {
+    JournalInvalid,
+    ContextInvalid,
+    TotalExceedsLimit,
+    LengthExceeded,
+    ReservationFailed,
+}
+
+impl ErrorCodecEnvelopeContextoAdmisionV2 {
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::JournalInvalid => "admission_envelope_v2_journal_invalid",
+            Self::ContextInvalid => "admission_envelope_v2_context_invalid",
+            Self::TotalExceedsLimit => "admission_envelope_v2_total_exceeds_limit",
+            Self::LengthExceeded => "admission_envelope_v2_length_exceeded",
+            Self::ReservationFailed => "admission_envelope_v2_reservation_failed",
+        }
+    }
+}
+
+impl fmt::Debug for ErrorCodecEnvelopeContextoAdmisionV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ErrorCodecEnvelopeContextoAdmisionV2")
+            .field(&self.code())
+            .finish()
+    }
+}
+
+impl fmt::Display for ErrorCodecEnvelopeContextoAdmisionV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for ErrorCodecEnvelopeContextoAdmisionV2 {}
 
 impl fmt::Debug for EnvelopeContextoAdmisionV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
