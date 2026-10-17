@@ -456,9 +456,43 @@ El CI publicado `b8786e3` (run `39011763572`) terminó SUCCESS con Windows
 `1218/0/9` y Linux `1238/0/9`, 38 suites Cargo y 7 pruebas Python por job,
 y demos/controles verdes. Ese CI precede a U1 y U2; no los cubre.
 
+### Binding puro de fases de retiro ABC
+
+Este helper privado valida datos DTO para las fases de retiro. En A, el
+JournalV2 asociado a la fase debe ser igual al Journal observado; Intent,
+Journal y Context deben compartir el scope observado. También compara las
+identidades persistidas, el binding estructural ADMENV, la longitud y el
+digest del Context con sus registros. Los errores son fijos y redactados.
+
+La extensión B/C conserva las fases existentes: B permite el binding
+estructural ENV2 de `Prepared` con RETIRE2 `Committed`; C describe Intent
+solo como dato, sin replay, cleanup o éxito. Ambos cortes usan valores ya
+observados y no abren archivos, reconstruyen identidades nativas desde DTO
+ni conceden frescura, autoridad o permiso de acción. No añaden un preflight
+global ni un caller.
+
+A quedó en el commit local
+`e7e4ab53f7b6c292d545700c784caf720395da93` (299 líneas de churn). Su filtro
+pasó `9/0/0` en Windows y Linux: seis pruebas heredadas y tres nuevas;
+formato, clippy, frontera y diff-check terminaron en 0, y cleanup Linux
+también terminó en 0. B/C quedó en el commit local
+`3e96637ad0138671813e8f9080a29c8ba2cef986` (219 líneas de churn). Su filtro
+pasó `11/0/0` por sistema: nueve pruebas heredadas y dos nuevas; los mismos
+controles terminaron en 0 y cleanup Linux en 0. Los conteos de filtros son
+acumulados por corte, no una suma de pruebas nuevas.
+
+El CI publicado `4cb9945684486fb7515bf3acabfccd3a08cbc88c` (run
+`39014089327`) terminó SUCCESS: Windows `1224/0/9` y Linux `1244/0/9`, con
+38 suites Cargo y 7 pruebas Python por job, demos y controles verdes. Ese CI
+precede a A y B/C, así que no cubre estos commits locales.
+
+El helper no sustituye la observación owner-bound de archivos. La puerta
+global de familia, la coordinación de filesystem, replay y cualquier caller
+de apply/recovery siguen pendientes; 4/9, U7 y fase 04 permanecen parciales.
+
 ## Evidencia de verificación
 
-Los quince CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los dieciséis CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -479,6 +513,7 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `e79099f` | `39008050182` | `1206/0/9` | `1226/0/9` |
 | `be97f03` | `39009583297` | `1212/0/9` | `1232/0/9` |
 | `b8786e3` | `39011763572` | `1218/0/9` | `1238/0/9` |
+| `4cb994` | `39014089327` | `1224/0/9` | `1244/0/9` |
 
 El CI `39004162338` corresponde al lote publicado
 `6b26b9a8620f9aceb183b5d32e853a52944931ac`: Windows `1194/0/9` y Linux

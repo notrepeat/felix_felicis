@@ -53,6 +53,22 @@ preflight global ni habilita replay, cleanup o caller. Su matriz y evidencia
 están en
 [04-contexto-admision.md](04-contexto-admision.md#clasificador-privado-de-familia-u1u2).
 
+El corte de binding persistido A/B/C valida datos DTO de las fases de retiro,
+sin filesystem ni autoridad. A quedó en el commit local
+`e7e4ab53f7b6c292d545700c784caf720395da93` (299 líneas de churn); su filtro
+pasó `9/0/0` en Windows y Linux, con seis pruebas heredadas y tres nuevas.
+B/C quedó en el commit local `3e96637ad0138671813e8f9080a29c8ba2cef986`
+(219 líneas de churn); su filtro pasó `11/0/0` por sistema, con nueve
+heredadas y dos nuevas. En ambos cortes, formato, clippy, frontera y
+diff-check terminaron en 0; cleanup Linux terminó en 0. Los conteos son
+acumulados por corte, no una suma de pruebas nuevas. El CI publicado
+`4cb9945684486fb7515bf3acabfccd3a08cbc88c` (run `39014089327`) terminó
+SUCCESS con Windows `1224/0/9` y Linux `1244/0/9`, 38 suites Cargo y 7
+pruebas Python por job, demos y controles verdes; precede a ambos commits y
+no los cubre. El detalle está en
+[04-contexto-admision.md](04-contexto-admision.md#binding-puro-de-fases-de-retiro-abc);
+no hay preflight global ni caller de apply/recovery.
+
 La estrategia paralela Journal v2 conserva v1. Sus vectores dorados v1, modelo,
 codec y selector canónico están en el árbol local; el Journal v2 tiene cuota
 propia de 1024 bytes y su encoder máximo midió 722 bytes en Windows y 665 en
