@@ -12,6 +12,8 @@ use crate::transaccion::anclado::identidad_archivo::MAX_PERSISTED_FILE_ID_FRAME_
 use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
 use crate::transaccion::journal::{Journal, JournalState, MAX_JOURNAL_BYTES};
 
+mod selector;
+
 const MAGIC: &[u8; 13] = b"FELIX-RETIRE\0";
 const VERSION: u16 = 1;
 const VERSION_BYTES: usize = 2;
@@ -63,6 +65,65 @@ impl fmt::Display for ErrorIntentRetiroPersistido {
 }
 
 impl std::error::Error for ErrorIntentRetiroPersistido {}
+
+#[derive(PartialEq, Eq)]
+pub(super) enum IntentRetiroPersistidoVersionado {
+    V1(IntentRetiroPersistido),
+    V2(crate::transaccion::anclado::intent_persistido_v2::IntentRetiroPersistidoV2),
+}
+
+impl fmt::Debug for IntentRetiroPersistidoVersionado {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::V1(_) => formatter.write_str("IntentRetiroPersistidoVersionado::V1([redacted])"),
+            Self::V2(_) => formatter.write_str("IntentRetiroPersistidoVersionado::V2([redacted])"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ErrorSelectorIntentRetiro {
+    HeaderTruncado,
+    MagicInvalido,
+    VersionNoSoportada,
+    TotalExcedeLimite,
+    DecoderV1,
+    DecoderV2,
+}
+
+impl ErrorSelectorIntentRetiro {
+    pub(super) const fn codigo(self) -> &'static str {
+        match self {
+            Self::HeaderTruncado => "retirement_selector_header_truncated",
+            Self::MagicInvalido => "retirement_selector_magic_invalid",
+            Self::VersionNoSoportada => "retirement_selector_version_unsupported",
+            Self::TotalExcedeLimite => "retirement_selector_total_exceeds_limit",
+            Self::DecoderV1 => "retirement_selector_v1_invalid",
+            Self::DecoderV2 => "retirement_selector_v2_invalid",
+        }
+    }
+}
+
+impl fmt::Debug for ErrorSelectorIntentRetiro {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl fmt::Display for ErrorSelectorIntentRetiro {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorSelectorIntentRetiro {}
+
+/// Clasifica y decodifica una sola versión; no concede autoridad ni hace I/O.
+pub(super) fn decodificar_versionado(
+    frame: &[u8],
+) -> Result<IntentRetiroPersistidoVersionado, ErrorSelectorIntentRetiro> {
+    selector::decodificar(frame)
+}
 
 impl IntentRetiroPersistido {
     /// Expone el Journal parseado como dato; no valida su vínculo con el parent.
