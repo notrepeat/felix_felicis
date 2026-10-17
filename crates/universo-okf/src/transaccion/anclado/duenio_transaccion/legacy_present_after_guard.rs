@@ -1,4 +1,4 @@
-//! Observes only the strict legacy Journal-present candidate after the auxiliary guard.
+//! Observes a strict legacy Journal or empty state after the auxiliary guard.
 
 use std::fmt;
 use std::fs::File;
@@ -16,22 +16,20 @@ use super::super::{
 use super::DuenioTransaccionAnclado;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ErrorObservacionLegacyPresente {
+pub(super) enum ErrorObservacionLegacy {
     OwnerUnverified,
     JournalUnverified,
-    JournalAbsent,
     AuxiliaryUnverified,
     ProbeUnverified,
     JournalChanged,
     JournalIncompatible,
 }
 
-impl ErrorObservacionLegacyPresente {
+impl ErrorObservacionLegacy {
     const fn code(self) -> &'static str {
         match self {
             Self::OwnerUnverified => "legacy_observation_owner_unverified",
             Self::JournalUnverified => "legacy_observation_journal_unverified",
-            Self::JournalAbsent => "legacy_observation_journal_absent",
             Self::AuxiliaryUnverified => "legacy_observation_auxiliary_unverified",
             Self::ProbeUnverified => "legacy_observation_probe_unverified",
             Self::JournalChanged => "legacy_observation_journal_changed",
@@ -40,25 +38,25 @@ impl ErrorObservacionLegacyPresente {
     }
 }
 
-impl fmt::Debug for ErrorObservacionLegacyPresente {
+impl fmt::Debug for ErrorObservacionLegacy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code())
     }
 }
 
-impl fmt::Display for ErrorObservacionLegacyPresente {
+impl fmt::Display for ErrorObservacionLegacy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.code())
     }
 }
 
-impl std::error::Error for ErrorObservacionLegacyPresente {}
+impl std::error::Error for ErrorObservacionLegacy {}
 
 impl DuenioTransaccionAnclado<'_> {
-    /// Keeps the original strict Journal observation only for a v1 canonical Journal.
-    pub(super) fn observar_journal_legacy_presente(
+    /// Keeps the strict legacy read and reports absence only after a final canonical probe.
+    pub(super) fn observar_legacy_o_vacio(
         &mut self,
-    ) -> Result<ObservacionJournalPersistido, ErrorObservacionLegacyPresente> {
+    ) -> Result<Option<ObservacionJournalPersistido>, ErrorObservacionLegacy> {
         self.observar_con_postcheck(|| {}, |owner| owner.parent_revalidado())
     }
 
@@ -66,81 +64,91 @@ impl DuenioTransaccionAnclado<'_> {
         &mut self,
         despues_de_lectura: H,
         postcheck: P,
-    ) -> Result<ObservacionJournalPersistido, ErrorObservacionLegacyPresente>
+    ) -> Result<Option<ObservacionJournalPersistido>, ErrorObservacionLegacy>
     where
         H: FnOnce(),
         P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
     {
         let parent = self
             .parent_revalidado()
-            .map_err(|_| ErrorObservacionLegacyPresente::OwnerUnverified)?;
+            .map_err(|_| ErrorObservacionLegacy::OwnerUnverified)?;
         drop(parent);
 
-        let lectura = self.leer_journal_legacy_presente(despues_de_lectura);
+        let lectura = self.leer_legacy_o_vacio(despues_de_lectura);
         let postcheck = postcheck(self);
-        finalizar_observacion_legacy_presente(lectura, postcheck)
+        finalizar_observacion_legacy(lectura, postcheck)
     }
 
-    fn leer_journal_legacy_presente<H>(
+    fn leer_legacy_o_vacio<H>(
         &mut self,
         despues_de_lectura: H,
-    ) -> Result<ObservacionJournalPersistido, ErrorObservacionLegacyPresente>
+    ) -> Result<Option<ObservacionJournalPersistido>, ErrorObservacionLegacy>
     where
         H: FnOnce(),
     {
         let lectura = self
             .observar_journal_versionado()
-            .map_err(|_| ErrorObservacionLegacyPresente::JournalUnverified);
+            .map_err(|_| ErrorObservacionLegacy::JournalUnverified);
         despues_de_lectura();
-        let journal = lectura?.ok_or(ErrorObservacionLegacyPresente::JournalAbsent)?;
+        let journal = lectura?;
 
-        if !matches!(journal.journal(), JournalPersistido::V1(_)) {
-            return Err(ErrorObservacionLegacyPresente::JournalIncompatible);
+        if journal
+            .as_ref()
+            .is_some_and(|observacion| !matches!(observacion.journal(), JournalPersistido::V1(_)))
+        {
+            return Err(ErrorObservacionLegacy::JournalIncompatible);
         }
 
         self.exigir_auxiliares_legacy_ausentes()
-            .map_err(|_| ErrorObservacionLegacyPresente::AuxiliaryUnverified)?;
+            .map_err(|_| ErrorObservacionLegacy::AuxiliaryUnverified)?;
         self.exigir_auxiliares_legacy_ausentes()
-            .map_err(|_| ErrorObservacionLegacyPresente::AuxiliaryUnverified)?;
-        self.confirmar_journal_final(&journal)?;
+            .map_err(|_| ErrorObservacionLegacy::AuxiliaryUnverified)?;
+        self.confirmar_journal_final(journal.as_ref())?;
         Ok(journal)
     }
 
     fn confirmar_journal_final(
         &self,
-        observacion_inicial: &ObservacionJournalPersistido,
-    ) -> Result<(), ErrorObservacionLegacyPresente> {
+        observacion_inicial: Option<&ObservacionJournalPersistido>,
+    ) -> Result<(), ErrorObservacionLegacy> {
         let parent = self
             .parent_revalidado()
-            .map_err(|_| ErrorObservacionLegacyPresente::OwnerUnverified)?;
+            .map_err(|_| ErrorObservacionLegacy::OwnerUnverified)?;
         let resultado = (|| {
             let ruta = self._lock.ubicacion().journal();
             let nombre = ruta
                 .as_path()
                 .file_name()
-                .ok_or(ErrorObservacionLegacyPresente::ProbeUnverified)?
+                .ok_or(ErrorObservacionLegacy::ProbeUnverified)?
                 .to_os_string();
-            validar_componente(&nombre)
-                .map_err(|_| ErrorObservacionLegacyPresente::ProbeUnverified)?;
+            validar_componente(&nombre).map_err(|_| ErrorObservacionLegacy::ProbeUnverified)?;
 
             let visible =
                 match abrir_entrada_relativa(&parent, &nombre, TipoEntradaAnclada::Archivo) {
                     Ok(visible) => visible,
-                    Err(ErrorDirectorioAnclado::EntradaAusente) => {
-                        return Err(ErrorObservacionLegacyPresente::JournalChanged);
+                    Err(ErrorDirectorioAnclado::EntradaAusente)
+                        if observacion_inicial.is_none() =>
+                    {
+                        return Ok(());
                     }
-                    Err(_) => return Err(ErrorObservacionLegacyPresente::ProbeUnverified),
+                    Err(ErrorDirectorioAnclado::EntradaAusente) => {
+                        return Err(ErrorObservacionLegacy::JournalChanged);
+                    }
+                    Err(_) => return Err(ErrorObservacionLegacy::ProbeUnverified),
                 };
-            if scope_filesystem(&visible)
-                .map_err(|_| ErrorObservacionLegacyPresente::ProbeUnverified)?
+            if scope_filesystem(&visible).map_err(|_| ErrorObservacionLegacy::ProbeUnverified)?
                 != self.scope_parent
             {
-                return Err(ErrorObservacionLegacyPresente::ProbeUnverified);
+                return Err(ErrorObservacionLegacy::ProbeUnverified);
             }
-            let identidad: IdentidadArchivo = identidad_archivo(&visible)
-                .map_err(|_| ErrorObservacionLegacyPresente::ProbeUnverified)?;
+
+            let Some(observacion_inicial) = observacion_inicial else {
+                return Err(ErrorObservacionLegacy::JournalChanged);
+            };
+            let identidad: IdentidadArchivo =
+                identidad_archivo(&visible).map_err(|_| ErrorObservacionLegacy::ProbeUnverified)?;
             if identidad != observacion_inicial.identidad().identidad_archivo() {
-                return Err(ErrorObservacionLegacyPresente::JournalChanged);
+                return Err(ErrorObservacionLegacy::JournalChanged);
             }
             Ok(())
         })();
@@ -149,11 +157,11 @@ impl DuenioTransaccionAnclado<'_> {
     }
 }
 
-fn finalizar_observacion_legacy_presente(
-    lectura: Result<ObservacionJournalPersistido, ErrorObservacionLegacyPresente>,
+fn finalizar_observacion_legacy(
+    lectura: Result<Option<ObservacionJournalPersistido>, ErrorObservacionLegacy>,
     postcheck: Result<File, ErrorJournalAnclado>,
-) -> Result<ObservacionJournalPersistido, ErrorObservacionLegacyPresente> {
-    let parent = postcheck.map_err(|_| ErrorObservacionLegacyPresente::OwnerUnverified)?;
+) -> Result<Option<ObservacionJournalPersistido>, ErrorObservacionLegacy> {
+    let parent = postcheck.map_err(|_| ErrorObservacionLegacy::OwnerUnverified)?;
     drop(parent);
     lectura
 }
@@ -200,7 +208,10 @@ mod tests {
 
         let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
         let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
-        let observado = owner.observar_journal_legacy_presente().unwrap();
+        let observado = owner
+            .observar_legacy_o_vacio()
+            .unwrap()
+            .expect("Journal v1 expected");
         assert!(matches!(observado.journal(), JournalPersistido::V1(_)));
         assert_eq!(
             observado.identidad().identidad_archivo(),
@@ -216,41 +227,52 @@ mod tests {
     }
 
     #[test]
-    fn auxiliar_presente_rechaza_sin_leer_ni_alterar_su_payload() {
+    fn auxiliar_presente_rechaza_con_journal_presente_o_ausente_y_preserva_payload() {
         let temp = tempfile::tempdir().unwrap();
-        let fixture = fixture(temp.path(), "legacy-present-auxiliary");
-        let basename = fixture.ubicacion.ruta().file_name().unwrap();
-        let nombre =
-            crate::transaccion::anclado::contexto_admision::nombre_canonico(basename).unwrap();
-        let auxiliar = fixture.ubicacion.ruta().parent().unwrap().join(nombre);
-        let bytes = b"opaque auxiliary payload";
-        fs::write(&auxiliar, bytes).unwrap();
-        let id_auxiliar = identidad(&auxiliar);
+        for caso in ["some", "none"] {
+            let fixture = fixture(temp.path(), caso);
+            let journal = journal_path(&fixture);
+            if caso == "none" {
+                fs::remove_file(&journal).unwrap();
+            }
+            let basename = fixture.ubicacion.ruta().file_name().unwrap();
+            let nombre =
+                crate::transaccion::anclado::contexto_admision::nombre_canonico(basename).unwrap();
+            let auxiliar = fixture.ubicacion.ruta().parent().unwrap().join(nombre);
+            let bytes = b"opaque auxiliary payload";
+            fs::write(&auxiliar, bytes).unwrap();
+            let id_auxiliar = identidad(&auxiliar);
 
-        let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
-        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
-        assert!(matches!(
-            owner.observar_journal_legacy_presente(),
-            Err(ErrorObservacionLegacyPresente::AuxiliaryUnverified)
-        ));
-        drop(owner);
-        drop(lock);
+            let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
+            let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+            assert!(matches!(
+                owner.observar_legacy_o_vacio(),
+                Err(ErrorObservacionLegacy::AuxiliaryUnverified)
+            ));
+            drop(owner);
+            drop(lock);
 
-        assert_eq!(fs::read(&auxiliar).unwrap(), bytes);
-        assert_eq!(identidad(&auxiliar), id_auxiliar);
+            assert_eq!(fs::read(&auxiliar).unwrap(), bytes);
+            assert_eq!(identidad(&auxiliar), id_auxiliar);
+            if caso == "some" {
+                assert_eq!(fs::read(&journal).unwrap(), fixture.bytes_journal);
+            } else {
+                assert!(!journal.exists());
+            }
+        }
     }
 
     #[test]
-    fn journal_v2_y_canonicamente_ausente_rechazan_sin_fallback() {
+    fn journal_v2_rechaza_y_ausencia_estricta_devuelve_none() {
         let temp = tempfile::tempdir().unwrap();
-        for caso in ["v2", "absent"] {
+        for caso in ["v2", "empty"] {
             let fixture = fixture(temp.path(), caso);
             let journal = journal_path(&fixture);
             let temporal = journal
                 .parent()
                 .unwrap()
                 .join(fixture.ubicacion.nombre_journal_temporal());
-            let esperado = if caso == "v2" {
+            let bytes_esperados = if caso == "v2" {
                 let v1 = Journal::parse(&fixture.bytes_journal).unwrap();
                 let v2 = JournalV2::new(
                     v1.transaction_id(),
@@ -262,33 +284,58 @@ mod tests {
                 .encode()
                 .unwrap();
                 fs::write(&journal, &v2).unwrap();
-                v2
+                Some(v2)
             } else {
-                fs::rename(&journal, &temporal).unwrap();
-                fs::read(&temporal).unwrap()
-            };
-            let error_esperado = if caso == "v2" {
-                ErrorObservacionLegacyPresente::JournalIncompatible
-            } else {
-                ErrorObservacionLegacyPresente::JournalAbsent
+                fs::remove_file(&journal).unwrap();
+                None
             };
 
             let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
             let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
-            assert!(matches!(
-                owner.observar_journal_legacy_presente(),
-                Err(error) if error == error_esperado
-            ));
+            let resultado = owner.observar_legacy_o_vacio();
+            if caso == "v2" {
+                assert!(matches!(
+                    resultado,
+                    Err(ErrorObservacionLegacy::JournalIncompatible)
+                ));
+            } else {
+                assert!(matches!(resultado, Ok(None)));
+            }
             drop(owner);
             drop(lock);
 
-            if caso == "v2" {
-                assert_eq!(fs::read(&journal).unwrap(), esperado);
+            if let Some(bytes) = bytes_esperados {
+                assert_eq!(fs::read(&journal).unwrap(), bytes);
             } else {
                 assert!(!journal.exists());
-                assert_eq!(fs::read(&temporal).unwrap(), esperado);
+                assert!(!temporal.exists());
             }
         }
+    }
+
+    #[test]
+    fn journal_tmp_solo_no_activa_fallback_y_preserva_bytes_e_identidad() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(temp.path(), "legacy-empty-temporary-only");
+        let journal = journal_path(&fixture);
+        fs::remove_file(&journal).unwrap();
+        let temporal = journal
+            .parent()
+            .unwrap()
+            .join(fixture.ubicacion.nombre_journal_temporal());
+        let bytes = b"opaque journal temporary";
+        fs::write(&temporal, bytes).unwrap();
+        let id_temporal = identidad(&temporal);
+
+        let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        assert!(matches!(owner.observar_legacy_o_vacio(), Ok(None)));
+        drop(owner);
+        drop(lock);
+
+        assert!(!journal.exists());
+        assert_eq!(fs::read(&temporal).unwrap(), bytes);
+        assert_eq!(identidad(&temporal), id_temporal);
     }
 
     #[test]
@@ -310,7 +357,7 @@ mod tests {
         );
         assert!(matches!(
             resultado,
-            Err(ErrorObservacionLegacyPresente::JournalChanged)
+            Err(ErrorObservacionLegacy::JournalChanged)
         ));
         drop(owner);
         drop(lock);
@@ -323,17 +370,22 @@ mod tests {
     }
 
     #[test]
-    fn postcheck_fallido_domina_candidato_some_y_error_de_lectura() {
+    fn postcheck_fallido_domina_candidato_some_none_y_error_de_lectura() {
         let temp = tempfile::tempdir().unwrap();
-        for caso in ["some", "read-error"] {
+        for caso in ["some", "none", "read-error"] {
             let fixture = fixture(temp.path(), caso);
             let journal = journal_path(&fixture);
-            let esperado = if caso == "read-error" {
-                let bytes = b"not-a-canonical-journal";
-                fs::write(&journal, bytes).unwrap();
-                bytes.as_slice()
-            } else {
-                fixture.bytes_journal.as_slice()
+            let esperado = match caso {
+                "none" => {
+                    fs::remove_file(&journal).unwrap();
+                    None
+                }
+                "read-error" => {
+                    let bytes = b"not-a-canonical-journal".to_vec();
+                    fs::write(&journal, &bytes).unwrap();
+                    Some(bytes)
+                }
+                _ => Some(fixture.bytes_journal.clone()),
             };
             let mut postcheck_ejecutado = false;
 
@@ -349,12 +401,77 @@ mod tests {
             assert!(postcheck_ejecutado);
             assert!(matches!(
                 resultado,
-                Err(ErrorObservacionLegacyPresente::OwnerUnverified)
+                Err(ErrorObservacionLegacy::OwnerUnverified)
             ));
             drop(owner);
             drop(lock);
 
-            assert_eq!(fs::read(&journal).unwrap(), esperado);
+            if let Some(bytes) = esperado {
+                assert_eq!(fs::read(&journal).unwrap(), bytes);
+            } else {
+                assert!(!journal.exists());
+            }
         }
+    }
+
+    #[test]
+    fn journal_que_reaparece_despues_de_ausencia_falla_y_preserva_bytes_e_identidad() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(temp.path(), "legacy-empty-reappeared");
+        let journal = journal_path(&fixture);
+        fs::remove_file(&journal).unwrap();
+        let bytes = fixture.bytes_journal.clone();
+        let mut id_reaparecida = None;
+
+        let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let resultado = owner.observar_con_postcheck(
+            || {
+                fs::write(&journal, &bytes).unwrap();
+                id_reaparecida = Some(identidad(&journal));
+            },
+            |owner| owner.parent_revalidado(),
+        );
+        assert!(matches!(
+            resultado,
+            Err(ErrorObservacionLegacy::JournalChanged)
+        ));
+        drop(owner);
+        drop(lock);
+
+        assert_eq!(fs::read(&journal).unwrap(), bytes);
+        assert_eq!(identidad(&journal), id_reaparecida.unwrap());
+    }
+
+    #[test]
+    fn tipo_incompatible_que_aparece_despues_de_ausencia_falla_cerrado() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(temp.path(), "legacy-empty-directory-reappeared");
+        let journal = journal_path(&fixture);
+        fs::remove_file(&journal).unwrap();
+        let canary = journal.join("canary");
+        let bytes = b"journal directory canary";
+        let mut id_canary = None;
+
+        let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let resultado = owner.observar_con_postcheck(
+            || {
+                fs::create_dir(&journal).unwrap();
+                fs::write(&canary, bytes).unwrap();
+                id_canary = Some(identidad(&canary));
+            },
+            |owner| owner.parent_revalidado(),
+        );
+        assert!(matches!(
+            resultado,
+            Err(ErrorObservacionLegacy::ProbeUnverified)
+        ));
+        drop(owner);
+        drop(lock);
+
+        assert!(journal.is_dir());
+        assert_eq!(fs::read(&canary).unwrap(), bytes);
+        assert_eq!(identidad(&canary), id_canary.unwrap());
     }
 }
