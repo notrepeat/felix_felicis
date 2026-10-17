@@ -1,16 +1,50 @@
 # Contexto privado para reproducir una admisión
 
-**Estado:** `ContextoAdmision` y su envelope v1 son valores de datos en memoria
-con codecs privados. El lifecycle documenta primitivas de lectura, publicación,
-verificación raw y retiro estricto; el flujo transaccional sigue incompleto.
+**Estado:** Los codecs y lectores versionados siguen siendo privados. El commit
+local f4dfd1c966e3b4f752e177fda24212cb0b2964db añade la observación legacy o
+ausente. El helper privado de identidad visible del commit local
+857155b06d0134c07f162976d1e781becbee1dd9 añade una primitiva de presencia con
+seis pruebas y gates locales aprobados; la observación coordinada normal de
+Journal v2 con Contexto v2 sigue pendiente y no hay caller productivo de apply
+o recovery. U7 y la fase 04 siguen parciales; el progreso global permanece en
+4/9.
 
-## Corte actual: guardia privada de auxiliares y coordinador legacy
+## Corte actual: observación legacy o ausencia estricta
 
-La guardia privada, integrada en `717492179325a3f97f0227d5600810ae643f6542`, exige la ausencia exacta de los cuatro nombres reservados de Context e Intent, canónicos y temporales; no deriva ni sondea `journal.tmp`. Sus filtros locales pasaron 3/0/0 en Windows y 4/0/0 en Linux.
+observar_legacy_o_vacio conserva la observación original y su File cuando el
+Journal J1 está presente. Solo devuelve None cuando la lectura inicial observa
+ausencia, se confirman dos veces las ausencias de los cuatro auxiliares
+canónicos y temporales de Context e Intent, y una sonda final confirma que el
+Journal sigue ausente. La reaparición, un tipo inesperado o un error de scope,
+identidad o probe fallan cerrados. journal.tmp permanece fuera de esta
+observación legacy; un Journal distinto de J1 se rechaza.
 
-El coordinador privado de Journal presente (commit `81ff6d427095910862c5bbe01725d75df245e0e3`) recibió aprobación de gates y auditoría independiente: runtime Windows 5/0/0 (877 filtradas) y Linux 5/0/0 (901); rustfmt, clippy, boundary y diff aprobaron en ambos sistemas. El cleanup del runner Linux pasó y los procesos se verificaron quietos en ambos sistemas. Conserva la lectura estricta original y su `File`, admite solo J1 canónico, repite la guardia y termina con sonda de tipo, scope e identidad nativa más postcheck del owner incluso tras error; rechaza J2 y ausencia canónica. Aún no tiene caller productivo y la secuencia entrega datos, no un snapshot ni autoridad de acción.
+La secuencia revalida el owner (parent, lock y scope) antes y después de la
+lectura. La verificación posterior del owner domina el resultado de lectura,
+incluidos Some, None y Err; la sonda final del Journal se cierra antes de esa
+verificación posterior. La operación entrega observaciones privadas, no
+snapshot ni autoridad.
 
-El CI de la base `863e6f6f5bd220c0e63e4d815d837701899c5731` (run `39017683749`) terminó SUCCESS: Windows `1229/0/9` y Linux `1249/0/9`. Cubre los bindings anteriores, pero precede y no cubre la guardia ni el coordinador. El progreso global sigue en 4/9; U7 y fase 04 permanecen parciales.
+Los gates locales de este commit cerraron en Windows y Linux: el filtro focal
+pasó 8 pruebas por sistema (877 filtradas en Windows y 901 en Linux); formato,
+clippy, frontera y diff-check terminaron en 0 en ambos. El cleanup Linux pasó y
+los procesos quedaron quietos; la auditoría independiente aprobó el corte.
+
+El CI público run 39020870034 para la base
+92cb69fb6e658ba6b8185a39344801761311294b terminó SUCCESS: Windows 1237/0/9 y
+Linux 1258/0/9, con 38 suites Cargo y 7 pruebas Python por job. Acredita la
+guardia y el coordinador anteriores; no cubre los commits locales f4dfd1c ni
+857155b ni la futura observación normal.
+
+El helper privado de identidad visible abre un sibling regular sin seguir
+enlaces y compara scope e identidad nativa desde el mismo handle. Devuelve solo
+confirmación o error tras comprobar scope e identidad; no devuelve File ni
+ruta, no revalida owner pre/post ni concede autoridad. Sus seis pruebas
+focales pasaron 6/0/0 en Windows (885 filtradas) y Linux (909); formato,
+clippy, frontera y diff-check terminaron en 0 en ambos sistemas. Cleanup pasó
+en ambos, los runners quedaron quietos y la auditoría independiente aprobó la
+unidad. Esto no constituye un observador de familia normal ni habilita apply o
+recovery.
 
 La estrategia adoptada conserva Journal v1 y añade Journal v2 paralelo con
 `schema=felix-journal-v2`, kind cerrado `context_required` y cuota propia de

@@ -12,13 +12,42 @@ bytes intactos.
 | Depende de | 03 |
 | Desbloquea | 05, 08 |
 
-### Corte actual: observación legacy
+### Corte actual: observación legacy o ausencia estricta
 
-La guardia privada de cuatro auxiliares Context/Intent quedó integrada en `717492179325a3f97f0227d5600810ae643f6542`; sus filtros locales pasaron 3/0/0 en Windows y 4/0/0 en Linux. `journal.tmp` queda fuera de la sonda.
+El commit local f4dfd1c966e3b4f752e177fda24212cb0b2964db añade
+observar_legacy_o_vacio: conserva el Journal J1 y su File originales si están
+presentes; solo acepta ausencia tras la lectura inicial, dos comprobaciones de
+los cuatro auxiliares canónicos y temporales de Context e Intent, y la sonda
+final de Journal. Reaparición, tipo inesperado o error de verificación fallan
+cerrados. journal.tmp queda fuera de esta observación legacy; J2 se rechaza.
 
-El coordinador privado de Journal presente (commit `81ff6d427095910862c5bbe01725d75df245e0e3`) pasó auditoría y todos sus gates: runtime Windows 5/0/0 (877 filtradas) y Linux 5/0/0 (901), más rustfmt, clippy, boundary y diff aprobados en ambos sistemas. El cleanup del runner Linux pasó y los procesos se verificaron quietos en ambos sistemas. Conserva la lectura estricta y su `File`, admite solo J1 canónico, repite la guardia y hace una sonda final de tipo, scope e identidad nativa con postcheck del owner incluso tras error. J2 y ausencia canónica se rechazan. Sigue sin caller productivo, snapshot ni autoridad de acción. La secuencia detallada está en [04-contexto-admision.md](04-contexto-admision.md#corte-actual-guardia-privada-de-auxiliares-y-coordinador-legacy).
+El owner (parent, lock y scope) se revalida antes y después de leer, y su
+verificación posterior prevalece sobre cualquier resultado de lectura (Some,
+None o Err). Esta secuencia entrega datos privados: no crea un snapshot, no
+concede autoridad y sigue sin caller productivo de apply o recovery.
 
-El CI run `39017683749` sobre `863e6f6f5bd220c0e63e4d815d837701899c5731` terminó SUCCESS (Windows `1229/0/9`, Linux `1249/0/9`), pero cubre los bindings previos y precede a la guardia y al coordinador. El progreso global permanece en 4/9; U7 y fase 04 siguen parciales.
+Los gates locales del commit cerraron en Windows y Linux: 8 pruebas focales por
+sistema (877/901 filtradas), formato, clippy, frontera y diff-check en 0; cleanup
+Linux aprobado, procesos quietos y auditoría independiente aprobada. El CI
+público run 39020870034 pasó para 92cb69fb6e658ba6b8185a39344801761311294b
+(Windows 1237/0/9, Linux 1258/0/9; 38 suites Cargo y 7 pruebas Python por job).
+Ese CI acredita la guardia y el coordinador anteriores; no cubre f4dfd1c, el
+helper 857155b ni la futura observación normal.
+
+La secuencia coordinada normal de Journal v2 y Contexto v2 permanece pendiente.
+El helper privado de identidad visible del commit local
+857155b06d0134c07f162976d1e781becbee1dd9 abre un sibling regular sin seguir
+enlaces y compara scope e identidad nativa desde el mismo handle. Devuelve solo
+confirmación o error tras comprobar scope e identidad; no retorna File ni ruta,
+no revalida owner pre/post y no concede autoridad. Sus seis pruebas focales
+pasaron 6/0/0 en Windows (885 filtradas) y Linux (909); formato, clippy,
+frontera y diff-check terminaron en 0. Cleanup pasó en Windows y Linux, los
+runners quedaron quietos y la auditoría independiente aprobó la unidad. Esto no
+es un observador de familia ni tiene caller productivo de apply o recovery.
+U7 y la fase 04 siguen parciales, con progreso global 4/9.
+
+La secuencia detallada está en
+[04-contexto-admision.md](04-contexto-admision.md#corte-actual-observacion-legacy-o-ausencia-estricta).
 
 ## Objetivo
 
