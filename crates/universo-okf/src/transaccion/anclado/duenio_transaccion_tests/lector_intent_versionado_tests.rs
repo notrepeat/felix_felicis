@@ -2,11 +2,23 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
+use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
 use crate::transaccion::anclado::identidad_archivo::{IdentidadArchivo, identidad_archivo};
+use crate::transaccion::anclado::intent_persistido::{self, IntentRetiroPersistidoVersionado};
+use crate::transaccion::anclado::intent_persistido_v2::IntentRetiroPersistidoV2;
 use crate::transaccion::anclado::{ScopeFilesystem, scope_filesystem};
+use crate::transaccion::journal::v2::{JournalKind, JournalV2};
+use crate::transaccion::journal::{
+    ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
+};
+use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
 
-use super::{ErrorLecturaFrameIntent, leer_acotado, leer_frame_intent, leer_frame_intent_con_hook};
+use super::{
+    CandidatoIntentDecodificadoSinVinculo, ErrorCandidatoIntentSinVinculo, ErrorLecturaFrameIntent,
+    leer_acotado, leer_candidato_intent_versionado,
+    leer_candidato_intent_versionado_con_cap_y_hook, leer_frame_intent, leer_frame_intent_con_hook,
+};
 
 struct ArchivoFixture {
     _directorio: TempDir,
@@ -153,4 +165,283 @@ fn cap_sin_capacidad_para_el_sentinela_falla_antes_de_leer() {
 
     assert_eq!(error, ErrorLecturaFrameIntent::LengthOverflow);
     assert_eq!(fs::read(&fixture.ruta).unwrap(), fixture.bytes);
+}
+
+const TRANSACTION_ID: &str = "0123456789abcdef0123456789abcdef";
+const CONTEXT_BYTES: &[u8] = b"; versioned intent fixture\n";
+
+#[derive(Clone, Copy)]
+enum VersionIntentFixture {
+    V1,
+    V2,
+}
+
+struct IntentFixture {
+    _directorio: TempDir,
+    ruta_intent: PathBuf,
+    ruta_journal: PathBuf,
+    ruta_contexto: PathBuf,
+    archivo_intent: File,
+    bytes_intent: Vec<u8>,
+    bytes_journal: Vec<u8>,
+    bytes_contexto: Vec<u8>,
+    identidad_intent: IdentidadArchivo,
+    scope: ScopeFilesystem,
+}
+
+fn directory_identity(value: u64) -> DirectoryIdentity {
+    #[cfg(unix)]
+    {
+        DirectoryIdentity::unix(17, value)
+    }
+    #[cfg(windows)]
+    {
+        DirectoryIdentity::windows(17, format!("{value:032x}"))
+    }
+}
+
+fn fingerprint(value: u64) -> ArtifactFingerprint {
+    ArtifactFingerprint::new(
+        directory_identity(value),
+        RawTreeDigest::from_digest([u8::try_from(value).unwrap(); 32]),
+    )
+}
+
+fn journal_v1(parent: DirectoryIdentity) -> Journal {
+    let mut journal =
+        Journal::new(TRANSACTION_ID, parent, fingerprint(31), fingerprint(32)).unwrap();
+    for state in [
+        JournalState::BackupReady,
+        JournalState::Installed,
+        JournalState::Committed,
+    ] {
+        journal.advance(state).unwrap();
+    }
+    journal
+}
+
+fn journal_v2(parent: DirectoryIdentity) -> JournalV2 {
+    let mut journal =
+        JournalV2::new(TRANSACTION_ID, parent, fingerprint(41), fingerprint(42)).unwrap();
+    for state in [
+        JournalState::BackupReady,
+        JournalState::Installed,
+        JournalState::Committed,
+    ] {
+        journal.advance(state).unwrap();
+    }
+    journal
+}
+
+fn open_empty(parent: &std::path::Path, name: &str) -> (PathBuf, File) {
+    let path = parent.join(name);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    (path, file)
+}
+
+fn intent_fixture(version: VersionIntentFixture) -> IntentFixture {
+    let directorio = tempdir().unwrap();
+    let parent_handle =
+        super::super::super::abrir_directorio_absoluto(directorio.path(), false).unwrap();
+    let identidad_parent = super::super::super::metadata_directorio(&parent_handle).unwrap();
+    let parent_journal = identidad_parent.journal_identity().unwrap();
+
+    let (ruta_intent, mut archivo_intent) = open_empty(directorio.path(), "intent-frame");
+    let (ruta_journal, mut archivo_journal) = open_empty(directorio.path(), "journal-record");
+    let (ruta_contexto, mut archivo_contexto) = open_empty(directorio.path(), "context-artifact");
+    archivo_contexto.write_all(CONTEXT_BYTES).unwrap();
+
+    let identidad_intent = identidad_archivo(&archivo_intent).unwrap();
+    let identidad_journal = identidad_archivo(&archivo_journal).unwrap();
+    let identidad_contexto = identidad_archivo(&archivo_contexto).unwrap();
+    let scope = scope_filesystem(&archivo_intent).unwrap();
+    let digest_contexto: [u8; 32] = Sha256::digest(CONTEXT_BYTES).into();
+    let longitud_contexto = u64::try_from(CONTEXT_BYTES.len()).unwrap();
+
+    let (bytes_journal, bytes_intent) = match version {
+        VersionIntentFixture::V1 => {
+            let journal = journal_v1(parent_journal);
+            let bytes_journal = journal.encode().unwrap();
+            archivo_journal.write_all(&bytes_journal).unwrap();
+            let bytes_intent = intent_persistido::codificar_nuevo(
+                &journal,
+                identidad_intent,
+                identidad_journal,
+                identidad_contexto,
+                scope.0,
+                longitud_contexto,
+                digest_contexto,
+            )
+            .unwrap();
+            (bytes_journal, bytes_intent)
+        }
+        VersionIntentFixture::V2 => {
+            let journal = journal_v2(parent_journal);
+            let bytes_journal = journal.encode().unwrap();
+            archivo_journal.write_all(&bytes_journal).unwrap();
+            let intent_id = IdentidadArchivoPersistida::try_from(identidad_intent).unwrap();
+            let journal_id = IdentidadArchivoPersistida::try_from(identidad_journal).unwrap();
+            let context_id = IdentidadArchivoPersistida::try_from(identidad_contexto).unwrap();
+            let bytes_intent = IntentRetiroPersistidoV2::desde_datos_persistidos(
+                journal,
+                intent_id,
+                journal_id,
+                context_id,
+                scope.0,
+                longitud_contexto,
+                digest_contexto,
+            )
+            .unwrap()
+            .encode()
+            .unwrap();
+            (bytes_journal, bytes_intent)
+        }
+    };
+    archivo_intent.write_all(&bytes_intent).unwrap();
+    archivo_intent.seek(SeekFrom::End(0)).unwrap();
+
+    IntentFixture {
+        _directorio: directorio,
+        ruta_intent,
+        ruta_journal,
+        ruta_contexto,
+        archivo_intent,
+        bytes_intent,
+        bytes_journal,
+        bytes_contexto: CONTEXT_BYTES.to_vec(),
+        identidad_intent,
+        scope,
+    }
+}
+
+fn assert_preserved(
+    ruta_intent: &std::path::Path,
+    ruta_journal: &std::path::Path,
+    ruta_contexto: &std::path::Path,
+    bytes_intent: &[u8],
+    bytes_journal: &[u8],
+    bytes_contexto: &[u8],
+) {
+    assert_eq!(fs::read(ruta_intent).unwrap(), bytes_intent);
+    assert_eq!(fs::read(ruta_journal).unwrap(), bytes_journal);
+    assert_eq!(fs::read(ruta_contexto).unwrap(), bytes_contexto);
+}
+
+fn assert_candidate_matches(
+    candidate: &CandidatoIntentDecodificadoSinVinculo,
+    expected: &IntentRetiroPersistidoVersionado,
+    version: VersionIntentFixture,
+) {
+    assert!(&candidate.envelope == expected);
+    match (&candidate.envelope, version) {
+        (IntentRetiroPersistidoVersionado::V1(intent), VersionIntentFixture::V1) => {
+            assert!(intent.journal().state() == JournalState::Committed);
+        }
+        (IntentRetiroPersistidoVersionado::V2(intent), VersionIntentFixture::V2) => {
+            assert!(intent.journal().state() == JournalState::Committed);
+            assert!(intent.journal().kind() == JournalKind::ContextRequired);
+        }
+        _ => panic!("el candidato conserva la variante decodificada"),
+    }
+}
+
+#[test]
+fn decodifica_candidato_v1_y_v2_con_cap_exacta_y_conserva_archivo() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        let fixture = intent_fixture(version);
+        let IntentFixture {
+            _directorio,
+            ruta_intent,
+            ruta_journal,
+            ruta_contexto,
+            archivo_intent,
+            bytes_intent,
+            bytes_journal,
+            bytes_contexto,
+            identidad_intent,
+            scope,
+        } = fixture;
+        let cap = bytes_intent.len();
+        let expected = intent_persistido::decodificar_versionado(&bytes_intent).unwrap();
+        let candidate =
+            leer_candidato_intent_versionado_con_cap_y_hook(archivo_intent, scope, cap, || {})
+                .unwrap();
+
+        assert_candidate_matches(&candidate, &expected, version);
+        assert!(identidad_archivo(&candidate.archivo_original).unwrap() == identidad_intent);
+        assert_eq!(
+            candidate.archivo_original.metadata().unwrap().len(),
+            u64::try_from(cap).unwrap()
+        );
+        assert_preserved(
+            &ruta_intent,
+            &ruta_journal,
+            &ruta_contexto,
+            &bytes_intent,
+            &bytes_journal,
+            &bytes_contexto,
+        );
+    }
+}
+
+#[test]
+fn limite_de_prueba_se_clampa_a_la_cuota_familiar() {
+    let cap_familiar = intent_persistido::cuota_maxima_frame_bytes();
+    let bytes = vec![b'x'; cap_familiar + 1];
+    let fixture = archivo_fixture(&bytes);
+    let hook_llamado = std::cell::Cell::new(false);
+    let error = match leer_candidato_intent_versionado_con_cap_y_hook(
+        fixture.archivo,
+        fixture.scope,
+        usize::MAX,
+        || hook_llamado.set(true),
+    ) {
+        Ok(_) => panic!("la cuota de prueba no debe superar la cuota familiar"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error,
+        ErrorCandidatoIntentSinVinculo::Frame(ErrorLecturaFrameIntent::FrameTooLarge)
+    );
+    assert!(!hook_llamado.get());
+    assert_eq!(fs::read(&fixture.ruta).unwrap(), bytes);
+}
+
+#[test]
+fn wrapper_productivo_usa_la_cuota_familiar_sin_exponerla_al_caller() {
+    let fixture = intent_fixture(VersionIntentFixture::V1);
+    let IntentFixture {
+        _directorio,
+        ruta_intent,
+        ruta_journal,
+        ruta_contexto,
+        archivo_intent,
+        bytes_intent,
+        bytes_journal,
+        bytes_contexto,
+        scope,
+        ..
+    } = fixture;
+    let expected = intent_persistido::decodificar_versionado(&bytes_intent).unwrap();
+    let candidate = leer_candidato_intent_versionado(archivo_intent, scope).unwrap();
+
+    assert_candidate_matches(&candidate, &expected, VersionIntentFixture::V1);
+    assert_eq!(
+        candidate.archivo_original.metadata().unwrap().len(),
+        u64::try_from(bytes_intent.len()).unwrap()
+    );
+    assert_preserved(
+        &ruta_intent,
+        &ruta_journal,
+        &ruta_contexto,
+        &bytes_intent,
+        &bytes_journal,
+        &bytes_contexto,
+    );
 }

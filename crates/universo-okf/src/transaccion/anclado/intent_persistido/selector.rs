@@ -12,6 +12,10 @@ const VERSION_BYTES: usize = 2;
 const HEADER_END: usize = MAGIC.len() + VERSION_BYTES;
 const MAX_VERSIONED_FRAME_BYTES: usize = maximo_de_cuotas(MAX_INTENT_BYTES, MAX_RETIRE_V2_BYTES);
 
+pub(super) const fn cuota_maxima_frame_bytes() -> usize {
+    MAX_VERSIONED_FRAME_BYTES
+}
+
 const fn maximo_de_cuotas(cuota_v1: usize, cuota_v2: usize) -> usize {
     if cuota_v1 > cuota_v2 {
         cuota_v1

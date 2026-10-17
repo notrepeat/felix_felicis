@@ -4,6 +4,10 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 
+use crate::transaccion::anclado::intent_persistido::{
+    self, ErrorSelectorIntentRetiro, IntentRetiroPersistidoVersionado,
+};
+
 use super::super::{
     IdentidadArchivo, ScopeFilesystem, identidad_archivo, metadata_es_reparse, scope_filesystem,
 };
@@ -66,6 +70,88 @@ impl fmt::Debug for FrameIntentLeido {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("FrameIntentLeido { .. }")
     }
+}
+
+/// Candidato decodificado antes de comparar vínculos persistidos y nativos.
+pub(super) struct CandidatoIntentDecodificadoSinVinculo {
+    envelope: IntentRetiroPersistidoVersionado,
+    archivo_original: File,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ErrorCandidatoIntentSinVinculo {
+    Frame(ErrorLecturaFrameIntent),
+    Selector(ErrorSelectorIntentRetiro),
+}
+
+impl ErrorCandidatoIntentSinVinculo {
+    pub(super) const fn codigo(self) -> &'static str {
+        match self {
+            Self::Frame(error) => error.codigo(),
+            Self::Selector(error) => error.codigo(),
+        }
+    }
+}
+
+impl fmt::Debug for ErrorCandidatoIntentSinVinculo {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl fmt::Display for ErrorCandidatoIntentSinVinculo {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorCandidatoIntentSinVinculo {}
+
+/// Lee un frame acotado y decodifica su versión sin comprobar vínculos.
+pub(super) fn leer_candidato_intent_versionado(
+    archivo: File,
+    scope_esperado: ScopeFilesystem,
+) -> Result<CandidatoIntentDecodificadoSinVinculo, ErrorCandidatoIntentSinVinculo> {
+    leer_candidato_con_hook(
+        archivo,
+        scope_esperado,
+        intent_persistido::cuota_maxima_frame_bytes(),
+        || {},
+    )
+}
+
+#[cfg(test)]
+pub(super) fn leer_candidato_intent_versionado_con_cap_y_hook<F>(
+    archivo: File,
+    scope_esperado: ScopeFilesystem,
+    cap_prueba: usize,
+    despues_metadata: F,
+) -> Result<CandidatoIntentDecodificadoSinVinculo, ErrorCandidatoIntentSinVinculo>
+where
+    F: FnOnce(),
+{
+    leer_candidato_con_hook(archivo, scope_esperado, cap_prueba, despues_metadata)
+}
+
+fn leer_candidato_con_hook<F>(
+    archivo: File,
+    scope_esperado: ScopeFilesystem,
+    cap_prueba: usize,
+    despues_metadata: F,
+) -> Result<CandidatoIntentDecodificadoSinVinculo, ErrorCandidatoIntentSinVinculo>
+where
+    F: FnOnce(),
+{
+    let cap = cap_prueba.min(intent_persistido::cuota_maxima_frame_bytes());
+    let frame = leer_con_hook(archivo, scope_esperado, cap, despues_metadata)
+        .map_err(ErrorCandidatoIntentSinVinculo::Frame)?;
+    let envelope = intent_persistido::decodificar_versionado(&frame.bytes)
+        .map_err(ErrorCandidatoIntentSinVinculo::Selector)?;
+
+    Ok(CandidatoIntentDecodificadoSinVinculo {
+        envelope,
+        archivo_original: frame.archivo_original,
+    })
 }
 
 pub(super) fn leer_frame_intent(

@@ -32,6 +32,10 @@ const FIXED_BYTES: usize = MAGIC.len()
 pub(super) const MAX_INTENT_BYTES: usize =
     FIXED_BYTES + MAX_JOURNAL_BYTES + 3 * MAX_PERSISTED_FILE_ID_FRAME_BYTES;
 
+pub(super) const fn cuota_maxima_frame_bytes() -> usize {
+    selector::cuota_maxima_frame_bytes()
+}
+
 /// Registro persistible experimental; todos sus campos son comparadores de datos.
 #[derive(PartialEq, Eq)]
 pub(super) struct IntentRetiroPersistido {
