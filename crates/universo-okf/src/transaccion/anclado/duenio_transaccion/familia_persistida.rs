@@ -2,8 +2,11 @@ use std::fmt;
 
 use crate::transaccion::admision::envelope::selector::EnvelopeAdmisionVersionada;
 use crate::transaccion::admision::envelope::v2::EnvelopeContextoAdmisionV2;
+use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
 use crate::transaccion::anclado::intent_persistido::IntentRetiroPersistidoVersionado;
-use crate::transaccion::anclado::intent_persistido_v2::IntentRetiroPersistidoV2;
+use crate::transaccion::anclado::intent_persistido_v2::{
+    ErrorIntentRetiroPersistidoV2, IntentRetiroPersistidoV2,
+};
 use crate::transaccion::journal::Journal;
 use crate::transaccion::journal::selector::JournalPersistido;
 use crate::transaccion::journal::v2::JournalV2;
@@ -126,6 +129,45 @@ fn exigir_binding(
         .map_err(|_| ErrorFamiliaPersistida)
 }
 
+/// Compara los bindings persistidos de la fase A sin abrir archivos ni autorizar acciones.
+pub(super) fn validar_bindings_retiro_datos(
+    fase: &FaseFamiliaPersistida<'_>,
+    intent: (&IdentidadArchivoPersistida, u64),
+    journal: Option<(&IdentidadArchivoPersistida, u64, &JournalV2)>,
+    contexto: Option<(&IdentidadArchivoPersistida, u64, u64, &[u8; 32])>,
+) -> Result<(), ErrorIntentRetiroPersistidoV2> {
+    let (intent_id, scope_intent) = intent;
+    let FaseFamiliaPersistida::RetiroA {
+        journal: journal_de_fase,
+        contexto: envelope,
+        intent: registro,
+    } = fase
+    else {
+        return Err(ErrorIntentRetiroPersistidoV2);
+    };
+    let Some((journal_id, scope_journal, journal_observado)) = journal else {
+        return Err(ErrorIntentRetiroPersistidoV2);
+    };
+    let Some((contexto_id, scope_contexto, longitud, digest)) = contexto else {
+        return Err(ErrorIntentRetiroPersistidoV2);
+    };
+
+    if *journal_de_fase != journal_observado
+        || scope_journal != scope_intent
+        || scope_contexto != scope_intent
+    {
+        return Err(ErrorIntentRetiroPersistidoV2);
+    }
+
+    registro.validar_vinculo_archivo_intent_datos(intent_id, scope_intent)?;
+    registro.validar_vinculo_journal_datos(journal_id, journal_observado)?;
+    envelope
+        .coincide_estructuralmente(journal_observado)
+        .map_err(|_| ErrorIntentRetiroPersistidoV2)?;
+    registro.validar_vinculo_contexto_datos(contexto_id, longitud, *digest)?;
+    Ok(())
+}
+
 #[cfg(all(test, any(target_os = "linux", windows)))]
 mod tests {
     use std::io::Cursor;
@@ -137,14 +179,16 @@ mod tests {
     };
     use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
     use crate::transaccion::anclado::intent_persistido::IntentRetiroPersistidoVersionado;
-    use crate::transaccion::anclado::intent_persistido_v2::IntentRetiroPersistidoV2;
+    use crate::transaccion::anclado::intent_persistido_v2::{
+        ErrorIntentRetiroPersistidoV2, IntentRetiroPersistidoV2,
+    };
     use crate::transaccion::journal::selector::JournalPersistido;
     use crate::transaccion::journal::v2::JournalV2;
     use crate::transaccion::journal::{
         ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
     };
 
-    use super::{FaseFamiliaPersistida, clasificar};
+    use super::{FaseFamiliaPersistida, clasificar, validar_bindings_retiro_datos};
 
     const TRANSACTION_ID: &str = "0123456789abcdef0123456789abcdef";
     const OTHER_TRANSACTION_ID: &str = "fedcba9876543210fedcba9876543210";
@@ -218,6 +262,10 @@ mod tests {
         ))
     }
 
+    fn envelope_v2_binding(journal: &JournalV2) -> EnvelopeContextoAdmisionV2 {
+        EnvelopeContextoAdmisionV2::ligar(envelope_fixtures::contexto(b"\n"), journal)
+    }
+
     fn identity_file_id_frame(seed: u64) -> Vec<u8> {
         #[cfg(unix)]
         let payload = format!(r#"{{"platform":"unix-v1","device":17,"inode":{seed}}}"#);
@@ -265,6 +313,54 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    type IntentObservation<'a> = (&'a IdentidadArchivoPersistida, u64);
+    type JournalObservation<'a> = (&'a IdentidadArchivoPersistida, u64, &'a JournalV2);
+    type ContextObservation<'a> = (&'a IdentidadArchivoPersistida, u64, u64, &'a [u8; 32]);
+
+    fn persisted_intent_v2(journal: JournalV2) -> IntentRetiroPersistidoV2 {
+        match intent_v2(journal) {
+            IntentRetiroPersistidoVersionado::V2(intent) => intent,
+            IntentRetiroPersistidoVersionado::V1(_) => unreachable!("fixture is v2"),
+        }
+    }
+
+    fn validate_a(
+        phase_journal: &JournalV2,
+        envelope: &EnvelopeContextoAdmisionV2,
+        intent_record: &IntentRetiroPersistidoV2,
+        intent_observed: IntentObservation<'_>,
+        journal_observed: Option<JournalObservation<'_>>,
+        context_observed: Option<ContextObservation<'_>>,
+    ) -> Result<(), ErrorIntentRetiroPersistidoV2> {
+        let phase = FaseFamiliaPersistida::RetiroA {
+            journal: phase_journal,
+            contexto: envelope,
+            intent: intent_record,
+        };
+        validar_bindings_retiro_datos(&phase, intent_observed, journal_observed, context_observed)
+    }
+
+    fn assert_a_rejected(
+        phase_journal: &JournalV2,
+        envelope: &EnvelopeContextoAdmisionV2,
+        intent_record: &IntentRetiroPersistidoV2,
+        intent_observed: IntentObservation<'_>,
+        journal_observed: Option<JournalObservation<'_>>,
+        context_observed: Option<ContextObservation<'_>>,
+    ) {
+        assert!(
+            validate_a(
+                phase_journal,
+                envelope,
+                intent_record,
+                intent_observed,
+                journal_observed,
+                context_observed,
+            )
+            .is_err()
+        );
     }
 
     fn assert_incompatible(
@@ -448,5 +544,202 @@ mod tests {
             "FaseFamiliaPersistida::RetiroCIntentSinContexto([redacted])"
         );
         assert!(!format!("{phase:?}").contains(TRANSACTION_ID));
+    }
+
+    #[test]
+    fn retiro_a_acepta_bindings_datos_coherentes() {
+        let journal = journal_v2_committed(TRANSACTION_ID, 151);
+        let envelope = envelope_v2_binding(&journal);
+        let intent_record = persisted_intent_v2(journal.clone());
+        let intent_id = identity_file_id(51);
+        let journal_id = identity_file_id(52);
+        let context_id = identity_file_id(53);
+        let digest = [0x5a; 32];
+
+        assert!(
+            validate_a(
+                &journal,
+                &envelope,
+                &intent_record,
+                (&intent_id, 61),
+                Some((&journal_id, 61, &journal)),
+                Some((&context_id, 61, 1, &digest)),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn retiro_a_rechaza_discrepancias_independientes() {
+        let journal = journal_v2_committed(TRANSACTION_ID, 161);
+        let envelope = envelope_v2_binding(&journal);
+        let intent_record = persisted_intent_v2(journal.clone());
+        let intent_id = identity_file_id(51);
+        let journal_id = identity_file_id(52);
+        let context_id = identity_file_id(53);
+        let digest = [0x5a; 32];
+        let journal_data = Some((&journal_id, 61, &journal));
+        let context_data = Some((&context_id, 61, 1, &digest));
+
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&identity_file_id(54), 61),
+            journal_data,
+            context_data,
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 62),
+            journal_data,
+            context_data,
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 62),
+            Some((&journal_id, 62, &journal)),
+            Some((&context_id, 62, 1, &digest)),
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 61),
+            Some((&identity_file_id(55), 61, &journal)),
+            context_data,
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 61),
+            Some((&journal_id, 62, &journal)),
+            context_data,
+        );
+
+        let other_journal = journal_v2_committed(OTHER_TRANSACTION_ID, 161);
+        let other_intent = persisted_intent_v2(other_journal.clone());
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &other_intent,
+            (&intent_id, 61),
+            journal_data,
+            context_data,
+        );
+
+        let phase_journal = journal_v2_committed(TRANSACTION_ID, 171);
+        let observed_journal = journal_v2_committed(OTHER_TRANSACTION_ID, 171);
+        let observed_envelope = envelope_v2_binding(&observed_journal);
+        let observed_intent = persisted_intent_v2(observed_journal.clone());
+        assert_a_rejected(
+            &phase_journal,
+            &observed_envelope,
+            &observed_intent,
+            (&intent_id, 61),
+            Some((&journal_id, 61, &observed_journal)),
+            context_data,
+        );
+
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 61),
+            journal_data,
+            Some((&identity_file_id(56), 61, 1, &digest)),
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 61),
+            journal_data,
+            Some((&context_id, 62, 1, &digest)),
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 61),
+            journal_data,
+            Some((&context_id, 61, 2, &digest)),
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 61),
+            journal_data,
+            Some((&context_id, 61, 1, &[0xa5; 32])),
+        );
+
+        let incompatible_envelope =
+            envelope_v2_binding(&journal_v2_committed(OTHER_TRANSACTION_ID, 161));
+        assert_a_rejected(
+            &journal,
+            &incompatible_envelope,
+            &intent_record,
+            (&intent_id, 61),
+            journal_data,
+            context_data,
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 61),
+            None,
+            context_data,
+        );
+        assert_a_rejected(
+            &journal,
+            &envelope,
+            &intent_record,
+            (&intent_id, 61),
+            journal_data,
+            None,
+        );
+    }
+
+    #[test]
+    fn bindings_rechazan_fases_b_c_y_otras_fases_ajenas() {
+        let journal_v1 = journal_v1_committed();
+        let journal_v2 = journal_v2_committed(TRANSACTION_ID, 181);
+        let envelope = envelope_v2_binding(&journal_v2);
+        let intent_record = persisted_intent_v2(journal_v2.clone());
+        let intent_id = identity_file_id(51);
+        let context_id = identity_file_id(53);
+        let digest = [0x5a; 32];
+        let intent = (&intent_id, 61);
+        let context = Some((&context_id, 61, 1, &digest));
+        let b_phase = FaseFamiliaPersistida::RetiroBDatosParaReplay {
+            contexto: &envelope,
+            intent: &intent_record,
+        };
+        let c_phase = FaseFamiliaPersistida::RetiroCIntentSinContexto(&intent_record);
+        let legacy_phase = FaseFamiliaPersistida::LegadoV1(&journal_v1);
+        let normal_phase = FaseFamiliaPersistida::NormalV2 {
+            journal: &journal_v2,
+            contexto: &envelope,
+        };
+        let empty_phase = FaseFamiliaPersistida::VacioObservado;
+
+        for phase in [
+            &b_phase,
+            &c_phase,
+            &legacy_phase,
+            &normal_phase,
+            &empty_phase,
+        ] {
+            let error = validar_bindings_retiro_datos(phase, intent, None, context).unwrap_err();
+            assert_eq!(format!("{error:?}"), "ErrorIntentRetiroPersistidoV2");
+            assert!(!format!("{error:?}").contains(TRANSACTION_ID));
+        }
     }
 }
