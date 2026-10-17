@@ -123,21 +123,30 @@ pruebas Python por job, además de demos y controles verdes. Ese CI precede a
 I1A/B1/B2. El detalle está en
 [04-contexto-admision.md](04-contexto-admision.md#lector-versionado-de-context-ctx1ctx4).
 
-El lector file-bound v1/v2 de Intent se implementa en cortes privados I1A/B1/B2.
-I1A y B1 cerraron sus gates locales; B2 está en el árbol activo y cerró gates
-locales con `12/0/0` en ambos sistemas. Formato, clippy, frontera y diff
-terminaron en `0` en Windows y Linux; los artefactos fueron frescos y cleanup
-Linux se reportó `PASS`. B2 quedó en el commit local
-`08ddb0b8d671b9a6d468ddc94bd756b0750c3b1c` (286 líneas de churn), con recibo
-postcommit `3AF525CCA621DBB401BC436ADF5902BB4C361C7EC517FEEADB5E25EC1E2CB6CE`.
-El CI registrado de Context precede a I1A/B1/B2. El detalle está en
-[04-contexto-admision.md](04-contexto-admision.md#lector-versionado-de-intent-i1ab1b2).
-I2 implementará apertura canónica, validación de temporales antes y después de
-leer y un postcheck owner-bound que prevalece sobre un resultado presente o
-error. I3 añadirá la doble comprobación de ausencia, validación de temporales
-entre sondas y en el postcheck final, que prevalece también sobre `None`. Ambos
-cortes, el preflight de familia, replay owner-bound v2 y caller productivo de
-apply o recovery siguen pendientes.
+El lector file-bound v1/v2 de Intent se implementa en cortes privados I1A/B1/B2;
+sus filtros locales llegaron a `12/0/0` en Windows y Linux con controles en `0`.
+I2C (`7770ff593fbb6c1be4e35e01da6dd5bbc5843efa`, 393 líneas de churn) añade la
+ruta owner-bound presente con tres pruebas `3/0/0` por sistema y controles
+locales en `0`. Valida owner y temporales antes y después de leer el mismo
+`File`; el postcheck, tras cerrar el préstamo, prevalece sobre una lectura
+presente o un error. El CI `be97f039c358f84a7f7383c94aafd70a0f977381` (run
+`39009583297`) cubre I1A/B1/B2 e I2A/B, pero precede a I2C; el CI
+`e79099f1fe1a43d4d4cc1440f630312ce20e1afb` (run `39008050182`) es anterior a
+I2A/B. Ambos terminaron `SUCCESS`, con 38 suites Cargo, 7 pruebas Python y
+demos/controles verdes por job. El detalle y la tabla están en
+[04-contexto-admision.md](04-contexto-admision.md#lector-versionado-de-intent).
+
+I3 (`14ff62f2a73c38ca28c99617962c65cc0a898615`) cerró su filtro focal con
+`6/0/0` en Windows y Linux; formato, clippy, frontera y diff terminaron en `0`,
+y cleanup Linux en `0`. La ruta devuelve ausencia solo tras dos aperturas con
+ausencia exacta, comprobaciones de parent/scope/lock y temporales entre sondas;
+reaparición, I/O y tipo no admitido son errores. El postcheck final prevalece
+también sobre `None`. El recibo de gates es
+`68C172468A3B42FC521AF4EEF6A6F146BE2D4C6F6C5772622812C90A3F456D4F`.
+Estos gates son locales; el CI `be97f03` citado arriba precede a I2C e I3. El
+preflight de familia por fases, replay owner-bound v2, la matriz general I4 de
+scope/tipo y cualquier caller productivo de apply o recovery siguen pendientes.
+U7 y fase 04 continúan parciales; el progreso global permanece en 4/9.
 
 Los journals v1 sin auxiliares conservan el recovery legacy. Journal v1 junto
 a un auxiliar nuevo es ambiguo por falta de kind; el futuro preflight/caller

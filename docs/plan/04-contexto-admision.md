@@ -40,8 +40,11 @@ en 0. No se ejecutó el filtro más amplio `transaccion::admision::`. Estos paso
 operan sobre datos en memoria y no activan un caller productivo de apply o
 recovery. J0/J1 añaden el lector file-bound versionado del Journal. El lector de
 Context se resume en «Lector versionado de Context». El lector versionado de
-Intent tiene cortes locales I1A, B1 y B2; estos no añaden gate de familia
-persistida ni caller productivo.
+Intent añade I1A/B1/B2, I2C e I3. I2C valida la lectura presente bajo owner y
+temporales; I3 añade ausencia exacta tras dos sondas y el postcheck final. Sus
+gates locales están cerrados; la tabla de evidencia separa los conteos de cada
+corte. El CI publicado `be97f03` precede a ambos. Ninguno añade aún el gate de
+familia persistida ni un caller productivo.
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -434,7 +437,7 @@ permanece en 4/9.
 
 ## Evidencia de verificación
 
-Los doce CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los catorce CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -452,6 +455,8 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `27fc2ff` | `38995183362` | `1148/0/9` | `1167/0/9` |
 | `cad51cc` | `38999370612` | `1169/0/9` | `1189/0/9` |
 | `6b26b9a` | `39004162338` | `1194/0/9` | `1214/0/9` |
+| `e79099f` | `39008050182` | `1206/0/9` | `1226/0/9` |
+| `be97f03` | `39009583297` | `1212/0/9` | `1232/0/9` |
 
 El CI `39004162338` corresponde al lote publicado
 `6b26b9a8620f9aceb183b5d32e853a52944931ac`: Windows `1194/0/9` y Linux
@@ -459,6 +464,14 @@ El CI `39004162338` corresponde al lote publicado
 controles verdes. Es la evidencia remota del lote Context; precede a I1A, B1 y
 B2. Sus gates locales se documentan por separado. Ctx4 cerró gates locales y
 quedó en el commit local `190d046` (312 líneas de churn).
+
+Los CI `e79099f1fe1a43d4d4cc1440f630312ce20e1afb` (run `39008050182`) y
+`be97f039c358f84a7f7383c94aafd70a0f977381` (run `39009583297`) también
+terminaron `SUCCESS`: respectivamente Windows/Linux `1206/0/9` y `1226/0/9`,
+y `1212/0/9` y `1232/0/9`. Cada job incluyó 38 suites Cargo, 7 pruebas
+Python, demos y controles verdes. El primero precede a I2A/B; el segundo cubre
+I2A/B y precede a I2C/I3. Al preparar esta actualización, I2C/I3 tienen gates
+locales pero aún no están cubiertos por un CI publicado.
 
 La prueba integrada de Unit6 (`5a270ca1686bb66169de6916b8a1d824da27ad09`, +86 líneas Rust) recorre con
 fixture sintética la cadena privada A → retiro Journal/B → retiro Context →
@@ -1560,7 +1573,7 @@ conserva sus rutas y semántica. I1A/B1/B2 no añaden el gate de familia
 persistida, replay owner-bound v2 ni caller productivo de apply o recovery. El
 progreso global permanece en 4/9, con U7 y fase 04 parciales.
 
-### Lector versionado de Intent (I1A/B1/B2)
+### Lector versionado de Intent
 
 I1A (`68d55bf56ec563e2133778751bfc7ff13ed83b94`) añade un recolector privado
 para un `File` ya abierto. Valida metadata, tipo regular, scope e identidad del
@@ -1585,12 +1598,29 @@ clippy, frontera y diff terminaron en `0` en ambos sistemas; los artefactos
 fueron frescos y cleanup Linux se reportó `PASS`. El commit local es
 `08ddb0b8d671b9a6d468ddc94bd756b0750c3b1c` (286 líneas de churn); el recibo
 postcommit es `3AF525CCA621DBB401BC436ADF5902BB4C361C7EC517FEEADB5E25EC1E2CB6CE`.
-El CI `39004162338` precede a I1A/B1/B2. I2 (apertura canónica, validación de
-temporales antes y después de leer y postcheck owner-bound que domina un
-resultado presente o error) e I3 (doble comprobación de ausencia, validación de
-temporales entre sondas y en el postcheck final, que domina también `None`), el
-gate de familia por fases y cualquier caller de recovery/apply siguen
-pendientes.
+I2C (`7770ff593fbb6c1be4e35e01da6dd5bbc5843efa`, 393 líneas de churn) añade la
+lectura presente owner-bound: valida parent/scope/lock y temporales antes y
+después, lee el mismo `File` y aplica un postcheck común tras cerrar el préstamo.
+Un fallo de postcheck prevalece sobre un resultado presente o un error de
+lectura. Sus tres pruebas owner y controles locales cerraron `3/0/0` en Windows
+y Linux; formato, clippy, frontera y diff semántico terminaron en `0`. El CI
+`be97f03` precede a I2C. I3 (`14ff62f2a73c38ca28c99617962c65cc0a898615`,
+209 líneas de churn) añade la doble sonda de ausencia exacta: la segunda
+apertura debe confirmar ausencia y las comprobaciones de owner, scope y los tres
+temporales se repiten entre sondas y tras la lectura. Reaparición, I/O o tipo
+no admitido devuelven error; el postcheck final domina también una ausencia
+candidata.
+
+| Corte | Filtro local Windows | Filtro local Linux | Controles |
+|---|---:|---:|---|
+| I2C, `7770ff5` | `3/0/0` | `3/0/0` | formato, clippy, frontera y diff `0` |
+| I3, `14ff62f` | `6/0/0` | `6/0/0` | formato, clippy, frontera y diff `0`; cleanup Linux `0` |
+
+El recibo de I3 es `68C172468A3B42FC521AF4EEF6A6F146BE2D4C6F6C5772622812C90A3F456D4F`.
+Estos son gates locales; el CI `be97f03` es el último CI publicado citado aquí
+y precede a I2C/I3. El gate de familia por fases, replay owner-bound v2, la
+matriz general de scope/tipo (I4) y cualquier caller de recovery/apply siguen
+pendientes. El estado global permanece en 4/9; U7 y fase 04 continúan parciales.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
