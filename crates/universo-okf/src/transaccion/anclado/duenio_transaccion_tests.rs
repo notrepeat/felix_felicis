@@ -12,6 +12,8 @@ use std::io::Read;
 use std::path::Path;
 use tempfile::tempdir;
 
+#[path = "duenio_transaccion_tests/contexto_versionado_owner_tests.rs"]
+mod contexto_versionado_owner_tests;
 #[path = "duenio_transaccion/owner_versionado_tests.rs"]
 mod owner_versionado_tests;
 

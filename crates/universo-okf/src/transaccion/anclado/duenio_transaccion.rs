@@ -249,6 +249,80 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         )
     }
 
+    /// Devuelve la lectura versionada solo tras soltar el lease y validar el owner.
+    pub(super) fn observar_contexto_versionado(
+        &mut self,
+    ) -> Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    > {
+        self.observar_contexto_versionado_con(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_contexto_versionado_con_prueba<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        self.observar_contexto_versionado_con(despues_de_leer)
+    }
+
+    fn observar_contexto_versionado_con<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = self.leer_contexto_versionado_con(despues_de_leer)?;
+        let postcheck = self.parent_revalidado();
+        finalizar_observacion_contexto_versionado(lectura, postcheck)
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_contexto_versionado_con_posterror_prueba(
+        &mut self,
+        error: super::journal_temporal::ErrorJournalAnclado,
+    ) -> Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    > {
+        let lectura = self.leer_contexto_versionado_con(|| {})?;
+        finalizar_observacion_contexto_versionado(lectura, Err(error))
+    }
+
+    fn leer_contexto_versionado_con<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Result<
+            Option<super::contexto_admision::ObservacionContextoVersionada>,
+            super::contexto_admision::ErrorLecturaContextoVersionada,
+        >,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = {
+            let lease = self
+                .contexto_admision()
+                .map_err(super::contexto_admision::ErrorLecturaContextoVersionada::Lease)?;
+            lease.observar_versionado()
+        };
+        despues_de_leer();
+        Ok(lectura)
+    }
+
     fn abrir_root_lectura(
         &self,
     ) -> Result<Option<DirectorioAnclado>, ErrorDuenioTransaccionAnclado> {
@@ -399,6 +473,24 @@ fn finalizar_observacion_journal_versionado(
     super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
 > {
     postcheck.map_err(super::journal_temporal::versionado::ErrorLecturaJournalVersionada::Lease)?;
+    lectura
+}
+
+fn finalizar_observacion_contexto_versionado(
+    lectura: Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    >,
+    postcheck: Result<File, super::journal_temporal::ErrorJournalAnclado>,
+) -> Result<
+    Option<super::contexto_admision::ObservacionContextoVersionada>,
+    super::contexto_admision::ErrorLecturaContextoVersionada,
+> {
+    postcheck.map_err(|_| {
+        super::contexto_admision::ErrorLecturaContextoVersionada::Lease(
+            super::contexto_admision::ErrorContextoAdmisionAnclado::OwnerUnverified,
+        )
+    })?;
     lectura
 }
 
