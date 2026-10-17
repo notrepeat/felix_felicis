@@ -21,9 +21,15 @@ no son una cota de RSS.
 Las unidades A y B1–B4 cerraron sus gates locales en ambos sistemas. B4
 (`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`, sobre `733c8db`) pasó 53/0/0
 pruebas focales; formato, clippy, frontera y diff semántico terminaron en 0.
-El CI publicado completo citado abajo es anterior a A–B4 y no los acredita. No
-hay codec `FELIX-RETIRE` v2, replay tipado/binding owner-bound v2, reader
-file-bound v2 ni caller productivo de apply o recovery.
+El CI `e5bcf331` (run `38988788938`) también cubre Journal v2 y ADMENV2 A–B4.
+El trabajo RETIRE v2 posterior aún no tiene CI propio. C1/C2, D1/D2A y el D2B
+corregido tienen gates locales cerrados; su primer intento falló antes de tests
+y no se le atribuyen conteos. D3A (`b67714f2`) cerró sus gates locales corregidos: selector 5/0/0 en ambos
+sistemas y controles en 0. D3B (`984ef824`) también cerró sus gates locales:
+selector 7/0/0 en ambos sistemas, controles en 0 y cleanup Linux en 0. Todo este
+código v2 clasifica o transforma datos:
+todavía no existe reader file-bound v2, replay tipado/binding owner-bound v2 ni
+caller productivo de apply o recovery.
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -276,12 +282,25 @@ Los frames exteriores `FELIX-ADMENV` v1 y `FELIX-RETIRE` v1 permanecen estrictos
 y nunca aceptan Journal v2 bajo framing v1. `FELIX-ADMCTX` v1 es un frame
 interior distinto y se conserva dentro del envelope ADMENV v2. El codec y
 selector exterior `FELIX-ADMENV` v2 están implementados en el árbol local; B4
-(`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`) cerró sus gates locales.
-`FELIX-RETIRE` v2 sigue como draft, sin codec ni reader. Tampoco existe una
-extensión tipada de replay/binding owner-bound v2 para `&JournalV2`; el consumidor
-futuro debe preservar y verificar `kind`, sin proyección a v1 ni booleano del
-caller, antes de un dispatcher. El selector no demuestra el recovery legacy ni
-su comportamiento sobre el filesystem.
+(`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`) cerró sus gates locales y CI.
+
+También está implementado localmente el codec de datos `FELIX-RETIRE` v2. C1/C2
+añaden el modelo `Committed`/`context_required` y comparadores de DTO; D1 codifica
+el frame, D2A valida su estructura, D2B decodifica JournalV2 y FILEID de forma
+estricta, y D3A/B seleccionan una sola versión sin fallback. El modelo limita el
+Context a 1..=512 MiB; el frame tiene una cuota derivada de 1536 bytes
+(`71 + 1024 + 3 × 147`), no una medición de registro. C1/C2 y D1/D2A tienen
+recibos locales; D2B corregido pasó 21/0/0 pruebas RETIRE v2 y 17/0/0 de
+compatibilidad v1 en Windows y Linux, con formato, clippy, frontera y diff `0`.
+Su primer intento de gates falló en compilación con `E0432` y `E0425` antes de
+iniciar tests; esos errores se corrigieron y no se atribuyen conteos a ese
+intento. D3A (`b67714f2`) está integrado y cerró sus gates locales corregidos;
+D3B (`984ef824`) también cerró sus gates locales. No se decodifica JournalV2
+como v1. Aún no existe reader file-bound, extensión tipada de
+replay/binding owner-bound v2 para `&JournalV2`, ni caller productivo. El futuro
+consumidor debe conservar y verificar `kind`, sin proyección a v1 ni booleano de
+caller, antes de un dispatcher. Ninguno de estos codecs demuestra recovery ni
+comportamiento sobre el filesystem.
 
 El selector es solo clasificación de datos. El Journal, su kind, el Context y
 los resultados de binding no conceden autoridad; no se activan apply ni recovery.
@@ -339,24 +358,41 @@ no da autoridad de recovery ni cleanup. Si la confirmación falla, el error no
 demuestra que el rename no tuvo efecto y la operación no reintenta ni limpia.
 El cleanup, el preflight global de huérfanos y el caller que ordene contexto →
 journal `Prepared` → primer rename siguen pendientes. El framing exterior v1 y
-sus codecs permanecen intactos. El modelo y codec de Journal v2 y el selector
-de schema cerraron gates locales; el CI remoto `5a73329` los cubre junto con sus
-ancestros. Ese CI no cubre el lote ADMENV2 A–B4.
-El codec y selector exterior `FELIX-ADMENV` v2 existen localmente; B4
-(`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`) cerró gates locales. No hay codec
-`FELIX-RETIRE` v2, reader file-bound v2, extensión tipada de replay/binding
-owner-bound v2 ni caller de producción. Las primitivas de storage no son una
-decisión de recovery.
+sus codecs permanecen intactos. El modelo y codec de Journal v2 y su selector
+cerraron gates locales y están cubiertos por CI. El CI `e5bcf331` (run
+`38988788938`) cubre también ADMENV2 A–B4; sus resultados están en la tabla de
+evidencia. Ese CI es anterior a RETIRE v2 y no lo acredita.
+
+RETIRE v2 ya cuenta con modelo/binding C1/C2, encoder D1, preflight D2A,
+decoder canónico D2B y selectores D3A/B en el árbol local. Son codecs y
+comparadores de datos; no abren archivos ni implementan replay owner-bound v2.
+C1/C2, D1/D2A y el D2B corregido tienen gates locales cerrados. El primer
+intento D2B falló al compilar (`E0432` por el import de cuota y `E0425` por un
+nombre de helper), sin iniciar tests; la corrección cambió el import de la cuota
+al módulo padre y arregló el typo, y después pasó los gates en ambos sistemas.
+D3A (`b67714f2`) cerró gates locales corregidos: selector 5/0/0 y formato,
+clippy, frontera y diff en 0 para Windows y Linux. El intento inicial de clippy
+falló por un import `JournalKind` no usado; el fix se limitó a quitarlo. Las
+pruebas v2 `21/0/0` y compatibilidad v1 `17/0/0` proceden del snapshot anterior,
+con fuentes v2/v1 idénticas; no se repitieron tras el cambio del selector.
+D3B (`984ef824`) añade dos pruebas y cerró gates locales: selector 7/0/0 en
+Windows y Linux; formato, clippy y frontera en 0; diff-check del selector
+rastreado en 0 y cleanup Linux en 0. El chequeo `--no-index` del archivo nuevo
+salió 1 por comparar contra vacío y no reportó whitespace; los artefactos fueron
+frescos. No hay CI remoto para RETIRE v2, reader file-bound v2
+ni caller de producción. Las primitivas de storage no son una decisión de
+recovery.
 
 El encoder y decoder exteriores v1 son codecs puros, mantienen
 `felix-journal-v1` sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un
 caller. La orquestación y el recovery context-aware requieren otra revisión.
-La secuencia privada `Croot→Intent→observación final` produce datos
-observacionales; no consume `FELIX-ADMENV` v2 ni implementa retiro v2 o caller
-de apply/recovery. El selector exterior ADMENV clasifica framing y
-preserva el decoder elegido, pero no valida replay ni prueba el recovery legacy
-o el filesystem. Falta una extensión tipada de replay/binding owner-bound v2
-que preserve `kind` antes de un futuro dispatcher. Los journals legacy sin
+La secuencia privada `Croot→Intent→observación final` sigue siendo un flujo
+observacional con operaciones v1; no consume los nuevos frames ADMENV2 o RETIRE2
+ni conecta esos codecs a apply/recovery. El selector exterior ADMENV y el
+selector RETIRE clasifican framing y preservan el decoder elegido, pero no
+validan replay ni prueban el recovery legacy o el filesystem. Falta una
+extensión tipada de replay/binding owner-bound v2 que preserve `kind` antes de
+un futuro dispatcher. Los journals legacy sin
 auxiliar mantienen el recovery actual; no se infiere contexto ni se convierte
 v1 a v2. El codec y el binding no son
 autoridad para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar backup.
@@ -369,7 +405,7 @@ el progreso global permanece en 4/9.
 
 ## Evidencia de verificación
 
-Los siete CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los ocho CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -382,11 +418,13 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `1b4b25e` | `38973980033` | `1057/0/9` | `1076/0/9` |
 | `203bb6b` | `38978377109` | `1064/0/9` | `1083/0/9` |
 | `5a73329` | `38983901592` | `1083/0/9` | `1102/0/9` |
+| `e5bcf33` | `38988788938` | `1112/0/9` | `1131/0/9` |
 
-El último CI remoto completo publicado al preparar este borrador es run
-`38983901592` de `5a73329`: Windows `1083/0/9` y Linux `1102/0/9`. Cada job
-terminó con 38 suites Cargo y 7 pruebas Python. Ese CI es anterior a las
-unidades locales ADMENV2 A–B4 y no las acredita ni sustituye sus gates focales.
+El CI remoto completo más reciente disponible para este borrador es el run
+`38988788938` de `e5bcf331cb98f1208bf5313b206a48e143d3e859`, con Windows
+`1112/0/9` y Linux `1131/0/9`; ambos jobs incluyeron 38 suites Cargo y 7 pruebas
+Python. Cubre Journal v2 y ADMENV2 A–B4. Es anterior a RETIRE v2 y no acredita
+C1/C2, D1, D2A, D2B corregido ni los selectores D3A/B.
 
 La prueba integrada de Unit6 (`5a270ca1686bb66169de6916b8a1d824da27ad09`, +86 líneas Rust) recorre con
 fixture sintética la cadena privada A → retiro Journal/B → retiro Context →
@@ -423,10 +461,10 @@ y artefactos frescos.
 | Unidad 2, `ccb390a`, modelo y codec | Filtros v2 `12/0/0` en ambos sistemas; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff `0`; cleanup Linux `0`. Encoder máximo observado: 722 bytes Windows y 665 Linux, ambos bajo la cuota propia de 1024. |
 | Unidad 3, `e83fd1f695f5af20474c42f00fcc704029cdf44c`, selector puro | Selector `6/0/0` y Journal v2 `12/0/0` en Windows y Linux; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff semántico `0` en ambos sistemas; cleanup Linux `0`. Solo clasifica datos v1/v2. |
 
-El CI `5a73329` cubre Journal v2 y sus ancestros, incluidas las unidades 0–3;
-el lote ADMENV2 A–B4, posterior a esa base, aún no tiene CI remoto propio. El
-selector no activa recovery, caller ni I/O de filesystem. Los gates locales de
-Journal v2 y ADMENV2 A–B4 cerraron.
+El CI `e5bcf331` cubre Journal v2 y sus ancestros, incluidas las unidades 0–3,
+y ADMENV2 A–B4. RETIRE v2 se desarrolló después y aún no tiene CI remoto propio.
+El selector de Journal v2 solo clasifica datos; no activa recovery, caller ni
+I/O de filesystem. Los gates locales de Journal v2 y ADMENV2 A–B4 cerraron.
 
 ### Estado local del envelope ADMENV2
 
@@ -441,9 +479,33 @@ Journal v2 y ADMENV2 A–B4 cerraron.
 A–B4 agregan el envelope, framing, decoder y selector `FELIX-ADMENV` v2 con
 kind `context_required` preservado y contexto interior v1. Cada cuota es 512
 MiB; no se afirma límite de RSS. El selector usa el máximo de las cuotas v1/v2
-antes de elegir una única rama, y cada codec valida su cuota propia. Los casos
-son focales locales, no CI remoto. A–B4 cerraron sus controles. No hay
+antes de elegir una única rama, y cada codec valida su cuota propia. A–B4
+cerraron sus controles locales y están cubiertas por CI `e5bcf331`. No hay
 consumidor file-bound para retiro v2 ni integración con recuperación o apply.
+
+### Estado local de RETIRE v2
+
+RETIRE v2 añade un modelo tipado, codecs puros y selección estricta de versión.
+El frame conserva JournalV2 completo con `Committed` y `context_required`, tres
+DTO FILEID, scope y metadata del Context. No convierte DTO a identidad nativa,
+no hace I/O de filesystem, replay ni autorización. El frame de 1536 bytes es
+una cuota derivada (`71 + 1024 + 3 × 147`), no un tamaño de registro medido; el
+modelo limita el Context a `1..=512 MiB`.
+
+| Corte | Evidencia local | Estado al preparar este borrador |
+|---|---|---|
+| C1, `86de718` | Modelo `Committed`/kind y límites Context; 3/0/0 Windows y Linux según los resúmenes de Cargo. | Gates locales cerrados. El wrapper Windows no devolvió un exit recuperable aunque registró el resumen exitoso; clippy, formato, frontera y diff pasaron. |
+| C2, `205d94f` | Comparadores puros de DTO y Journal completo; 6/0/0 en Windows y Linux. | Gates locales cerrados; controles de formato, clippy, frontera y diff `0`. |
+| D1, `ccc898a` | Encoder RETIRE v2, 9/0/0; compatibilidad RETIRE v1, 17/0/0 en ambos sistemas. | Gates locales cerrados; formato, clippy, frontera y diff `0`. |
+| D2A, `9409fd9` | Preflight de framing, límites y cursor; 14/0/0 RETIRE v2 y 17/0/0 compatibilidad v1 en ambos sistemas. | Gates locales cerrados; formato, clippy, frontera y diff `0`; cleanup Linux `0`. |
+| D2B, `406694efce983b9b129040022d899a0d13649128` | Modelo `1AA24E2A…6602E943`, codec `E6631637…CE49660`; 21/0/0 RETIRE v2 y 17/0/0 compatibilidad v1 en Windows y Linux. | Gates locales cerrados; formato, clippy `-D warnings`, frontera y diff `0`; cleanup Linux `0`. El intento previo falló en compilación con `E0432`/`E0425` antes de tests y no aporta conteos. |
+| D3A, selector (`b67714f2`) | Parent `4CBD45947BB9E06E6176DEA43885D7349F9C48F2581FEDA74DE88F364D8CEE2B`, selector `0489365037F4E7109A5399848C030BEA5701795DAB1A6322031ACD504306632A`; +396/−0 líneas Rust, cinco tests. Selector 5/0/0 en ambos sistemas; v2 21/0/0 y v1 17/0/0 en ambos del snapshot anterior, con esas fuentes idénticas. | Gates corregidos cerrados en ambos sistemas: formato, clippy, frontera y diff `0`. El primer clippy falló por un import `JournalKind` no usado, luego eliminado. No hay CI propio. |
+| D3B, límites de selector (`984ef824`) | Selector `66B05DA93706F5A50D19ECEEF284229B0D8D5D32508404F8967BEA996ACC1EF6`, test `FDCAF8EF12C150EF482871FDED55A246C8BD70F86C0F31C3A1787899F5442400`; +67/−0 líneas Rust, dos casos nuevos y siete pruebas en total. | Gates locales cerrados: selector 7/0/0, formato, clippy, frontera y diff-check rastreado en 0; cleanup Linux 0 y artefactos frescos. El test fija aceptación exacta en 16 bytes y rechazo a 17 con cuotas en ambos órdenes. No tiene CI propio. |
+
+La corrección D2B movió el import de la cuota Context al módulo padre y arregló
+el typo del helper existente; el gate receipt corregido cierra esa unidad. El CI
+`e5bcf331` antecede a C1/D2A y no cubre ninguna unidad RETIRE v2; D2B corregido
+y D3A/B tampoco tienen CI propio.
 
 ### Registro histórico detallado
 

@@ -47,22 +47,30 @@ de apply o recovery.
 La estrategia paralela Journal v2 conserva v1. Sus vectores dorados v1, modelo,
 codec y selector canónico están en el árbol local; el Journal v2 tiene cuota
 propia de 1024 bytes y su encoder máximo midió 722 bytes en Windows y 665 en
-Linux. Unidad 3 (`e83fd1f695f5af20474c42f00fcc704029cdf44c`, sobre `ccb390a4`)
-cerró selector 6/0/0 y Journal v2 12/0/0 en ambos sistemas, y compatibilidad
-codec v1 10/0/0 en Windows y 9/0/0 en Linux; formato, clippy, frontera y diff
-semántico terminaron en 0 en ambos sistemas, y cleanup Linux terminó en 0.
-El envelope exterior `FELIX-ADMENV` v2 también está implementado localmente:
-magic compartido, versión estricta 2, `JournalV2` `Prepared` con kind
-preservado y `FELIX-ADMCTX` v1 interior. Frame y contexto tienen cuotas propias
-de 512 MiB, sin promesa de límite de RSS; el selector aplica el máximo de cuotas
-antes de elegir una rama y no hace fallback. B4
-(`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`, sobre `733c8db`) pasó 53/0/0
-pruebas en ambos sistemas; fmt, clippy, frontera y diff semántico terminaron en
-0. El CI remoto citado en 04-contexto-admision es anterior y no cubre A–B4. No
-hay `FELIX-RETIRE` v2,
-reader file-bound v2, extensión tipada de replay/binding owner-bound v2 ni
-caller de apply o recovery. El avance global permanece en 4/9; U7 y fase 04
-siguen parciales.
+Linux. El CI `e5bcf331` (run `38988788938`) cubre Journal v2 y ADMENV2 A–B4:
+Windows `1112/0/9`, Linux `1131/0/9`, con 38 suites Cargo y 7 pruebas Python
+por job. El envelope exterior `FELIX-ADMENV` v2 conserva el contexto interior
+`FELIX-ADMCTX` v1 y usa cuotas propias de 512 MiB; no implica una cota de RSS.
+Su selector limita con el máximo de cuotas antes de elegir una rama y no hace
+fallback.
+
+RETIRE v2 ya tiene un modelo/binding puro, encoder, preflight, decoder y
+selectores v1/v2 en desarrollo local. Estos componentes preservan JournalV2 y
+su kind; clasifican o transforman bytes en memoria, sin lectura de archivos,
+replay ni autoridad. Los gates de C1/C2, D1/D2A y D2B corregido cerraron; D2B
+pasó 21/0/0 pruebas RETIRE v2 y 17/0/0 de compatibilidad v1 por sistema. El
+intento anterior falló al compilar con `E0432`/`E0425` y no inició tests; sus
+conteos no se acreditan. D3A (`b67714f2`) cerró gates corregidos: selector 5/0/0
+en ambos sistemas y controles de formato, clippy, frontera y diff en 0. Su
+clippy inicial falló por un import `JournalKind` no usado, luego eliminado. Los
+conteos v2 21/0/0 y v1 17/0/0 proceden del snapshot anterior con fuentes
+idénticas. D3B (`984ef824`) cerró gates locales con selector 7/0/0 en ambos
+sistemas, controles en 0 y cleanup Linux en 0. El CI citado no incluye RETIRE
+v2 y este lote aún no tiene CI propio. No existe reader file-bound v2, extensión tipada de
+replay/binding owner-bound v2 ni caller de apply o recovery. Los estados y
+evidencia por corte se detallan en
+[04-contexto-admision.md](04-contexto-admision.md#estado-local-de-retire-v2).
+El avance global permanece en 4/9; U7 y fase 04 siguen parciales.
 
 Hay tres tests interproceso en cortes diferentes. `b990c72` termina con código
 86 en `RestoreOld`, después de restaurar y reobservar `Old` y antes de retirar
