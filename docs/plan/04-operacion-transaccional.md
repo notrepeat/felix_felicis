@@ -47,10 +47,14 @@ de apply o recovery.
 La estrategia paralela Journal v2 conserva v1. Sus vectores dorados v1, modelo,
 codec y selector canónico están en el árbol local; el Journal v2 tiene cuota
 propia de 1024 bytes y su encoder máximo midió 722 bytes en Windows y 665 en
-Linux. El CI `ec973` cubrió el lote publicado hasta RETIRE v2 D3B. El CI exacto
-posterior `27fc2ff` (run `38995183362`) terminó SUCCESS: Windows `1148/0/9`,
-Linux `1167/0/9`, con 38 suites Cargo y 7 pruebas Python por job; cubre R0–R2,
-pero precede a J0/J1 y no acredita el lector estricto nuevo. El envelope exterior
+Linux. El CI `ec973` cubrió el lote publicado hasta RETIRE v2 D3B. El CI exacto posterior `27fc2ff` (run `38995183362`) terminó SUCCESS: Windows
+`1148/0/9`, Linux `1167/0/9`, con 38 suites Cargo y 7 pruebas Python por job;
+cubre R0–R2, pero precede a J0/J1. El CI posterior `cad51cc` (run
+`38999370612`) terminó SUCCESS: Windows `1169/0/9`, Linux `1189/0/9`, también
+con 38 suites Cargo y 7 pruebas Python por job. Cubre Journal v2 y J0/J1, pero
+precede a las unidades Context Ctx1–Ctx4.
+
+El envelope exterior
 `FELIX-ADMENV` v2 conserva el contexto interior `FELIX-ADMCTX` v1 y usa cuotas
 propias de 512 MiB; no implica una cota de RSS. Su selector limita con el máximo
 de cuotas antes de elegir una rama y no hace fallback.
@@ -102,13 +106,21 @@ con 15 pruebas, y 84/0/0 en Linux, con 16. Cleanup Linux terminó en 0. Añade
 tres pruebas comunes y una Unix para schema desconocido, malformación v1 sin
 fallback, directorio en el nombre canónico y symlink; Windows no reclama
 cobertura de symlink. Las pruebas sintéticas no equivalen a una sustitución
-real del lock ni a una frontera general frente a escritores externos. J0/J1
-todavía no tienen CI remoto propio. El estado técnico y los límites de
-evidencia se detallan en
+real del lock ni a una frontera general frente a escritores externos. El CI
+`cad51cc` cubre J0/J1 y sus ancestros; las unidades Context Ctx1–Ctx4 son
+posteriores al CI de referencia registrado al preparar este lote. El estado
+técnico y los límites de evidencia del Journal se detallan en
 [04-contexto-admision.md](04-contexto-admision.md#lector-versionado-del-journal-j0j1).
 
-No hay lector file-bound v2 para Context o Intent, preflight de familia
-persistida ni caller productivo de apply o recovery.
+El lector file-bound v2 de Context ya existe localmente bajo lease estricto;
+Ctx1–Ctx4 cerraron gates focales locales. Ctx4 pasó `7/0/0` en Windows y Linux,
+con formato, clippy, frontera y diff en `0`, artefactos frescos y cleanup Linux
+en `0`; el commit local es
+`190d04628f69fd59c564af79eabf3e0142de322e` (312 líneas de churn). Al preparar
+este lote, el CI de referencia `cad51cc` precede a Ctx1–Ctx4. El detalle está en
+[04-contexto-admision.md](04-contexto-admision.md#lector-versionado-de-context-ctx1ctx4).
+Aún no hay reader file-bound v2 de Intent, preflight de familia persistida,
+replay owner-bound v2 ni caller productivo de apply o recovery.
 Los journals v1 sin auxiliares conservan el recovery legacy. Journal v1 junto
 a un auxiliar nuevo es ambiguo por falta de kind; el futuro preflight/caller
 deberá rechazarlo antes del dispatcher o CAS, compuerta aún pendiente. Una terna

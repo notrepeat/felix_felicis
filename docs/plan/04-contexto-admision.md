@@ -22,10 +22,12 @@ Las unidades A y B1–B4 cerraron sus gates locales en ambos sistemas. B4
 (`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`, sobre `733c8db`) pasó 53/0/0
 pruebas focales; formato, clippy, frontera y diff semántico terminaron en 0.
 El CI `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`) cubrió
-el lote publicado hasta RETIRE v2 D3B. El CI exacto posterior `27fc2ff`
-(run `38995183362`) terminó SUCCESS: Windows `1148/0/9`, Linux `1167/0/9`,
-38 suites Cargo y 7 pruebas Python por job; cubre R0–R2. Ambos CI preceden a
-J0/J1 y no acreditan el lector estricto nuevo.
+el lote publicado hasta RETIRE v2 D3B. El CI exacto posterior `27fc2ff` (run `38995183362`) terminó SUCCESS:
+Windows `1148/0/9` y Linux `1167/0/9`, con 38 suites Cargo y 7 pruebas Python
+por job; cubre R0–R2, pero precede a J0/J1. El CI `cad51cc` (run
+`38999370612`) terminó SUCCESS con Windows `1169/0/9` y Linux `1189/0/9`;
+incluye 38 suites Cargo y 7 pruebas Python por job y cubre Journal v2 y sus
+lectores J0/J1, pero precede a las unidades Context Ctx1–Ctx4.
 C1/C2, D1/D2A y D2B corregido tienen gates locales cerrados; D3A
 (`b67714f2`) y D3B (`984ef824`) también. R0 (`655cc804`) extrae el cálculo raw
 compartido y R1 (`055da2b3`) conserva JournalV2 completo en la expectativa
@@ -35,10 +37,10 @@ estructural ADMENV v2 antes del cálculo tipado. El filtro local
 seis pruebas v2 observadas por nombre; formato, clippy, frontera y diff-check
 pasaron en ambos sistemas, los artefactos fueron frescos y cleanup Linux terminó
 en 0. No se ejecutó el filtro más amplio `transaccion::admision::`. Estos pasos
-operan sobre datos en memoria: no implementan reader de Context o Intent v2,
-gate de familia persistida ni caller productivo de apply o recovery. J0/J1
-añaden por separado el selector y lector file-bound versionado del Journal; su
-estado se registra en «Lector versionado del Journal».
+operan sobre datos en memoria: no implementan reader de Intent v2, gate de
+familia persistida ni caller productivo de apply o recovery. J0/J1 añaden el
+lector file-bound versionado del Journal. El lector de Context se resume en
+«Lector versionado de Context».
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -391,10 +393,11 @@ Windows y Linux; formato, clippy y frontera en 0; diff-check del selector
 rastreado en 0 y cleanup Linux en 0. El chequeo `--no-index` del archivo nuevo
 salió 1 por comparar contra vacío y no reportó whitespace; los artefactos fueron
 frescos. El CI `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`)
-cubre el lote publicado hasta D3B. El CI posterior `27fc2ff` (run
-`38995183362`) cubre R0/R1/R2, pero precede a J0/J1. Aún no hay CI remoto propio
-para el lector estricto J1 ni caller de producción. Las primitivas de storage
-no son una decisión de recovery.
+cubre el lote publicado hasta D3B. El CI `27fc2ff` precede a J0/J1; el CI
+posterior `cad51cc` cubre Journal v2 hasta J1 y sus ancestros, pero precede a
+Ctx1–Ctx4. Al preparar este lote, los gates focales de Context se documentan
+abajo; el lote no habilita caller de producción. Las primitivas de storage no
+son una decisión de recovery.
 
 El encoder y decoder exteriores v1 son codecs puros, mantienen
 `felix-journal-v1` sin cambios y no abren rutas. El reader genérico exige EOF y
@@ -419,14 +422,16 @@ Sigue bloqueada la frontera real de mount, bind mount o FUSE para cleanup de
 `PartialOld`; no se cambia el contrato ni la capability del backup.
 
 `Committed` mantiene los requisitos de la tabla vigente. No se salta su
-validación por retirar un auxiliar futuro. No hay reader file-bound v2 para
-Context o Intent, preflight de familia persistida ni caller productivo. Fase 04
-y U7 continúan parciales;
-el progreso global permanece en 4/9.
+validación por retirar un auxiliar futuro. El reader file-bound v2 de Context
+se resume en la sección Ctx1–Ctx4. Ctx4 cerró sus gates locales y quedó
+en el commit local `190d046` (312 líneas de churn).
+Aún no hay reader file-bound v2 de Intent, preflight de familia persistida ni
+caller productivo. Fase 04 y U7 continúan parciales; el progreso global
+permanece en 4/9.
 
 ## Evidencia de verificación
 
-Los diez CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los once CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -442,11 +447,14 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `e5bcf33` | `38988788938` | `1112/0/9` | `1131/0/9` |
 | `ec973ee` | `38993176466` | `1140/0/9` | `1159/0/9` |
 | `27fc2ff` | `38995183362` | `1148/0/9` | `1167/0/9` |
+| `cad51cc` | `38999370612` | `1169/0/9` | `1189/0/9` |
 
-El CI remoto completo más reciente registrado aquí es el run `38995183362` de
-`27fc2ff`, con Windows `1148/0/9` y Linux `1167/0/9`; ambos jobs incluyeron 38
-suites Cargo y 7 pruebas Python. Cubre R0–R2 y sus ancestros, pero precede a J0
-y al lector J1.
+El CI remoto completo más reciente registrado aquí es el run `38999370612` de
+`cad51cc`, con Windows `1169/0/9` y Linux `1189/0/9`; ambos jobs incluyeron 38
+suites Cargo y 7 pruebas Python. Al preparar este lote, es el CI de referencia
+registrado en la tabla y precede a Ctx1–Ctx4. Sus gates locales se documentan
+por separado; Ctx4 cerró gates locales y quedó en el commit local
+`190d046` (312 líneas de churn).
 
 La prueba integrada de Unit6 (`5a270ca1686bb66169de6916b8a1d824da27ad09`, +86 líneas Rust) recorre con
 fixture sintética la cadena privada A → retiro Journal/B → retiro Context →
@@ -482,13 +490,15 @@ y artefactos frescos.
 | Unidad 1A, `3cb5a9f`; Unidad 1B, `eb9282d` | Gates locales aprobados en Windows y Linux según recibos; ambos commits incluidos en CI `5a73329`. |
 | Unidad 2, `ccb390a`, modelo y codec | Filtros v2 `12/0/0` en ambos sistemas; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff `0`; cleanup Linux `0`. Encoder máximo observado: 722 bytes Windows y 665 Linux, ambos bajo la cuota propia de 1024. |
 | Unidad 3, `e83fd1f695f5af20474c42f00fcc704029cdf44c`, selector puro | Selector `6/0/0` y Journal v2 `12/0/0` en Windows y Linux; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff semántico `0` en ambos sistemas; cleanup Linux `0`. Solo clasifica datos v1/v2. |
-| J0, `6af0fb90b513f85e622662c47c39bfd3a05eaeb3` | Selector `7/0/0` en ambos sistemas y controles `0`; deriva la cuota común máxima desde los límites v1/v2, sin cambiar parseo ni semántica. CI remoto propio pendiente. |
+| J0, `6af0fb90b513f85e622662c47c39bfd3a05eaeb3` | Selector `7/0/0` en ambos sistemas y controles `0`; deriva la cuota común máxima desde los límites v1/v2, sin cambiar parseo ni semántica. Cubierto por CI `cad51cc`. |
 
 El CI `e5bcf331` cubre Journal v2 y sus ancestros, incluidas las unidades 0–3,
-y ADMENV2 A–B4. El CI posterior `27fc2ff` cubre R0–R2, pero precede a J0/J1.
-El selector solo clasifica datos; no activa recovery ni un caller. J1A/J1B/J1C1/C2/C3 son
-una frontera distinta de lectura file-bound y no están cubiertos por esos CI.
-Los gates locales de Journal v2 y ADMENV2 A–B4 cerraron.
+y ADMENV2 A–B4. El CI `cad51cc` cubre además J0/J1. Al preparar este lote,
+`cad51cc` es la referencia registrada y precede a Ctx1–Ctx4. El selector solo
+clasifica datos; no activa recovery ni un caller.
+J1A/J1B/J1C1/C2/C3 son una frontera de lectura file-bound distinta, cubierta
+por `cad51cc`; las unidades Context posteriores tienen gates focales locales
+documentados abajo. Los gates locales de Journal v2 y ADMENV2 A–B4 cerraron.
 
 ### Estado local del envelope ADMENV2
 
@@ -522,8 +532,9 @@ no validan un owner ni admiten un caller de recovery.
 | R2, `5477b103` | Binding ADMENV v2 antes del cálculo tipado; filtro `transaccion::admision::envelope::` 56/0/0 en Windows y Linux, con seis pruebas v2 observadas por nombre. | Gates locales cerrados; formato, clippy, frontera y diff-check `0`; artefactos frescos y cleanup Linux `0`. |
 
 El CI `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`) precede
-a R0/R1/R2. El CI `27fc2ff` (run `38995183362`) cubre esos tres cortes, pero
-precede a J0/J1. Sigue pendiente el replay owner-bound v2 para `&JournalV2`.
+a R0/R1/R2. El CI `27fc2ff` cubre esos tres cortes; el posterior `cad51cc`
+incluye J0/J1 y sus ancestros, pero precede a Ctx1–Ctx4. Sigue pendiente el
+replay owner-bound v2 para `&JournalV2`.
 
 ### Estado local de RETIRE v2
 
@@ -1499,10 +1510,50 @@ fallback, directorio en el nombre canónico y symlink. Windows no reclama
 cobertura de symlink. Las pruebas sintéticas no equivalen a una sustitución
 real del lock ni a una frontera general frente a escritores externos.
 
-Este lector cubre solo el Journal. No hay lectores file-bound v2 para Context o
-Intent, preflight de familia persistida ni caller de apply/recovery; los leases
-legacy y el formato persistido v1 permanecen intactos. El avance sigue en 4/9,
-con U7 y fase 04 parciales.
+Este apartado cubre solo el reader del Journal. El lector de Context y el estado
+de Intent se describen en la sección siguiente. No hay todavía reader file-bound
+v2 para Intent, preflight de familia persistida ni caller de apply/recovery.
+
+### Lector versionado de Context (Ctx1–Ctx4)
+
+Ctx1 añadió un recolector incremental acotado con centinela `cap+1`, aritmética
+comprobada, reserva fallible, reintento ante `Interrupted`, detección de EOF y
+SHA-256 de los bytes reunidos. No preasigna la cuota de 512 MiB ni afirma una
+cota de RSS. Ctx2 deriva la cuota común de las cuotas v1/v2 y añade comparadores
+puros del parent. Ctx3A y Ctx3B leen el archivo presente bajo lease estricto:
+validan owner, parent y scope; exigen archivo regular/no-follow, miden metadata
+antes de leer, vuelven a `seek(0)` en el mismo handle y aplican selector y cap.
+La sonda final verifica identidad y scope del nombre visible. La ausencia solo
+se devuelve tras dos sondas exactas, con comprobación del parent entre ellas.
+
+Ctx4 añade el wrapper owner-bound: adquiere el lease, obtiene el resultado de
+lectura y suelta el lease antes de revalidar parent, scope y lock visible. Un
+fallo de owner posterior descarta cualquier resultado de lectura `Some`, `None`
+o `Err`; un fallo al adquirir el lease puede cerrar antes de la lectura. La
+observación conserva el `File` original como dato privado, sin `Clone` ni getter
+de archivo. No es snapshot de bytes/nombre ni autoridad. Sus siete pruebas están
+en el árbol activo. Sus gates focales cerraron con `7/0/0` en Windows y Linux;
+formato, clippy, frontera y diff terminaron en `0`, los artefactos fueron
+frescos y cleanup Linux terminó en `0`. El recibo
+`C7A1E470CAE76CD842C73A93F10237F07E8C90E7B50433E5F175C6D5B6D33192` registra
+esos resultados. El commit local es `190d04628f69fd59c564af79eabf3e0142de322e` (312 líneas de churn).
+
+| Corte | Filtro local Windows | Filtro local Linux | Estado |
+|---|---:|---:|---|
+| Ctx1, `8fa02f4` | `7/0/0` | `7/0/0` | Gates locales cerrados |
+| Ctx2, `90af67b` | `8/0/0` | `8/0/0` | Gates locales cerrados |
+| Ctx3A, `ef2e693` | `3/0/0` | `3/0/0` | Gates locales cerrados |
+| Ctx3A2, `07fb3e0` | `2/0/0` | `2/0/0` | Gates locales cerrados |
+| Ctx3B, `8bb5270` | `5/0/0` | `5/0/0` | Gates locales cerrados |
+| Ctx4, `190d046` | `7/0/0` | `7/0/0` | Gates locales cerrados; 312 líneas de churn |
+
+Los resultados de Ctx1–Ctx4 son gates focales locales. El CI de referencia
+`cad51cc`, registrado al preparar este lote, cubre J0/J1 y precede a Ctx1–Ctx4.
+Ctx5 aún debe ampliar la
+matriz de errores de scope. El lector v1 de Context conserva sus rutas y
+semántica; no hay todavía reader de Intent v2, gate de familia persistida,
+replay owner-bound v2 ni caller productivo de apply o recovery. El progreso
+global permanece en 4/9, con U7 y fase 04 parciales.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
