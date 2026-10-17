@@ -6,7 +6,7 @@ use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivo
 use crate::transaccion::anclado::identidad_archivo::{IdentidadArchivo, identidad_archivo};
 use crate::transaccion::anclado::intent_persistido::{self, IntentRetiroPersistidoVersionado};
 use crate::transaccion::anclado::intent_persistido_v2::IntentRetiroPersistidoV2;
-use crate::transaccion::anclado::{ScopeFilesystem, scope_filesystem};
+use crate::transaccion::anclado::{IdentidadDirectorio, ScopeFilesystem, scope_filesystem};
 use crate::transaccion::journal::v2::{JournalKind, JournalV2};
 use crate::transaccion::journal::{
     ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
@@ -15,9 +15,11 @@ use sha2::{Digest, Sha256};
 use tempfile::{TempDir, tempdir};
 
 use super::{
-    CandidatoIntentDecodificadoSinVinculo, ErrorCandidatoIntentSinVinculo, ErrorLecturaFrameIntent,
+    CandidatoIntentConVinculosCoincidentes, CandidatoIntentDecodificadoSinVinculo,
+    ErrorCandidatoIntentSinVinculo, ErrorIntentVersionadoVinculado, ErrorLecturaFrameIntent,
     leer_acotado, leer_candidato_intent_versionado,
     leer_candidato_intent_versionado_con_cap_y_hook, leer_frame_intent, leer_frame_intent_con_hook,
+    leer_intent_versionado_vinculado,
 };
 
 struct ArchivoFixture {
@@ -186,7 +188,17 @@ struct IntentFixture {
     bytes_journal: Vec<u8>,
     bytes_contexto: Vec<u8>,
     identidad_intent: IdentidadArchivo,
+    identidad_parent: IdentidadDirectorio,
+    parent_journal: DirectoryIdentity,
     scope: ScopeFilesystem,
+}
+
+#[derive(Clone, Copy)]
+enum BindingIncorrecto {
+    Ninguno,
+    IdentidadIntent,
+    Scope,
+    Parent,
 }
 
 fn directory_identity(value: u64) -> DirectoryIdentity {
@@ -198,6 +210,23 @@ fn directory_identity(value: u64) -> DirectoryIdentity {
     {
         DirectoryIdentity::windows(17, format!("{value:032x}"))
     }
+}
+
+fn another_directory_identity(identity: &DirectoryIdentity) -> DirectoryIdentity {
+    #[cfg(unix)]
+    if let DirectoryIdentity::Unix { device, inode } = identity {
+        return DirectoryIdentity::unix(*device, inode.wrapping_add(1));
+    }
+    #[cfg(windows)]
+    if let DirectoryIdentity::Windows { volume, file_id } = identity {
+        let alternate = if file_id == "00000000000000000000000000000000" {
+            "11111111111111111111111111111111"
+        } else {
+            "00000000000000000000000000000000"
+        };
+        return DirectoryIdentity::windows(*volume, alternate);
+    }
+    unreachable!("la identidad de directorio debe pertenecer a esta plataforma")
 }
 
 fn fingerprint(value: u64) -> ArtifactFingerprint {
@@ -245,6 +274,13 @@ fn open_empty(parent: &std::path::Path, name: &str) -> (PathBuf, File) {
 }
 
 fn intent_fixture(version: VersionIntentFixture) -> IntentFixture {
+    intent_fixture_con_binding(version, BindingIncorrecto::Ninguno)
+}
+
+fn intent_fixture_con_binding(
+    version: VersionIntentFixture,
+    binding_incorrecto: BindingIncorrecto,
+) -> IntentFixture {
     let directorio = tempdir().unwrap();
     let parent_handle =
         super::super::super::abrir_directorio_absoluto(directorio.path(), false).unwrap();
@@ -260,20 +296,32 @@ fn intent_fixture(version: VersionIntentFixture) -> IntentFixture {
     let identidad_journal = identidad_archivo(&archivo_journal).unwrap();
     let identidad_contexto = identidad_archivo(&archivo_contexto).unwrap();
     let scope = scope_filesystem(&archivo_intent).unwrap();
+    let identidad_intent_persistida = match binding_incorrecto {
+        BindingIncorrecto::IdentidadIntent => identidad_journal,
+        _ => identidad_intent,
+    };
+    let scope_persistido = match binding_incorrecto {
+        BindingIncorrecto::Scope => scope.0 ^ 1,
+        _ => scope.0,
+    };
+    let parent_persistido = match binding_incorrecto {
+        BindingIncorrecto::Parent => another_directory_identity(&parent_journal),
+        _ => parent_journal.clone(),
+    };
     let digest_contexto: [u8; 32] = Sha256::digest(CONTEXT_BYTES).into();
     let longitud_contexto = u64::try_from(CONTEXT_BYTES.len()).unwrap();
 
     let (bytes_journal, bytes_intent) = match version {
         VersionIntentFixture::V1 => {
-            let journal = journal_v1(parent_journal);
+            let journal = journal_v1(parent_persistido);
             let bytes_journal = journal.encode().unwrap();
             archivo_journal.write_all(&bytes_journal).unwrap();
             let bytes_intent = intent_persistido::codificar_nuevo(
                 &journal,
-                identidad_intent,
+                identidad_intent_persistida,
                 identidad_journal,
                 identidad_contexto,
-                scope.0,
+                scope_persistido,
                 longitud_contexto,
                 digest_contexto,
             )
@@ -281,10 +329,11 @@ fn intent_fixture(version: VersionIntentFixture) -> IntentFixture {
             (bytes_journal, bytes_intent)
         }
         VersionIntentFixture::V2 => {
-            let journal = journal_v2(parent_journal);
+            let journal = journal_v2(parent_persistido);
             let bytes_journal = journal.encode().unwrap();
             archivo_journal.write_all(&bytes_journal).unwrap();
-            let intent_id = IdentidadArchivoPersistida::try_from(identidad_intent).unwrap();
+            let intent_id =
+                IdentidadArchivoPersistida::try_from(identidad_intent_persistida).unwrap();
             let journal_id = IdentidadArchivoPersistida::try_from(identidad_journal).unwrap();
             let context_id = IdentidadArchivoPersistida::try_from(identidad_contexto).unwrap();
             let bytes_intent = IntentRetiroPersistidoV2::desde_datos_persistidos(
@@ -292,7 +341,7 @@ fn intent_fixture(version: VersionIntentFixture) -> IntentFixture {
                 intent_id,
                 journal_id,
                 context_id,
-                scope.0,
+                scope_persistido,
                 longitud_contexto,
                 digest_contexto,
             )
@@ -315,6 +364,8 @@ fn intent_fixture(version: VersionIntentFixture) -> IntentFixture {
         bytes_journal,
         bytes_contexto: CONTEXT_BYTES.to_vec(),
         identidad_intent,
+        identidad_parent,
+        parent_journal,
         scope,
     }
 }
@@ -350,6 +401,24 @@ fn assert_candidate_matches(
     }
 }
 
+fn assert_linked_matches(
+    candidate: &CandidatoIntentConVinculosCoincidentes,
+    expected: &IntentRetiroPersistidoVersionado,
+    version: VersionIntentFixture,
+) {
+    assert!(&candidate.envelope == expected);
+    match (&candidate.envelope, version) {
+        (IntentRetiroPersistidoVersionado::V1(intent), VersionIntentFixture::V1) => {
+            assert!(intent.journal().state() == JournalState::Committed);
+        }
+        (IntentRetiroPersistidoVersionado::V2(intent), VersionIntentFixture::V2) => {
+            assert!(intent.journal().state() == JournalState::Committed);
+            assert!(intent.journal().kind() == JournalKind::ContextRequired);
+        }
+        _ => panic!("el vínculo conserva la variante del envelope"),
+    }
+}
+
 #[test]
 fn decodifica_candidato_v1_y_v2_con_cap_exacta_y_conserva_archivo() {
     for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
@@ -365,6 +434,7 @@ fn decodifica_candidato_v1_y_v2_con_cap_exacta_y_conserva_archivo() {
             bytes_contexto,
             identidad_intent,
             scope,
+            ..
         } = fixture;
         let cap = bytes_intent.len();
         let expected = intent_persistido::decodificar_versionado(&bytes_intent).unwrap();
@@ -444,4 +514,98 @@ fn wrapper_productivo_usa_la_cuota_familiar_sin_exponerla_al_caller() {
         &bytes_journal,
         &bytes_contexto,
     );
+}
+
+#[test]
+fn vincula_envelope_v1_y_v2_con_id_scope_parent_y_handle_originales() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        let fixture = intent_fixture(version);
+        let IntentFixture {
+            _directorio,
+            ruta_intent,
+            ruta_journal,
+            ruta_contexto,
+            archivo_intent,
+            bytes_intent,
+            bytes_journal,
+            bytes_contexto,
+            identidad_intent,
+            identidad_parent,
+            parent_journal,
+            scope,
+        } = fixture;
+        let expected = intent_persistido::decodificar_versionado(&bytes_intent).unwrap();
+        let linked =
+            leer_intent_versionado_vinculado(archivo_intent, scope, identidad_parent).unwrap();
+
+        assert_linked_matches(&linked, &expected, version);
+        assert!(linked.identidad_archivo == identidad_intent);
+        assert!(linked.scope == scope);
+        assert!(linked.parent_journal == parent_journal);
+        assert!(identidad_archivo(&linked.archivo_original).unwrap() == identidad_intent);
+        assert_preserved(
+            &ruta_intent,
+            &ruta_journal,
+            &ruta_contexto,
+            &bytes_intent,
+            &bytes_journal,
+            &bytes_contexto,
+        );
+    }
+}
+
+fn assert_binding_error(fixture: IntentFixture, expected: ErrorIntentVersionadoVinculado) {
+    let IntentFixture {
+        _directorio,
+        ruta_intent,
+        ruta_journal,
+        ruta_contexto,
+        archivo_intent,
+        bytes_intent,
+        bytes_journal,
+        bytes_contexto,
+        identidad_parent,
+        scope,
+        ..
+    } = fixture;
+    let error = match leer_intent_versionado_vinculado(archivo_intent, scope, identidad_parent) {
+        Ok(_) => panic!("el vínculo incompatible debe rechazarse"),
+        Err(error) => error,
+    };
+
+    assert!(error == expected);
+    assert_eq!(format!("{error:?}"), expected.codigo());
+    assert_eq!(error.to_string(), expected.codigo());
+    assert_preserved(
+        &ruta_intent,
+        &ruta_journal,
+        &ruta_contexto,
+        &bytes_intent,
+        &bytes_journal,
+        &bytes_contexto,
+    );
+}
+
+#[test]
+fn rechaza_id_y_scope_persistidos_distintos_para_v1_y_v2() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        assert_binding_error(
+            intent_fixture_con_binding(version, BindingIncorrecto::IdentidadIntent),
+            ErrorIntentVersionadoVinculado::SourceBindingMismatch,
+        );
+        assert_binding_error(
+            intent_fixture_con_binding(version, BindingIncorrecto::Scope),
+            ErrorIntentVersionadoVinculado::SourceBindingMismatch,
+        );
+    }
+}
+
+#[test]
+fn rechaza_parent_persistido_distinto_para_v1_y_v2() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        assert_binding_error(
+            intent_fixture_con_binding(version, BindingIncorrecto::Parent),
+            ErrorIntentVersionadoVinculado::ParentBindingMismatch,
+        );
+    }
 }

@@ -4,12 +4,15 @@ use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 
+use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
 use crate::transaccion::anclado::intent_persistido::{
     self, ErrorSelectorIntentRetiro, IntentRetiroPersistidoVersionado,
 };
+use crate::transaccion::journal::DirectoryIdentity;
 
 use super::super::{
-    IdentidadArchivo, ScopeFilesystem, identidad_archivo, metadata_es_reparse, scope_filesystem,
+    IdentidadArchivo, IdentidadDirectorio, ScopeFilesystem, identidad_archivo, metadata_es_reparse,
+    scope_filesystem,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -76,6 +79,105 @@ impl fmt::Debug for FrameIntentLeido {
 pub(super) struct CandidatoIntentDecodificadoSinVinculo {
     envelope: IntentRetiroPersistidoVersionado,
     archivo_original: File,
+    identidad_archivo: IdentidadArchivo,
+    scope: ScopeFilesystem,
+}
+
+/// Datos cuyo ID, scope persistido y parent del Journal coincidieron.
+pub(super) struct CandidatoIntentConVinculosCoincidentes {
+    envelope: IntentRetiroPersistidoVersionado,
+    archivo_original: File,
+    identidad_archivo: IdentidadArchivo,
+    scope: ScopeFilesystem,
+    parent_journal: DirectoryIdentity,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ErrorIntentVersionadoVinculado {
+    Candidato(ErrorCandidatoIntentSinVinculo),
+    SourceIdentityUnverified,
+    SourceBindingMismatch,
+    ParentBindingMismatch,
+}
+
+impl ErrorIntentVersionadoVinculado {
+    pub(super) const fn codigo(self) -> &'static str {
+        match self {
+            Self::Candidato(error) => error.codigo(),
+            Self::SourceIdentityUnverified => "retirement_intent_identity_unverified",
+            Self::SourceBindingMismatch => "retirement_intent_source_binding_mismatch",
+            Self::ParentBindingMismatch => "retirement_intent_parent_binding_mismatch",
+        }
+    }
+}
+
+impl fmt::Debug for ErrorIntentVersionadoVinculado {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl fmt::Display for ErrorIntentVersionadoVinculado {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorIntentVersionadoVinculado {}
+
+/// Decodes, then compares the captured native source and expected parent data.
+pub(super) fn leer_intent_versionado_vinculado(
+    archivo: File,
+    scope_esperado: ScopeFilesystem,
+    identidad_parent: IdentidadDirectorio,
+) -> Result<CandidatoIntentConVinculosCoincidentes, ErrorIntentVersionadoVinculado> {
+    let candidato = leer_candidato_intent_versionado(archivo, scope_esperado)
+        .map_err(ErrorIntentVersionadoVinculado::Candidato)?;
+    vincular_candidato(candidato, identidad_parent)
+}
+
+fn vincular_candidato(
+    candidato: CandidatoIntentDecodificadoSinVinculo,
+    identidad_parent: IdentidadDirectorio,
+) -> Result<CandidatoIntentConVinculosCoincidentes, ErrorIntentVersionadoVinculado> {
+    let parent_journal = identidad_parent
+        .journal_identity()
+        .ok_or(ErrorIntentVersionadoVinculado::ParentBindingMismatch)?;
+
+    match &candidato.envelope {
+        IntentRetiroPersistidoVersionado::V1(intent) => {
+            intent
+                .validar_vinculo_archivo_intent(candidato.identidad_archivo, candidato.scope)
+                .map_err(|_| ErrorIntentVersionadoVinculado::SourceBindingMismatch)?;
+            if intent.journal().parent() != &parent_journal {
+                return Err(ErrorIntentVersionadoVinculado::ParentBindingMismatch);
+            }
+        }
+        IntentRetiroPersistidoVersionado::V2(intent) => {
+            let identity = IdentidadArchivoPersistida::try_from(candidato.identidad_archivo)
+                .map_err(|_| ErrorIntentVersionadoVinculado::SourceIdentityUnverified)?;
+            intent
+                .validar_vinculo_archivo_intent_datos(&identity, candidato.scope.0)
+                .map_err(|_| ErrorIntentVersionadoVinculado::SourceBindingMismatch)?;
+            if intent.journal().parent() != &parent_journal {
+                return Err(ErrorIntentVersionadoVinculado::ParentBindingMismatch);
+            }
+        }
+    }
+
+    let CandidatoIntentDecodificadoSinVinculo {
+        envelope,
+        archivo_original,
+        identidad_archivo,
+        scope,
+    } = candidato;
+    Ok(CandidatoIntentConVinculosCoincidentes {
+        envelope,
+        archivo_original,
+        identidad_archivo,
+        scope,
+        parent_journal,
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -151,6 +253,8 @@ where
     Ok(CandidatoIntentDecodificadoSinVinculo {
         envelope,
         archivo_original: frame.archivo_original,
+        identidad_archivo: frame.identidad_archivo,
+        scope: frame.scope,
     })
 }
 
