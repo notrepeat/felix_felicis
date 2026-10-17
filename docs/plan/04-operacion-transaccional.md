@@ -47,9 +47,11 @@ de apply o recovery.
 La estrategia paralela Journal v2 conserva v1. Sus vectores dorados v1, modelo,
 codec y selector canónico están en el árbol local; el Journal v2 tiene cuota
 propia de 1024 bytes y su encoder máximo midió 722 bytes en Windows y 665 en
-Linux. El CI `e5bcf331` (run `38988788938`) cubre Journal v2 y ADMENV2 A–B4:
-Windows `1112/0/9`, Linux `1131/0/9`, con 38 suites Cargo y 7 pruebas Python
-por job. El envelope exterior `FELIX-ADMENV` v2 conserva el contexto interior
+Linux. El CI exacto `ec973eeee769fce7fa56947f06d352ee00212d9c` (run
+`38993176466`) terminó SUCCESS: Windows `1140/0/9`, Linux `1159/0/9`, con 38
+suites Cargo y 7 pruebas Python por job. Cubre el lote publicado hasta RETIRE
+v2 D3B, pero precede a R0/R1/R2 y no acredita esos cortes. El envelope exterior
+`FELIX-ADMENV` v2 conserva el contexto interior
 `FELIX-ADMCTX` v1 y usa cuotas propias de 512 MiB; no implica una cota de RSS.
 Su selector limita con el máximo de cuotas antes de elegir una rama y no hace
 fallback.
@@ -65,11 +67,25 @@ en ambos sistemas y controles de formato, clippy, frontera y diff en 0. Su
 clippy inicial falló por un import `JournalKind` no usado, luego eliminado. Los
 conteos v2 21/0/0 y v1 17/0/0 proceden del snapshot anterior con fuentes
 idénticas. D3B (`984ef824`) cerró gates locales con selector 7/0/0 en ambos
-sistemas, controles en 0 y cleanup Linux en 0. El CI citado no incluye RETIRE
-v2 y este lote aún no tiene CI propio. No existe reader file-bound v2, extensión tipada de
-replay/binding owner-bound v2 ni caller de apply o recovery. Los estados y
-evidencia por corte se detallan en
-[04-contexto-admision.md](04-contexto-admision.md#estado-local-de-retire-v2).
+sistemas, controles en 0 y cleanup Linux en 0. R0 extrae el cálculo raw
+compartido; R1 produce la expectativa tipada conservando JournalV2 completo;
+ambos tienen gates locales cerrados (8/0/0 y 13/0/0, respectivamente, en ambos
+sistemas). R2 (`5477b103`) compara el binding ADMENV v2 antes del cálculo
+tipado y conserva JournalV2. El filtro local
+`transaccion::admision::envelope::` pasó 56/0/0 en Windows y Linux, incluidas
+seis pruebas v2 observadas por nombre; formato, clippy, frontera y diff-check
+pasaron en ambos sistemas, los artefactos fueron frescos y cleanup Linux terminó
+en 0. No se ejecutó el filtro más amplio `transaccion::admision::`. El CI
+`ec973` cubre hasta D3B, no estos cortes posteriores. No hay reader file-bound
+de Journal v2 ni replay owner-bound v2, ni caller productivo de apply o recovery. La evidencia
+por corte se detalla en [04-contexto-admision.md](04-contexto-admision.md#replay-tipado-de-journal-v2)
+y [04-contexto-admision.md](04-contexto-admision.md#estado-local-de-retire-v2).
+Los journals v1 sin auxiliares conservan el recovery legacy. Journal v1 junto
+a un auxiliar nuevo es ambiguo por falta de kind; el futuro preflight/caller
+deberá rechazarlo antes del dispatcher o CAS, compuerta aún pendiente. Una terna
+v1 coherente puede seguir dando las observaciones privadas actuales, sin
+autorizar recovery global. Un futuro caller requiere familia v2 coherente,
+owner fresco y replay v2 validado.
 El avance global permanece en 4/9; U7 y fase 04 siguen parciales.
 
 Hay tres tests interproceso en cortes diferentes. `b990c72` termina con código

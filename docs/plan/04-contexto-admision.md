@@ -21,15 +21,21 @@ no son una cota de RSS.
 Las unidades A y B1–B4 cerraron sus gates locales en ambos sistemas. B4
 (`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`, sobre `733c8db`) pasó 53/0/0
 pruebas focales; formato, clippy, frontera y diff semántico terminaron en 0.
-El CI `e5bcf331` (run `38988788938`) también cubre Journal v2 y ADMENV2 A–B4.
-El trabajo RETIRE v2 posterior aún no tiene CI propio. C1/C2, D1/D2A y el D2B
-corregido tienen gates locales cerrados; su primer intento falló antes de tests
-y no se le atribuyen conteos. D3A (`b67714f2`) cerró sus gates locales corregidos: selector 5/0/0 en ambos
-sistemas y controles en 0. D3B (`984ef824`) también cerró sus gates locales:
-selector 7/0/0 en ambos sistemas, controles en 0 y cleanup Linux en 0. Todo este
-código v2 clasifica o transforma datos:
-todavía no existe reader file-bound v2, replay tipado/binding owner-bound v2 ni
-caller productivo de apply o recovery.
+El CI exacto `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`)
+terminó SUCCESS: Windows `1140/0/9`, Linux `1159/0/9`, 38 suites Cargo y 7
+pruebas Python por job. Cubre el lote publicado hasta RETIRE v2 D3B; es anterior
+a R0/R1/R2 y no acredita esos cortes.
+C1/C2, D1/D2A y D2B corregido tienen gates locales cerrados; D3A
+(`b67714f2`) y D3B (`984ef824`) también. R0 (`655cc804`) extrae el cálculo raw
+compartido y R1 (`055da2b3`) conserva JournalV2 completo en la expectativa
+tipada; sus gates locales cerraron en ambos sistemas. R2 agrega binding
+estructural ADMENV v2 antes del cálculo tipado. El filtro local
+`transaccion::admision::envelope::` pasó 56/0/0 en Windows y Linux, incluidas
+seis pruebas v2 observadas por nombre; formato, clippy, frontera y diff-check
+pasaron en ambos sistemas, los artefactos fueron frescos y cleanup Linux terminó
+en 0. No se ejecutó el filtro más amplio `transaccion::admision::`. Estos pasos
+operan sobre datos en memoria: no hay reader file-bound
+v2, replay owner-bound v2 ni caller productivo de apply o recovery.
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -296,11 +302,12 @@ Su primer intento de gates falló en compilación con `E0432` y `E0425` antes de
 iniciar tests; esos errores se corrigieron y no se atribuyen conteos a ese
 intento. D3A (`b67714f2`) está integrado y cerró sus gates locales corregidos;
 D3B (`984ef824`) también cerró sus gates locales. No se decodifica JournalV2
-como v1. Aún no existe reader file-bound, extensión tipada de
-replay/binding owner-bound v2 para `&JournalV2`, ni caller productivo. El futuro
-consumidor debe conservar y verificar `kind`, sin proyección a v1 ni booleano de
-caller, antes de un dispatcher. Ninguno de estos codecs demuestra recovery ni
-comportamiento sobre el filesystem.
+como v1. El replay R0/R1 y el binding estructural R2 se resumen en
+[Replay tipado de Journal v2](#replay-tipado-de-journal-v2). Aún no existe
+reader file-bound de Journal v2 ni replay owner-bound v2 para `&JournalV2`, ni caller
+productivo. El futuro consumidor debe conservar y verificar `kind`, sin
+proyección a v1 ni booleano de caller, antes de un dispatcher. Ninguno de estos
+codecs demuestra recovery ni comportamiento sobre el filesystem.
 
 El selector es solo clasificación de datos. El Journal, su kind, el Context y
 los resultados de binding no conceden autoridad; no se activan apply ni recovery.
@@ -379,23 +386,30 @@ D3B (`984ef824`) añade dos pruebas y cerró gates locales: selector 7/0/0 en
 Windows y Linux; formato, clippy y frontera en 0; diff-check del selector
 rastreado en 0 y cleanup Linux en 0. El chequeo `--no-index` del archivo nuevo
 salió 1 por comparar contra vacío y no reportó whitespace; los artefactos fueron
-frescos. No hay CI remoto para RETIRE v2, reader file-bound v2
-ni caller de producción. Las primitivas de storage no son una decisión de
-recovery.
+frescos. El CI `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`)
+cubre el lote publicado hasta D3B, pero precede a R0/R1/R2. No hay CI para esos
+cortes posteriores, ni reader file-bound v2 o caller de producción. Las
+primitivas de storage no son una decisión de recovery.
 
 El encoder y decoder exteriores v1 son codecs puros, mantienen
-`felix-journal-v1` sin cambios y no abren rutas. El reader genérico exige EOF y no se integra a un
-caller. La orquestación y el recovery context-aware requieren otra revisión.
-La secuencia privada `Croot→Intent→observación final` sigue siendo un flujo
-observacional con operaciones v1; no consume los nuevos frames ADMENV2 o RETIRE2
-ni conecta esos codecs a apply/recovery. El selector exterior ADMENV y el
-selector RETIRE clasifican framing y preservan el decoder elegido, pero no
-validan replay ni prueban el recovery legacy o el filesystem. Falta una
-extensión tipada de replay/binding owner-bound v2 que preserve `kind` antes de
-un futuro dispatcher. Los journals legacy sin
-auxiliar mantienen el recovery actual; no se infiere contexto ni se convierte
-v1 a v2. El codec y el binding no son
-autoridad para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar backup.
+`felix-journal-v1` sin cambios y no abren rutas. El reader genérico exige EOF y
+no se integra a un caller. La orquestación y el recovery context-aware requieren
+otra revisión. La secuencia privada `Croot→Intent→observación final` sigue
+siendo un flujo observacional con operaciones v1; no consume los nuevos frames
+ADMENV2 o RETIRE2 ni conecta esos codecs a apply/recovery. R0/R1/R2 añaden un
+cálculo tipado de expectativa sobre datos y binding estructural previo al
+perfil, no una comprobación file-bound del owner. Los selectores clasifican
+framing y preservan la rama elegida; no validan el filesystem ni prueban el
+recovery legacy. Falta el replay owner-bound v2 antes de un futuro dispatcher.
+Los journals legacy v1 sin auxiliares mantienen el recovery actual; no se
+infiere contexto ni se convierte v1 a v2. Un Journal v1 junto a un auxiliar
+nuevo es ambiguo por falta de kind. El futuro preflight/caller deberá rechazar
+esa combinación antes del dispatcher o CAS; esa compuerta aún no está
+implementada. Una terna v1 coherente puede seguir produciendo las observaciones
+privadas actuales, pero no autoriza recovery global futuro. Solo una familia v2
+coherente con owner fresco y replay validado podrá preparar una decisión futura;
+no se habilitan ahora filas de caller. El codec y el binding no son autoridad
+para aceptar `New`, habilitar `KeepNew`/`Committed` o limpiar backup.
 Sigue bloqueada la frontera real de mount, bind mount o FUSE para cleanup de
 `PartialOld`; no se cambia el contrato ni la capability del backup.
 
@@ -405,7 +419,7 @@ el progreso global permanece en 4/9.
 
 ## Evidencia de verificación
 
-Los ocho CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los nueve CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -419,12 +433,12 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `203bb6b` | `38978377109` | `1064/0/9` | `1083/0/9` |
 | `5a73329` | `38983901592` | `1083/0/9` | `1102/0/9` |
 | `e5bcf33` | `38988788938` | `1112/0/9` | `1131/0/9` |
+| `ec973ee` | `38993176466` | `1140/0/9` | `1159/0/9` |
 
-El CI remoto completo más reciente disponible para este borrador es el run
-`38988788938` de `e5bcf331cb98f1208bf5313b206a48e143d3e859`, con Windows
-`1112/0/9` y Linux `1131/0/9`; ambos jobs incluyeron 38 suites Cargo y 7 pruebas
-Python. Cubre Journal v2 y ADMENV2 A–B4. Es anterior a RETIRE v2 y no acredita
-C1/C2, D1, D2A, D2B corregido ni los selectores D3A/B.
+El CI remoto completo más reciente registrado aquí es el run `38993176466` de
+`ec973eeee769fce7fa56947f06d352ee00212d9c`, con Windows `1140/0/9` y Linux
+`1159/0/9`; ambos jobs incluyeron 38 suites Cargo y 7 pruebas Python. Cubre el
+lote publicado hasta RETIRE v2 D3B, pero es anterior y no acredita R0/R1/R2.
 
 La prueba integrada de Unit6 (`5a270ca1686bb66169de6916b8a1d824da27ad09`, +86 líneas Rust) recorre con
 fixture sintética la cadena privada A → retiro Journal/B → retiro Context →
@@ -462,9 +476,10 @@ y artefactos frescos.
 | Unidad 3, `e83fd1f695f5af20474c42f00fcc704029cdf44c`, selector puro | Selector `6/0/0` y Journal v2 `12/0/0` en Windows y Linux; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff semántico `0` en ambos sistemas; cleanup Linux `0`. Solo clasifica datos v1/v2. |
 
 El CI `e5bcf331` cubre Journal v2 y sus ancestros, incluidas las unidades 0–3,
-y ADMENV2 A–B4. RETIRE v2 se desarrolló después y aún no tiene CI remoto propio.
-El selector de Journal v2 solo clasifica datos; no activa recovery, caller ni
-I/O de filesystem. Los gates locales de Journal v2 y ADMENV2 A–B4 cerraron.
+y ADMENV2 A–B4. El CI posterior `ec973` cubre RETIRE v2 hasta D3B, pero precede
+a R0/R1/R2. El selector de Journal v2 solo clasifica datos; no activa recovery,
+caller ni I/O de filesystem. Los gates locales de Journal v2 y ADMENV2 A–B4
+cerraron.
 
 ### Estado local del envelope ADMENV2
 
@@ -483,6 +498,24 @@ antes de elegir una única rama, y cada codec valida su cuota propia. A–B4
 cerraron sus controles locales y están cubiertas por CI `e5bcf331`. No hay
 consumidor file-bound para retiro v2 ni integración con recuperación o apply.
 
+### Replay tipado de Journal v2
+
+R0 extrae el cálculo raw compartido y deja las comparaciones del wrapper v1 en
+su orden original. R1 devuelve `NewEsperadoV2` con JournalV2 completo, kind y
+estado conservados. R2 compara el vínculo estructural completo de ADMENV v2
+antes del cálculo de perfil cerrado. Son transformaciones de datos en memoria;
+no validan un owner ni admiten un caller de recovery.
+
+| Corte | Evidencia local | Estado |
+|---|---|---|
+| R0, `655cc804` | Helper raw compartido; 8/0/0 tests focales en Windows y Linux. | Gates locales cerrados; formato, clippy `-D warnings`, frontera y diff en 0; cleanup Linux en 0. |
+| R1, `055da2b3` | `NewEsperadoV2` conserva Journal completo; 13/0/0 tests focales en Windows y Linux. | Gates locales cerrados; formato, clippy `-D warnings`, frontera y diff en 0; cleanup Linux en 0. |
+| R2, `5477b103` | Binding ADMENV v2 antes del cálculo tipado; filtro `transaccion::admision::envelope::` 56/0/0 en Windows y Linux, con seis pruebas v2 observadas por nombre. | Gates locales cerrados; formato, clippy, frontera y diff-check `0`; artefactos frescos y cleanup Linux `0`. |
+
+El CI `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`) precede
+a R0/R1/R2: no acredita estos cortes. R2 aún no tiene CI propio. Sigue
+pendiente el reader file-bound v2 y el binding/replay owner-bound.
+
 ### Estado local de RETIRE v2
 
 RETIRE v2 añade un modelo tipado, codecs puros y selección estricta de versión.
@@ -499,13 +532,13 @@ modelo limita el Context a `1..=512 MiB`.
 | D1, `ccc898a` | Encoder RETIRE v2, 9/0/0; compatibilidad RETIRE v1, 17/0/0 en ambos sistemas. | Gates locales cerrados; formato, clippy, frontera y diff `0`. |
 | D2A, `9409fd9` | Preflight de framing, límites y cursor; 14/0/0 RETIRE v2 y 17/0/0 compatibilidad v1 en ambos sistemas. | Gates locales cerrados; formato, clippy, frontera y diff `0`; cleanup Linux `0`. |
 | D2B, `406694efce983b9b129040022d899a0d13649128` | Modelo `1AA24E2A…6602E943`, codec `E6631637…CE49660`; 21/0/0 RETIRE v2 y 17/0/0 compatibilidad v1 en Windows y Linux. | Gates locales cerrados; formato, clippy `-D warnings`, frontera y diff `0`; cleanup Linux `0`. El intento previo falló en compilación con `E0432`/`E0425` antes de tests y no aporta conteos. |
-| D3A, selector (`b67714f2`) | Parent `4CBD45947BB9E06E6176DEA43885D7349F9C48F2581FEDA74DE88F364D8CEE2B`, selector `0489365037F4E7109A5399848C030BEA5701795DAB1A6322031ACD504306632A`; +396/−0 líneas Rust, cinco tests. Selector 5/0/0 en ambos sistemas; v2 21/0/0 y v1 17/0/0 en ambos del snapshot anterior, con esas fuentes idénticas. | Gates corregidos cerrados en ambos sistemas: formato, clippy, frontera y diff `0`. El primer clippy falló por un import `JournalKind` no usado, luego eliminado. No hay CI propio. |
-| D3B, límites de selector (`984ef824`) | Selector `66B05DA93706F5A50D19ECEEF284229B0D8D5D32508404F8967BEA996ACC1EF6`, test `FDCAF8EF12C150EF482871FDED55A246C8BD70F86C0F31C3A1787899F5442400`; +67/−0 líneas Rust, dos casos nuevos y siete pruebas en total. | Gates locales cerrados: selector 7/0/0, formato, clippy, frontera y diff-check rastreado en 0; cleanup Linux 0 y artefactos frescos. El test fija aceptación exacta en 16 bytes y rechazo a 17 con cuotas en ambos órdenes. No tiene CI propio. |
+| D3A, selector (`b67714f2`) | Parent `4CBD45947BB9E06E6176DEA43885D7349F9C48F2581FEDA74DE88F364D8CEE2B`, selector `0489365037F4E7109A5399848C030BEA5701795DAB1A6322031ACD504306632A`; +396/−0 líneas Rust, cinco tests. Selector 5/0/0 en ambos sistemas; v2 21/0/0 y v1 17/0/0 en ambos del snapshot anterior, con esas fuentes idénticas. | Gates corregidos cerrados en ambos sistemas: formato, clippy, frontera y diff `0`. El primer clippy falló por un import `JournalKind` no usado, luego eliminado. Cubierta por CI `ec973`. |
+| D3B, límites de selector (`984ef824`) | Selector `66B05DA93706F5A50D19ECEEF284229B0D8D5D32508404F8967BEA996ACC1EF6`, test `FDCAF8EF12C150EF482871FDED55A246C8BD70F86C0F31C3A1787899F5442400`; +67/−0 líneas Rust, dos casos nuevos y siete pruebas en total. | Gates locales cerrados: selector 7/0/0, formato, clippy, frontera y diff-check rastreado en 0; cleanup Linux 0 y artefactos frescos. El test fija aceptación exacta en 16 bytes y rechazo a 17 con cuotas en ambos órdenes. Cubierta por CI `ec973`. |
 
 La corrección D2B movió el import de la cuota Context al módulo padre y arregló
 el typo del helper existente; el gate receipt corregido cierra esa unidad. El CI
-`e5bcf331` antecede a C1/D2A y no cubre ninguna unidad RETIRE v2; D2B corregido
-y D3A/B tampoco tienen CI propio.
+anterior `e5bcf331` antecede a C1/D2A; el posterior `ec973` cubre RETIRE v2
+hasta D3B, pero no los cortes R0/R1/R2 que llegaron después.
 
 ### Registro histórico detallado
 
@@ -735,9 +768,11 @@ sintéticas y preservan el storage. El commit local
 warnings denegados, frontera pública y diffcheck pasaron en ambos sistemas; la
 limpieza del `TMPDIR` Linux terminó con exit 0. El CI de
 `7a7273f42f61a391e0eb28d0d9226820c2d3956d` registrado abajo es anterior y no
-cubre este commit. Esta revalidación no observa backup ni stage, no decide una
+cubre este commit. El CI posterior `ec973` cubre el estado publicado hasta D3B,
+pero no R0/R1/R2. Esta revalidación no observa backup ni stage, no decide una
 fila y no concede autoridad. El consumidor descrito a continuación pasó sus
-filtros locales en Windows y Linux; todavía no tiene CI propio.
+filtros locales en Windows y Linux y quedó dentro de la base publicada anterior
+a R0/R1/R2.
 
 La unidad consumidora `b94ef7026de087539ed2a1ef39f3b6d5c16e1260` añade
 `observar_fila_conservar_new(self)` sobre la prueba revalidada y contiene 396
