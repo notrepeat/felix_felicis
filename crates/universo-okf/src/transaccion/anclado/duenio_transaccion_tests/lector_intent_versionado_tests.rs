@@ -17,7 +17,7 @@ use tempfile::{TempDir, tempdir};
 use super::{
     CandidatoIntentConVinculosCoincidentes, CandidatoIntentDecodificadoSinVinculo,
     ErrorCandidatoIntentSinVinculo, ErrorIntentVersionadoVinculado, ErrorLecturaFrameIntent,
-    leer_acotado, leer_candidato_intent_versionado,
+    comparar_sonda_visible_intent, leer_acotado, leer_candidato_intent_versionado,
     leer_candidato_intent_versionado_con_cap_y_hook, leer_frame_intent, leer_frame_intent_con_hook,
     leer_intent_versionado_vinculado,
 };
@@ -606,6 +606,154 @@ fn rechaza_parent_persistido_distinto_para_v1_y_v2() {
         assert_binding_error(
             intent_fixture_con_binding(version, BindingIncorrecto::Parent),
             ErrorIntentVersionadoVinculado::ParentBindingMismatch,
+        );
+    }
+}
+
+#[test]
+fn compara_sonda_relativa_con_id_y_scope_retenidos_para_v1_y_v2() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        let fixture = intent_fixture(version);
+        let parent = super::super::super::abrir_directorio_absoluto(
+            fixture.ruta_intent.parent().unwrap(),
+            true,
+        )
+        .unwrap();
+        let name = fixture.ruta_intent.file_name().unwrap();
+        let source = super::super::lector_intent_canonico::abrir_intent_canonico(&parent, name)
+            .unwrap()
+            .unwrap();
+        let candidate =
+            leer_intent_versionado_vinculado(source, fixture.scope, fixture.identidad_parent)
+                .unwrap();
+        let probe = super::super::lector_intent_canonico::abrir_intent_canonico(&parent, name)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(comparar_sonda_visible_intent(&candidate, &probe), Ok(()));
+        assert_eq!(
+            fs::read(&fixture.ruta_intent).unwrap(),
+            fixture.bytes_intent
+        );
+        drop(probe);
+        drop(candidate);
+    }
+}
+
+#[test]
+fn reemplazo_visible_con_bytes_iguales_e_id_distinto_se_rechaza_y_preserva() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        let fixture = intent_fixture(version);
+        let IntentFixture {
+            _directorio,
+            ruta_intent,
+            archivo_intent,
+            bytes_intent,
+            identidad_parent,
+            scope,
+            ..
+        } = fixture;
+        drop(archivo_intent);
+        let retained = ruta_intent.with_file_name("retained-intent-frame");
+        let name = ruta_intent.file_name().unwrap();
+        let parent =
+            super::super::super::abrir_directorio_absoluto(ruta_intent.parent().unwrap(), true)
+                .unwrap();
+        let source = super::super::lector_intent_canonico::abrir_intent_canonico(&parent, name)
+            .unwrap()
+            .unwrap();
+        let candidate = leer_intent_versionado_vinculado(source, scope, identidad_parent).unwrap();
+        let original_identity = candidate.identidad_archivo;
+
+        fs::rename(&ruta_intent, &retained).unwrap();
+        fs::write(&ruta_intent, &bytes_intent).unwrap();
+        let probe = super::super::lector_intent_canonico::abrir_intent_canonico(&parent, name)
+            .unwrap()
+            .unwrap();
+        let replacement_identity = identidad_archivo(&probe).unwrap();
+        assert!(replacement_identity != candidate.identidad_archivo);
+        assert_eq!(
+            comparar_sonda_visible_intent(&candidate, &probe),
+            Err(ErrorIntentVersionadoVinculado::SourceBindingMismatch)
+        );
+
+        drop(probe);
+        drop(candidate);
+        drop(parent);
+        assert_eq!(fs::read(&retained).unwrap(), bytes_intent);
+        assert_eq!(fs::read(&ruta_intent).unwrap(), bytes_intent);
+        let retained_identity = identidad_archivo(&File::open(&retained).unwrap()).unwrap();
+        let visible_identity = identidad_archivo(&File::open(&ruta_intent).unwrap()).unwrap();
+        assert!(retained_identity != visible_identity);
+        assert_eq!(retained_identity, original_identity);
+        assert_eq!(visible_identity, replacement_identity);
+    }
+}
+
+#[test]
+fn rechaza_scope_retenido_distinto_de_la_sonda_para_v1_y_v2() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        let fixture = intent_fixture(version);
+        let parent = super::super::super::abrir_directorio_absoluto(
+            fixture.ruta_intent.parent().unwrap(),
+            true,
+        )
+        .unwrap();
+        let name = fixture.ruta_intent.file_name().unwrap();
+        let source = super::super::lector_intent_canonico::abrir_intent_canonico(&parent, name)
+            .unwrap()
+            .unwrap();
+        let mut candidate =
+            leer_intent_versionado_vinculado(source, fixture.scope, fixture.identidad_parent)
+                .unwrap();
+        candidate.scope = ScopeFilesystem(candidate.scope.0 ^ 1);
+        let probe = super::super::lector_intent_canonico::abrir_intent_canonico(&parent, name)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            comparar_sonda_visible_intent(&candidate, &probe),
+            Err(ErrorIntentVersionadoVinculado::SourceBindingMismatch)
+        );
+        assert_preserved(
+            &fixture.ruta_intent,
+            &fixture.ruta_journal,
+            &fixture.ruta_contexto,
+            &fixture.bytes_intent,
+            &fixture.bytes_journal,
+            &fixture.bytes_contexto,
+        );
+    }
+}
+
+#[test]
+fn rechaza_handle_de_directorio_como_sonda_para_v1_y_v2() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        let fixture = intent_fixture(version);
+        let parent = super::super::super::abrir_directorio_absoluto(
+            fixture.ruta_intent.parent().unwrap(),
+            true,
+        )
+        .unwrap();
+        let name = fixture.ruta_intent.file_name().unwrap();
+        let source = super::super::lector_intent_canonico::abrir_intent_canonico(&parent, name)
+            .unwrap()
+            .unwrap();
+        let candidate =
+            leer_intent_versionado_vinculado(source, fixture.scope, fixture.identidad_parent)
+                .unwrap();
+
+        assert_eq!(
+            comparar_sonda_visible_intent(&candidate, &parent),
+            Err(ErrorIntentVersionadoVinculado::SourceIdentityUnverified)
+        );
+        assert_preserved(
+            &fixture.ruta_intent,
+            &fixture.ruta_journal,
+            &fixture.ruta_contexto,
+            &fixture.bytes_intent,
+            &fixture.bytes_journal,
+            &fixture.bytes_contexto,
         );
     }
 }

@@ -125,6 +125,28 @@ impl fmt::Display for ErrorIntentVersionadoVinculado {
 
 impl std::error::Error for ErrorIntentVersionadoVinculado {}
 
+/// Compares a fresh relative probe with the native data retained at read time.
+fn comparar_sonda_visible_intent(
+    candidato: &CandidatoIntentConVinculosCoincidentes,
+    sonda: &File,
+) -> Result<(), ErrorIntentVersionadoVinculado> {
+    let metadata = sonda
+        .metadata()
+        .map_err(|_| ErrorIntentVersionadoVinculado::SourceIdentityUnverified)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata_es_reparse(&metadata) {
+        return Err(ErrorIntentVersionadoVinculado::SourceIdentityUnverified);
+    }
+
+    let scope = scope_filesystem(sonda)
+        .map_err(|_| ErrorIntentVersionadoVinculado::SourceIdentityUnverified)?;
+    let identidad = identidad_archivo(sonda)
+        .map_err(|_| ErrorIntentVersionadoVinculado::SourceIdentityUnverified)?;
+    if scope != candidato.scope || identidad != candidato.identidad_archivo {
+        return Err(ErrorIntentVersionadoVinculado::SourceBindingMismatch);
+    }
+    Ok(())
+}
+
 /// Decodes, then compares the captured native source and expected parent data.
 pub(super) fn leer_intent_versionado_vinculado(
     archivo: File,
