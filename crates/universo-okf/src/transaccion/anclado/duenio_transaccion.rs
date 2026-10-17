@@ -514,6 +514,9 @@ mod observar_siblings_nuevo_flujo;
 #[path = "duenio_transaccion/intent_retiro.rs"]
 pub(in crate::transaccion::anclado::duenio_transaccion) mod intent_retiro;
 
+#[path = "duenio_transaccion/lector_intent_versionado.rs"]
+mod lector_intent_versionado;
+
 // El reconciliador incremental será el primer consumidor productivo.
 #[allow(dead_code)]
 #[path = "duenio_transaccion/lector_intent_canonico.rs"]
