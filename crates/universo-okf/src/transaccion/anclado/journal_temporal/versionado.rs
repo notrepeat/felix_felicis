@@ -47,6 +47,13 @@ impl fmt::Display for ErrorLecturaJournalVersionada {
 
 impl std::error::Error for ErrorLecturaJournalVersionada {}
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::transaccion::anclado) enum EtapaLecturaJournalVersionada {
+    DespuesDePrimeraAusencia,
+    DespuesDeMetadata,
+    AntesDeSondaVisible,
+}
+
 pub(in crate::transaccion::anclado) struct ObservacionJournalPersistido {
     journal: JournalPersistido,
     identidad: IdentidadArchivoJournal,
@@ -73,26 +80,26 @@ impl JournalTemporalAnclado<'_> {
     pub(in crate::transaccion::anclado) fn observar_versionado(
         &self,
     ) -> Result<Option<ObservacionJournalPersistido>, ErrorLecturaJournalVersionada> {
-        self.observar_versionado_con(|| {})
+        self.observar_versionado_con(|_| {})
     }
 
     #[cfg(test)]
     pub(in crate::transaccion::anclado) fn observar_versionado_con_prueba<F>(
         &self,
-        despues_de_primera_ausencia: F,
+        despues_de_etapa: F,
     ) -> Result<Option<ObservacionJournalPersistido>, ErrorLecturaJournalVersionada>
     where
-        F: FnOnce(),
+        F: FnMut(EtapaLecturaJournalVersionada),
     {
-        self.observar_versionado_con(despues_de_primera_ausencia)
+        self.observar_versionado_con(despues_de_etapa)
     }
 
     fn observar_versionado_con<F>(
         &self,
-        despues_de_primera_ausencia: F,
+        mut despues_de_etapa: F,
     ) -> Result<Option<ObservacionJournalPersistido>, ErrorLecturaJournalVersionada>
     where
-        F: FnOnce(),
+        F: FnMut(EtapaLecturaJournalVersionada),
     {
         if self.scope_parent.is_none() {
             return Err(ErrorLecturaJournalVersionada::Lease(
@@ -111,7 +118,7 @@ impl JournalTemporalAnclado<'_> {
             Err(ErrorDirectorioAnclado::EntradaAusente) => {
                 self.validar_parent_con_scope(&mut scope_filesystem)
                     .map_err(ErrorLecturaJournalVersionada::Lease)?;
-                despues_de_primera_ausencia();
+                despues_de_etapa(EtapaLecturaJournalVersionada::DespuesDePrimeraAusencia);
                 match abrir_entrada_relativa(
                     &self.parent,
                     &self.nombre_journal,
@@ -164,6 +171,7 @@ impl JournalTemporalAnclado<'_> {
                 ErrorJournalAnclado::TooLarge,
             ));
         }
+        despues_de_etapa(EtapaLecturaJournalVersionada::DespuesDeMetadata);
 
         archivo
             .seek(SeekFrom::Start(0))
@@ -190,6 +198,7 @@ impl JournalTemporalAnclado<'_> {
             ));
         }
 
+        despues_de_etapa(EtapaLecturaJournalVersionada::AntesDeSondaVisible);
         let visible = abrir_entrada_relativa(
             &self.parent,
             &self.nombre_journal,

@@ -1,11 +1,13 @@
 use super::super::ErrorJournalAnclado;
-use super::super::versionado::ErrorLecturaJournalVersionada;
+use super::super::versionado::{ErrorLecturaJournalVersionada, EtapaLecturaJournalVersionada};
 use super::{crear_root, fingerprint_prueba, identidad_distinta, journal_prueba, nombre_journal};
 use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
 use crate::transaccion::journal::selector::JournalPersistido;
 use crate::transaccion::journal::v2::JournalV2;
 use crate::transaccion::lock::LockEscritura;
-use std::fs::{self, File};
+use std::cell::Cell;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use tempfile::tempdir;
 
 const TRANSACTION_ID: &str = "0123456789abcdef0123456789abcdef";
@@ -144,7 +146,11 @@ fn ausencia_que_reaparece_antes_de_la_segunda_sonda_es_error() {
     let canonical = nombre_journal(&root);
 
     let error = lease
-        .observar_versionado_con_prueba(|| fs::write(&canonical, &bytes).unwrap())
+        .observar_versionado_con_prueba(|etapa| {
+            if etapa == EtapaLecturaJournalVersionada::DespuesDePrimeraAusencia {
+                fs::write(&canonical, &bytes).unwrap();
+            }
+        })
         .unwrap_err();
 
     assert_eq!(
@@ -152,4 +158,82 @@ fn ausencia_que_reaparece_antes_de_la_segunda_sonda_es_error() {
         ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::CanonicalConflict)
     );
     assert_eq!(fs::read(canonical).unwrap(), bytes);
+}
+
+#[test]
+fn reemplazo_de_nombre_con_bytes_iguales_falla_por_identidad() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let parent = lease.identidad_parent.journal_identity().unwrap();
+    let bytes = journal_prueba(parent).encode().unwrap();
+    let canonical = nombre_journal(&root);
+    let retained = root.join("journal-retained-after-read");
+    fs::write(&canonical, &bytes).unwrap();
+    let identidad_original =
+        super::super::identidad_archivo(&File::open(&canonical).unwrap()).unwrap();
+    let reemplazado = Cell::new(false);
+
+    let error = lease
+        .observar_versionado_con_prueba(|etapa| {
+            if etapa == EtapaLecturaJournalVersionada::AntesDeSondaVisible {
+                fs::rename(&canonical, &retained).unwrap();
+                fs::write(&canonical, &bytes).unwrap();
+                reemplazado.set(true);
+            }
+        })
+        .unwrap_err();
+
+    assert!(reemplazado.get());
+    assert_eq!(
+        error,
+        ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::IdentityMismatch)
+    );
+    assert_eq!(fs::read(&retained).unwrap(), bytes);
+    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    let identidad_retenida =
+        super::super::identidad_archivo(&File::open(&retained).unwrap()).unwrap();
+    let identidad_visible =
+        super::super::identidad_archivo(&File::open(&canonical).unwrap()).unwrap();
+    assert_eq!(identidad_retenida, identidad_original);
+    assert_ne!(identidad_visible, identidad_original);
+}
+
+#[test]
+fn crecimiento_despues_de_metadata_se_rechaza_por_centinela() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let canonical = nombre_journal(&root);
+    let cuota = crate::transaccion::journal::selector::MAX_VERSIONED_JOURNAL_BYTES;
+    let bytes = vec![0xff; cuota];
+    fs::write(&canonical, &bytes).unwrap();
+    let crecio = Cell::new(false);
+
+    let error = lease
+        .observar_versionado_con_prueba(|etapa| {
+            if etapa == EtapaLecturaJournalVersionada::DespuesDeMetadata {
+                OpenOptions::new()
+                    .append(true)
+                    .open(&canonical)
+                    .unwrap()
+                    .write_all(&[0xff])
+                    .unwrap();
+                crecio.set(true);
+            }
+        })
+        .unwrap_err();
+
+    assert!(crecio.get());
+    assert_eq!(
+        error,
+        ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::TooLarge)
+    );
+    let mut esperado = bytes;
+    esperado.push(0xff);
+    assert_eq!(fs::read(canonical).unwrap(), esperado);
 }
