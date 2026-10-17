@@ -129,7 +129,7 @@ fn exigir_binding(
         .map_err(|_| ErrorFamiliaPersistida)
 }
 
-/// Compara los bindings persistidos de la fase A sin abrir archivos ni autorizar acciones.
+/// Compara los bindings persistidos de las fases de retiro sin autorizar acciones.
 pub(super) fn validar_bindings_retiro_datos(
     fase: &FaseFamiliaPersistida<'_>,
     intent: (&IdentidadArchivoPersistida, u64),
@@ -137,35 +137,63 @@ pub(super) fn validar_bindings_retiro_datos(
     contexto: Option<(&IdentidadArchivoPersistida, u64, u64, &[u8; 32])>,
 ) -> Result<(), ErrorIntentRetiroPersistidoV2> {
     let (intent_id, scope_intent) = intent;
-    let FaseFamiliaPersistida::RetiroA {
-        journal: journal_de_fase,
-        contexto: envelope,
-        intent: registro,
-    } = fase
-    else {
-        return Err(ErrorIntentRetiroPersistidoV2);
-    };
-    let Some((journal_id, scope_journal, journal_observado)) = journal else {
-        return Err(ErrorIntentRetiroPersistidoV2);
-    };
-    let Some((contexto_id, scope_contexto, longitud, digest)) = contexto else {
-        return Err(ErrorIntentRetiroPersistidoV2);
-    };
+    match fase {
+        FaseFamiliaPersistida::RetiroA {
+            journal: journal_de_fase,
+            contexto: envelope,
+            intent: registro,
+        } => {
+            let Some((journal_id, scope_journal, journal_observado)) = journal else {
+                return Err(ErrorIntentRetiroPersistidoV2);
+            };
+            let Some((contexto_id, scope_contexto, longitud, digest)) = contexto else {
+                return Err(ErrorIntentRetiroPersistidoV2);
+            };
 
-    if *journal_de_fase != journal_observado
-        || scope_journal != scope_intent
-        || scope_contexto != scope_intent
-    {
-        return Err(ErrorIntentRetiroPersistidoV2);
+            if *journal_de_fase != journal_observado
+                || scope_journal != scope_intent
+                || scope_contexto != scope_intent
+            {
+                return Err(ErrorIntentRetiroPersistidoV2);
+            }
+
+            registro.validar_vinculo_archivo_intent_datos(intent_id, scope_intent)?;
+            registro.validar_vinculo_journal_datos(journal_id, journal_observado)?;
+            envelope
+                .coincide_estructuralmente(journal_observado)
+                .map_err(|_| ErrorIntentRetiroPersistidoV2)?;
+            registro.validar_vinculo_contexto_datos(contexto_id, longitud, *digest)?;
+            Ok(())
+        }
+        FaseFamiliaPersistida::RetiroBDatosParaReplay {
+            contexto: envelope,
+            intent: registro,
+        } => {
+            if journal.is_some() {
+                return Err(ErrorIntentRetiroPersistidoV2);
+            }
+            let Some((contexto_id, scope_contexto, longitud, digest)) = contexto else {
+                return Err(ErrorIntentRetiroPersistidoV2);
+            };
+            if scope_contexto != scope_intent {
+                return Err(ErrorIntentRetiroPersistidoV2);
+            }
+
+            registro.validar_vinculo_archivo_intent_datos(intent_id, scope_intent)?;
+            envelope
+                .coincide_estructuralmente(registro.journal())
+                .map_err(|_| ErrorIntentRetiroPersistidoV2)?;
+            registro.validar_vinculo_contexto_datos(contexto_id, longitud, *digest)?;
+            Ok(())
+        }
+        FaseFamiliaPersistida::RetiroCIntentSinContexto(registro) => {
+            if journal.is_some() || contexto.is_some() {
+                return Err(ErrorIntentRetiroPersistidoV2);
+            }
+            registro.validar_vinculo_archivo_intent_datos(intent_id, scope_intent)
+        }
+        _ => Err(ErrorIntentRetiroPersistidoV2),
     }
-
-    registro.validar_vinculo_archivo_intent_datos(intent_id, scope_intent)?;
-    registro.validar_vinculo_journal_datos(journal_id, journal_observado)?;
-    envelope
-        .coincide_estructuralmente(journal_observado)
-        .map_err(|_| ErrorIntentRetiroPersistidoV2)?;
-    registro.validar_vinculo_contexto_datos(contexto_id, longitud, *digest)?;
-    Ok(())
 }
 
 #[cfg(all(test, any(target_os = "linux", windows)))]
@@ -708,21 +736,15 @@ mod tests {
     }
 
     #[test]
-    fn bindings_rechazan_fases_b_c_y_otras_fases_ajenas() {
+    fn bindings_rechazan_fases_no_retiro() {
         let journal_v1 = journal_v1_committed();
         let journal_v2 = journal_v2_committed(TRANSACTION_ID, 181);
         let envelope = envelope_v2_binding(&journal_v2);
-        let intent_record = persisted_intent_v2(journal_v2.clone());
         let intent_id = identity_file_id(51);
         let context_id = identity_file_id(53);
         let digest = [0x5a; 32];
         let intent = (&intent_id, 61);
         let context = Some((&context_id, 61, 1, &digest));
-        let b_phase = FaseFamiliaPersistida::RetiroBDatosParaReplay {
-            contexto: &envelope,
-            intent: &intent_record,
-        };
-        let c_phase = FaseFamiliaPersistida::RetiroCIntentSinContexto(&intent_record);
         let legacy_phase = FaseFamiliaPersistida::LegadoV1(&journal_v1);
         let normal_phase = FaseFamiliaPersistida::NormalV2 {
             journal: &journal_v2,
@@ -730,16 +752,129 @@ mod tests {
         };
         let empty_phase = FaseFamiliaPersistida::VacioObservado;
 
-        for phase in [
-            &b_phase,
-            &c_phase,
-            &legacy_phase,
-            &normal_phase,
-            &empty_phase,
-        ] {
+        for phase in [&legacy_phase, &normal_phase, &empty_phase] {
             let error = validar_bindings_retiro_datos(phase, intent, None, context).unwrap_err();
             assert_eq!(format!("{error:?}"), "ErrorIntentRetiroPersistidoV2");
             assert!(!format!("{error:?}").contains(TRANSACTION_ID));
         }
+    }
+
+    #[test]
+    fn retiro_b_liga_env2_al_journal_embebido_y_rechaza_formas_invalidas() {
+        let intent_record = persisted_intent_v2(journal_v2_committed(TRANSACTION_ID, 191));
+        let envelope = envelope_v2_binding(intent_record.journal());
+        let intent_id = identity_file_id(51);
+        let context_id = identity_file_id(53);
+        let digest = [0x5a; 32];
+        let phase = FaseFamiliaPersistida::RetiroBDatosParaReplay {
+            contexto: &envelope,
+            intent: &intent_record,
+        };
+        let context = Some((&context_id, 61, 1, &digest));
+
+        assert!(validar_bindings_retiro_datos(&phase, (&intent_id, 61), None, context).is_ok());
+        assert!(
+            validar_bindings_retiro_datos(&phase, (&identity_file_id(54), 61), None, context,)
+                .is_err()
+        );
+        assert!(
+            validar_bindings_retiro_datos(
+                &phase,
+                (&intent_id, 61),
+                None,
+                Some((&context_id, 62, 1, &digest)),
+            )
+            .is_err()
+        );
+        assert!(
+            validar_bindings_retiro_datos(
+                &phase,
+                (&intent_id, 62),
+                None,
+                Some((&context_id, 62, 1, &digest)),
+            )
+            .is_err()
+        );
+        assert!(
+            validar_bindings_retiro_datos(
+                &phase,
+                (&intent_id, 61),
+                Some((&identity_file_id(52), 61, intent_record.journal())),
+                context,
+            )
+            .is_err()
+        );
+        assert!(validar_bindings_retiro_datos(&phase, (&intent_id, 61), None, None).is_err());
+        assert!(
+            validar_bindings_retiro_datos(
+                &phase,
+                (&intent_id, 61),
+                None,
+                Some((&identity_file_id(55), 61, 1, &digest)),
+            )
+            .is_err()
+        );
+        assert!(
+            validar_bindings_retiro_datos(
+                &phase,
+                (&intent_id, 61),
+                None,
+                Some((&context_id, 61, 2, &digest)),
+            )
+            .is_err()
+        );
+        assert!(
+            validar_bindings_retiro_datos(
+                &phase,
+                (&intent_id, 61),
+                None,
+                Some((&context_id, 61, 1, &[0xa5; 32])),
+            )
+            .is_err()
+        );
+
+        let incompatible = envelope_v2_binding(&journal_v2_committed(OTHER_TRANSACTION_ID, 191));
+        let incompatible_phase = FaseFamiliaPersistida::RetiroBDatosParaReplay {
+            contexto: &incompatible,
+            intent: &intent_record,
+        };
+        assert!(
+            validar_bindings_retiro_datos(&incompatible_phase, (&intent_id, 61), None, context)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn retiro_c_compara_intent_sin_inferir_context_y_rechaza_datos_extra() {
+        let intent_record = persisted_intent_v2(journal_v2_committed(TRANSACTION_ID, 201));
+        let intent_id = identity_file_id(51);
+        let journal_id = identity_file_id(52);
+        let context_id = identity_file_id(53);
+        let phase = FaseFamiliaPersistida::RetiroCIntentSinContexto(&intent_record);
+
+        assert!(validar_bindings_retiro_datos(&phase, (&intent_id, 61), None, None).is_ok());
+        assert!(validar_bindings_retiro_datos(&phase, (&intent_id, 62), None, None).is_err());
+        assert!(
+            validar_bindings_retiro_datos(&phase, (&identity_file_id(54), 61), None, None,)
+                .is_err()
+        );
+        assert!(
+            validar_bindings_retiro_datos(
+                &phase,
+                (&intent_id, 61),
+                Some((&journal_id, 61, intent_record.journal())),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            validar_bindings_retiro_datos(
+                &phase,
+                (&intent_id, 61),
+                None,
+                Some((&context_id, 61, 1, &[0x5a; 32])),
+            )
+            .is_err()
+        );
     }
 }
