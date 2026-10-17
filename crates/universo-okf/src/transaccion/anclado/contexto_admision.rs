@@ -96,6 +96,64 @@ impl fmt::Debug for ResultadoEliminacionContextoAnclado {
 }
 
 pub(crate) type RegistroContextoAdmisionLeido = (EnvelopeContextoAdmision, IdentidadArchivo);
+/// Observación file-bound v1/v2; el handle original nunca se expone.
+#[must_use]
+pub(super) struct ObservacionContextoVersionada {
+    envelope: crate::transaccion::admision::envelope::selector::EnvelopeAdmisionVersionada,
+    evidencia: EvidenciaLecturaContexto,
+    archivo_original: File,
+}
+
+impl fmt::Debug for ObservacionContextoVersionada {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionContextoVersionada { .. }")
+    }
+}
+
+/// Errores fijos del lector versionado; nunca conserva bytes ni errores de I/O.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ErrorLecturaContextoVersionada {
+    Lease(ErrorContextoAdmisionAnclado),
+    ParentBindingMismatch,
+    SourceIdentityMismatch,
+    FrameTooLarge,
+    LengthOverflow,
+    ReservationFailed,
+    ReadIo,
+    Selector(crate::transaccion::admision::envelope::selector::ErrorSelectorEnvelopeAdmision),
+}
+
+impl ErrorLecturaContextoVersionada {
+    pub(super) const fn codigo(self) -> &'static str {
+        match self {
+            Self::Lease(error) => error.codigo(),
+            Self::ParentBindingMismatch => "admission_context_parent_mismatch",
+            Self::SourceIdentityMismatch => "admission_context_source_identity_mismatch",
+            Self::FrameTooLarge => "context_frame_too_large",
+            Self::LengthOverflow => "context_frame_length_overflow",
+            Self::ReservationFailed => "context_frame_reserve_failed",
+            Self::ReadIo => "context_frame_io",
+            Self::Selector(error) => error.codigo(),
+        }
+    }
+}
+
+impl fmt::Debug for ErrorLecturaContextoVersionada {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ErrorLecturaContextoVersionada")
+            .field(&self.codigo())
+            .finish()
+    }
+}
+
+impl fmt::Display for ErrorLecturaContextoVersionada {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorLecturaContextoVersionada {}
 
 /// Lease de lectura del sibling canónico; no concede autoridad de recovery.
 ///
@@ -118,6 +176,8 @@ mod evidencia;
 #[path = "contexto_admision/publicar.rs"]
 mod publicar;
 pub(super) use publicar::renombrar_no_reemplazar;
+#[path = "contexto_admision/lector_versionado.rs"]
+mod lector_versionado;
 #[path = "contexto_admision/recolector.rs"]
 mod recolector;
 #[path = "contexto_admision/temporal.rs"]
