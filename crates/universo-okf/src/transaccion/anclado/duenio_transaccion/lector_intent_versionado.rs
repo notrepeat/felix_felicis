@@ -187,6 +187,17 @@ pub(super) fn leer_intent_canonico_versionado(
     let archivo = super::lector_intent_canonico::abrir_intent_canonico(parent, nombre)
         .map_err(|_| ErrorIntentCanonicoVersionado::CanonicalUnverified)?
         .ok_or(ErrorIntentCanonicoVersionado::CanonicalUnverified)?;
+
+    leer_intent_abierto_versionado(parent, nombre, archivo, scope_esperado, identidad_parent)
+}
+
+fn leer_intent_abierto_versionado(
+    parent: &File,
+    nombre: &OsStr,
+    archivo: File,
+    scope_esperado: ScopeFilesystem,
+    identidad_parent: IdentidadDirectorio,
+) -> Result<CandidatoIntentConVinculosCoincidentes, ErrorIntentCanonicoVersionado> {
     let candidato = leer_intent_versionado_vinculado(archivo, scope_esperado, identidad_parent)
         .map_err(ErrorIntentCanonicoVersionado::Candidate)?;
 
@@ -287,39 +298,63 @@ impl NombresIntentVersionado {
 }
 
 impl super::DuenioTransaccionAnclado<'_> {
-    /// Reads a present Intent and always revalidates owner and reserved names.
+    /// Observes a present Intent or two exact absences with owner revalidation.
     pub(super) fn observar_intent_versionado(
         &mut self,
-    ) -> Result<ObservacionIntentVersionada, ErrorObservacionIntentVersionada> {
-        self.observar_intent_versionado_con_hook(|| {})
+    ) -> Result<Option<ObservacionIntentVersionada>, ErrorObservacionIntentVersionada> {
+        self.observar_intent_versionado_con_hooks(|| {}, || {})
     }
 
     #[cfg(test)]
     pub(super) fn observar_intent_versionado_con_hook_prueba<F>(
         &mut self,
         after_read: F,
-    ) -> Result<ObservacionIntentVersionada, ErrorObservacionIntentVersionada>
+    ) -> Result<Option<ObservacionIntentVersionada>, ErrorObservacionIntentVersionada>
     where
         F: FnOnce(),
     {
-        self.observar_intent_versionado_con_hook(after_read)
+        self.observar_intent_versionado_con_hooks(|| {}, after_read)
     }
 
-    fn observar_intent_versionado_con_hook<F>(
+    #[cfg(test)]
+    pub(super) fn observar_intent_versionado_despues_primera_ausencia_prueba<F>(
         &mut self,
-        after_read: F,
-    ) -> Result<ObservacionIntentVersionada, ErrorObservacionIntentVersionada>
+        after_first_absence: F,
+    ) -> Result<Option<ObservacionIntentVersionada>, ErrorObservacionIntentVersionada>
     where
         F: FnOnce(),
     {
-        let nombres = NombresIntentVersionado::desde_owner(self)?;
-        let parent = self
-            .parent_revalidado()
-            .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
-        validar_temporales_intent(self, &parent, &nombres)?;
+        self.observar_intent_versionado_con_hooks(after_first_absence, || {})
+    }
 
-        let lectura = self.leer_intent_versionado_presente(&parent, &nombres);
-        drop(parent);
+    fn observar_intent_versionado_con_hooks<F, G>(
+        &mut self,
+        after_first_absence: F,
+        after_read: G,
+    ) -> Result<Option<ObservacionIntentVersionada>, ErrorObservacionIntentVersionada>
+    where
+        F: FnOnce(),
+        G: FnOnce(),
+    {
+        let nombres = NombresIntentVersionado::desde_owner(self)?;
+        let lectura = {
+            let parent = self
+                .parent_revalidado()
+                .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
+            validar_temporales_intent(self, &parent, &nombres)?;
+
+            match super::lector_intent_canonico::abrir_intent_canonico(&parent, &nombres.canonico) {
+                Ok(Some(archivo)) => self
+                    .leer_intent_versionado_presente(&parent, &nombres, archivo)
+                    .map(Some),
+                Ok(None) => {
+                    drop(parent);
+                    after_first_absence();
+                    self.confirmar_segunda_ausencia(&nombres)
+                }
+                Err(_) => Err(ErrorObservacionIntentVersionada::CanonicalUnverified),
+            }
+        };
         after_read();
 
         let postcheck = self.revalidar_owner_y_temporales();
@@ -330,15 +365,36 @@ impl super::DuenioTransaccionAnclado<'_> {
         &self,
         parent: &File,
         nombres: &NombresIntentVersionado,
+        archivo: File,
     ) -> Result<ObservacionIntentVersionada, ErrorObservacionIntentVersionada> {
-        let candidato = leer_intent_canonico_versionado(
+        let candidato = leer_intent_abierto_versionado(
             parent,
             &nombres.canonico,
+            archivo,
             self.scope_parent,
             self.identidad_parent,
         )
         .map_err(mapear_error_canonico_intent)?;
         Ok(ObservacionIntentVersionada { candidato })
+    }
+
+    fn confirmar_segunda_ausencia(
+        &self,
+        nombres: &NombresIntentVersionado,
+    ) -> Result<Option<ObservacionIntentVersionada>, ErrorObservacionIntentVersionada> {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
+        validar_temporales_intent(self, &parent, nombres)?;
+
+        match super::lector_intent_canonico::abrir_intent_canonico(&parent, &nombres.canonico) {
+            Ok(None) => Ok(None),
+            Ok(Some(archivo)) => {
+                drop(archivo);
+                Err(ErrorObservacionIntentVersionada::CanonicalUnverified)
+            }
+            Err(_) => Err(ErrorObservacionIntentVersionada::CanonicalUnverified),
+        }
     }
 
     fn revalidar_owner_y_temporales(&self) -> Result<(), ErrorObservacionIntentVersionada> {
