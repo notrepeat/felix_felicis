@@ -13,7 +13,13 @@ const HEADER_BYTES: usize = MAGIC.len() + 2 + 8;
 const JOURNAL_LENGTH_BYTES: usize = 4;
 const CONTEXT_LENGTH_BYTES: usize = 8;
 
+mod decodificar;
 mod lectura;
+pub(super) fn decode(
+    bytes: &[u8],
+) -> Result<EnvelopeContextoAdmisionV2, ErrorCodecEnvelopeContextoAdmisionV2> {
+    decodificar::decode(bytes)
+}
 
 pub(super) const MAX_ADMENV_V2_BYTES: usize = 512 * 1024 * 1024;
 pub(super) const MAX_CONTEXT_ARTIFACT_V2_BYTES: usize = 512 * 1024 * 1024;

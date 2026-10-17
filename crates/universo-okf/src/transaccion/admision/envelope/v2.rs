@@ -22,6 +22,11 @@ impl EnvelopeContextoAdmisionV2 {
         codec::encode(self)
     }
 
+    /// Decodifica un frame exterior v2 con JournalV2 y Context canónicos.
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, ErrorCodecEnvelopeContextoAdmisionV2> {
+        codec::decode(bytes)
+    }
+
     /// Conserva los campos vinculantes completos, incluido el kind cerrado de v2.
     pub(crate) fn ligar(contexto: ContextoAdmision, journal: &JournalV2) -> Self {
         Self {
