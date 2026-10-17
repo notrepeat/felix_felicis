@@ -462,3 +462,35 @@ fn parent_movido_con_lock_y_siblings_decoy_sigue_el_handle_original() {
     );
     assert_eq!(fs::read(lock_decoy).unwrap(), LOCK_BYTES);
 }
+
+fn reporte_de_slots(slots: [PresenciaSiblingNuevoFlujo; 6]) -> ObservacionSiblingsNuevoFlujo {
+    ObservacionSiblingsNuevoFlujo {
+        journal: slots[0],
+        journal_temporal: slots[1],
+        contexto: slots[2],
+        contexto_temporal: slots[3],
+        intent_retiro: slots[4],
+        intent_retiro_temporal: slots[5],
+    }
+}
+
+#[test]
+fn guard_normal_v2_acepta_solo_journal_y_contexto_presentes() {
+    use PresenciaSiblingNuevoFlujo::{Ausente, Presente};
+
+    let correcto = [Presente, Ausente, Presente, Ausente, Ausente, Ausente];
+    assert_eq!(reporte_de_slots(correcto).exigir_slots_normal_v2(), Ok(()));
+
+    for indice in 0..correcto.len() {
+        let mut invertido = correcto;
+        invertido[indice] = match invertido[indice] {
+            PresenciaSiblingNuevoFlujo::Ausente => Presente,
+            PresenciaSiblingNuevoFlujo::Presente => Ausente,
+        };
+        assert_eq!(
+            reporte_de_slots(invertido).exigir_slots_normal_v2(),
+            Err(ErrorSlotsNormalV2),
+            "el slot {indice} invertido debe fallar cerrado"
+        );
+    }
+}

@@ -56,7 +56,29 @@ impl ObservacionSiblingsNuevoFlujo {
     pub(crate) fn intent_retiro_temporal(&self) -> PresenciaSiblingNuevoFlujo {
         self.intent_retiro_temporal
     }
+
+    /// Acepta solo los slots canónicos J/C presentes y los otros cuatro ausentes.
+    /// No vuelve a observar el filesystem ni concede autoridad.
+    pub(super) fn exigir_slots_normal_v2(&self) -> Result<(), ErrorSlotsNormalV2> {
+        use PresenciaSiblingNuevoFlujo::{Ausente, Presente};
+
+        if self.journal == Presente
+            && self.journal_temporal == Ausente
+            && self.contexto == Presente
+            && self.contexto_temporal == Ausente
+            && self.intent_retiro == Ausente
+            && self.intent_retiro_temporal == Ausente
+        {
+            Ok(())
+        } else {
+            Err(ErrorSlotsNormalV2)
+        }
+    }
 }
+
+/// Error constante cuando el reporte no tiene la forma Normal V2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ErrorSlotsNormalV2;
 
 impl DuenioTransaccionAnclado<'_> {
     /// Observa los seis nombres sibling internos desde el parent retenido.
