@@ -1,4 +1,4 @@
-//! Modelo y codec puro RETIRE v2; no abre archivos ni realiza I/O.
+//! Modelo y codec puro RETIRE v2; no abre archivos ni accede al filesystem.
 
 use std::fmt;
 
@@ -78,6 +78,11 @@ impl IntentRetiroPersistidoV2 {
     /// Codifica el mismo DTO v2 sin proyectar su Journal a v1.
     pub(super) fn encode(&self) -> Result<Vec<u8>, ErrorCodecIntentRetiroV2> {
         codec::encode(self)
+    }
+
+    /// Decodifica el frame canónico sin abrir archivos ni convertir identidades.
+    pub(super) fn decode(frame: &[u8]) -> Result<Self, ErrorCodecIntentRetiroV2> {
+        codec::decode(frame)
     }
 
     /// El Journal se devuelve íntegro, sin proyectarlo al tipo v1.

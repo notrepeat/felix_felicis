@@ -1,6 +1,10 @@
-//! Encoder y preflight estructural del frame RETIRE v2.
+//! Encoder, preflight estructural y decoder canónico del frame RETIRE v2.
+
+use std::io::Cursor;
 
 use crate::transaccion::anclado::identidad_archivo::MAX_PERSISTED_FILE_ID_FRAME_BYTES;
+use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
+use crate::transaccion::journal::v2::JournalV2;
 use crate::transaccion::journal::v2::MAX_JOURNAL_V2_BYTES;
 
 use super::{
@@ -137,6 +141,54 @@ fn parse_frame(frame: &[u8]) -> Result<FrameV2Vista<'_>, ErrorCodecIntentRetiroV
     })
 }
 
+pub(super) fn decode(frame: &[u8]) -> Result<IntentRetiroPersistidoV2, ErrorCodecIntentRetiroV2> {
+    let FrameV2Vista {
+        journal,
+        identidades,
+        scope_parent,
+        longitud_contexto,
+        digest_contexto,
+    } = parse_frame(frame)?;
+    let journal = JournalV2::parse(journal).map_err(|_| ErrorCodecIntentRetiroV2::Malformed)?;
+    let [intent_bytes, journal_bytes, contexto_bytes] = identidades;
+    let identity_intent = decode_identity(intent_bytes)?;
+    let identity_journal = decode_identity(journal_bytes)?;
+    let identity_contexto = decode_identity(contexto_bytes)?;
+    let record = IntentRetiroPersistidoV2::desde_datos_persistidos(
+        journal,
+        identity_intent,
+        identity_journal,
+        identity_contexto,
+        scope_parent,
+        longitud_contexto,
+        digest_contexto,
+    )
+    .map_err(|_| ErrorCodecIntentRetiroV2::Malformed)?;
+
+    if encode(&record)?.as_slice() != frame {
+        return Err(ErrorCodecIntentRetiroV2::Malformed);
+    }
+    Ok(record)
+}
+
+fn decode_identity(bytes: &[u8]) -> Result<IdentidadArchivoPersistida, ErrorCodecIntentRetiroV2> {
+    let mut cursor = Cursor::new(bytes);
+    let identity = IdentidadArchivoPersistida::decode(&mut cursor)
+        .map_err(|_| ErrorCodecIntentRetiroV2::Malformed)?;
+    let expected_position =
+        u64::try_from(bytes.len()).map_err(|_| ErrorCodecIntentRetiroV2::Malformed)?;
+    if cursor.position() != expected_position
+        || identity
+            .encode()
+            .map_err(|_| ErrorCodecIntentRetiroV2::Malformed)?
+            .as_slice()
+            != bytes
+    {
+        return Err(ErrorCodecIntentRetiroV2::Malformed);
+    }
+    Ok(identity)
+}
+
 fn preflight_frame_length(
     frame_length: usize,
     maximum: usize,
@@ -202,10 +254,11 @@ fn encode_identity(
 mod tests {
     use std::io::Cursor;
 
+    use super::super::MAX_CONTEXT_ARTIFACT_V2_BYTES;
     use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
-    use crate::transaccion::journal::v2::{JournalKind, JournalV2};
+    use crate::transaccion::journal::v2::{JournalKind, JournalV2, JournalV2Error};
     use crate::transaccion::journal::{
-        ArtifactFingerprint, DirectoryIdentity, JournalState, RawTreeDigest,
+        ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
     };
 
     use super::{
@@ -268,6 +321,72 @@ mod tests {
         journal
     }
 
+    #[derive(serde::Serialize)]
+    struct JournalV2WireFixture {
+        schema: &'static str,
+        kind: &'static str,
+        transaction_id: &'static str,
+        state: JournalState,
+        parent: DirectoryIdentity,
+        old: ArtifactFingerprint,
+        new: ArtifactFingerprint,
+    }
+
+    fn journal_with_foreign_directory_identity(slot: usize) -> Vec<u8> {
+        #[cfg(unix)]
+        let foreign = DirectoryIdentity::Windows {
+            volume: 17,
+            file_id: "0000000000000000000000000000001d".to_owned(),
+        };
+        #[cfg(windows)]
+        let foreign = DirectoryIdentity::Unix {
+            device: 17,
+            inode: 29,
+        };
+
+        let parent = if slot == 0 {
+            foreign.clone()
+        } else {
+            directory_identity(29)
+        };
+        let old_identity = if slot == 1 {
+            foreign.clone()
+        } else {
+            directory_identity(31)
+        };
+        let new_identity = if slot == 2 {
+            foreign
+        } else {
+            directory_identity(32)
+        };
+        serde_json::to_vec(&JournalV2WireFixture {
+            schema: "felix-journal-v2",
+            kind: "context_required",
+            transaction_id: TRANSACTION_ID,
+            state: JournalState::Committed,
+            parent,
+            old: ArtifactFingerprint::new(old_identity, RawTreeDigest::from_digest([0x11; 32])),
+            new: ArtifactFingerprint::new(new_identity, RawTreeDigest::from_digest([0x22; 32])),
+        })
+        .unwrap()
+    }
+
+    fn v1_journal() -> Journal {
+        Journal::new(
+            TRANSACTION_ID,
+            directory_identity(29),
+            ArtifactFingerprint::new(
+                directory_identity(31),
+                RawTreeDigest::from_digest([0x11; 32]),
+            ),
+            ArtifactFingerprint::new(
+                directory_identity(32),
+                RawTreeDigest::from_digest([0x22; 32]),
+            ),
+        )
+        .unwrap()
+    }
+
     fn record() -> IntentRetiroPersistidoV2 {
         IntentRetiroPersistidoV2::desde_datos_persistidos(
             committed_journal(),
@@ -279,6 +398,83 @@ mod tests {
             CONTEXT_DIGEST,
         )
         .unwrap()
+    }
+
+    fn replace_journal(frame: &[u8], journal: &[u8]) -> Vec<u8> {
+        let length_offset = RETIRE_V2_MAGIC.len() + 2;
+        let mut offset = length_offset;
+        let old_length = usize::from(read_u16(frame, &mut offset));
+        let start = offset;
+        let mut replaced = frame.to_vec();
+        replaced.splice(start..start + old_length, journal.iter().copied());
+        replaced[length_offset..length_offset + 2]
+            .copy_from_slice(&u16::try_from(journal.len()).unwrap().to_be_bytes());
+        replaced
+    }
+
+    fn replace_journal_text(frame: &[u8], from: &str, to: &str) -> Vec<u8> {
+        let length_offset = RETIRE_V2_MAGIC.len() + 2;
+        let mut offset = length_offset;
+        let length = usize::from(read_u16(frame, &mut offset));
+        let start = offset;
+        let journal = std::str::from_utf8(&frame[start..start + length]).unwrap();
+        let replaced_journal = journal.replacen(from, to, 1);
+        assert_ne!(replaced_journal.as_str(), journal);
+        assert_eq!(replaced_journal.len(), journal.len());
+
+        let mut replaced = frame.to_vec();
+        replaced[start..start + length].copy_from_slice(replaced_journal.as_bytes());
+        replaced
+    }
+
+    fn replace_identity(frame: &[u8], index: usize, identity: &[u8]) -> Vec<u8> {
+        let length_offset = identity_length_offsets(frame)[index];
+        let mut offset = length_offset;
+        let old_length = usize::from(read_u16(frame, &mut offset));
+        let start = offset;
+        let mut replaced = frame.to_vec();
+        replaced.splice(start..start + old_length, identity.iter().copied());
+        replaced[length_offset..length_offset + 2]
+            .copy_from_slice(&u16::try_from(identity.len()).unwrap().to_be_bytes());
+        replaced
+    }
+
+    fn truncate_and_adjust_length(frame: &[u8], length_offset: usize) -> Vec<u8> {
+        let declared = usize::from(u16::from_be_bytes(
+            frame[length_offset..length_offset + 2].try_into().unwrap(),
+        ));
+        assert!(declared > 0);
+
+        let mut truncated = frame.to_vec();
+        truncated.remove(length_offset + 2 + declared - 1);
+        truncated[length_offset..length_offset + 2]
+            .copy_from_slice(&u16::try_from(declared - 1).unwrap().to_be_bytes());
+        truncated
+    }
+
+    fn reorder_identity_fields(identity: &[u8]) -> Vec<u8> {
+        let header_length = b"FELIX-FILEID\0".len() + 2 + 4;
+        let payload = std::str::from_utf8(&identity[header_length..]).unwrap();
+        let (prefix, fields) = payload.split_once(',').unwrap();
+        let fields = fields.strip_suffix('}').unwrap();
+        let (first, second) = fields.split_once(',').unwrap();
+        let reordered = format!("{prefix},{second},{first}}}");
+        assert_eq!(reordered.len(), payload.len());
+
+        let mut changed = identity.to_vec();
+        changed[header_length..].copy_from_slice(reordered.as_bytes());
+        changed
+    }
+
+    fn context_length_offset(frame: &[u8]) -> usize {
+        let mut offset = RETIRE_V2_MAGIC.len() + 2;
+        let journal_length = usize::from(read_u16(frame, &mut offset));
+        offset += journal_length;
+        for _ in 0..3 {
+            let identity_length = usize::from(read_u16(frame, &mut offset));
+            offset += identity_length;
+        }
+        offset + 8
     }
 
     fn read_u16(frame: &[u8], offset: &mut usize) -> u16 {
@@ -467,6 +663,164 @@ mod tests {
         assert!(matches!(
             super::take(&[], &mut offset, 1),
             Err(ErrorCodecIntentRetiroV2::Malformed)
+        ));
+    }
+
+    #[test]
+    fn decoder_round_trip_preserves_the_complete_journal_and_binding_data() {
+        let original = record();
+        let frame = original.encode().unwrap();
+        let decoded = IntentRetiroPersistidoV2::decode(&frame).unwrap();
+
+        assert!(decoded == original);
+        assert_eq!(decoded.journal().state(), JournalState::Committed);
+        assert_eq!(decoded.journal().kind(), JournalKind::ContextRequired);
+        assert_eq!(decoded.encode().unwrap(), frame);
+    }
+
+    #[test]
+    fn decoder_rejects_v1_invalid_state_kind_and_noncanonical_journals() {
+        let frame = record().encode().unwrap();
+        let v1_frame = replace_journal(&frame, &v1_journal().encode().unwrap());
+        assert!(matches!(
+            IntentRetiroPersistidoV2::decode(&v1_frame),
+            Err(ErrorCodecIntentRetiroV2::Malformed)
+        ));
+
+        let v1_schema = replace_journal_text(&frame, "felix-journal-v2", "felix-journal-v1");
+        assert!(IntentRetiroPersistidoV2::decode(&v1_schema).is_err());
+
+        let prepared = JournalV2::new(
+            TRANSACTION_ID,
+            directory_identity(29),
+            ArtifactFingerprint::new(
+                directory_identity(31),
+                RawTreeDigest::from_digest([0x11; 32]),
+            ),
+            ArtifactFingerprint::new(
+                directory_identity(32),
+                RawTreeDigest::from_digest([0x22; 32]),
+            ),
+        )
+        .unwrap();
+        let prepared_frame = replace_journal(&frame, &prepared.encode().unwrap());
+        assert!(matches!(
+            IntentRetiroPersistidoV2::decode(&prepared_frame),
+            Err(ErrorCodecIntentRetiroV2::Malformed)
+        ));
+
+        let unknown_kind = replace_journal_text(&frame, "context_required", "context_requirex");
+        assert!(matches!(
+            IntentRetiroPersistidoV2::decode(&unknown_kind),
+            Err(ErrorCodecIntentRetiroV2::Malformed)
+        ));
+
+        let reordered = replace_journal_text(
+            &frame,
+            "\"schema\":\"felix-journal-v2\",\"kind\":\"context_required\"",
+            "\"kind\":\"context_required\",\"schema\":\"felix-journal-v2\"",
+        );
+        assert!(IntentRetiroPersistidoV2::decode(&reordered).is_err());
+    }
+
+    #[test]
+    fn decoder_rejects_foreign_platform_directory_identities_in_journal() {
+        let frame = record().encode().unwrap();
+        for slot in 0..3 {
+            let foreign_journal = journal_with_foreign_directory_identity(slot);
+            let invalid = replace_journal(&frame, &foreign_journal);
+            let parsed = parse_frame(&invalid).unwrap();
+            assert_eq!(
+                JournalV2::parse(parsed.journal),
+                Err(JournalV2Error::PlatformInvalid)
+            );
+            assert!(matches!(
+                IntentRetiroPersistidoV2::decode(&invalid),
+                Err(ErrorCodecIntentRetiroV2::Malformed)
+            ));
+        }
+    }
+
+    #[test]
+    fn decoder_rejects_malformed_trailing_and_noncanonical_file_ids() {
+        let frame = record().encode().unwrap();
+        for index in 0..3 {
+            let length_offset = identity_length_offsets(&frame)[index];
+            let mut offset = length_offset;
+            let length = usize::from(read_u16(&frame, &mut offset));
+            let identity = &frame[offset..offset + length];
+
+            let mut malformed = identity.to_vec();
+            malformed[0] ^= 1;
+            assert!(
+                IntentRetiroPersistidoV2::decode(&replace_identity(&frame, index, &malformed,))
+                    .is_err()
+            );
+
+            let mut trailing = identity.to_vec();
+            trailing.push(0);
+            assert!(
+                IntentRetiroPersistidoV2::decode(&replace_identity(&frame, index, &trailing,))
+                    .is_err()
+            );
+
+            let reordered = reorder_identity_fields(identity);
+            assert!(
+                IntentRetiroPersistidoV2::decode(&replace_identity(&frame, index, &reordered,))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn decoder_rejects_semantically_truncated_journal_and_file_id_slices() {
+        let frame = record().encode().unwrap();
+        let mut length_offsets = vec![RETIRE_V2_MAGIC.len() + 2];
+        length_offsets.extend(identity_length_offsets(&frame));
+
+        for length_offset in length_offsets {
+            let truncated = truncate_and_adjust_length(&frame, length_offset);
+            assert!(parse_frame(&truncated).is_ok());
+            assert!(IntentRetiroPersistidoV2::decode(&truncated).is_err());
+        }
+    }
+
+    #[test]
+    fn decoder_enforces_context_artifact_length_without_allocating_it() {
+        let frame = record().encode().unwrap();
+        let offset = context_length_offset(&frame);
+
+        for length in [0, MAX_CONTEXT_ARTIFACT_V2_BYTES + 1] {
+            let mut invalid = frame.clone();
+            invalid[offset..offset + 8].copy_from_slice(&length.to_be_bytes());
+            assert!(matches!(
+                IntentRetiroPersistidoV2::decode(&invalid),
+                Err(ErrorCodecIntentRetiroV2::Malformed)
+            ));
+        }
+
+        let mut inclusive = frame;
+        inclusive[offset..offset + 8].copy_from_slice(&MAX_CONTEXT_ARTIFACT_V2_BYTES.to_be_bytes());
+        let decoded = IntentRetiroPersistidoV2::decode(&inclusive).unwrap();
+        assert_eq!(decoded.longitud_contexto, MAX_CONTEXT_ARTIFACT_V2_BYTES);
+    }
+
+    #[test]
+    fn decoder_rejects_outer_v1_unknown_version_and_bytes_outside_frame_quota() {
+        let frame = record().encode().unwrap();
+        for version in [1, RETIRE_V2_VERSION + 1] {
+            let mut invalid = frame.clone();
+            invalid[RETIRE_V2_MAGIC.len()..RETIRE_V2_MAGIC.len() + 2]
+                .copy_from_slice(&version.to_be_bytes());
+            assert!(IntentRetiroPersistidoV2::decode(&invalid).is_err());
+        }
+
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(IntentRetiroPersistidoV2::decode(&trailing).is_err());
+        assert!(matches!(
+            IntentRetiroPersistidoV2::decode(&vec![0; MAX_RETIRE_V2_BYTES + 1]),
+            Err(ErrorCodecIntentRetiroV2::TooLarge)
         ));
     }
 
