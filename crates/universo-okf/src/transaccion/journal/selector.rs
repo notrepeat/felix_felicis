@@ -4,11 +4,32 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use super::v2::{JournalV2, JournalV2Error};
-use super::{Journal, JournalError, SCHEMA_V1};
+use super::v2::{JournalV2, JournalV2Error, MAX_JOURNAL_V2_BYTES};
+use super::{Journal, JournalError, MAX_JOURNAL_BYTES, SCHEMA_V1};
 
 const SCHEMA_V2: &str = "felix-journal-v2";
-const MAX_VERSIONED_JOURNAL_BYTES: usize = 1024;
+pub(crate) const MAX_VERSIONED_JOURNAL_BYTES: usize =
+    max_versioned_journal_bytes(MAX_JOURNAL_BYTES, MAX_JOURNAL_V2_BYTES);
+
+const fn max_versioned_journal_bytes(v1_quota: usize, v2_quota: usize) -> usize {
+    if v1_quota > v2_quota {
+        v1_quota
+    } else {
+        v2_quota
+    }
+}
+
+fn preflight_versioned_length(
+    observed_len: usize,
+    v1_quota: usize,
+    v2_quota: usize,
+) -> Result<(), JournalPersistidoError> {
+    if observed_len > max_versioned_journal_bytes(v1_quota, v2_quota) {
+        Err(JournalPersistidoError::TooLarge)
+    } else {
+        Ok(())
+    }
+}
 
 #[derive(Deserialize)]
 struct SchemaProbe {
@@ -63,9 +84,7 @@ impl fmt::Display for JournalPersistidoError {
 impl std::error::Error for JournalPersistidoError {}
 
 pub(crate) fn parse(bytes: &[u8]) -> Result<JournalPersistido, JournalPersistidoError> {
-    if bytes.len() > MAX_VERSIONED_JOURNAL_BYTES {
-        return Err(JournalPersistidoError::TooLarge);
-    }
+    preflight_versioned_length(bytes.len(), MAX_JOURNAL_BYTES, MAX_JOURNAL_V2_BYTES)?;
 
     let probe: SchemaProbe =
         serde_json::from_slice(bytes).map_err(|_| JournalPersistidoError::Malformed)?;
@@ -184,6 +203,23 @@ mod tests {
         assert_eq!(
             parse(&oversized_invalid),
             Err(JournalPersistidoError::TooLarge)
+        );
+    }
+
+    #[test]
+    fn quota_preflight_is_inclusive_and_uses_both_family_limits() {
+        for (v1_quota, v2_quota) in [(1024, 1536), (1536, 1024), (1024, 1024)] {
+            let max = max_versioned_journal_bytes(v1_quota, v2_quota);
+            assert_eq!(preflight_versioned_length(max, v1_quota, v2_quota), Ok(()));
+            assert_eq!(
+                preflight_versioned_length(max + 1, v1_quota, v2_quota),
+                Err(JournalPersistidoError::TooLarge)
+            );
+        }
+
+        assert_eq!(
+            MAX_VERSIONED_JOURNAL_BYTES,
+            max_versioned_journal_bytes(MAX_JOURNAL_BYTES, MAX_JOURNAL_V2_BYTES)
         );
     }
 
