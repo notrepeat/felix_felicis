@@ -5,7 +5,8 @@ use super::super::versionado::{
 use super::{crear_root, fingerprint_prueba, identidad_distinta, journal_prueba, nombre_journal};
 use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
 use crate::transaccion::anclado::{ErrorDirectorioAnclado, ScopeFilesystem, scope_filesystem};
-use crate::transaccion::journal::selector::JournalPersistido;
+use crate::transaccion::journal::JournalError;
+use crate::transaccion::journal::selector::{JournalPersistido, JournalPersistidoError};
 use crate::transaccion::journal::v2::JournalV2;
 use crate::transaccion::lock::LockEscritura;
 use std::cell::Cell;
@@ -383,4 +384,117 @@ fn probe_parent_tras_ausencia_rechaza_mismatch_y_error_sin_crear_archivo() {
         );
         assert!(!canonical.exists());
     }
+}
+
+#[test]
+fn schema_desconocido_falla_sin_modificar_archivo() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let parent = lease.identidad_parent.journal_identity().unwrap();
+    let canonical = nombre_journal(&root);
+    let bytes = String::from_utf8(journal_prueba(parent).encode().unwrap())
+        .unwrap()
+        .replacen("felix-journal-v1", "felix-journal-future", 1)
+        .into_bytes();
+    fs::write(&canonical, &bytes).unwrap();
+
+    let error = lease.observar_versionado().unwrap_err();
+
+    assert_eq!(
+        error,
+        ErrorLecturaJournalVersionada::Selector(JournalPersistidoError::SchemaUnsupported)
+    );
+    assert_eq!(fs::read(canonical).unwrap(), bytes);
+}
+
+#[test]
+fn esquema_v1_malformado_no_cambia_de_decoder_ni_modifica_bytes() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let parent = lease.identidad_parent.journal_identity().unwrap();
+    let canonical = nombre_journal(&root);
+    let journal_v2 = JournalV2::new(
+        TRANSACTION_ID,
+        parent,
+        fingerprint_prueba(2, 'a'),
+        fingerprint_prueba(3, 'b'),
+    )
+    .unwrap();
+    let bytes = String::from_utf8(journal_v2.encode().unwrap())
+        .unwrap()
+        .replacen("felix-journal-v2", "felix-journal-v1", 1)
+        .into_bytes();
+    fs::write(&canonical, &bytes).unwrap();
+
+    let error = lease.observar_versionado().unwrap_err();
+
+    assert_eq!(
+        error,
+        ErrorLecturaJournalVersionada::Selector(JournalPersistidoError::V1(
+            JournalError::Malformed
+        ))
+    );
+    assert_eq!(fs::read(canonical).unwrap(), bytes);
+}
+
+#[test]
+fn directorio_en_nombre_canonico_se_rechaza_y_preserva_su_canario() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let canonical = nombre_journal(&root);
+    fs::create_dir(&canonical).unwrap();
+    let canary = canonical.join("canary");
+    fs::write(&canary, b"directory-canary").unwrap();
+
+    let error = lease.observar_versionado().unwrap_err();
+
+    assert!(matches!(
+        error,
+        ErrorLecturaJournalVersionada::Lease(
+            ErrorJournalAnclado::RegularFileRequired | ErrorJournalAnclado::Io
+        )
+    ));
+    assert!(canonical.is_dir());
+    assert_eq!(fs::read(canary).unwrap(), b"directory-canary");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_canonico_no_se_sigue_y_preserva_el_archivo_destino() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let parent = lease.identidad_parent.journal_identity().unwrap();
+    let target = temp.path().join("outside-journal-canary");
+    let bytes = journal_prueba(parent).encode().unwrap();
+    fs::write(&target, &bytes).unwrap();
+    let canonical = nombre_journal(&root);
+    symlink(&target, &canonical).unwrap();
+
+    let error = lease.observar_versionado().unwrap_err();
+
+    assert_eq!(
+        error,
+        ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::ReparseNotAllowed)
+    );
+    assert!(
+        fs::symlink_metadata(&canonical)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(target).unwrap(), bytes);
 }
