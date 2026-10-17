@@ -518,6 +518,8 @@ mod auxiliary_guard;
 #[allow(dead_code)]
 #[path = "duenio_transaccion/legacy_present_after_guard.rs"]
 mod legacy_present_after_guard;
+#[path = "duenio_transaccion/visible_identity_probe.rs"]
+mod visible_identity_probe;
 
 #[path = "duenio_transaccion/intent_retiro.rs"]
 pub(in crate::transaccion::anclado::duenio_transaccion) mod intent_retiro;
