@@ -16,9 +16,10 @@ use tempfile::{TempDir, tempdir};
 
 use super::{
     CandidatoIntentConVinculosCoincidentes, CandidatoIntentDecodificadoSinVinculo,
-    ErrorCandidatoIntentSinVinculo, ErrorIntentVersionadoVinculado, ErrorLecturaFrameIntent,
-    comparar_sonda_visible_intent, leer_acotado, leer_candidato_intent_versionado,
-    leer_candidato_intent_versionado_con_cap_y_hook, leer_frame_intent, leer_frame_intent_con_hook,
+    ErrorCandidatoIntentSinVinculo, ErrorIntentCanonicoVersionado, ErrorIntentVersionadoVinculado,
+    ErrorLecturaFrameIntent, comparar_sonda_visible_intent, leer_acotado,
+    leer_candidato_intent_versionado, leer_candidato_intent_versionado_con_cap_y_hook,
+    leer_frame_intent, leer_frame_intent_con_hook, leer_intent_canonico_versionado,
     leer_intent_versionado_vinculado,
 };
 
@@ -367,6 +368,94 @@ fn intent_fixture_con_binding(
         identidad_parent,
         parent_journal,
         scope,
+    }
+}
+
+#[test]
+fn lectura_canonica_presente_retorna_vinculo_completo_v1_y_v2() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        let fixture = intent_fixture(version);
+        let parent =
+            super::super::super::abrir_directorio_absoluto(fixture._directorio.path(), false)
+                .unwrap();
+        let nombre = fixture.ruta_intent.file_name().unwrap();
+        let candidato = leer_intent_canonico_versionado(
+            &parent,
+            nombre,
+            fixture.scope,
+            fixture.identidad_parent,
+        )
+        .unwrap();
+
+        assert!(candidato.identidad_archivo == fixture.identidad_intent);
+        assert!(candidato.scope == fixture.scope);
+        assert!(candidato.parent_journal == fixture.parent_journal);
+        match (version, &candidato.envelope) {
+            (VersionIntentFixture::V1, IntentRetiroPersistidoVersionado::V1(_)) => {}
+            (VersionIntentFixture::V2, IntentRetiroPersistidoVersionado::V2(_)) => {}
+            _ => panic!("el selector debe preservar la variante decodificada"),
+        }
+        assert_eq!(
+            fs::read(&fixture.ruta_intent).unwrap(),
+            fixture.bytes_intent
+        );
+        assert_eq!(
+            fs::read(&fixture.ruta_journal).unwrap(),
+            fixture.bytes_journal
+        );
+        assert_eq!(
+            fs::read(&fixture.ruta_contexto).unwrap(),
+            fixture.bytes_contexto
+        );
+    }
+}
+
+#[test]
+fn lectura_canonica_rechaza_vinculos_persistidos_distintos_v1_y_v2() {
+    for version in [VersionIntentFixture::V1, VersionIntentFixture::V2] {
+        for (binding, expected) in [
+            (
+                BindingIncorrecto::IdentidadIntent,
+                ErrorIntentVersionadoVinculado::SourceBindingMismatch,
+            ),
+            (
+                BindingIncorrecto::Scope,
+                ErrorIntentVersionadoVinculado::SourceBindingMismatch,
+            ),
+            (
+                BindingIncorrecto::Parent,
+                ErrorIntentVersionadoVinculado::ParentBindingMismatch,
+            ),
+        ] {
+            let fixture = intent_fixture_con_binding(version, binding);
+            let parent =
+                super::super::super::abrir_directorio_absoluto(fixture._directorio.path(), false)
+                    .unwrap();
+            let nombre = fixture.ruta_intent.file_name().unwrap();
+            let error = match leer_intent_canonico_versionado(
+                &parent,
+                nombre,
+                fixture.scope,
+                fixture.identidad_parent,
+            ) {
+                Ok(_) => panic!("un vínculo persistido distinto debe rechazarse"),
+                Err(error) => error,
+            };
+
+            assert_eq!(error, ErrorIntentCanonicoVersionado::Candidate(expected));
+            assert_eq!(
+                fs::read(&fixture.ruta_intent).unwrap(),
+                fixture.bytes_intent
+            );
+            assert_eq!(
+                fs::read(&fixture.ruta_journal).unwrap(),
+                fixture.bytes_journal
+            );
+            assert_eq!(
+                fs::read(&fixture.ruta_contexto).unwrap(),
+                fixture.bytes_contexto
+            );
+        }
     }
 }
 

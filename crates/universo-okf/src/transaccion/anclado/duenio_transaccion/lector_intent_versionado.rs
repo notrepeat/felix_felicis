@@ -1,5 +1,6 @@
 //! Recolecta un frame RETIRE acotado desde el mismo handle ya abierto.
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -145,6 +146,58 @@ fn comparar_sonda_visible_intent(
         return Err(ErrorIntentVersionadoVinculado::SourceBindingMismatch);
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ErrorIntentCanonicoVersionado {
+    CanonicalUnverified,
+    Candidate(ErrorIntentVersionadoVinculado),
+}
+
+impl ErrorIntentCanonicoVersionado {
+    pub(super) const fn codigo(self) -> &'static str {
+        match self {
+            Self::CanonicalUnverified => "retirement_intent_canonical_unverified",
+            Self::Candidate(error) => error.codigo(),
+        }
+    }
+}
+
+impl fmt::Debug for ErrorIntentCanonicoVersionado {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl fmt::Display for ErrorIntentCanonicoVersionado {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorIntentCanonicoVersionado {}
+
+/// Opens, binds, and probes one present canonical Intent without an owner.
+pub(super) fn leer_intent_canonico_versionado(
+    parent: &File,
+    nombre: &OsStr,
+    scope_esperado: ScopeFilesystem,
+    identidad_parent: IdentidadDirectorio,
+) -> Result<CandidatoIntentConVinculosCoincidentes, ErrorIntentCanonicoVersionado> {
+    let archivo = super::lector_intent_canonico::abrir_intent_canonico(parent, nombre)
+        .map_err(|_| ErrorIntentCanonicoVersionado::CanonicalUnverified)?
+        .ok_or(ErrorIntentCanonicoVersionado::CanonicalUnverified)?;
+    let candidato = leer_intent_versionado_vinculado(archivo, scope_esperado, identidad_parent)
+        .map_err(ErrorIntentCanonicoVersionado::Candidate)?;
+
+    let probe = super::lector_intent_canonico::abrir_intent_canonico(parent, nombre)
+        .map_err(|_| ErrorIntentCanonicoVersionado::CanonicalUnverified)?
+        .ok_or(ErrorIntentCanonicoVersionado::CanonicalUnverified)?;
+    comparar_sonda_visible_intent(&candidato, &probe)
+        .map_err(|_| ErrorIntentCanonicoVersionado::CanonicalUnverified)?;
+    drop(probe);
+
+    Ok(candidato)
 }
 
 /// Decodes, then compares the captured native source and expected parent data.
