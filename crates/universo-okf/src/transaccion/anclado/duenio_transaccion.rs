@@ -514,6 +514,9 @@ mod observar_siblings_nuevo_flujo;
 #[path = "duenio_transaccion/intent_retiro.rs"]
 pub(in crate::transaccion::anclado::duenio_transaccion) mod intent_retiro;
 
+#[path = "duenio_transaccion/familia_persistida.rs"]
+mod familia_persistida;
+
 #[path = "duenio_transaccion/lector_intent_versionado.rs"]
 mod lector_intent_versionado;
 
