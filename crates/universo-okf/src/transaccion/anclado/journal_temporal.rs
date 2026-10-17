@@ -70,6 +70,8 @@ mod eliminar;
 mod publicar;
 #[path = "journal_temporal/reemplazar.rs"]
 mod reemplazar;
+#[path = "journal_temporal/versionado.rs"]
+pub(super) mod versionado;
 
 #[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

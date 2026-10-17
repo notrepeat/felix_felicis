@@ -6,6 +6,9 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
+#[path = "journal_temporal_tests/lector_versionado.rs"]
+mod lector_versionado;
+
 fn crear_root(temp: &Path) -> PathBuf {
     let root = temp.join("bundle");
     fs::create_dir(&root).unwrap();
