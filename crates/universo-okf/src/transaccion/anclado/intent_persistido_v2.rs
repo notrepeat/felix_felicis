@@ -1,14 +1,43 @@
-//! Modelo de datos RETIRE v2; no hace framing ni I/O.
+//! Modelo y codec puro RETIRE v2; no abre archivos ni realiza I/O.
 
 use std::fmt;
 
+use crate::transaccion::anclado::identidad_archivo::MAX_PERSISTED_FILE_ID_FRAME_BYTES;
 use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
 use crate::transaccion::journal::JournalState;
-use crate::transaccion::journal::v2::{JournalKind, JournalV2};
+use crate::transaccion::journal::v2::{JournalKind, JournalV2, MAX_JOURNAL_V2_BYTES};
 
 mod binding;
+mod codec;
+
+pub(super) const RETIRE_V2_MAGIC: &[u8; 13] = b"FELIX-RETIRE\0";
+pub(super) const RETIRE_V2_VERSION: u16 = 2;
+const FIXED_RETIRE_V2_BYTES: usize = RETIRE_V2_MAGIC.len() + 2 + 2 + 3 * 2 + 8 + 8 + 32;
+pub(super) const MAX_RETIRE_V2_BYTES: usize =
+    FIXED_RETIRE_V2_BYTES + MAX_JOURNAL_V2_BYTES + 3 * MAX_PERSISTED_FILE_ID_FRAME_BYTES;
 
 pub(super) const MAX_CONTEXT_ARTIFACT_V2_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(PartialEq, Eq)]
+pub(super) enum ErrorCodecIntentRetiroV2 {
+    TooLarge,
+    Malformed,
+    Allocation,
+}
+
+impl fmt::Debug for ErrorCodecIntentRetiroV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ErrorCodecIntentRetiroV2([redacted])")
+    }
+}
+
+impl fmt::Display for ErrorCodecIntentRetiroV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("invalid_retirement_envelope_v2")
+    }
+}
+
+impl std::error::Error for ErrorCodecIntentRetiroV2 {}
 
 /// Conserva el JournalV2 completo y las identidades como comparadores de datos.
 #[derive(PartialEq, Eq)]
@@ -46,6 +75,11 @@ impl fmt::Display for ErrorIntentRetiroPersistidoV2 {
 impl std::error::Error for ErrorIntentRetiroPersistidoV2 {}
 
 impl IntentRetiroPersistidoV2 {
+    /// Codifica el mismo DTO v2 sin proyectar su Journal a v1.
+    pub(super) fn encode(&self) -> Result<Vec<u8>, ErrorCodecIntentRetiroV2> {
+        codec::encode(self)
+    }
+
     /// El Journal se devuelve íntegro, sin proyectarlo al tipo v1.
     pub(super) fn journal(&self) -> &JournalV2 {
         &self.journal
