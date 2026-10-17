@@ -27,6 +27,7 @@ pub(crate) mod contexto_admision;
 pub(crate) mod duenio_transaccion;
 mod identidad_archivo;
 pub(super) mod intent_persistido;
+pub(super) mod intent_persistido_v2;
 pub(crate) mod journal_temporal;
 mod limpieza;
 mod operaciones;
