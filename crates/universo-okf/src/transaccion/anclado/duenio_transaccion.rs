@@ -149,6 +149,84 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         )
     }
 
+    /// Devuelve datos versionados solo tras volver a validar el owner.
+    pub(super) fn observar_journal_versionado(
+        &mut self,
+    ) -> Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    > {
+        self.observar_journal_versionado_con(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_journal_versionado_con_prueba<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        self.observar_journal_versionado_con(despues_de_leer)
+    }
+
+    fn observar_journal_versionado_con<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = self.leer_journal_versionado_con(despues_de_leer)?;
+        let postcheck = self.parent_revalidado();
+        finalizar_observacion_journal_versionado(lectura, postcheck)
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_journal_versionado_con_posterror_prueba<F>(
+        &mut self,
+        despues_de_leer: F,
+        error: super::journal_temporal::ErrorJournalAnclado,
+    ) -> Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = self.leer_journal_versionado_con(despues_de_leer)?;
+        finalizar_observacion_journal_versionado(lectura, Err(error))
+    }
+
+    fn leer_journal_versionado_con<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Result<
+            Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+            super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+        >,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = {
+            let lease = self.journal_temporal_estricto().map_err(
+                super::journal_temporal::versionado::ErrorLecturaJournalVersionada::Lease,
+            )?;
+            lease.observar_versionado()
+        };
+        despues_de_leer();
+        Ok(lectura)
+    }
+
     /// Emite un lease de lectura del contexto canónico desde el mismo parent.
     ///
     /// Revalida identidad, scope y lock visible antes de ceder el lease. Los
@@ -308,6 +386,20 @@ impl fmt::Debug for DuenioTransaccionAnclado<'_> {
 
 fn mapear_error(_error: ErrorDirectorioAnclado) -> ErrorDuenioTransaccionAnclado {
     ErrorDuenioTransaccionAnclado::NoVerificable
+}
+
+fn finalizar_observacion_journal_versionado(
+    lectura: Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >,
+    postcheck: Result<File, super::journal_temporal::ErrorJournalAnclado>,
+) -> Result<
+    Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+    super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+> {
+    postcheck.map_err(super::journal_temporal::versionado::ErrorLecturaJournalVersionada::Lease)?;
+    lectura
 }
 
 #[cfg(all(test, any(target_os = "linux", windows)))]

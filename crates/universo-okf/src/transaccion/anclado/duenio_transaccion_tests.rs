@@ -12,6 +12,9 @@ use std::io::Read;
 use std::path::Path;
 use tempfile::tempdir;
 
+#[path = "duenio_transaccion/owner_versionado_tests.rs"]
+mod owner_versionado_tests;
+
 fn abrir_root_y_lock(parent: &Path, crear_root: bool) -> (UbicacionRaiz, std::path::PathBuf) {
     fs::create_dir_all(parent).unwrap();
     let root = parent.join("bundle");
