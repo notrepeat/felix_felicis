@@ -125,6 +125,11 @@ impl ObservacionContextoVersionada {
 
         envelope.coincide_estructuralmente(journal)
     }
+
+    /// Copia la identidad nativa retenida para comprobar el mismo sibling.
+    pub(super) fn identidad_archivo_observado(&self) -> IdentidadArchivo {
+        self.evidencia.identidad_archivo
+    }
 }
 
 /// Errores fijos del lector versionado; nunca conserva bytes ni errores de I/O.

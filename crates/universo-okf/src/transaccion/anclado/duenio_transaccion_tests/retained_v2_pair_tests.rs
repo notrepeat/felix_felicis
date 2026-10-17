@@ -2,8 +2,11 @@ use super::*;
 
 use crate::transaccion::admision::envelope::v2::EnvelopeContextoAdmisionV2;
 use crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionPareadaV2;
+use crate::transaccion::anclado::{IdentidadArchivo, identidad_archivo as identidad_nativa};
 use crate::transaccion::journal::JournalState;
 use crate::transaccion::journal::v2::JournalV2;
+use std::fs::File;
+use std::path::Path;
 
 #[derive(Clone, Copy)]
 enum DiferenciaBinding {
@@ -253,6 +256,245 @@ fn postcheck_exterior_domina_tanto_un_candidato_como_un_error_de_observacion() {
         verificar_lock_y_contexto(
             &rutas,
             if falta_contexto {
+                None
+            } else {
+                Some(&bytes_contexto)
+            },
+        );
+    }
+}
+
+fn identidad_real(path: &Path) -> IdentidadArchivo {
+    identidad_nativa(&File::open(path).unwrap()).unwrap()
+}
+
+#[test]
+fn revalidar_pareja_v2_acepta_los_mismos_objetos_y_preserva_frames() {
+    let temp = tempdir().unwrap();
+    let rutas = preparar_rutas(&temp);
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let (bytes_journal, bytes_contexto) =
+        escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+
+    let pareja = owner.revalidar_pareja_v2().unwrap();
+
+    assert_eq!(
+        fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+        bytes_journal
+    );
+    assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+    drop(pareja);
+    drop(owner);
+    drop(lock);
+    verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
+}
+
+#[test]
+fn reemplazo_journal_con_bytes_iguales_e_id_distinto_falla_y_preserva_ambos_objetos() {
+    let temp = tempdir().unwrap();
+    let rutas = preparar_rutas(&temp);
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let (bytes_journal, bytes_contexto) =
+        escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+    let canonico = rutas.ubicacion.journal().as_path().to_path_buf();
+    let retenido = rutas
+        .contexto
+        .parent()
+        .unwrap()
+        .join("journal-original-retained");
+    let fuente = rutas
+        .contexto
+        .parent()
+        .unwrap()
+        .join("journal-replacement-source");
+    fs::write(&fuente, &bytes_journal).unwrap();
+    let id_original = identidad_real(&canonico);
+    let id_reemplazo = identidad_real(&fuente);
+    assert_ne!(id_original, id_reemplazo);
+
+    let resultado = owner.revalidar_pareja_v2_con_prueba(
+        |_| {
+            fs::rename(&canonico, &retenido).unwrap();
+            fs::rename(&fuente, &canonico).unwrap();
+        },
+        |owner| owner.parent_revalidado(),
+    );
+
+    assert!(matches!(
+        resultado,
+        Err(ErrorObservacionPareadaV2::PairUnverified)
+    ));
+    assert_eq!(fs::read(&retenido).unwrap(), bytes_journal);
+    assert_eq!(fs::read(&canonico).unwrap(), bytes_journal);
+    assert_eq!(identidad_real(&retenido), id_original);
+    assert_eq!(identidad_real(&canonico), id_reemplazo);
+    assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+
+    drop(owner);
+    drop(lock);
+    verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
+}
+
+#[test]
+fn reemplazo_contexto_con_bytes_iguales_e_id_distinto_falla_y_preserva_ambos_objetos() {
+    let temp = tempdir().unwrap();
+    let rutas = preparar_rutas(&temp);
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let (bytes_journal, bytes_contexto) =
+        escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+    let canonico = rutas.contexto.clone();
+    let retenido = rutas
+        .contexto
+        .parent()
+        .unwrap()
+        .join("context-original-retained");
+    let fuente = rutas
+        .contexto
+        .parent()
+        .unwrap()
+        .join("context-replacement-source");
+    fs::write(&fuente, &bytes_contexto).unwrap();
+    let id_original = identidad_real(&canonico);
+    let id_reemplazo = identidad_real(&fuente);
+    assert_ne!(id_original, id_reemplazo);
+
+    let resultado = owner.revalidar_pareja_v2_con_prueba(
+        |_| {
+            fs::rename(&canonico, &retenido).unwrap();
+            fs::rename(&fuente, &canonico).unwrap();
+        },
+        |owner| owner.parent_revalidado(),
+    );
+
+    assert!(matches!(
+        resultado,
+        Err(ErrorObservacionPareadaV2::PairUnverified)
+    ));
+    assert_eq!(fs::read(&retenido).unwrap(), bytes_contexto);
+    assert_eq!(fs::read(&canonico).unwrap(), bytes_contexto);
+    assert_eq!(identidad_real(&retenido), id_original);
+    assert_eq!(identidad_real(&canonico), id_reemplazo);
+    assert_eq!(
+        fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+        bytes_journal
+    );
+
+    drop(owner);
+    drop(lock);
+    verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
+}
+
+#[test]
+fn ausencia_final_de_journal_o_contexto_falla_y_preserva_el_original() {
+    for falta_journal in [true, false] {
+        let temp = tempdir().unwrap();
+        let rutas = preparar_rutas(&temp);
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let (bytes_journal, bytes_contexto) =
+            escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+        let (canonico, retenido, bytes) = if falta_journal {
+            (
+                rutas.ubicacion.journal().as_path().to_path_buf(),
+                rutas
+                    .contexto
+                    .parent()
+                    .unwrap()
+                    .join("journal-original-retained"),
+                bytes_journal.clone(),
+            )
+        } else {
+            (
+                rutas.contexto.clone(),
+                rutas
+                    .contexto
+                    .parent()
+                    .unwrap()
+                    .join("context-original-retained"),
+                bytes_contexto.clone(),
+            )
+        };
+        let id_original = identidad_real(&canonico);
+
+        let resultado = owner.revalidar_pareja_v2_con_prueba(
+            |_| fs::rename(&canonico, &retenido).unwrap(),
+            |owner| owner.parent_revalidado(),
+        );
+
+        assert!(matches!(
+            resultado,
+            Err(ErrorObservacionPareadaV2::PairUnverified)
+        ));
+        assert!(!canonico.exists());
+        assert_eq!(fs::read(&retenido).unwrap(), bytes);
+        assert_eq!(identidad_real(&retenido), id_original);
+        assert_eq!(
+            fs::read(rutas.ubicacion.journal().as_path()).ok(),
+            if falta_journal {
+                None
+            } else {
+                Some(bytes_journal)
+            }
+        );
+        drop(owner);
+        drop(lock);
+        verificar_lock_y_contexto(
+            &rutas,
+            if falta_journal {
+                Some(&bytes_contexto)
+            } else {
+                None
+            },
+        );
+    }
+}
+
+#[test]
+fn postcheck_de_revalidacion_domina_candidato_error_de_lectura_y_error_de_probe() {
+    for caso in 0..3 {
+        let temp = tempdir().unwrap();
+        let rutas = preparar_rutas(&temp);
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let (bytes_journal, bytes_contexto) =
+            escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+        if caso == 1 {
+            fs::remove_file(rutas.ubicacion.journal().as_path()).unwrap();
+        }
+
+        let resultado = owner.revalidar_pareja_v2_con_prueba(
+            |_| {
+                if caso == 2 {
+                    fs::remove_file(&rutas.contexto).unwrap();
+                }
+            },
+            |_| Err(crate::transaccion::anclado::journal_temporal::ErrorJournalAnclado::Io),
+        );
+
+        assert!(matches!(
+            resultado,
+            Err(ErrorObservacionPareadaV2::OwnerUnverified)
+        ));
+        assert_eq!(!rutas.ubicacion.journal().as_path().exists(), caso == 1);
+        assert_eq!(!rutas.contexto.exists(), caso == 2);
+        if caso != 1 {
+            assert_eq!(
+                fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+                bytes_journal
+            );
+        }
+        if caso != 2 {
+            assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+        }
+
+        drop(owner);
+        drop(lock);
+        verificar_lock_y_contexto(
+            &rutas,
+            if caso == 2 {
                 None
             } else {
                 Some(&bytes_contexto)
