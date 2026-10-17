@@ -511,6 +511,11 @@ mod observar_root;
 #[path = "duenio_transaccion/observar_siblings_nuevo_flujo.rs"]
 mod observar_siblings_nuevo_flujo;
 
+// El coordinador de observación legacy lo consumirá en la unidad siguiente.
+#[allow(dead_code)]
+#[path = "duenio_transaccion/auxiliary_guard.rs"]
+mod auxiliary_guard;
+
 #[path = "duenio_transaccion/intent_retiro.rs"]
 pub(in crate::transaccion::anclado::duenio_transaccion) mod intent_retiro;
 
