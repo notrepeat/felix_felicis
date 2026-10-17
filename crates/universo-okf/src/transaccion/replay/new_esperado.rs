@@ -107,6 +107,12 @@ impl fmt::Display for ErrorNewEsperado {
 
 impl std::error::Error for ErrorNewEsperado {}
 
+/// Resultado del núcleo compartido; no conserva metadatos del Journal.
+pub(super) struct InventarioRawRepropuesto {
+    pub(super) entradas: Vec<EntradaSnapshot>,
+    pub(super) digest: RawTreeDigest,
+}
+
 /// Vuelve a evaluar y serializar el delta, calcula el inventario raw completo
 /// que produciría staging y verifica sus huellas old/new contra el journal.
 ///
@@ -134,6 +140,32 @@ pub(crate) fn calcular_new_esperado(
         return Err(ErrorNewEsperado::HuellaOldNoCoincide);
     }
 
+    let inventario =
+        calcular_inventario_raw_repropuesto(contexto, motor_soportado, policy_soportada)?;
+    let new = ArtifactFingerprint::new(
+        journal.new_fingerprint().identity().clone(),
+        inventario.digest.clone(),
+    );
+    if &new != journal.new_fingerprint() {
+        return Err(ErrorNewEsperado::HuellaNewNoCoincide);
+    }
+
+    Ok(NewEsperado {
+        transaction_id: journal.transaction_id().to_owned(),
+        parent: journal.parent().clone(),
+        old,
+        new,
+        entradas: inventario.entradas,
+        digest: inventario.digest,
+    })
+}
+
+/// Reproduce la propuesta y obtiene solo el inventario raw; no enlaza un Journal.
+pub(super) fn calcular_inventario_raw_repropuesto(
+    contexto: &ContextoAdmision,
+    motor_soportado: &str,
+    policy_soportada: &str,
+) -> Result<InventarioRawRepropuesto, ErrorNewEsperado> {
     let reproducida = reproponer(contexto, motor_soportado, policy_soportada)
         .map_err(ErrorNewEsperado::Replay)?;
     let candidato = match &reproducida.resultado {
@@ -151,20 +183,8 @@ pub(crate) fn calcular_new_esperado(
         planificar_staging(&reproducida.snapshot, &documentos).map_err(ErrorNewEsperado::Plan)?;
     let entradas = inventario_objetivo_para_replay(&plan).map_err(ErrorNewEsperado::Inventario)?;
     let digest = calcular_digest_raw_tree(&entradas).map_err(ErrorNewEsperado::Snapshot)?;
-    let new =
-        ArtifactFingerprint::new(journal.new_fingerprint().identity().clone(), digest.clone());
-    if &new != journal.new_fingerprint() {
-        return Err(ErrorNewEsperado::HuellaNewNoCoincide);
-    }
 
-    Ok(NewEsperado {
-        transaction_id: journal.transaction_id().to_owned(),
-        parent: journal.parent().clone(),
-        old,
-        new,
-        entradas,
-        digest,
-    })
+    Ok(InventarioRawRepropuesto { entradas, digest })
 }
 
 fn derivar_parent_overrides(
