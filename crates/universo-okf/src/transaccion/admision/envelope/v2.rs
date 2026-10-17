@@ -7,6 +7,8 @@ use super::super::ContextoAdmision;
 
 mod codec;
 
+pub(super) const MAX_FRAME_BYTES: usize = codec::MAX_ADMENV_V2_BYTES;
+
 /// Contexto de admisión ligado estructuralmente a los datos inmutables de JournalV2.
 ///
 /// La coincidencia compara datos; no reproduce el contexto, observa el filesystem
