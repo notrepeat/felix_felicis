@@ -515,6 +515,9 @@ mod observar_siblings_nuevo_flujo;
 #[allow(dead_code)]
 #[path = "duenio_transaccion/auxiliary_guard.rs"]
 mod auxiliary_guard;
+#[allow(dead_code)]
+#[path = "duenio_transaccion/legacy_present_after_guard.rs"]
+mod legacy_present_after_guard;
 
 #[path = "duenio_transaccion/intent_retiro.rs"]
 pub(in crate::transaccion::anclado::duenio_transaccion) mod intent_retiro;
