@@ -219,9 +219,13 @@ fn padres_por_path(estructura: &Estructura) -> BTreeMap<BundlePath, Option<Bundl
 
 #[cfg(test)]
 mod tests {
+    use super::super::new_esperado_v2::{ErrorNewEsperadoV2, calcular_new_esperado_v2};
     use super::*;
 
     use crate::transaccion::captura::{ConfigRawCapturada, materializar_snapshot_desde_entradas};
+    use crate::transaccion::journal::JournalState;
+    use crate::transaccion::journal::v2::JournalV2;
+    use crate::transaccion::replay::semantica_archivada::{POLICY_ID_V1, VERSION_MOTOR_V1};
     use crate::transaccion::snapshot::TipoEntradaSnapshot;
     use universo_core::{Atomo, Delta};
 
@@ -234,6 +238,15 @@ mod tests {
     const AUX_DOC: &[u8] = b"captured auxiliary bytes";
 
     fn contexto(invariantes: &[u8], delta: Delta) -> ContextoAdmision {
+        contexto_con_tags(invariantes, delta, MOTOR, POLICY)
+    }
+
+    fn contexto_con_tags(
+        invariantes: &[u8],
+        delta: Delta,
+        motor: &str,
+        policy: &str,
+    ) -> ContextoAdmision {
         let entradas = vec![
             EntradaSnapshot::directorio("knowledge"),
             EntradaSnapshot::directorio("knowledge/empty"),
@@ -246,7 +259,7 @@ mod tests {
         let configuracion =
             ConfigRawCapturada::nueva(MANIFIESTO.as_bytes(), invariantes, None, None).unwrap();
         let snapshot =
-            materializar_snapshot_desde_entradas(entradas, configuracion, MOTOR, POLICY).unwrap();
+            materializar_snapshot_desde_entradas(entradas, configuracion, motor, policy).unwrap();
         ContextoAdmision::capturar(&snapshot, &delta).unwrap()
     }
 
@@ -288,7 +301,8 @@ mod tests {
     }
 
     fn inventario_esperado(contexto: &ContextoAdmision) -> Vec<EntradaSnapshot> {
-        let reproducida = reproponer(contexto, MOTOR, POLICY).unwrap();
+        let reproducida =
+            reproponer(contexto, contexto.version_motor(), contexto.policy_id()).unwrap();
         let ResultadoPropuesta::Admitida(candidato) = &reproducida.resultado else {
             panic!("la propuesta fixture debe ser admitida");
         };
@@ -401,5 +415,143 @@ mod tests {
         let error = calcular_new_esperado(&contexto, &journal, MOTOR, POLICY).unwrap_err();
 
         assert_eq!(error.codigo(), "new_proposal_not_admitted");
+    }
+
+    fn journal_v2(contexto: &ContextoAdmision, digest_new: RawTreeDigest) -> JournalV2 {
+        let digest_old = calcular_digest_raw_tree(&contexto.entradas_base()).unwrap();
+        JournalV2::new(
+            "0123456789abcdef0123456789abcdef",
+            identidad(1),
+            ArtifactFingerprint::new(identidad(2), digest_old),
+            ArtifactFingerprint::new(identidad(3), digest_new),
+        )
+        .unwrap()
+    }
+
+    fn assert_inventario_equivalente(izquierdo: &[EntradaSnapshot], derecho: &[EntradaSnapshot]) {
+        assert_eq!(izquierdo.len(), derecho.len());
+        for (izquierda, derecha) in izquierdo.iter().zip(derecho) {
+            assert!(izquierda.ruta() == derecha.ruta());
+            assert!(izquierda.tipo() == derecha.tipo());
+            assert!(izquierda.bytes() == derecha.bytes());
+        }
+    }
+
+    #[test]
+    fn new_esperado_v2_conserva_journal_e_inventario_equivalente_a_v1() {
+        let contexto = contexto_con_tags(b"\n", delta_mover_leaf(), VERSION_MOTOR_V1, POLICY_ID_V1);
+        let inventario = inventario_esperado(&contexto);
+        let digest = calcular_digest_raw_tree(&inventario).unwrap();
+        let journal_v1 = journal(&contexto, digest.clone());
+        let journal_v2 = journal_v2(&contexto, digest);
+
+        let v1 =
+            calcular_new_esperado(&contexto, &journal_v1, VERSION_MOTOR_V1, POLICY_ID_V1).unwrap();
+        let v2 = calcular_new_esperado_v2(&contexto, &journal_v2).unwrap();
+
+        assert!(v2.journal() == &journal_v2);
+        assert_eq!(v2.journal().kind(), journal_v2.kind());
+        assert_eq!(v2.journal().state(), journal_v2.state());
+        assert!(v2.digest() == v1.digest());
+        assert_inventario_equivalente(v2.entradas(), v1.entradas());
+        assert_eq!(format!("{v2:?}"), "NewEsperadoV2 { .. }");
+    }
+
+    #[test]
+    fn new_esperado_v2_conserva_los_cuatro_estados_sin_mutarlos() {
+        let contexto = contexto_con_tags(b"\n", delta_mover_leaf(), VERSION_MOTOR_V1, POLICY_ID_V1);
+        let digest = calcular_digest_raw_tree(&inventario_esperado(&contexto)).unwrap();
+        let preparado = journal_v2(&contexto, digest);
+        let mut journals = vec![preparado.clone()];
+        let mut siguiente = preparado;
+        for estado in [
+            JournalState::BackupReady,
+            JournalState::Installed,
+            JournalState::Committed,
+        ] {
+            siguiente.advance(estado).unwrap();
+            journals.push(siguiente.clone());
+        }
+
+        for esperado in journals {
+            let observacion = calcular_new_esperado_v2(&contexto, &esperado).unwrap();
+            assert!(observacion.journal() == &esperado);
+            assert_eq!(observacion.journal().state(), esperado.state());
+        }
+    }
+
+    #[test]
+    fn new_esperado_v2_rechaza_motor_o_policy_no_soportados() {
+        for (motor, policy) in [
+            ("future-engine/1", POLICY_ID_V1),
+            (VERSION_MOTOR_V1, "future-policy/1"),
+        ] {
+            let contexto = contexto_con_tags(b"\n", delta_mover_leaf(), motor, policy);
+            let digest = calcular_digest_raw_tree(&contexto.entradas_base()).unwrap();
+            let journal = journal_v2(&contexto, digest);
+
+            let error = calcular_new_esperado_v2(&contexto, &journal).unwrap_err();
+
+            assert_eq!(error.codigo(), "replay_engine_policy_mismatch");
+        }
+    }
+
+    #[test]
+    fn new_esperado_v2_compara_old_antes_de_una_propuesta_rechazada() {
+        let contexto = contexto_con_tags(
+            b"(not (Type @knowledge/index a))",
+            Delta::nuevo([], []).unwrap(),
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        );
+        let entradas_sin_auxiliar = contexto
+            .entradas_base()
+            .into_iter()
+            .filter(|entrada| entrada.ruta() != "knowledge/note.txt")
+            .collect::<Vec<_>>();
+        let old_incompleto = calcular_digest_raw_tree(&entradas_sin_auxiliar).unwrap();
+        let new = calcular_digest_raw_tree(&contexto.entradas_base()).unwrap();
+        let journal = JournalV2::new(
+            "0123456789abcdef0123456789abcdef",
+            identidad(1),
+            ArtifactFingerprint::new(identidad(2), old_incompleto),
+            ArtifactFingerprint::new(identidad(3), new),
+        )
+        .unwrap();
+
+        let error = calcular_new_esperado_v2(&contexto, &journal).unwrap_err();
+
+        assert_eq!(error, ErrorNewEsperadoV2::HuellaOldNoCoincide);
+    }
+
+    #[test]
+    fn new_esperado_v2_rechaza_propuesta_y_new_distinto() {
+        let contexto_rechazado = contexto_con_tags(
+            b"(not (Type @knowledge/index a))",
+            Delta::nuevo([], []).unwrap(),
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        );
+        let base = calcular_digest_raw_tree(&contexto_rechazado.entradas_base()).unwrap();
+        let journal_rechazado = journal_v2(&contexto_rechazado, base);
+        let error = calcular_new_esperado_v2(&contexto_rechazado, &journal_rechazado).unwrap_err();
+        assert_eq!(error.codigo(), "new_proposal_not_admitted");
+
+        let contexto_admitido = contexto_con_tags(
+            b"\n",
+            Delta::nuevo([], []).unwrap(),
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        );
+        let journal = journal_v2(
+            &contexto_admitido,
+            digest_con_aux_mutado(&contexto_admitido),
+        );
+        let error = calcular_new_esperado_v2(&contexto_admitido, &journal).unwrap_err();
+
+        assert_eq!(error, ErrorNewEsperadoV2::HuellaNewNoCoincide);
+        assert_eq!(error.to_string(), "new_expected_fingerprint_mismatch");
+        assert!(!format!("{error:?}").contains("knowledge"));
+        assert!(!format!("{error:?}").contains("0123456789abcdef"));
     }
 }
