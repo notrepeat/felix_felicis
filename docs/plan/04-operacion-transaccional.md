@@ -47,14 +47,13 @@ de apply o recovery.
 La estrategia paralela Journal v2 conserva v1. Sus vectores dorados v1, modelo,
 codec y selector canónico están en el árbol local; el Journal v2 tiene cuota
 propia de 1024 bytes y su encoder máximo midió 722 bytes en Windows y 665 en
-Linux. El CI exacto `ec973eeee769fce7fa56947f06d352ee00212d9c` (run
-`38993176466`) terminó SUCCESS: Windows `1140/0/9`, Linux `1159/0/9`, con 38
-suites Cargo y 7 pruebas Python por job. Cubre el lote publicado hasta RETIRE
-v2 D3B, pero precede a R0/R1/R2 y no acredita esos cortes. El envelope exterior
-`FELIX-ADMENV` v2 conserva el contexto interior
-`FELIX-ADMCTX` v1 y usa cuotas propias de 512 MiB; no implica una cota de RSS.
-Su selector limita con el máximo de cuotas antes de elegir una rama y no hace
-fallback.
+Linux. El CI `ec973` cubrió el lote publicado hasta RETIRE v2 D3B. El CI exacto
+posterior `27fc2ff` (run `38995183362`) terminó SUCCESS: Windows `1148/0/9`,
+Linux `1167/0/9`, con 38 suites Cargo y 7 pruebas Python por job; cubre R0–R2,
+pero precede a J0/J1 y no acredita el lector estricto nuevo. El envelope exterior
+`FELIX-ADMENV` v2 conserva el contexto interior `FELIX-ADMCTX` v1 y usa cuotas
+propias de 512 MiB; no implica una cota de RSS. Su selector limita con el máximo
+de cuotas antes de elegir una rama y no hace fallback.
 
 RETIRE v2 ya tiene un modelo/binding puro, encoder, preflight, decoder y
 selectores v1/v2 en desarrollo local. Estos componentes preservan JournalV2 y
@@ -75,11 +74,41 @@ tipado y conserva JournalV2. El filtro local
 `transaccion::admision::envelope::` pasó 56/0/0 en Windows y Linux, incluidas
 seis pruebas v2 observadas por nombre; formato, clippy, frontera y diff-check
 pasaron en ambos sistemas, los artefactos fueron frescos y cleanup Linux terminó
-en 0. No se ejecutó el filtro más amplio `transaccion::admision::`. El CI
-`ec973` cubre hasta D3B, no estos cortes posteriores. No hay reader file-bound
-de Journal v2 ni replay owner-bound v2, ni caller productivo de apply o recovery. La evidencia
+en 0. No se ejecutó el filtro más amplio `transaccion::admision::`. La evidencia
 por corte se detalla en [04-contexto-admision.md](04-contexto-admision.md#replay-tipado-de-journal-v2)
 y [04-contexto-admision.md](04-contexto-admision.md#estado-local-de-retire-v2).
+
+J0 (`6af0fb90`) calcula el cap común del selector desde los límites v1/v2; sus
+siete pruebas y controles locales pasaron en ambos sistemas. J1A (`ff1d08ca`)
+añade lectura tipada file-bound del Journal v1/v2 bajo lease estricto; retiene
+el `File` observado sin congelar bytes ni nombre. El filtro local pasó 73/0/0
+en Windows y 74/0/0 en Linux, con controles en 0.
+
+J1B añade el wrapper owner-bound que suelta el lease y revalida parent, scope
+y lock visible antes de entregar la observación. El fixture corregido siembra
+el canario antes de adquirir el guard y libera owner y guard antes de comprobar
+bytes. Sus gates locales cerraron Windows 178/0/0 y Linux 183/0/0; el primer
+intento sobre el fixture anterior dio 176/2 por OS error 33 al leer el lock
+durante setup, antes del rename. El commit 1d9d8a64623957cb1825bdf43f5c0b09bad90a07
+contiene 254 líneas de churn y no tiene CI propio. J1C1 cerró su filtro local
+con ocho pruebas del lector: Windows 75/0/0 y Linux 76/0/0; controles 0. El
+commit 1d80f37c563c1f3c7594e45012e83ea4d08e2b5a añade 113 líneas de churn.
+J1C2 (c706721b5cf7268ae24fda4922754adefae487e7) está integrado. Sus doce
+pruebas lectoras cerraron con Windows 79/0/0 y Linux 80/0/0; formato, clippy,
+frontera y diff semántico terminaron en 0. J1C3
+(`ccbed6c023e03abda0641319d246b46d0b08641c`, 116 líneas de churn) está
+integrado y cerró sus gates locales: el filtro lector pasó 82/0/0 en Windows,
+con 15 pruebas, y 84/0/0 en Linux, con 16. Cleanup Linux terminó en 0. Añade
+tres pruebas comunes y una Unix para schema desconocido, malformación v1 sin
+fallback, directorio en el nombre canónico y symlink; Windows no reclama
+cobertura de symlink. Las pruebas sintéticas no equivalen a una sustitución
+real del lock ni a una frontera general frente a escritores externos. J0/J1
+todavía no tienen CI remoto propio. El estado técnico y los límites de
+evidencia se detallan en
+[04-contexto-admision.md](04-contexto-admision.md#lector-versionado-del-journal-j0j1).
+
+No hay lector file-bound v2 para Context o Intent, preflight de familia
+persistida ni caller productivo de apply o recovery.
 Los journals v1 sin auxiliares conservan el recovery legacy. Journal v1 junto
 a un auxiliar nuevo es ambiguo por falta de kind; el futuro preflight/caller
 deberá rechazarlo antes del dispatcher o CAS, compuerta aún pendiente. Una terna

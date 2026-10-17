@@ -21,10 +21,11 @@ no son una cota de RSS.
 Las unidades A y B1–B4 cerraron sus gates locales en ambos sistemas. B4
 (`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`, sobre `733c8db`) pasó 53/0/0
 pruebas focales; formato, clippy, frontera y diff semántico terminaron en 0.
-El CI exacto `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`)
-terminó SUCCESS: Windows `1140/0/9`, Linux `1159/0/9`, 38 suites Cargo y 7
-pruebas Python por job. Cubre el lote publicado hasta RETIRE v2 D3B; es anterior
-a R0/R1/R2 y no acredita esos cortes.
+El CI `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`) cubrió
+el lote publicado hasta RETIRE v2 D3B. El CI exacto posterior `27fc2ff`
+(run `38995183362`) terminó SUCCESS: Windows `1148/0/9`, Linux `1167/0/9`,
+38 suites Cargo y 7 pruebas Python por job; cubre R0–R2. Ambos CI preceden a
+J0/J1 y no acreditan el lector estricto nuevo.
 C1/C2, D1/D2A y D2B corregido tienen gates locales cerrados; D3A
 (`b67714f2`) y D3B (`984ef824`) también. R0 (`655cc804`) extrae el cálculo raw
 compartido y R1 (`055da2b3`) conserva JournalV2 completo en la expectativa
@@ -34,8 +35,10 @@ estructural ADMENV v2 antes del cálculo tipado. El filtro local
 seis pruebas v2 observadas por nombre; formato, clippy, frontera y diff-check
 pasaron en ambos sistemas, los artefactos fueron frescos y cleanup Linux terminó
 en 0. No se ejecutó el filtro más amplio `transaccion::admision::`. Estos pasos
-operan sobre datos en memoria: no hay reader file-bound
-v2, replay owner-bound v2 ni caller productivo de apply o recovery.
+operan sobre datos en memoria: no implementan reader de Context o Intent v2,
+gate de familia persistida ni caller productivo de apply o recovery. J0/J1
+añaden por separado el selector y lector file-bound versionado del Journal; su
+estado se registra en «Lector versionado del Journal».
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -303,11 +306,12 @@ iniciar tests; esos errores se corrigieron y no se atribuyen conteos a ese
 intento. D3A (`b67714f2`) está integrado y cerró sus gates locales corregidos;
 D3B (`984ef824`) también cerró sus gates locales. No se decodifica JournalV2
 como v1. El replay R0/R1 y el binding estructural R2 se resumen en
-[Replay tipado de Journal v2](#replay-tipado-de-journal-v2). Aún no existe
-reader file-bound de Journal v2 ni replay owner-bound v2 para `&JournalV2`, ni caller
-productivo. El futuro consumidor debe conservar y verificar `kind`, sin
+[Replay tipado de Journal v2](#replay-tipado-de-journal-v2). J1A/J1B/J1C1/C2/C3 añaden
+lectura file-bound del Journal persistido v1/v2 bajo lease estricto y su
+postcheck owner-bound; no implementan replay owner-bound v2 para `&JournalV2` ni
+caller productivo. Un futuro consumidor deberá conservar y verificar `kind`, sin
 proyección a v1 ni booleano de caller, antes de un dispatcher. Ninguno de estos
-codecs demuestra recovery ni comportamiento sobre el filesystem.
+codecs demuestra recovery ni comportamiento del filesystem para Context o Intent.
 
 El selector es solo clasificación de datos. El Journal, su kind, el Context y
 los resultados de binding no conceden autoridad; no se activan apply ni recovery.
@@ -387,9 +391,10 @@ Windows y Linux; formato, clippy y frontera en 0; diff-check del selector
 rastreado en 0 y cleanup Linux en 0. El chequeo `--no-index` del archivo nuevo
 salió 1 por comparar contra vacío y no reportó whitespace; los artefactos fueron
 frescos. El CI `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`)
-cubre el lote publicado hasta D3B, pero precede a R0/R1/R2. No hay CI para esos
-cortes posteriores, ni reader file-bound v2 o caller de producción. Las
-primitivas de storage no son una decisión de recovery.
+cubre el lote publicado hasta D3B. El CI posterior `27fc2ff` (run
+`38995183362`) cubre R0/R1/R2, pero precede a J0/J1. Aún no hay CI remoto propio
+para el lector estricto J1 ni caller de producción. Las primitivas de storage
+no son una decisión de recovery.
 
 El encoder y decoder exteriores v1 son codecs puros, mantienen
 `felix-journal-v1` sin cambios y no abren rutas. El reader genérico exige EOF y
@@ -414,12 +419,14 @@ Sigue bloqueada la frontera real de mount, bind mount o FUSE para cleanup de
 `PartialOld`; no se cambia el contrato ni la capability del backup.
 
 `Committed` mantiene los requisitos de la tabla vigente. No se salta su
-validación por retirar un auxiliar futuro. Fase 04 y U7 continúan parciales;
+validación por retirar un auxiliar futuro. No hay reader file-bound v2 para
+Context o Intent, preflight de familia persistida ni caller productivo. Fase 04
+y U7 continúan parciales;
 el progreso global permanece en 4/9.
 
 ## Evidencia de verificación
 
-Los nueve CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los diez CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -434,11 +441,12 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `5a73329` | `38983901592` | `1083/0/9` | `1102/0/9` |
 | `e5bcf33` | `38988788938` | `1112/0/9` | `1131/0/9` |
 | `ec973ee` | `38993176466` | `1140/0/9` | `1159/0/9` |
+| `27fc2ff` | `38995183362` | `1148/0/9` | `1167/0/9` |
 
-El CI remoto completo más reciente registrado aquí es el run `38993176466` de
-`ec973eeee769fce7fa56947f06d352ee00212d9c`, con Windows `1140/0/9` y Linux
-`1159/0/9`; ambos jobs incluyeron 38 suites Cargo y 7 pruebas Python. Cubre el
-lote publicado hasta RETIRE v2 D3B, pero es anterior y no acredita R0/R1/R2.
+El CI remoto completo más reciente registrado aquí es el run `38995183362` de
+`27fc2ff`, con Windows `1148/0/9` y Linux `1167/0/9`; ambos jobs incluyeron 38
+suites Cargo y 7 pruebas Python. Cubre R0–R2 y sus ancestros, pero precede a J0
+y al lector J1.
 
 La prueba integrada de Unit6 (`5a270ca1686bb66169de6916b8a1d824da27ad09`, +86 líneas Rust) recorre con
 fixture sintética la cadena privada A → retiro Journal/B → retiro Context →
@@ -474,12 +482,13 @@ y artefactos frescos.
 | Unidad 1A, `3cb5a9f`; Unidad 1B, `eb9282d` | Gates locales aprobados en Windows y Linux según recibos; ambos commits incluidos en CI `5a73329`. |
 | Unidad 2, `ccb390a`, modelo y codec | Filtros v2 `12/0/0` en ambos sistemas; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff `0`; cleanup Linux `0`. Encoder máximo observado: 722 bytes Windows y 665 Linux, ambos bajo la cuota propia de 1024. |
 | Unidad 3, `e83fd1f695f5af20474c42f00fcc704029cdf44c`, selector puro | Selector `6/0/0` y Journal v2 `12/0/0` en Windows y Linux; compatibilidad v1 `10/0/0` Windows / `9/0/0` Linux. fmt, clippy, frontera y diff semántico `0` en ambos sistemas; cleanup Linux `0`. Solo clasifica datos v1/v2. |
+| J0, `6af0fb90b513f85e622662c47c39bfd3a05eaeb3` | Selector `7/0/0` en ambos sistemas y controles `0`; deriva la cuota común máxima desde los límites v1/v2, sin cambiar parseo ni semántica. CI remoto propio pendiente. |
 
 El CI `e5bcf331` cubre Journal v2 y sus ancestros, incluidas las unidades 0–3,
-y ADMENV2 A–B4. El CI posterior `ec973` cubre RETIRE v2 hasta D3B, pero precede
-a R0/R1/R2. El selector de Journal v2 solo clasifica datos; no activa recovery,
-caller ni I/O de filesystem. Los gates locales de Journal v2 y ADMENV2 A–B4
-cerraron.
+y ADMENV2 A–B4. El CI posterior `27fc2ff` cubre R0–R2, pero precede a J0/J1.
+El selector solo clasifica datos; no activa recovery ni un caller. J1A/J1B/J1C1/C2/C3 son
+una frontera distinta de lectura file-bound y no están cubiertos por esos CI.
+Los gates locales de Journal v2 y ADMENV2 A–B4 cerraron.
 
 ### Estado local del envelope ADMENV2
 
@@ -513,8 +522,8 @@ no validan un owner ni admiten un caller de recovery.
 | R2, `5477b103` | Binding ADMENV v2 antes del cálculo tipado; filtro `transaccion::admision::envelope::` 56/0/0 en Windows y Linux, con seis pruebas v2 observadas por nombre. | Gates locales cerrados; formato, clippy, frontera y diff-check `0`; artefactos frescos y cleanup Linux `0`. |
 
 El CI `ec973eeee769fce7fa56947f06d352ee00212d9c` (run `38993176466`) precede
-a R0/R1/R2: no acredita estos cortes. R2 aún no tiene CI propio. Sigue
-pendiente el reader file-bound v2 y el binding/replay owner-bound.
+a R0/R1/R2. El CI `27fc2ff` (run `38995183362`) cubre esos tres cortes, pero
+precede a J0/J1. Sigue pendiente el replay owner-bound v2 para `&JournalV2`.
 
 ### Estado local de RETIRE v2
 
@@ -1429,6 +1438,71 @@ A. El rollback del lote nuevo sigue las dependencias: retirar primero A,
 después U2 y por último U1; los constructores legacy y el recovery existente
 se conservan. El progreso global permanece en 4/9; fase 04 y U7 siguen
 parciales.
+
+### Lector versionado del Journal (J0/J1)
+
+J0 (`6af0fb90`) deriva la cuota común del selector como el máximo de los límites
+propios de Journal v1 y v2. Sus siete pruebas focales y controles locales
+pasaron en Windows y Linux; el CI `27fc2ff` precede a este commit.
+
+J1A (`ff1d08ca`) añade lectura tipada del Journal canónico mediante el lease
+estricto y el mismo parent retenido. Exige scope verificado, archivo regular y
+no-follow; mide metadata antes de reservar, vuelve a `seek(0)` sobre el mismo
+handle, limita la lectura con centinela, usa el selector existente y valida el
+parent del registro. Reabre el nombre visible y exige identidad y scope iguales
+antes de devolver la observación. `None` representa solo ausencia confirmada dos
+veces. El resultado conserva el `File`, su identidad y el Journal completo;
+mantener el handle abierto no congela sus bytes ni el nombre del namespace, y
+las comprobaciones no forman un snapshot frente a escritores externos. El filtro
+`journal_temporal` más los seis casos nuevos pasó 73/0/0 en Windows y 74/0/0
+en Linux; formato, clippy, frontera y diff terminaron en 0 en ambos sistemas.
+
+
+J1B añade el wrapper owner-bound: libera el lease, vuelve a validar parent,
+scope y lock visible, y solo entonces expone el resultado file-bound. Un fallo
+del postcheck descarta tanto Some como None. Sus cinco tests incluyen tres
+casos de filesystem real y dos inyecciones sintéticas que ejercitan la misma
+rama de descarte sin afirmar que se sustituyó el lock. Windows puede bloquear
+el rename del lock abierto, por lo que esos dos tests sintéticos no sustituyen
+la evidencia de una sustitución real. El primer gate local de Windows, sobre el
+fixture anterior, registró 176 pasadas y 2 fallidas: ambas fallaron en el setup
+al leer el lock abierto (OS error 33), antes del rename; no fue un fallo del
+postcheck productivo. El fixture corregido siembra el canario antes de adquirir
+el guard y libera owner y guard antes de comprobar los bytes. Los gates locales
+corregidos cerraron Windows 178/0/0 y Linux 183/0/0. El commit
+1d9d8a64623957cb1825bdf43f5c0b09bad90a07 contiene 254 líneas de churn; todavía
+no tiene CI propio.
+
+J1C1 (1d80f37c563c1f3c7594e45012e83ea4d08e2b5a, 113 líneas de churn) añade dos
+casos deterministas: un reemplazo del nombre con bytes iguales e identidad
+distinta se rechaza y conserva ambos objetos; el crecimiento tras metadata se
+detecta con el centinela TooLarge y conserva los bytes nuevos. El filtro dejó
+ocho pruebas del lector: Windows 75/0/0 y Linux 76/0/0, con controles locales
+en 0. Este resultado no demuestra una frontera general frente a escritores
+externos.
+
+J1C2 (`c706721b5cf7268ae24fda4922754adefae487e7`) amplía el probe de scope
+solo para tests y por llamada. Cuatro pruebas ejercitan mismatch y error
+inyectado en parent inicial, source inicial, sonda visible final y parent tras
+ausencia; verifican preservación de los archivos o de la ausencia. El lector
+suma doce funciones de test. Sus gates locales cerraron con Windows 79/0/0 y
+Linux 80/0/0; las doce pruebas lectoras y los controles de formato, clippy,
+frontera y diff semántico pasaron. J1C2 no modifica la entrada productiva ni
+omite la validación de scope existente.
+
+J1C3 (`ccbed6c023e03abda0641319d246b46d0b08641c`, 116 líneas de churn) cerró
+sus gates locales. El filtro lector pasó 82/0/0 en Windows, con 15 pruebas del
+lector, y 84/0/0 en Linux, con 16. Formato, clippy con `-D warnings`, frontera
+pública y diff semántico terminaron en 0; cleanup Linux también terminó en 0.
+Añade tres pruebas comunes y una Unix: schema desconocido, malformación v1 sin
+fallback, directorio en el nombre canónico y symlink. Windows no reclama
+cobertura de symlink. Las pruebas sintéticas no equivalen a una sustitución
+real del lock ni a una frontera general frente a escritores externos.
+
+Este lector cubre solo el Journal. No hay lectores file-bound v2 para Context o
+Intent, preflight de familia persistida ni caller de apply/recovery; los leases
+legacy y el formato persistido v1 permanecen intactos. El avance sigue en 4/9,
+con U7 y fase 04 parciales.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni
