@@ -4,6 +4,14 @@
 con codecs privados. El lifecycle documenta primitivas de lectura, publicación,
 verificación raw y retiro estricto; el flujo transaccional sigue incompleto.
 
+## Corte actual: guardia privada de auxiliares y coordinador legacy
+
+La guardia privada, integrada en `717492179325a3f97f0227d5600810ae643f6542`, exige la ausencia exacta de los cuatro nombres reservados de Context e Intent, canónicos y temporales; no deriva ni sondea `journal.tmp`. Sus filtros locales pasaron 3/0/0 en Windows y 4/0/0 en Linux.
+
+El coordinador privado de Journal presente (commit `81ff6d427095910862c5bbe01725d75df245e0e3`) recibió aprobación de gates y auditoría independiente: runtime Windows 5/0/0 (877 filtradas) y Linux 5/0/0 (901); rustfmt, clippy, boundary y diff aprobaron en ambos sistemas. El cleanup del runner Linux pasó y los procesos se verificaron quietos en ambos sistemas. Conserva la lectura estricta original y su `File`, admite solo J1 canónico, repite la guardia y termina con sonda de tipo, scope e identidad nativa más postcheck del owner incluso tras error; rechaza J2 y ausencia canónica. Aún no tiene caller productivo y la secuencia entrega datos, no un snapshot ni autoridad de acción.
+
+El CI de la base `863e6f6f5bd220c0e63e4d815d837701899c5731` (run `39017683749`) terminó SUCCESS: Windows `1229/0/9` y Linux `1249/0/9`. Cubre los bindings anteriores, pero precede y no cubre la guardia ni el coordinador. El progreso global sigue en 4/9; U7 y fase 04 permanecen parciales.
+
 La estrategia adoptada conserva Journal v1 y añade Journal v2 paralelo con
 `schema=felix-journal-v2`, kind cerrado `context_required` y cuota propia de
 1024 bytes. El modelo, codec estricto y selector de schema están en el árbol

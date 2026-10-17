@@ -12,6 +12,14 @@ bytes intactos.
 | Depende de | 03 |
 | Desbloquea | 05, 08 |
 
+### Corte actual: observación legacy
+
+La guardia privada de cuatro auxiliares Context/Intent quedó integrada en `717492179325a3f97f0227d5600810ae643f6542`; sus filtros locales pasaron 3/0/0 en Windows y 4/0/0 en Linux. `journal.tmp` queda fuera de la sonda.
+
+El coordinador privado de Journal presente (commit `81ff6d427095910862c5bbe01725d75df245e0e3`) pasó auditoría y todos sus gates: runtime Windows 5/0/0 (877 filtradas) y Linux 5/0/0 (901), más rustfmt, clippy, boundary y diff aprobados en ambos sistemas. El cleanup del runner Linux pasó y los procesos se verificaron quietos en ambos sistemas. Conserva la lectura estricta y su `File`, admite solo J1 canónico, repite la guardia y hace una sonda final de tipo, scope e identidad nativa con postcheck del owner incluso tras error. J2 y ausencia canónica se rechazan. Sigue sin caller productivo, snapshot ni autoridad de acción. La secuencia detallada está en [04-contexto-admision.md](04-contexto-admision.md#corte-actual-guardia-privada-de-auxiliares-y-coordinador-legacy).
+
+El CI run `39017683749` sobre `863e6f6f5bd220c0e63e4d815d837701899c5731` terminó SUCCESS (Windows `1229/0/9`, Linux `1249/0/9`), pero cubre los bindings previos y precede a la guardia y al coordinador. El progreso global permanece en 4/9; U7 y fase 04 siguen parciales.
+
 ## Objetivo
 
 Definir y entregar una transacción v1 que evalúe un delta contra un snapshot
