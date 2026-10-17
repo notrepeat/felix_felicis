@@ -6,9 +6,12 @@ use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
 
+use crate::transaccion::admision::envelope::selector::EnvelopeAdmisionVersionada;
+use crate::transaccion::admision::envelope::v2::ErrorEnvelopeContextoAdmisionV2;
 use crate::transaccion::admision::envelope::{
     EnvelopeContextoAdmision, codec::ErrorCodecEnvelopeAdmision,
 };
+use crate::transaccion::journal::v2::JournalV2;
 use crate::transaccion::lock::LockEscritura;
 
 use super::abrir::abrir_entrada_relativa;
@@ -107,6 +110,20 @@ pub(super) struct ObservacionContextoVersionada {
 impl fmt::Debug for ObservacionContextoVersionada {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ObservacionContextoVersionada { .. }")
+    }
+}
+
+impl ObservacionContextoVersionada {
+    /// Exige la variante V2 y su binding estructural; no presta el envelope.
+    pub(super) fn validar_binding_v2(
+        &self,
+        journal: &JournalV2,
+    ) -> Result<(), ErrorEnvelopeContextoAdmisionV2> {
+        let EnvelopeAdmisionVersionada::V2(envelope) = &self.envelope else {
+            return Err(ErrorEnvelopeContextoAdmisionV2::VinculoNoCoincide);
+        };
+
+        envelope.coincide_estructuralmente(journal)
     }
 }
 

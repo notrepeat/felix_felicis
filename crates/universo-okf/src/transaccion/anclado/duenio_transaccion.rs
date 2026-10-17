@@ -518,6 +518,8 @@ mod auxiliary_guard;
 #[allow(dead_code)]
 #[path = "duenio_transaccion/legacy_present_after_guard.rs"]
 mod legacy_present_after_guard;
+#[path = "duenio_transaccion/retained_v2_pair.rs"]
+mod retained_v2_pair;
 #[path = "duenio_transaccion/visible_identity_probe.rs"]
 mod visible_identity_probe;
 

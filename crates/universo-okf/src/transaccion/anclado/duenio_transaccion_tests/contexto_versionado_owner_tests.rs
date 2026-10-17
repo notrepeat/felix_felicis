@@ -1,4 +1,6 @@
 use super::*;
+#[path = "retained_v2_pair_tests.rs"]
+mod retained_v2_pair_tests;
 
 use crate::transaccion::admision::envelope::v2::EnvelopeContextoAdmisionV2;
 use crate::transaccion::admision::envelope::{self, EnvelopeContextoAdmision, codec as codec_v1};
