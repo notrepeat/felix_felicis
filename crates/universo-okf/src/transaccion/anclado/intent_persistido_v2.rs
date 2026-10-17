@@ -6,6 +6,8 @@ use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivo
 use crate::transaccion::journal::JournalState;
 use crate::transaccion::journal::v2::{JournalKind, JournalV2};
 
+mod binding;
+
 pub(super) const MAX_CONTEXT_ARTIFACT_V2_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Conserva el JournalV2 completo y las identidades como comparadores de datos.
