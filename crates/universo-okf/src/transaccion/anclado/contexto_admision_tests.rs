@@ -23,6 +23,8 @@ mod eliminar_contexto_resultados_tests;
 mod eliminar_contexto_tests;
 #[path = "contexto_admision_tests/lector_versionado_invalid_tests.rs"]
 mod lector_versionado_invalid_tests;
+#[path = "contexto_admision_tests/lector_versionado_lease_tests.rs"]
+mod lector_versionado_lease_tests;
 #[path = "contexto_admision_tests/lector_versionado_tests.rs"]
 mod lector_versionado_tests;
 

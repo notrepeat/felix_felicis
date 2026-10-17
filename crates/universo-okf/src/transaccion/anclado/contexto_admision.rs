@@ -220,6 +220,58 @@ impl ContextoAdmisionAnclado<'_> {
             .map_err(ErrorContextoAdmisionAnclado::Codec)
     }
 
+    /// Observa el frame exterior tipado o una ausencia confirmada por dos sondas.
+    /// El resultado conserva datos de la lectura, no autoridad ni postcheck owner.
+    pub(super) fn observar_versionado(
+        &self,
+    ) -> Result<Option<ObservacionContextoVersionada>, ErrorLecturaContextoVersionada> {
+        self.observar_versionado_con_hook_interno(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_versionado_con_hook<F>(
+        &self,
+        despues_de_primera_ausencia: F,
+    ) -> Result<Option<ObservacionContextoVersionada>, ErrorLecturaContextoVersionada>
+    where
+        F: FnOnce(),
+    {
+        self.observar_versionado_con_hook_interno(despues_de_primera_ausencia)
+    }
+
+    fn observar_versionado_con_hook_interno<F>(
+        &self,
+        despues_de_primera_ausencia: F,
+    ) -> Result<Option<ObservacionContextoVersionada>, ErrorLecturaContextoVersionada>
+    where
+        F: FnOnce(),
+    {
+        self.revalidar_parent_y_lock()
+            .map_err(ErrorLecturaContextoVersionada::Lease)?;
+        let apertura = self
+            .abrir_canonico()
+            .map_err(ErrorLecturaContextoVersionada::Lease)?;
+        let Some((archivo, _identidad_del_opener)) = apertura else {
+            despues_de_primera_ausencia();
+            self.revalidar_parent_y_lock()
+                .map_err(ErrorLecturaContextoVersionada::Lease)?;
+            return match self
+                .abrir_canonico()
+                .map_err(ErrorLecturaContextoVersionada::Lease)?
+            {
+                None => Ok(None),
+                Some((archivo, _identidad_del_opener)) => {
+                    drop(archivo);
+                    Err(ErrorLecturaContextoVersionada::Lease(
+                        ErrorContextoAdmisionAnclado::CanonicalUnverified,
+                    ))
+                }
+            };
+        };
+
+        lector_versionado::leer_archivo_versionado(self, archivo).map(Some)
+    }
+
     /// Reabre y contrasta el frame raw con evidencia medida antes.
     /// Revalida parent y lock antes y después; no decodifica ni concede cleanup.
     #[allow(dead_code)] // El consumidor futuro de Context aún no está integrado.
