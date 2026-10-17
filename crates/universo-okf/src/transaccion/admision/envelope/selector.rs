@@ -10,6 +10,7 @@ use super::v2::{
     EnvelopeContextoAdmisionV2, ErrorCodecEnvelopeContextoAdmisionV2,
     MAX_FRAME_BYTES as MAX_ADMENV_V2_FRAME_BYTES,
 };
+use crate::transaccion::journal::DirectoryIdentity;
 
 const MAGIC: &[u8; 12] = b"FELIX-ADMENV";
 const VERSION_BYTES: usize = 2;
@@ -25,10 +26,25 @@ const fn maximo_de_cuotas(cuota_v1: usize, cuota_v2: usize) -> usize {
     }
 }
 
+/// Devuelve la única cuota familiar para preflight del framing exterior.
+pub(crate) const fn cuota_maxima_frame_bytes() -> usize {
+    MAX_VERSIONED_FRAME_BYTES
+}
+
 /// Variante exterior seleccionada por magic y versión; no proyecta datos ni autoriza acciones.
 pub(crate) enum EnvelopeAdmisionVersionada {
     V1(EnvelopeContextoAdmision),
     V2(EnvelopeContextoAdmisionV2),
+}
+
+impl EnvelopeAdmisionVersionada {
+    /// Delega la comparación de datos al envelope retenido sin proyectar su variante.
+    pub(crate) fn coincide_parent(&self, parent: &DirectoryIdentity) -> bool {
+        match self {
+            Self::V1(envelope) => envelope.coincide_parent(parent),
+            Self::V2(envelope) => envelope.coincide_parent(parent),
+        }
+    }
 }
 
 impl fmt::Debug for EnvelopeAdmisionVersionada {
@@ -91,7 +107,7 @@ enum VersionEnvelope {
 pub(crate) fn decodificar(
     bytes: &[u8],
 ) -> Result<EnvelopeAdmisionVersionada, ErrorSelectorEnvelopeAdmision> {
-    decodificar_con_limite(bytes, MAX_VERSIONED_FRAME_BYTES)
+    decodificar_con_limite(bytes, cuota_maxima_frame_bytes())
 }
 
 fn decodificar_con_limite(
@@ -338,6 +354,39 @@ mod tests {
     fn cap_comun_usa_la_mayor_cuota_sin_atar_v1_a_v2() {
         assert_eq!(maximo_de_cuotas(8, 16), 16);
         assert_eq!(maximo_de_cuotas(16, 8), 16);
+        assert_eq!(maximo_de_cuotas(8, 8), 8);
+        assert_eq!(
+            cuota_maxima_frame_bytes(),
+            maximo_de_cuotas(MAX_ENVELOPE_FRAME_BYTES, MAX_ADMENV_V2_FRAME_BYTES)
+        );
+    }
+
+    #[test]
+    fn parent_binding_delega_en_ambas_variantes_y_v2_conserva_kind() {
+        let (wire_v1, _) = frame_v1();
+        let parent = fixtures::identidad(1);
+        let otro_parent = fixtures::identidad(9);
+        let v1 = decodificar(&wire_v1).unwrap();
+
+        assert!(v1.coincide_parent(&parent));
+        assert!(!v1.coincide_parent(&otro_parent));
+
+        let journal = journal_v2();
+        let frame_v2 = EnvelopeContextoAdmisionV2::ligar(fixtures::contexto(b"\n"), &journal)
+            .encode()
+            .unwrap();
+        let v2 = decodificar(&frame_v2).unwrap();
+
+        assert!(v2.coincide_parent(&parent));
+        assert!(!v2.coincide_parent(&otro_parent));
+        match v2 {
+            EnvelopeAdmisionVersionada::V2(envelope) => {
+                assert!(envelope.coincide_estructuralmente(&journal).is_ok());
+            }
+            EnvelopeAdmisionVersionada::V1(_) => {
+                panic!("el binding v2 debe conservar su variante y su kind cerrado");
+            }
+        }
     }
 
     #[test]

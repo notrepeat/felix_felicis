@@ -40,6 +40,11 @@ impl EnvelopeContextoAdmisionV2 {
         }
     }
 
+    /// Compara el padre persistido como dato y conserva el binding v2 completo.
+    pub(super) fn coincide_parent(&self, parent: &DirectoryIdentity) -> bool {
+        self.vinculo.parent == *parent
+    }
+
     /// Comprueba igualdad estructural de datos sin interpretar el estado como binding.
     pub(crate) fn coincide_estructuralmente(
         &self,

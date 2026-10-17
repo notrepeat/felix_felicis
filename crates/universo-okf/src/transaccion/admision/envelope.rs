@@ -38,6 +38,11 @@ impl EnvelopeContextoAdmision {
         }
     }
 
+    /// Compara el padre persistido como dato; no observa ni autoriza el filesystem.
+    pub(super) fn coincide_parent(&self, parent: &DirectoryIdentity) -> bool {
+        self.vinculo.parent == *parent
+    }
+
     /// Comprueba el vínculo completo y vuelve a calcular la expectativa raw.
     /// El resultado `NewEsperado` sigue siendo dato, no una capability.
     pub(crate) fn validar_replay(
