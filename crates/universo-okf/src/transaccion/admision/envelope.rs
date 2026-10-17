@@ -16,6 +16,7 @@ use super::ContextoAdmision;
 
 #[allow(dead_code)]
 pub(crate) mod codec;
+pub(crate) mod v2;
 
 /// Contexto raw asociado por consistencia a las identidades de un journal.
 ///
