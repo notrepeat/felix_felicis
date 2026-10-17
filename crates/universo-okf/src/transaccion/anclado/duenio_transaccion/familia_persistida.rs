@@ -3,6 +3,7 @@ use std::fmt;
 use crate::transaccion::admision::envelope::selector::EnvelopeAdmisionVersionada;
 use crate::transaccion::admision::envelope::v2::EnvelopeContextoAdmisionV2;
 use crate::transaccion::anclado::intent_persistido::IntentRetiroPersistidoVersionado;
+use crate::transaccion::anclado::intent_persistido_v2::IntentRetiroPersistidoV2;
 use crate::transaccion::journal::Journal;
 use crate::transaccion::journal::selector::JournalPersistido;
 use crate::transaccion::journal::v2::JournalV2;
@@ -14,6 +15,16 @@ pub(super) enum FaseFamiliaPersistida<'a> {
         journal: &'a JournalV2,
         contexto: &'a EnvelopeContextoAdmisionV2,
     },
+    RetiroA {
+        journal: &'a JournalV2,
+        contexto: &'a EnvelopeContextoAdmisionV2,
+        intent: &'a IntentRetiroPersistidoV2,
+    },
+    RetiroBDatosParaReplay {
+        contexto: &'a EnvelopeContextoAdmisionV2,
+        intent: &'a IntentRetiroPersistidoV2,
+    },
+    RetiroCIntentSinContexto(&'a IntentRetiroPersistidoV2),
     VacioObservado,
 }
 
@@ -22,6 +33,13 @@ impl fmt::Debug for FaseFamiliaPersistida<'_> {
         let fixed = match self {
             Self::LegadoV1(_) => "FaseFamiliaPersistida::LegadoV1([redacted])",
             Self::NormalV2 { .. } => "FaseFamiliaPersistida::NormalV2([redacted])",
+            Self::RetiroA { .. } => "FaseFamiliaPersistida::RetiroA([redacted])",
+            Self::RetiroBDatosParaReplay { .. } => {
+                "FaseFamiliaPersistida::RetiroBDatosParaReplay([redacted])"
+            }
+            Self::RetiroCIntentSinContexto(_) => {
+                "FaseFamiliaPersistida::RetiroCIntentSinContexto([redacted])"
+            }
             Self::VacioObservado => "FaseFamiliaPersistida::VacioObservado",
         };
         formatter.write_str(fixed)
@@ -68,6 +86,32 @@ pub(super) fn clasificar<'a>(
         ) => {
             exigir_binding(contexto, journal)?;
             Ok(FaseFamiliaPersistida::NormalV2 { journal, contexto })
+        }
+        (
+            Some(JournalPersistido::V2(journal)),
+            Some(EnvelopeAdmisionVersionada::V2(contexto)),
+            Some(IntentRetiroPersistidoVersionado::V2(intent)),
+        ) => {
+            exigir_binding(contexto, journal)?;
+            if journal != intent.journal() {
+                return Err(ErrorFamiliaPersistida);
+            }
+            Ok(FaseFamiliaPersistida::RetiroA {
+                journal,
+                contexto,
+                intent,
+            })
+        }
+        (
+            None,
+            Some(EnvelopeAdmisionVersionada::V2(contexto)),
+            Some(IntentRetiroPersistidoVersionado::V2(intent)),
+        ) => {
+            exigir_binding(contexto, intent.journal())?;
+            Ok(FaseFamiliaPersistida::RetiroBDatosParaReplay { contexto, intent })
+        }
+        (None, None, Some(IntentRetiroPersistidoVersionado::V2(intent))) => {
+            Ok(FaseFamiliaPersistida::RetiroCIntentSinContexto(intent))
         }
         _ => Err(ErrorFamiliaPersistida),
     }
@@ -233,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn tabla_completa_acepta_solo_vacio_legado_y_familia_normal_v2() {
+    fn tabla_completa_de_presencia_y_versiones_acepta_seis_familias() {
         let journal_1 = JournalPersistido::V1(journal_v1_committed());
         let journal_2 = JournalPersistido::V2(journal_v2_committed(TRANSACTION_ID, 71));
         let envelope_1 = envelope_v1(match &journal_1 {
@@ -261,7 +305,7 @@ mod tests {
                 for (intent_index, intent) in intents.into_iter().enumerate() {
                     let accepted = matches!(
                         (journal_index, envelope_index, intent_index),
-                        (0, 0, 0) | (1, 0, 0) | (2, 2, 0)
+                        (0, 0, 0) | (1, 0, 0) | (2, 2, 0) | (2, 2, 2) | (0, 2, 2) | (0, 0, 2)
                     );
                     let result = clasificar(journal, envelope, intent);
                     assert_eq!(result.is_ok(), accepted);
@@ -283,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_v2_exige_binding_sin_tratar_estado_como_binding() {
+    fn normal_v2_exige_binding_y_estado_no_es_binding() {
         let prepared = journal_v2(TRANSACTION_ID, 81);
         let persisted = JournalPersistido::V2(prepared.clone());
         let matching_envelope = envelope_v2(&prepared);
@@ -353,5 +397,56 @@ mod tests {
         assert_eq!(format!("{error:?}"), "ErrorFamiliaPersistida([redacted])");
         assert_eq!(error.to_string(), "persisted_family_incompatible");
         assert!(!format!("{error:?}").contains(TRANSACTION_ID));
+    }
+
+    #[test]
+    fn retiro_a_exige_journal_completo_incluido_estado() {
+        let committed = journal_v2_committed(TRANSACTION_ID, 91);
+        let persisted = JournalPersistido::V2(committed.clone());
+        let context = envelope_v2(&committed);
+        let matching_intent = intent_v2(committed.clone());
+        assert!(matches!(
+            clasificar(Some(&persisted), Some(&context), Some(&matching_intent)),
+            Ok(FaseFamiliaPersistida::RetiroA { .. })
+        ));
+
+        let prepared = journal_v2(TRANSACTION_ID, 91);
+        let prepared_persisted = JournalPersistido::V2(prepared.clone());
+        let prepared_context = envelope_v2(&prepared);
+        let error = clasificar(
+            Some(&prepared_persisted),
+            Some(&prepared_context),
+            Some(&matching_intent),
+        );
+        assert!(error.is_err());
+    }
+
+    #[test]
+    fn retiro_b_acepta_context_prepared_y_intent_committed_con_binding() {
+        let prepared = journal_v2(TRANSACTION_ID, 101);
+        let context = envelope_v2(&prepared);
+        let committed = intent_v2(journal_v2_committed(TRANSACTION_ID, 101));
+        assert!(matches!(
+            clasificar(None, Some(&context), Some(&committed)),
+            Ok(FaseFamiliaPersistida::RetiroBDatosParaReplay { .. })
+        ));
+
+        let other_parent = intent_v2(journal_v2_committed(TRANSACTION_ID, 102));
+        assert_incompatible(None, Some(&context), Some(&other_parent));
+    }
+
+    #[test]
+    fn retiro_c_solo_informa_intent_y_debug_se_mantiene_redactado() {
+        let intent = intent_v2(journal_v2_committed(TRANSACTION_ID, 111));
+        let phase = clasificar(None, None, Some(&intent)).unwrap();
+        assert!(matches!(
+            phase,
+            FaseFamiliaPersistida::RetiroCIntentSinContexto(_)
+        ));
+        assert_eq!(
+            format!("{phase:?}"),
+            "FaseFamiliaPersistida::RetiroCIntentSinContexto([redacted])"
+        );
+        assert!(!format!("{phase:?}").contains(TRANSACTION_ID));
     }
 }
