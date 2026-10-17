@@ -47,15 +47,22 @@ de apply o recovery.
 La estrategia paralela Journal v2 conserva v1. Sus vectores dorados v1, modelo,
 codec y selector canónico están en el árbol local; el Journal v2 tiene cuota
 propia de 1024 bytes y su encoder máximo midió 722 bytes en Windows y 665 en
-Linux. Las unidades 1A, 1B y 2 cerraron gates locales. Unidad 3
-(`e83fd1f695f5af20474c42f00fcc704029cdf44c`, sobre `ccb390a4`) pasó selector
-6/0/0 y Journal v2 12/0/0 en ambos sistemas, y compatibilidad codec v1 10/0/0
-en Windows y 9/0/0 en Linux; formato, clippy, frontera y diff semántico
-terminaron en 0 en ambos sistemas, y cleanup Linux terminó en 0. El CI remoto
-citado en 04-contexto-admision es anterior y no cubre estas unidades locales.
-No hay ADMENV2/RETIRE2 ni lectores de envelope exterior v2, extensión tipada de
-replay/binding owner-bound v2 ni caller de apply o recovery. El avance global
-permanece en 4/9; U7 y fase 04 siguen parciales.
+Linux. Unidad 3 (`e83fd1f695f5af20474c42f00fcc704029cdf44c`, sobre `ccb390a4`)
+cerró selector 6/0/0 y Journal v2 12/0/0 en ambos sistemas, y compatibilidad
+codec v1 10/0/0 en Windows y 9/0/0 en Linux; formato, clippy, frontera y diff
+semántico terminaron en 0 en ambos sistemas, y cleanup Linux terminó en 0.
+El envelope exterior `FELIX-ADMENV` v2 también está implementado localmente:
+magic compartido, versión estricta 2, `JournalV2` `Prepared` con kind
+preservado y `FELIX-ADMCTX` v1 interior. Frame y contexto tienen cuotas propias
+de 512 MiB, sin promesa de límite de RSS; el selector aplica el máximo de cuotas
+antes de elegir una rama y no hace fallback. B4
+(`3020f6cf5b16ce5deb07786c901b76a2a17c4faa`, sobre `733c8db`) pasó 53/0/0
+pruebas en ambos sistemas; fmt, clippy, frontera y diff semántico terminaron en
+0. El CI remoto citado en 04-contexto-admision es anterior y no cubre A–B4. No
+hay `FELIX-RETIRE` v2,
+reader file-bound v2, extensión tipada de replay/binding owner-bound v2 ni
+caller de apply o recovery. El avance global permanece en 4/9; U7 y fase 04
+siguen parciales.
 
 Hay tres tests interproceso en cortes diferentes. `b990c72` termina con código
 86 en `RestoreOld`, después de restaurar y reobservar `Old` y antes de retirar
