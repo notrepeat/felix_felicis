@@ -37,10 +37,11 @@ estructural ADMENV v2 antes del cálculo tipado. El filtro local
 seis pruebas v2 observadas por nombre; formato, clippy, frontera y diff-check
 pasaron en ambos sistemas, los artefactos fueron frescos y cleanup Linux terminó
 en 0. No se ejecutó el filtro más amplio `transaccion::admision::`. Estos pasos
-operan sobre datos en memoria: no implementan reader de Intent v2, gate de
-familia persistida ni caller productivo de apply o recovery. J0/J1 añaden el
-lector file-bound versionado del Journal. El lector de Context se resume en
-«Lector versionado de Context».
+operan sobre datos en memoria y no activan un caller productivo de apply o
+recovery. J0/J1 añaden el lector file-bound versionado del Journal. El lector de
+Context se resume en «Lector versionado de Context». El lector versionado de
+Intent tiene cortes locales I1A, B1 y B2; estos no añaden gate de familia
+persistida ni caller productivo.
 
 También existen el writer privado del intent temporal y su verificador
 de solo archivo: este reabre el nombre exacto desde el parent retenido y contrasta
@@ -425,13 +426,15 @@ Sigue bloqueada la frontera real de mount, bind mount o FUSE para cleanup de
 validación por retirar un auxiliar futuro. El reader file-bound v2 de Context
 se resume en la sección Ctx1–Ctx4. Ctx4 cerró sus gates locales y quedó
 en el commit local `190d046` (312 líneas de churn).
-Aún no hay reader file-bound v2 de Intent, preflight de familia persistida ni
-caller productivo. Fase 04 y U7 continúan parciales; el progreso global
+I1A y B1 ya añaden el reader privado file-bound de Intent. B2 cerró gates
+locales en Windows y Linux y quedó en el commit `08ddb0b8`; el CI registrado de
+Context precede a estos cortes. No hay todavía preflight de familia persistida
+ni caller productivo. Fase 04 y U7 continúan parciales; el progreso global
 permanece en 4/9.
 
 ## Evidencia de verificación
 
-Los once CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
+Los doce CI publicados terminaron `SUCCESS` en Linux y Windows. Cada fila
 comparte 38 suites Cargo y 7 pruebas Python por sistema, con 0 fallidos y 9
 ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 
@@ -448,13 +451,14 @@ ignorados por sistema. Consulta cualquier ejecución con `gh run view <run-id>`.
 | `ec973ee` | `38993176466` | `1140/0/9` | `1159/0/9` |
 | `27fc2ff` | `38995183362` | `1148/0/9` | `1167/0/9` |
 | `cad51cc` | `38999370612` | `1169/0/9` | `1189/0/9` |
+| `6b26b9a` | `39004162338` | `1194/0/9` | `1214/0/9` |
 
-El CI remoto completo más reciente registrado aquí es el run `38999370612` de
-`cad51cc`, con Windows `1169/0/9` y Linux `1189/0/9`; ambos jobs incluyeron 38
-suites Cargo y 7 pruebas Python. Al preparar este lote, es el CI de referencia
-registrado en la tabla y precede a Ctx1–Ctx4. Sus gates locales se documentan
-por separado; Ctx4 cerró gates locales y quedó en el commit local
-`190d046` (312 líneas de churn).
+El CI `39004162338` corresponde al lote publicado
+`6b26b9a8620f9aceb183b5d32e853a52944931ac`: Windows `1194/0/9` y Linux
+`1214/0/9`; ambos jobs incluyeron 38 suites Cargo, 7 pruebas Python, demos y
+controles verdes. Es la evidencia remota del lote Context; precede a I1A, B1 y
+B2. Sus gates locales se documentan por separado. Ctx4 cerró gates locales y
+quedó en el commit local `190d046` (312 líneas de churn).
 
 La prueba integrada de Unit6 (`5a270ca1686bb66169de6916b8a1d824da27ad09`, +86 líneas Rust) recorre con
 fixture sintética la cadena privada A → retiro Journal/B → retiro Context →
@@ -493,9 +497,9 @@ y artefactos frescos.
 | J0, `6af0fb90b513f85e622662c47c39bfd3a05eaeb3` | Selector `7/0/0` en ambos sistemas y controles `0`; deriva la cuota común máxima desde los límites v1/v2, sin cambiar parseo ni semántica. Cubierto por CI `cad51cc`. |
 
 El CI `e5bcf331` cubre Journal v2 y sus ancestros, incluidas las unidades 0–3,
-y ADMENV2 A–B4. El CI `cad51cc` cubre además J0/J1. Al preparar este lote,
-`cad51cc` es la referencia registrada y precede a Ctx1–Ctx4. El selector solo
-clasifica datos; no activa recovery ni un caller.
+y ADMENV2 A–B4. El CI `cad51cc` cubre además J0/J1, aunque precede a Ctx1–Ctx4.
+El CI posterior del lote Context está registrado arriba y precede a I1A/B1/B2.
+El selector solo clasifica datos; no activa recovery ni un caller.
 J1A/J1B/J1C1/C2/C3 son una frontera de lectura file-bound distinta, cubierta
 por `cad51cc`; las unidades Context posteriores tienen gates focales locales
 documentados abajo. Los gates locales de Journal v2 y ADMENV2 A–B4 cerraron.
@@ -1511,8 +1515,8 @@ cobertura de symlink. Las pruebas sintéticas no equivalen a una sustitución
 real del lock ni a una frontera general frente a escritores externos.
 
 Este apartado cubre solo el reader del Journal. El lector de Context y el estado
-de Intent se describen en la sección siguiente. No hay todavía reader file-bound
-v2 para Intent, preflight de familia persistida ni caller de apply/recovery.
+del reader de Intent se describen en las secciones siguientes. El preflight de
+familia persistida y el caller de apply/recovery siguen pendientes.
 
 ### Lector versionado de Context (Ctx1–Ctx4)
 
@@ -1547,13 +1551,46 @@ esos resultados. El commit local es `190d04628f69fd59c564af79eabf3e0142de322e` (
 | Ctx3B, `8bb5270` | `5/0/0` | `5/0/0` | Gates locales cerrados |
 | Ctx4, `190d046` | `7/0/0` | `7/0/0` | Gates locales cerrados; 312 líneas de churn |
 
-Los resultados de Ctx1–Ctx4 son gates focales locales. El CI de referencia
-`cad51cc`, registrado al preparar este lote, cubre J0/J1 y precede a Ctx1–Ctx4.
-Ctx5 aún debe ampliar la
-matriz de errores de scope. El lector v1 de Context conserva sus rutas y
-semántica; no hay todavía reader de Intent v2, gate de familia persistida,
-replay owner-bound v2 ni caller productivo de apply o recovery. El progreso
-global permanece en 4/9, con U7 y fase 04 parciales.
+Los resultados de Ctx1–Ctx4 son gates focales locales. El lote Context
+publicado pasó el CI `39004162338`, registrado arriba; este CI precede a
+I1A/B1/B2.
+
+Ctx5 aún debe ampliar la matriz de errores de scope. El lector v1 de Context
+conserva sus rutas y semántica. I1A/B1/B2 no añaden el gate de familia
+persistida, replay owner-bound v2 ni caller productivo de apply o recovery. El
+progreso global permanece en 4/9, con U7 y fase 04 parciales.
+
+### Lector versionado de Intent (I1A/B1/B2)
+
+I1A (`68d55bf56ec563e2133778751bfc7ff13ed83b94`) añade un recolector privado
+para un `File` ya abierto. Valida metadata, tipo regular, scope e identidad del
+mismo handle, vuelve a `seek(0)` y reúne bytes acotados con centinela, reserva
+fallible. Sus seis pruebas y controles locales cerraron en Windows y
+Linux. B1 (`a391741405212e5f4322951581242bcb701d954d`) aplica el selector
+estricto v1/v2 y la cuota familiar derivada, y devuelve un candidato de datos
+versionados sin vínculo. Conserva solo el `File` y el enum versionado en campos
+privados, sin `Clone` ni getter del archivo. El filtro acumulado pasó `9/0/0`
+(tres casos añadidos sobre I1A) y sus controles locales cerraron en ambos
+sistemas. El frame válido de longitud exacta se acepta y el lector limita la
+cuota solicitada a la cuota familiar.
+
+B2 añade al candidato la identidad nativa y el scope capturados por I1A y
+compara, en ambas variantes, ese ID con el DTO persistido, el scope del archivo
+con el persistido y el parent del Journal. La conversión va de identidad
+nativa a DTO; no reconstruye identidad nativa desde bytes. El resultado sigue
+siendo dato privado, no una prueba de owner,
+autorización o snapshot. El filtro acumulado pasó `12/0/0` (tres casos añadidos
+sobre B1), con doce funciones nuevas de prueba en el lector en total. Formato,
+clippy, frontera y diff terminaron en `0` en ambos sistemas; los artefactos
+fueron frescos y cleanup Linux se reportó `PASS`. El commit local es
+`08ddb0b8d671b9a6d468ddc94bd756b0750c3b1c` (286 líneas de churn); el recibo
+postcommit es `3AF525CCA621DBB401BC436ADF5902BB4C361C7EC517FEEADB5E25EC1E2CB6CE`.
+El CI `39004162338` precede a I1A/B1/B2. I2 (apertura canónica, validación de
+temporales antes y después de leer y postcheck owner-bound que domina un
+resultado presente o error) e I3 (doble comprobación de ausencia, validación de
+temporales entre sondas y en el postcheck final, que domina también `None`), el
+gate de familia por fases y cualquier caller de recovery/apply siguen
+pendientes.
 
 Los registros siguientes son históricos de rondas anteriores. Se conservan
 sin borrar sus resultados; sus conteos no reemplazan la verificación actual ni

@@ -116,11 +116,29 @@ El lector file-bound v2 de Context ya existe localmente bajo lease estricto;
 Ctx1–Ctx4 cerraron gates focales locales. Ctx4 pasó `7/0/0` en Windows y Linux,
 con formato, clippy, frontera y diff en `0`, artefactos frescos y cleanup Linux
 en `0`; el commit local es
-`190d04628f69fd59c564af79eabf3e0142de322e` (312 líneas de churn). Al preparar
-este lote, el CI de referencia `cad51cc` precede a Ctx1–Ctx4. El detalle está en
+`190d04628f69fd59c564af79eabf3e0142de322e` (312 líneas de churn). El lote
+Context publicado `6b26b9a8620f9aceb183b5d32e853a52944931ac` pasó el CI
+`39004162338`: Windows `1194/0/9`, Linux `1214/0/9`, 38 suites Cargo y 7
+pruebas Python por job, además de demos y controles verdes. Ese CI precede a
+I1A/B1/B2. El detalle está en
 [04-contexto-admision.md](04-contexto-admision.md#lector-versionado-de-context-ctx1ctx4).
-Aún no hay reader file-bound v2 de Intent, preflight de familia persistida,
-replay owner-bound v2 ni caller productivo de apply o recovery.
+
+El lector file-bound v1/v2 de Intent se implementa en cortes privados I1A/B1/B2.
+I1A y B1 cerraron sus gates locales; B2 está en el árbol activo y cerró gates
+locales con `12/0/0` en ambos sistemas. Formato, clippy, frontera y diff
+terminaron en `0` en Windows y Linux; los artefactos fueron frescos y cleanup
+Linux se reportó `PASS`. B2 quedó en el commit local
+`08ddb0b8d671b9a6d468ddc94bd756b0750c3b1c` (286 líneas de churn), con recibo
+postcommit `3AF525CCA621DBB401BC436ADF5902BB4C361C7EC517FEEADB5E25EC1E2CB6CE`.
+El CI registrado de Context precede a I1A/B1/B2. El detalle está en
+[04-contexto-admision.md](04-contexto-admision.md#lector-versionado-de-intent-i1ab1b2).
+I2 implementará apertura canónica, validación de temporales antes y después de
+leer y un postcheck owner-bound que prevalece sobre un resultado presente o
+error. I3 añadirá la doble comprobación de ausencia, validación de temporales
+entre sondas y en el postcheck final, que prevalece también sobre `None`. Ambos
+cortes, el preflight de familia, replay owner-bound v2 y caller productivo de
+apply o recovery siguen pendientes.
+
 Los journals v1 sin auxiliares conservan el recovery legacy. Journal v1 junto
 a un auxiliar nuevo es ambiguo por falta de kind; el futuro preflight/caller
 deberá rechazarlo antes del dispatcher o CAS, compuerta aún pendiente. Una terna
