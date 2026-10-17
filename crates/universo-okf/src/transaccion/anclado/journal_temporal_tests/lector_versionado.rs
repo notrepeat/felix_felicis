@@ -1,7 +1,10 @@
 use super::super::ErrorJournalAnclado;
-use super::super::versionado::{ErrorLecturaJournalVersionada, EtapaLecturaJournalVersionada};
+use super::super::versionado::{
+    ErrorLecturaJournalVersionada, EtapaLecturaJournalVersionada, EtapaProbeScopeJournalVersionada,
+};
 use super::{crear_root, fingerprint_prueba, identidad_distinta, journal_prueba, nombre_journal};
 use crate::transaccion::anclado::duenio_transaccion::DuenioTransaccionAnclado;
+use crate::transaccion::anclado::{ErrorDirectorioAnclado, ScopeFilesystem, scope_filesystem};
 use crate::transaccion::journal::selector::JournalPersistido;
 use crate::transaccion::journal::v2::JournalV2;
 use crate::transaccion::lock::LockEscritura;
@@ -236,4 +239,148 @@ fn crecimiento_despues_de_metadata_se_rechaza_por_centinela() {
     let mut esperado = bytes;
     esperado.push(0xff);
     assert_eq!(fs::read(canonical).unwrap(), esperado);
+}
+
+#[test]
+fn probe_parent_inicial_rechaza_mismatch_y_error_sin_cambiar_archivo() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let bytes = journal_prueba(lease.identidad_parent.journal_identity().unwrap())
+        .encode()
+        .unwrap();
+    let canonical = nombre_journal(&root);
+    fs::write(&canonical, &bytes).unwrap();
+
+    for devuelve_error in [false, true] {
+        let error = lease
+            .observar_versionado_con_scope_prueba(|etapa, handle| {
+                if etapa == EtapaProbeScopeJournalVersionada::ParentInicial {
+                    if devuelve_error {
+                        Err(ErrorDirectorioAnclado::Io)
+                    } else {
+                        Ok(ScopeFilesystem(scope_esperado.0 ^ 1))
+                    }
+                } else {
+                    scope_filesystem(handle)
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::ParentScopeUnverified)
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn probe_source_inicial_rechaza_mismatch_y_error_sin_cambiar_archivo() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let bytes = journal_prueba(lease.identidad_parent.journal_identity().unwrap())
+        .encode()
+        .unwrap();
+    let canonical = nombre_journal(&root);
+    fs::write(&canonical, &bytes).unwrap();
+
+    for devuelve_error in [false, true] {
+        let error = lease
+            .observar_versionado_con_scope_prueba(|etapa, handle| {
+                if etapa == EtapaProbeScopeJournalVersionada::SourceInicial {
+                    if devuelve_error {
+                        Err(ErrorDirectorioAnclado::Io)
+                    } else {
+                        Ok(ScopeFilesystem(scope_esperado.0 ^ 1))
+                    }
+                } else {
+                    scope_filesystem(handle)
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::SourceScopeUnverified)
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn probe_visible_final_rechaza_mismatch_y_error_sin_cambiar_archivo() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let bytes = journal_prueba(lease.identidad_parent.journal_identity().unwrap())
+        .encode()
+        .unwrap();
+    let canonical = nombre_journal(&root);
+    fs::write(&canonical, &bytes).unwrap();
+
+    for devuelve_error in [false, true] {
+        let error = lease
+            .observar_versionado_con_scope_prueba(|etapa, handle| {
+                if etapa == EtapaProbeScopeJournalVersionada::VisibleFinal {
+                    if devuelve_error {
+                        Err(ErrorDirectorioAnclado::Io)
+                    } else {
+                        Ok(ScopeFilesystem(scope_esperado.0 ^ 1))
+                    }
+                } else {
+                    scope_filesystem(handle)
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::SourceScopeUnverified)
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn probe_parent_tras_ausencia_rechaza_mismatch_y_error_sin_crear_archivo() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let scope_esperado = lease.scope_parent.unwrap();
+    let canonical = nombre_journal(&root);
+
+    for devuelve_error in [false, true] {
+        let error = lease
+            .observar_versionado_con_scope_prueba(|etapa, handle| {
+                if etapa == EtapaProbeScopeJournalVersionada::ParentDespuesDePrimeraAusencia {
+                    if devuelve_error {
+                        Err(ErrorDirectorioAnclado::Io)
+                    } else {
+                        Ok(ScopeFilesystem(scope_esperado.0 ^ 1))
+                    }
+                } else {
+                    scope_filesystem(handle)
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::ParentScopeUnverified)
+        );
+        assert!(!canonical.exists());
+    }
 }

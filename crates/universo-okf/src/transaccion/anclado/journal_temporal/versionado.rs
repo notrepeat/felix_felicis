@@ -11,8 +11,8 @@ use crate::transaccion::journal::selector::{
 
 use super::{
     ErrorDirectorioAnclado, ErrorJournalAnclado, IdentidadArchivoJournal, JournalTemporalAnclado,
-    TipoEntradaAnclada, abrir_entrada_relativa, identidad_archivo, mapear_error_directorio,
-    scope_filesystem, validar_archivo_regular,
+    ScopeFilesystem, TipoEntradaAnclada, abrir_entrada_relativa, identidad_archivo,
+    mapear_error_directorio, scope_filesystem, validar_archivo_regular,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -54,6 +54,14 @@ pub(in crate::transaccion::anclado) enum EtapaLecturaJournalVersionada {
     AntesDeSondaVisible,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::transaccion::anclado) enum EtapaProbeScopeJournalVersionada {
+    ParentInicial,
+    ParentDespuesDePrimeraAusencia,
+    SourceInicial,
+    VisibleFinal,
+}
+
 pub(in crate::transaccion::anclado) struct ObservacionJournalPersistido {
     journal: JournalPersistido,
     identidad: IdentidadArchivoJournal,
@@ -80,7 +88,7 @@ impl JournalTemporalAnclado<'_> {
     pub(in crate::transaccion::anclado) fn observar_versionado(
         &self,
     ) -> Result<Option<ObservacionJournalPersistido>, ErrorLecturaJournalVersionada> {
-        self.observar_versionado_con(|_| {})
+        self.observar_versionado_con(|_| {}, |_, handle| scope_filesystem(handle))
     }
 
     #[cfg(test)]
@@ -91,23 +99,47 @@ impl JournalTemporalAnclado<'_> {
     where
         F: FnMut(EtapaLecturaJournalVersionada),
     {
-        self.observar_versionado_con(despues_de_etapa)
+        self.observar_versionado_con(despues_de_etapa, |_, handle| scope_filesystem(handle))
     }
 
-    fn observar_versionado_con<F>(
+    #[cfg(test)]
+    pub(in crate::transaccion::anclado) fn observar_versionado_con_scope_prueba<F>(
+        &self,
+        scope_probe: F,
+    ) -> Result<Option<ObservacionJournalPersistido>, ErrorLecturaJournalVersionada>
+    where
+        F: FnMut(
+            EtapaProbeScopeJournalVersionada,
+            &File,
+        ) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        self.observar_versionado_con(|_| {}, scope_probe)
+    }
+
+    fn observar_versionado_con<F, P>(
         &self,
         mut despues_de_etapa: F,
+        mut scope_probe: P,
     ) -> Result<Option<ObservacionJournalPersistido>, ErrorLecturaJournalVersionada>
     where
         F: FnMut(EtapaLecturaJournalVersionada),
+        P: FnMut(
+            EtapaProbeScopeJournalVersionada,
+            &File,
+        ) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
     {
         if self.scope_parent.is_none() {
             return Err(ErrorLecturaJournalVersionada::Lease(
                 ErrorJournalAnclado::ParentScopeUnverified,
             ));
         }
-        self.validar_parent_con_scope(&mut scope_filesystem)
-            .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        {
+            let mut probe = |handle: &File| {
+                scope_probe(EtapaProbeScopeJournalVersionada::ParentInicial, handle)
+            };
+            self.validar_parent_con_scope(&mut probe)
+                .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        }
 
         let mut archivo = match abrir_entrada_relativa(
             &self.parent,
@@ -116,8 +148,16 @@ impl JournalTemporalAnclado<'_> {
         ) {
             Ok(archivo) => archivo,
             Err(ErrorDirectorioAnclado::EntradaAusente) => {
-                self.validar_parent_con_scope(&mut scope_filesystem)
-                    .map_err(ErrorLecturaJournalVersionada::Lease)?;
+                {
+                    let mut probe = |handle: &File| {
+                        scope_probe(
+                            EtapaProbeScopeJournalVersionada::ParentDespuesDePrimeraAusencia,
+                            handle,
+                        )
+                    };
+                    self.validar_parent_con_scope(&mut probe)
+                        .map_err(ErrorLecturaJournalVersionada::Lease)?;
+                }
                 despues_de_etapa(EtapaLecturaJournalVersionada::DespuesDePrimeraAusencia);
                 match abrir_entrada_relativa(
                     &self.parent,
@@ -146,8 +186,13 @@ impl JournalTemporalAnclado<'_> {
         };
 
         validar_archivo_regular(&archivo).map_err(ErrorLecturaJournalVersionada::Lease)?;
-        self.validar_scope_source_con(&archivo, &mut scope_filesystem)
-            .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        {
+            let mut probe = |handle: &File| {
+                scope_probe(EtapaProbeScopeJournalVersionada::SourceInicial, handle)
+            };
+            self.validar_scope_source_con(&archivo, &mut probe)
+                .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        }
         let identidad =
             identidad_archivo(&archivo).map_err(ErrorLecturaJournalVersionada::Lease)?;
 
@@ -211,8 +256,12 @@ impl JournalTemporalAnclado<'_> {
             otro => ErrorLecturaJournalVersionada::Lease(mapear_error_directorio(otro)),
         })?;
         validar_archivo_regular(&visible).map_err(ErrorLecturaJournalVersionada::Lease)?;
-        self.validar_scope_source_con(&visible, &mut scope_filesystem)
-            .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        {
+            let mut probe =
+                |handle: &File| scope_probe(EtapaProbeScopeJournalVersionada::VisibleFinal, handle);
+            self.validar_scope_source_con(&visible, &mut probe)
+                .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        }
         let identidad_visible =
             identidad_archivo(&visible).map_err(ErrorLecturaJournalVersionada::Lease)?;
         if identidad_visible != identidad {
