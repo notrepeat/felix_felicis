@@ -332,4 +332,7 @@ mod tests {
             assert!(!format!("{error:?}").contains(TRANSACTION_ID));
         }
     }
+
+    #[cfg(test)]
+    mod boundary_tests;
 }
