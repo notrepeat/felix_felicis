@@ -1,6 +1,6 @@
 //! Recolecta un frame RETIRE acotado desde el mismo handle ya abierto.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -198,6 +198,184 @@ pub(super) fn leer_intent_canonico_versionado(
     drop(probe);
 
     Ok(candidato)
+}
+
+/// Owner-bound data result; the retained file is private and is not a snapshot.
+pub(super) struct ObservacionIntentVersionada {
+    candidato: CandidatoIntentConVinculosCoincidentes,
+}
+
+impl fmt::Debug for ObservacionIntentVersionada {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionIntentVersionada { .. }")
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ErrorObservacionIntentVersionada {
+    OwnerUnverified,
+    CanonicalUnverified,
+    Candidate(ErrorIntentVersionadoVinculado),
+}
+
+impl ErrorObservacionIntentVersionada {
+    pub(super) const fn codigo(self) -> &'static str {
+        match self {
+            Self::OwnerUnverified => "retirement_intent_owner_unverified",
+            Self::CanonicalUnverified => "retirement_intent_canonical_unverified",
+            Self::Candidate(error) => error.codigo(),
+        }
+    }
+}
+
+impl fmt::Debug for ErrorObservacionIntentVersionada {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ErrorObservacionIntentVersionada")
+            .field(&self.codigo())
+            .finish()
+    }
+}
+
+impl fmt::Display for ErrorObservacionIntentVersionada {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorObservacionIntentVersionada {}
+
+struct NombresIntentVersionado {
+    canonico: OsString,
+    temporales: [OsString; 3],
+}
+
+impl NombresIntentVersionado {
+    fn desde_owner(
+        owner: &super::DuenioTransaccionAnclado<'_>,
+    ) -> Result<Self, ErrorObservacionIntentVersionada> {
+        let ubicacion = owner._lock.ubicacion();
+        let basename = ubicacion
+            .ruta()
+            .file_name()
+            .ok_or(ErrorObservacionIntentVersionada::OwnerUnverified)?;
+        let canonico = super::observar_siblings_nuevo_flujo::nombre_intent_retiro(basename)
+            .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
+        let intent_temporal =
+            crate::transaccion::anclado::contexto_admision::nombre_temporal_sibling(&canonico)
+                .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
+        let contexto = crate::transaccion::anclado::contexto_admision::nombre_canonico(basename)
+            .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
+        let contexto_temporal =
+            crate::transaccion::anclado::contexto_admision::nombre_temporal_sibling(&contexto)
+                .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
+        let journal_temporal = ubicacion.nombre_journal_temporal();
+
+        Ok(Self {
+            canonico,
+            temporales: [journal_temporal, contexto_temporal, intent_temporal],
+        })
+    }
+
+    fn temporales_os_str(&self) -> [&OsStr; 3] {
+        [
+            self.temporales[0].as_os_str(),
+            self.temporales[1].as_os_str(),
+            self.temporales[2].as_os_str(),
+        ]
+    }
+}
+
+impl super::DuenioTransaccionAnclado<'_> {
+    /// Reads a present Intent and always revalidates owner and reserved names.
+    pub(super) fn observar_intent_versionado(
+        &mut self,
+    ) -> Result<ObservacionIntentVersionada, ErrorObservacionIntentVersionada> {
+        self.observar_intent_versionado_con_hook(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_intent_versionado_con_hook_prueba<F>(
+        &mut self,
+        after_read: F,
+    ) -> Result<ObservacionIntentVersionada, ErrorObservacionIntentVersionada>
+    where
+        F: FnOnce(),
+    {
+        self.observar_intent_versionado_con_hook(after_read)
+    }
+
+    fn observar_intent_versionado_con_hook<F>(
+        &mut self,
+        after_read: F,
+    ) -> Result<ObservacionIntentVersionada, ErrorObservacionIntentVersionada>
+    where
+        F: FnOnce(),
+    {
+        let nombres = NombresIntentVersionado::desde_owner(self)?;
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
+        validar_temporales_intent(self, &parent, &nombres)?;
+
+        let lectura = self.leer_intent_versionado_presente(&parent, &nombres);
+        drop(parent);
+        after_read();
+
+        let postcheck = self.revalidar_owner_y_temporales();
+        finalizar_con_postcheck(lectura, postcheck)
+    }
+
+    fn leer_intent_versionado_presente(
+        &self,
+        parent: &File,
+        nombres: &NombresIntentVersionado,
+    ) -> Result<ObservacionIntentVersionada, ErrorObservacionIntentVersionada> {
+        let candidato = leer_intent_canonico_versionado(
+            parent,
+            &nombres.canonico,
+            self.scope_parent,
+            self.identidad_parent,
+        )
+        .map_err(mapear_error_canonico_intent)?;
+        Ok(ObservacionIntentVersionada { candidato })
+    }
+
+    fn revalidar_owner_y_temporales(&self) -> Result<(), ErrorObservacionIntentVersionada> {
+        let nombres = NombresIntentVersionado::desde_owner(self)?;
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)?;
+        let validacion = validar_temporales_intent(self, &parent, &nombres);
+        drop(parent);
+        validacion
+    }
+}
+
+fn validar_temporales_intent(
+    owner: &super::DuenioTransaccionAnclado<'_>,
+    parent: &File,
+    nombres: &NombresIntentVersionado,
+) -> Result<(), ErrorObservacionIntentVersionada> {
+    super::lector_intent_canonico::validar_temporales_ausentes(
+        parent,
+        owner.scope_parent,
+        nombres.temporales_os_str(),
+    )
+    .map_err(|_| ErrorObservacionIntentVersionada::OwnerUnverified)
+}
+
+fn mapear_error_canonico_intent(
+    error: ErrorIntentCanonicoVersionado,
+) -> ErrorObservacionIntentVersionada {
+    match error {
+        ErrorIntentCanonicoVersionado::CanonicalUnverified => {
+            ErrorObservacionIntentVersionada::CanonicalUnverified
+        }
+        ErrorIntentCanonicoVersionado::Candidate(error) => {
+            ErrorObservacionIntentVersionada::Candidate(error)
+        }
+    }
 }
 
 /// Decodes, then compares the captured native source and expected parent data.
@@ -438,4 +616,12 @@ fn leer_acotado<R: Read>(
         bytes.extend_from_slice(&fragmento[..leidos]);
     }
     Ok(bytes)
+}
+
+fn finalizar_con_postcheck<T, E>(
+    resultado: Result<T, E>,
+    postcheck: Result<(), E>,
+) -> Result<T, E> {
+    postcheck?;
+    resultado
 }

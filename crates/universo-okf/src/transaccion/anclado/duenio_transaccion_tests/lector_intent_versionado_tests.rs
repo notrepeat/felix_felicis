@@ -17,11 +17,14 @@ use tempfile::{TempDir, tempdir};
 use super::{
     CandidatoIntentConVinculosCoincidentes, CandidatoIntentDecodificadoSinVinculo,
     ErrorCandidatoIntentSinVinculo, ErrorIntentCanonicoVersionado, ErrorIntentVersionadoVinculado,
-    ErrorLecturaFrameIntent, comparar_sonda_visible_intent, leer_acotado,
-    leer_candidato_intent_versionado, leer_candidato_intent_versionado_con_cap_y_hook,
-    leer_frame_intent, leer_frame_intent_con_hook, leer_intent_canonico_versionado,
-    leer_intent_versionado_vinculado,
+    ErrorLecturaFrameIntent, ErrorObservacionIntentVersionada, NombresIntentVersionado,
+    comparar_sonda_visible_intent, leer_acotado, leer_candidato_intent_versionado,
+    leer_candidato_intent_versionado_con_cap_y_hook, leer_frame_intent, leer_frame_intent_con_hook,
+    leer_intent_canonico_versionado, leer_intent_versionado_vinculado,
 };
+
+#[path = "lector_intent_versionado_owner_tests.rs"]
+mod owner_tests;
 
 struct ArchivoFixture {
     _directorio: TempDir,
