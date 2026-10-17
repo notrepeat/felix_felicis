@@ -43,11 +43,14 @@ impl EnvelopeContextoAdmisionV2 {
     }
 }
 
-/// Error fijo y redactado del encoder exterior ADMENV v2.
+/// Error fijo y redactado del codec exterior ADMENV v2.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorCodecEnvelopeContextoAdmisionV2 {
+    FramingInvalid,
+    VersionUnsupported,
     JournalInvalid,
     ContextInvalid,
+    ContextExceedsLimit,
     TotalExceedsLimit,
     LengthExceeded,
     ReservationFailed,
@@ -56,8 +59,11 @@ pub(crate) enum ErrorCodecEnvelopeContextoAdmisionV2 {
 impl ErrorCodecEnvelopeContextoAdmisionV2 {
     pub(crate) const fn code(self) -> &'static str {
         match self {
+            Self::FramingInvalid => "admission_envelope_v2_framing_invalid",
+            Self::VersionUnsupported => "admission_envelope_v2_version_unsupported",
             Self::JournalInvalid => "admission_envelope_v2_journal_invalid",
             Self::ContextInvalid => "admission_envelope_v2_context_invalid",
+            Self::ContextExceedsLimit => "admission_envelope_v2_context_exceeds_limit",
             Self::TotalExceedsLimit => "admission_envelope_v2_total_exceeds_limit",
             Self::LengthExceeded => "admission_envelope_v2_length_exceeded",
             Self::ReservationFailed => "admission_envelope_v2_reservation_failed",

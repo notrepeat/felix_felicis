@@ -1,4 +1,4 @@
-//! Encoder puro del frame exterior FELIX-ADMENV v2.
+//! Codec puro del frame exterior FELIX-ADMENV v2.
 
 use crate::transaccion::journal::v2::{JournalKind, JournalV2, MAX_JOURNAL_V2_BYTES};
 
@@ -12,6 +12,8 @@ const VERSION: u16 = 2;
 const HEADER_BYTES: usize = MAGIC.len() + 2 + 8;
 const JOURNAL_LENGTH_BYTES: usize = 4;
 const CONTEXT_LENGTH_BYTES: usize = 8;
+
+mod lectura;
 
 pub(super) const MAX_ADMENV_V2_BYTES: usize = 512 * 1024 * 1024;
 pub(super) const MAX_CONTEXT_ARTIFACT_V2_BYTES: usize = 512 * 1024 * 1024;
