@@ -846,3 +846,6 @@ mod context_journal_fixture_tests;
 
 #[path = "duenio_transaccion/context_journal_v2_observation.rs"]
 mod context_journal_v2_observation;
+
+#[path = "duenio_transaccion/context_journal_v2.rs"]
+mod context_journal_v2;
