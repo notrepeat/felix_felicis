@@ -7,62 +7,43 @@ permanece en 4/9. Este flujo aún no tiene caller productivo desde apply ni reco
 <a name="corte-actual-observacion-normal-versionada"></a>
 ## Corte actual: observación normal versionada
 
-El CI registrado para 923a6c02a90229c1b5842ad5a363bc5dbc1b77ca (run
-39089036068) terminó SUCCESS: Linux 1289/0/9 y Windows 1268/0/9. Cada sistema
-ejecutó 38 suites Cargo, 7 pruebas Python y 14 pasos; la demostración cubrió
-cuatro estados y 16 salidas. Este CI incluye B2b y B3, pero no los commits
-posteriores de comparación Root, observación RAW, clasificación, helper ni
-coordinador.
+El CI del coordinador en a089f69 (run 39097637362) terminó SUCCESS: Linux 1309/0/9 y
+Windows 1288/0/9. Cada sistema ejecutó 38 suites Cargo, siete pruebas Python
+y 14 pasos. Ese CI no cubre RA0, RA1 ni RA2.
 
-El commit 88475d9ff3d92fd589d741482248fae1050882f2 compara la huella completa
-del replay cerrado con una muestra raw de root bajo el mismo owner y perfil
-NormalV2. La relación contiene datos: Coincide, Diferente o Ausente. Sus gates
-focales pasaron 5/0/0 en Windows y Linux (913 y 937 pruebas filtradas). También
-pasaron formato, clippy, boundary y diff-check; paquete, artefactos nuevos,
-procesos y auditoría C0 quedaron limpios.
+| Corte | Commit | Cambio medido | Pruebas focales Windows / Linux |
+|---|---|---:|---|
+| RA0 — guard de slots de retiro | 140cebf | 75 líneas | 11/0/0; 14/0/0 |
+| RA1 — retención de retiro A | 7cbcc55 | 386 líneas | 28/0/0; 28/0/0 |
+| RA2 — identidades de retiro A | 8bf3051 | 296 líneas | 32/0/0; 32/0/0 |
 
-| Corte posterior | Cambio medido | Pruebas focales |
-|---|---:|---|
-| Observación RAW 8e3dbe6 | 399 líneas | Windows 15/0/0; Linux 16/0/0 |
-| Clasificación 5e888da | 183 líneas | Windows 18/0/0; Linux 19/0/0 |
-| Helper de fixtures 472547b55ef158c67bb5436374924530d6098533 | 260: 161 altas, 99 bajas | 5/0/0 en cada sistema |
+Los tres cortes pasaron sus gates focales con Rust 1.88 locked/offline y
+paquete limpio. También pasaron formato, clippy del workspace con todos los
+targets y -D warnings, frontera pública y diff-check; las revisiones
+confirmaron artefactos frescos y limpieza al finalizar.
 
-La revisión independiente de estos cortes confirmó formato, clippy, frontera y
-diff-check; también paquete limpio, artefactos desde cero, procesos en reposo y
-temporales limpios. En el corte Root, la auditoría independiente aprobó 79 entradas C0=0. El helper de fixtures pertenece a las pruebas. La sonda
-visible_identity_probe compara scope e identidad nativa desde el mismo handle y
-no expone File ni ruta.
+En RA1, el primer intento se detuvo al compilar con E0689, antes de ejecutar
+pruebas, por el tipo inferido del rango de siete casos. Se anotó el inicio
+como 0_usize..7, conservando los siete casos; el reintento pasó 28/0/0 en
+Windows y Linux.
 
-El coordinador de inventario y replay quedó en el commit
-cd4139f9042e767d627f20fae60d851a8c836db2 (327 líneas de cambio, dos archivos).
-Sus gates focales pasaron 6/0/0 en Windows (927 filtradas) y Linux (951).
-Formato y clippy del workspace, frontera, diff-check, cleanup, artefactos y
-auditoría independiente pasaron; la auditoría C0 quedó en cero y los procesos
-en reposo. La secuencia comprobada incluyó limpieza de paquete, recompilación y
-pruebas. No se afirma una comparación temporal exacta de artefactos.
+NormalV2 exige Journal y Context canónicos presentes, e Intent y los tres
+temporales ausentes; sus sondas finales comparan secuencialmente sólo las
+identidades de Journal y Context. Retiro A conserva los wrappers originales
+de Journal, Context e Intent. Su guard clasifica de forma pura las formas
+A/B/C; RA2 sondea secuencialmente las tres identidades finales y su postcheck
+exterior domina éxito y error.
 
-El observer RAW retiene JournalV2 completo y muestras de root, backup y stage.
-La clasificación fija root_new_validated=false. El replay es puro: la
-comparación con el replay y la clasificación usan la misma muestra raw de root.
-El coordinador deriva root_new_validated=true solo si esa muestra clasifica
-como New y la relación de huella completa es Coincide, para Prepared,
-BackupReady e Installed. La adaptación J1→J2 se limita a fixtures de prueba;
-producción no proyecta JournalV2 a Journal v1.
+El clasificador RAW fija root_new_validated=false. En Prepared, BackupReady e
+Installed, el coordinador usa la misma muestra raw de root para comparar la
+huella completa y clasificar; deriva root_new_validated=true internamente
+sólo cuando root es New y la huella Coincide. El caller no aporta ese boolean
+y no hay proyección productiva de JournalV2 a Journal v1.
 
-La observación NormalV2 es owner-bound: valida el owner fuera del cuerpo, exige
-Journal y Context canónicos presentes e Intent y los tres temporales ausentes,
-lee payloads con lectores estrictos y conserva los wrappers originales. Tras
-el guard final compara secuencialmente las identidades nativas de Journal y
-Context; cierra las sondas y hace un postcheck exterior que domina éxito y
-errores. NormalV2 conserva indirectamente los Files originales, sin exponer
-File, path, owner ni Arc. fase(&self) clasifica de forma pura con préstamos
-locales del Journal y del envelope originales; la fase prestada contiene datos,
-no autoridad.
-
-La secuencia es observacional, no un snapshot atómico ni garantía de
-estabilidad posterior. No cubre mounts generales, power-loss ni fsync completo,
-y no concede autoridad filesystem ni habilita un caller productivo de apply,
-recovery o cleanup.
+La secuencia sigue siendo observacional, no un snapshot atómico ni garantía
+de estabilidad posterior. No concede autoridad filesystem ni caller
+productivo de apply, recovery o cleanup. Journal v1 permanece intacto; U7 y
+la fase 04 siguen parciales y el progreso global permanece en 4/9.
 
 <a name="corte-actual-observacion-legacy-o-ausencia-estricta"></a>
 ### Corte actual: observación legacy o ausencia estricta
