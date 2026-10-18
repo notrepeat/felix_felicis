@@ -74,12 +74,52 @@ impl ObservacionSiblingsNuevoFlujo {
             Err(ErrorSlotsNormalV2)
         }
     }
+    /// Clasifica exclusivamente las tres formas de presencia Retiro v2.
+    ///
+    /// El resultado describe slots observados; no valida registros ni concede
+    /// replay, cleanup, fase persistida o autoridad.
+    pub(super) fn clasificar_forma_slots_retiro_v2(
+        &self,
+    ) -> Result<FormaObservadaSlotsRetiroV2, ErrorFormaObservadaSlotsRetiroV2> {
+        use PresenciaSiblingNuevoFlujo::{Ausente, Presente};
+
+        match (
+            self.journal,
+            self.journal_temporal,
+            self.contexto,
+            self.contexto_temporal,
+            self.intent_retiro,
+            self.intent_retiro_temporal,
+        ) {
+            (Presente, Ausente, Presente, Ausente, Presente, Ausente) => {
+                Ok(FormaObservadaSlotsRetiroV2::RetiroA)
+            }
+            (Ausente, Ausente, Presente, Ausente, Presente, Ausente) => {
+                Ok(FormaObservadaSlotsRetiroV2::RetiroB)
+            }
+            (Ausente, Ausente, Ausente, Ausente, Presente, Ausente) => {
+                Ok(FormaObservadaSlotsRetiroV2::RetiroC)
+            }
+            _ => Err(ErrorFormaObservadaSlotsRetiroV2),
+        }
+    }
 }
 
 /// Error constante cuando el reporte no tiene la forma Normal V2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ErrorSlotsNormalV2;
 
+/// Forma observada de los slots A/B/C; no es un estado de registros validado.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FormaObservadaSlotsRetiroV2 {
+    RetiroA,
+    RetiroB,
+    RetiroC,
+}
+
+/// Error fijo cuando seis slots no coinciden con una forma Retiro A/B/C.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ErrorFormaObservadaSlotsRetiroV2;
 impl DuenioTransaccionAnclado<'_> {
     /// Observa los seis nombres sibling internos desde el parent retenido.
     ///

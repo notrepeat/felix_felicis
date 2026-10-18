@@ -494,3 +494,38 @@ fn guard_normal_v2_acepta_solo_journal_y_contexto_presentes() {
         );
     }
 }
+
+#[test]
+fn clasificador_retire_v2_cubre_las_64_combinaciones_de_slots() {
+    use PresenciaSiblingNuevoFlujo::{Ausente, Presente};
+
+    let mut aceptadas = 0;
+    let mut rechazadas = 0;
+
+    for mascara in 0_u8..64 {
+        let slots = std::array::from_fn(|indice| {
+            if mascara & (1_u8 << indice) == 0 {
+                Ausente
+            } else {
+                Presente
+            }
+        });
+        let resultado = reporte_de_slots(slots).clasificar_forma_slots_retiro_v2();
+        let esperado = match mascara {
+            21 => Ok(FormaObservadaSlotsRetiroV2::RetiroA),
+            20 => Ok(FormaObservadaSlotsRetiroV2::RetiroB),
+            16 => Ok(FormaObservadaSlotsRetiroV2::RetiroC),
+            _ => Err(ErrorFormaObservadaSlotsRetiroV2),
+        };
+
+        assert_eq!(resultado, esperado, "máscara de slots {mascara}");
+        if resultado.is_ok() {
+            aceptadas += 1;
+        } else {
+            rechazadas += 1;
+        }
+    }
+
+    assert_eq!(aceptadas, 3);
+    assert_eq!(rechazadas, 61);
+}
