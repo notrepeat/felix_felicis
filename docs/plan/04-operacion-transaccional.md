@@ -14,47 +14,48 @@ bytes intactos.
 
 ### Corte actual: observación normal versionada
 
-El CI registrado para el commit
-e892fafe588456c886839f34b98f097343cd70c1 (run 39081820659) terminó SUCCESS:
-Windows 1262/0/9 y Linux 1283/0/9, con 38 suites Cargo y 7 pruebas Python
-por job. Incluye A1 96fe2a9, A2 26e67be, B1 abe8450 y B2a e892faf. Este run
-no cubre los gates focales posteriores de B2b ni B3.
+El CI registrado para 923a6c02a90229c1b5842ad5a363bc5dbc1b77ca (run
+39089036068) terminó SUCCESS: Linux 1289/0/9 y Windows 1268/0/9. Incluye B2b
+y B3; no cubre los commits posteriores ni sus gates focales.
 
-**Gates focales posteriores:**
+| Corte posterior | Cambio medido | Pruebas focales |
+|---|---:|---|
+| Root replay 88475d9 | 387 líneas | Windows 5/0/0; Linux 5/0/0 |
+| Observer RAW 8e3dbe6 | 399 líneas | Windows 15/0/0; Linux 16/0/0 |
+| Clasificación 5e888da | 183 líneas | Windows 18/0/0; Linux 19/0/0 |
+| Helper de fixtures 472547b55ef158c67bb5436374924530d6098533 | 260: 161 altas, 99 bajas | 5/0/0 por sistema |
+| Coordinador v2 | 327 líneas; dos archivos | Windows 6/0/0; Linux 6/0/0 |
 
-- B2b, commit 2d88e7db7307ccba50ca58c1109543a1d625154f (283 líneas): auditoría
-  independiente aprobada; 19/0/0 en Windows y Linux, con 892/916 filtradas.
+El coordinador es cd4139f9042e767d627f20fae60d851a8c836db2; el cambio mide
+327 líneas en dos archivos.
 
-- B3, commit `b8aed0503873a78e1283dca92e313ebd996b1101`, padre
-  `2d88e7db7307ccba50ca58c1109543a1d625154f`; tres rutas, 126/0.
-  La prueba raw pasó 21/0/0 en Windows (892 filtradas) y Linux (916);
-  formato, clippy, frontera y diff-check terminaron en 0 en ambos sistemas.
-  Cleanup pasó y seis comprobaciones de pgrep quedaron quietas. La auditoría
-  independiente aprobó 98 entradas de C0, fuentes y artefactos sin
-  discrepancias.
+Los cortes posteriores pasaron los gates focales indicados y formato, clippy,
+frontera y diff-check; la revisión independiente confirmó paquetes limpios,
+artefactos frescos, procesos en reposo y temporales limpios. En el coordinador,
+la secuencia registrada fue limpieza de paquete, recompilación y pruebas; no se
+afirma una comparación temporal exacta de artefactos. El CI de 923a no incluye
+ninguno de esos commits posteriores.
 
-El coordinador normal valida el owner antes de empezar y aplica el guard inicial
-de seis slots. Relee la pareja reteniendo los wrappers originales, repite el
-guard y luego compara secuencialmente las identidades nativas de Journal y
-Context contra esos originales. Cierra las sondas y ejecuta un postcheck
-exterior del owner que domina el éxito y cualquier error capturado. Los slots
-requieren Journal y Context canónicos presentes, e Intent canónico y los
-temporales de Journal, Context e Intent ausentes.
+El observer RAW conserva JournalV2 completo y observa root, backup y stage.
+El adaptador de clasificación fija root_new_validated=false. El replay cerrado
+es puro: la comparación con el replay y la clasificación usan la misma muestra
+raw de root. El coordinador combina esos datos y deriva root_new_validated=true
+solo si root es New y la huella completa coincide, en Prepared, BackupReady e
+Installed. La adaptación J1→J2 es exclusiva de fixtures; no hay proyección
+productiva de JournalV2 a Journal v1.
 
-La fachada NormalV2 es privada y conserva indirectamente los Files originales;
-no expone File, path, owner ni Arc. fase(&self) clasifica de forma pura con
-préstamos del Journal y del envelope versionado originales. La fase devuelta
-es data-only, queda ligada al préstamo y no otorga autoridad ni caller de
-apply, replay, recovery o cleanup.
+La observación normal conserva los Files originales, revalida el owner por
+fuera y exige los seis slots esperados antes y después de leer. Las sondas
+finales de Journal y Context comparan IDs nativos y son secuenciales; el
+postcheck exterior domina errores y éxito. La fase prestada clasifica datos,
+sin autoridad filesystem ni caller productivo de apply, recovery o cleanup.
+Estas lecturas no forman un snapshot atómico ni prometen estabilidad posterior,
+mounts generales, power-loss o fsync completo.
 
-Las sondas son secuenciales, no un snapshot atómico, y no garantizan estabilidad
-posterior. No se afirman mounts generales, power-loss ni fsync completo. U7 y
-la fase 04 siguen parciales, con progreso global 4/9.
-
-El contrato legacy acepta ausencia solo cuando falta el nombre canónico de
-Journal; no selecciona una “ausencia de J1”. journal.tmp queda fuera de ese
-corte y un Journal presente distinto de J1 se rechaza. El helper visible de
-identidad, aislado, no hace el postcheck del owner: lo aporta el coordinador.
+U7 y la fase 04 siguen parciales; el progreso global permanece en 4/9.
+El contrato legacy considera ausencia solo cuando falta el nombre canónico de
+Journal; journal.tmp queda fuera y un Journal presente distinto de J1 se
+rechaza. El helper visible de identidad no hace postcheck del owner por sí solo.
 
 Normal: [observación](04-contexto-admision.md#corte-actual-observacion-normal-versionada).
 Legacy: [detalle](04-contexto-admision.md#corte-actual-observacion-legacy-o-ausencia-estricta).
