@@ -181,6 +181,106 @@ fn canonic_v2_conflictivo_no_reemplaza_ni_limpia_el_temporal() {
 }
 
 #[test]
+fn guard_recibo_v2_exige_mismo_token_y_misma_identidad_aunque_bytes_coincidan() {
+    let temp = tempdir().unwrap();
+    let parent = temp.path().join("parent");
+    let (ubicacion, _) = ubicacion(&parent, true);
+    let (envelope, journal) = envelope_v2(parent_identity(&parent));
+    let esperado = envelope.encode().unwrap();
+    let canonico = contexto_path(&ubicacion);
+    let lock_path = ubicacion.lock().as_path().to_path_buf();
+    let lock_canary = b"preserve context receipt lock";
+    fs::write(&lock_path, lock_canary).unwrap();
+
+    let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner =
+        super::super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(&mut lock)
+            .unwrap();
+    let recibo = owner
+        .contexto_admision()
+        .unwrap()
+        .crear_temporal_v2(&envelope)
+        .unwrap()
+        .verificar()
+        .unwrap()
+        .publicar()
+        .unwrap();
+    let id_original = identidad_archivo(&File::open(&canonico).unwrap()).unwrap();
+
+    let observacion_original = {
+        let lease = owner.contexto_admision().unwrap();
+        let observacion = lease.observar_versionado().unwrap().unwrap();
+        assert_eq!(
+            recibo.validar_observacion_v2(&lease, &observacion, &journal),
+            Ok(())
+        );
+        let journal_ajeno = JournalV2::new(
+            "ffffffffffffffffffffffffffffffff",
+            journal.parent().clone(),
+            journal.old().clone(),
+            journal.new_fingerprint().clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            recibo.validar_observacion_v2(&lease, &observacion, &journal_ajeno),
+            Err(ErrorContextoAdmisionAnclado::CanonicalUnverified)
+        );
+        observacion
+    };
+    assert_eq!(observacion_original.evidencia_raw_retiro().0, id_original);
+
+    let original_guardado = parent.join("contexto-original-preservado");
+    fs::rename(&canonico, &original_guardado).unwrap();
+    fs::write(&canonico, &esperado).unwrap();
+    let id_reemplazo = identidad_archivo(&File::open(&canonico).unwrap()).unwrap();
+    assert_ne!(id_original, id_reemplazo);
+    assert_eq!(fs::read(&original_guardado).unwrap(), esperado);
+    assert_eq!(fs::read(&canonico).unwrap(), esperado);
+
+    {
+        let lease = owner.contexto_admision().unwrap();
+        let observacion = lease.observar_versionado().unwrap().unwrap();
+        assert_ne!(
+            observacion.evidencia_raw_retiro().0,
+            observacion_original.evidencia_raw_retiro().0
+        );
+        assert_eq!(
+            recibo.validar_observacion_v2(&lease, &observacion, &journal),
+            Err(ErrorContextoAdmisionAnclado::CanonicalUnverified)
+        );
+    }
+    drop(observacion_original);
+
+    drop(owner);
+    drop(lock);
+    assert_eq!(
+        fs::read(&lock_path).unwrap().as_slice(),
+        lock_canary.as_slice()
+    );
+
+    let mut lock_ajeno = LockEscritura::adquirir_en(&ubicacion).unwrap();
+    let mut owner_ajeno =
+        super::super::super::duenio_transaccion::DuenioTransaccionAnclado::desde_lock(
+            &mut lock_ajeno,
+        )
+        .unwrap();
+    {
+        let lease = owner_ajeno.contexto_admision().unwrap();
+        let observacion = lease.observar_versionado().unwrap().unwrap();
+        assert_eq!(
+            recibo.validar_observacion_v2(&lease, &observacion, &journal),
+            Err(ErrorContextoAdmisionAnclado::OwnerUnverified)
+        );
+    }
+    drop(owner_ajeno);
+    drop(lock_ajeno);
+    assert_eq!(
+        fs::read(&lock_path).unwrap().as_slice(),
+        lock_canary.as_slice()
+    );
+}
+
+#[test]
 fn temporal_v2_sustituido_por_bytes_iguales_y_otro_id_falla_verificacion() {
     let temp = tempdir().unwrap();
     let parent = temp.path().join("parent");

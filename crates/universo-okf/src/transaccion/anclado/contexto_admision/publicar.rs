@@ -25,6 +25,40 @@ impl fmt::Debug for ReciboContextoPublicado {
     }
 }
 
+impl ReciboContextoPublicado {
+    /// Contrasta los datos de una lectura V2 con este recibo bajo un lease real.
+    /// No vuelve a probar el basename después de esa observación.
+    pub(in crate::transaccion::anclado) fn validar_observacion_v2(
+        &self,
+        lease: &ContextoAdmisionAnclado<'_>,
+        observacion: &super::ObservacionContextoVersionada,
+        journal: &crate::transaccion::journal::v2::JournalV2,
+    ) -> Result<(), ErrorContextoAdmisionAnclado> {
+        if !Arc::ptr_eq(&self._autoridad, &lease._autoridad)
+            || self.identidad_parent != lease.identidad_parent
+            || self.scope_parent != lease.scope_parent
+        {
+            return Err(ErrorContextoAdmisionAnclado::OwnerUnverified);
+        }
+
+        lease.revalidar_parent_y_lock()?;
+        let (identidad, longitud, digest) = observacion.evidencia_raw_retiro();
+        let longitud_recibo = u64::try_from(self.datos.longitud)
+            .map_err(|_| ErrorContextoAdmisionAnclado::CanonicalUnverified)?;
+        if identidad != self.datos.identidad_archivo
+            || longitud != longitud_recibo
+            || digest != self.datos.digest
+            || super::validar_scope(&observacion.archivo_original, lease.scope_parent).is_err()
+        {
+            return Err(ErrorContextoAdmisionAnclado::CanonicalUnverified);
+        }
+        observacion
+            .validar_binding_v2(journal)
+            .map_err(|_| ErrorContextoAdmisionAnclado::CanonicalUnverified)?;
+        lease.revalidar_parent_y_lock()
+    }
+}
+
 impl<'lock> ContextoTemporalVerificado<'lock> {
     /// Renombra una sola vez y confirma los nombres desde el parent retenido.
     ///
