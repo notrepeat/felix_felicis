@@ -7,6 +7,7 @@ use std::fs::File;
 use std::sync::Arc;
 
 use crate::transaccion::admision::envelope::selector::EnvelopeAdmisionVersionada;
+use crate::transaccion::admision::envelope::v2::ErrorCodecEnvelopeContextoAdmisionV2;
 use crate::transaccion::admision::envelope::v2::ErrorEnvelopeContextoAdmisionV2;
 use crate::transaccion::admision::envelope::{
     EnvelopeContextoAdmision, codec::ErrorCodecEnvelopeAdmision,
@@ -37,6 +38,7 @@ pub(crate) enum ErrorContextoAdmisionAnclado {
     RemoteUnsupported,
     Io,
     Codec(ErrorCodecEnvelopeAdmision),
+    CodecV2(ErrorCodecEnvelopeContextoAdmisionV2),
 }
 
 impl ErrorContextoAdmisionAnclado {
@@ -55,6 +57,7 @@ impl ErrorContextoAdmisionAnclado {
             Self::RemoteUnsupported => "admission_context_remote_unsupported",
             Self::Io => "admission_context_io",
             Self::Codec(error) => error.codigo(),
+            Self::CodecV2(error) => error.code(),
         }
     }
 }

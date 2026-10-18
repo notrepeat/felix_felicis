@@ -17,6 +17,8 @@ use tempfile::tempdir;
 
 #[path = "contexto_admision_tests/contexto_canonico_tests.rs"]
 mod contexto_canonico_tests;
+#[path = "contexto_admision_tests/contexto_v2_storage_tests.rs"]
+mod contexto_v2_storage_tests;
 #[path = "contexto_admision_tests/eliminar_contexto_resultados_tests.rs"]
 mod eliminar_contexto_resultados_tests;
 #[path = "contexto_admision_tests/eliminar_contexto_tests.rs"]

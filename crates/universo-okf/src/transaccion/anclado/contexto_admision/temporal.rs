@@ -3,6 +3,9 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 
+use crate::transaccion::admision::envelope::v2::{
+    EnvelopeContextoAdmisionV2, ErrorCodecEnvelopeContextoAdmisionV2,
+};
 use crate::transaccion::admision::envelope::{
     EnvelopeContextoAdmision, codec::ErrorCodecEnvelopeAdmision,
 };
@@ -76,6 +79,37 @@ impl<'lock> ContextoAdmisionAnclado<'lock> {
         C: FnOnce(&EnvelopeContextoAdmision) -> Result<Vec<u8>, ErrorCodecEnvelopeAdmision>,
     {
         let bytes = codificar(envelope).map_err(ErrorContextoAdmisionAnclado::Codec)?;
+        self.crear_temporal_desde_bytes(bytes)
+    }
+
+    /// Codifica y sincroniza un temporal exclusivo V2 bajo el parent retenido.
+    ///
+    /// Es un recibo de storage, no publica el canonical ni habilita recovery.
+    pub(in crate::transaccion::anclado) fn crear_temporal_v2(
+        self,
+        envelope: &EnvelopeContextoAdmisionV2,
+    ) -> Result<ReciboContextoTemporal<'lock>, ErrorContextoAdmisionAnclado> {
+        self.crear_temporal_v2_con(envelope, EnvelopeContextoAdmisionV2::encode)
+    }
+
+    pub(super) fn crear_temporal_v2_con<C>(
+        self,
+        envelope: &EnvelopeContextoAdmisionV2,
+        codificar: C,
+    ) -> Result<ReciboContextoTemporal<'lock>, ErrorContextoAdmisionAnclado>
+    where
+        C: FnOnce(
+            &EnvelopeContextoAdmisionV2,
+        ) -> Result<Vec<u8>, ErrorCodecEnvelopeContextoAdmisionV2>,
+    {
+        let bytes = codificar(envelope).map_err(ErrorContextoAdmisionAnclado::CodecV2)?;
+        self.crear_temporal_desde_bytes(bytes)
+    }
+
+    fn crear_temporal_desde_bytes(
+        self,
+        bytes: Vec<u8>,
+    ) -> Result<ReciboContextoTemporal<'lock>, ErrorContextoAdmisionAnclado> {
         if journal_temporal::raiz_es_remota(self._lock.raiz_canonica()) {
             return Err(ErrorContextoAdmisionAnclado::RemoteUnsupported);
         }

@@ -12,7 +12,7 @@ use super::{ContextoAdmisionAnclado, ErrorContextoAdmisionAnclado};
 
 /// Recibo de storage confirmado, sin borrow del lock ni autoridad de recovery.
 #[must_use = "el recibo solo vincula datos al owner que retuvo el lock"]
-pub(super) struct ReciboContextoPublicado {
+pub(in crate::transaccion::anclado) struct ReciboContextoPublicado {
     _autoridad: Arc<()>,
     identidad_parent: IdentidadDirectorio,
     scope_parent: ScopeFilesystem,
@@ -31,7 +31,9 @@ impl<'lock> ContextoTemporalVerificado<'lock> {
     /// Un error después del intento no demuestra que el syscall no tuvo efecto.
     /// El método nunca reintenta ni limpia; conserva el estado observado para
     /// que el caller lo reconcilie bajo el lock.
-    pub(super) fn publicar(self) -> Result<ReciboContextoPublicado, ErrorContextoAdmisionAnclado> {
+    pub(in crate::transaccion::anclado) fn publicar(
+        self,
+    ) -> Result<ReciboContextoPublicado, ErrorContextoAdmisionAnclado> {
         self.publicar_con(renombrar_no_reemplazar)
     }
 
