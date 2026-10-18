@@ -2,6 +2,8 @@ use super::*;
 use crate::transaccion::admision::envelope::selector::{
     EnvelopeAdmisionVersionada, decodificar as decodificar_envelope,
 };
+use crate::transaccion::anclado::contexto_admision::ReciboContextoPublicado;
+use crate::transaccion::anclado::duenio_transaccion::ReciboTemporalJournalV2;
 use crate::transaccion::anclado::duenio_transaccion::fixture_root_replay::{
     FixturePublicada, contexto_path, id_archivo, verificar_arbol,
 };
@@ -114,4 +116,78 @@ fn fixture_contexto_v2_publicado_conserva_binding_replay_y_siblings() {
     assert_eq!(id_archivo(&fixture.lock), identidad_lock);
     verificar_arbol(&fixture.fixture.root, &fixture.fixture.entradas);
     verificar_canary(&fixture.canary, fixture.identidad_canary);
+}
+
+pub(super) fn preparar_recibos<'owner, 'lock>(
+    owner: &'owner mut DuenioTransaccionAnclado<'lock>,
+    fixture: &FixtureContextoJournalV2,
+) -> (
+    ReciboContextoPublicado,
+    ReciboTemporalJournalV2<'owner, 'lock>,
+) {
+    let recibo_contexto = owner
+        .contexto_admision()
+        .unwrap()
+        .crear_temporal_v2(&fixture.envelope)
+        .unwrap()
+        .verificar()
+        .unwrap()
+        .publicar()
+        .unwrap();
+    let recibo_journal = owner.crear_temporal_journal_v2(&fixture.journal).unwrap();
+    (recibo_contexto, recibo_journal)
+}
+
+pub(super) fn journal_temporal(fixture: &FixtureContextoJournalV2) -> PathBuf {
+    let root = fixture.fixture.ubicacion.ruta();
+    let mut nombre = std::ffi::OsString::from(".");
+    nombre.push(root.file_name().unwrap());
+    nombre.push(".felix.journal.tmp");
+    root.parent().unwrap().join(nombre)
+}
+
+pub(super) fn revisar_canarios_y_arbol(
+    fixture: &FixtureContextoJournalV2,
+    lock_id: crate::transaccion::anclado::IdentidadArchivo,
+) {
+    assert_eq!(fs::read(&fixture.lock).unwrap(), LOCK_CANARY);
+    assert_eq!(id_archivo(&fixture.lock), lock_id);
+    verificar_arbol(&fixture.fixture.root, &fixture.fixture.entradas);
+    verificar_canary(&fixture.canary, fixture.identidad_canary);
+}
+
+#[test]
+fn fixture_journal_temporal_crea_recibos_reales_y_preserva_siblings() {
+    let temp = tempdir().unwrap();
+    let fixture = preparar_fixture_contexto_journal_v2(&temp.path().join("parent"));
+    let temporal = journal_temporal(&fixture);
+    let bytes_journal = fixture.journal.encode().unwrap();
+    let lock_id;
+    let contexto_id;
+    let temporal_id;
+
+    {
+        let mut lock = LockEscritura::adquirir_en(&fixture.fixture.ubicacion).unwrap();
+        lock_id = lock.identidad_archivo_lock().unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let (_recibo_contexto, _recibo_journal) = preparar_recibos(&mut owner, &fixture);
+        contexto_id = id_archivo(&fixture.contexto);
+        temporal_id = id_archivo(&temporal);
+        assert_eq!(
+            fs::read(&fixture.contexto).unwrap(),
+            fixture.fixture.bytes_contexto
+        );
+        assert_eq!(fs::read(&temporal).unwrap(), bytes_journal);
+        assert!(!fixture.journal_canonico.exists());
+    }
+
+    assert_eq!(
+        fs::read(&fixture.contexto).unwrap(),
+        fixture.fixture.bytes_contexto
+    );
+    assert_eq!(id_archivo(&fixture.contexto), contexto_id);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes_journal);
+    assert_eq!(id_archivo(&temporal), temporal_id);
+    assert!(!fixture.journal_canonico.exists());
+    revisar_canarios_y_arbol(&fixture, lock_id);
 }
