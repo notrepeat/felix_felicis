@@ -1,50 +1,91 @@
 # Contexto privado para reproducir una admisión
 
-**Estado:** Los codecs y lectores versionados siguen siendo privados. El commit
-local f4dfd1c966e3b4f752e177fda24212cb0b2964db añade la observación legacy o
-ausente. El helper privado de identidad visible del commit local
-857155b06d0134c07f162976d1e781becbee1dd9 añade una primitiva de presencia con
-seis pruebas y gates locales aprobados; la observación coordinada normal de
-Journal v2 con Contexto v2 sigue pendiente y no hay caller productivo de apply
-o recovery. U7 y la fase 04 siguen parciales; el progreso global permanece en
-4/9.
+**Estado:** Journal v1 permanece intacto y los codecs y lectores versionados
+siguen privados. U7 y la fase 04 continúan parciales; el progreso global
+permanece en 4/9. No hay caller productivo de apply ni recovery.
 
-## Corte actual: observación legacy o ausencia estricta
+<a name="corte-actual-observacion-normal-versionada"></a>
+## Corte actual: observación normal versionada
 
-observar_legacy_o_vacio conserva la observación original y su File cuando el
-Journal J1 está presente. Solo devuelve None cuando la lectura inicial observa
-ausencia, se confirman dos veces las ausencias de los cuatro auxiliares
-canónicos y temporales de Context e Intent, y una sonda final confirma que el
-Journal sigue ausente. La reaparición, un tipo inesperado o un error de scope,
-identidad o probe fallan cerrados. journal.tmp permanece fuera de esta
-observación legacy; un Journal distinto de J1 se rechaza.
+El CI registrado para el commit
+e892fafe588456c886839f34b98f097343cd70c1 (run 39081820659) terminó SUCCESS:
+Windows 1262/0/9 y Linux 1283/0/9. Incluyó 38 suites Cargo y 7 pruebas Python
+por job. Cubre A1 96fe2a9 (391 líneas de cambio), A2 26e67be (363), B1
+abe8450 (54) y B2a e892faf (357). La ancestry de ese commit también incluye
+f4dfd1c y 857155b. La demostración registrada cubre cuatro estados y 16
+salidas. Este run no cubre los gates focales posteriores de B2b ni B3.
 
-La secuencia revalida el owner (parent, lock y scope) antes y después de la
-lectura. La verificación posterior del owner domina el resultado de lectura,
-incluidos Some, None y Err; la sonda final del Journal se cierra antes de esa
-verificación posterior. La operación entrega observaciones privadas, no
-snapshot ni autoridad.
+**Gates focales posteriores:**
 
-Los gates locales de este commit cerraron en Windows y Linux: el filtro focal
-pasó 8 pruebas por sistema (877 filtradas en Windows y 901 en Linux); formato,
-clippy, frontera y diff-check terminaron en 0 en ambos. El cleanup Linux pasó y
-los procesos quedaron quietos; la auditoría independiente aprobó el corte.
+- B2b, commit 2d88e7db7307ccba50ca58c1109543a1d625154f, 283 líneas de cambio:
+  auditoría independiente aprobada; filtro 19/0/0 en Windows y Linux, con
+  892 y 916 pruebas filtradas.
 
-El CI público run 39020870034 para la base
-92cb69fb6e658ba6b8185a39344801761311294b terminó SUCCESS: Windows 1237/0/9 y
-Linux 1258/0/9, con 38 suites Cargo y 7 pruebas Python por job. Acredita la
-guardia y el coordinador anteriores; no cubre los commits locales f4dfd1c ni
-857155b ni la futura observación normal.
+- B3, commit b8aed0503873a78e1283dca92e313ebd996b1101, con padre
+  2d88e7db7307ccba50ca58c1109543a1d625154f; tres rutas, 126/0.
+  La prueba raw final pasó 21/0/0 en Windows (892 filtradas) y Linux
+  (916); formato, clippy, frontera y diff-check terminaron en 0 en ambos
+  sistemas. Cleanup pasó y seis comprobaciones de pgrep quedaron quietas.
+  La auditoría independiente aprobó 98 entradas de C0, fuentes y artefactos
+  sin discrepancias. El run 39081820659 no incluye B3.
 
-El helper privado de identidad visible abre un sibling regular sin seguir
-enlaces y compara scope e identidad nativa desde el mismo handle. Devuelve solo
-confirmación o error tras comprobar scope e identidad; no devuelve File ni
-ruta, no revalida owner pre/post ni concede autoridad. Sus seis pruebas
-focales pasaron 6/0/0 en Windows (885 filtradas) y Linux (909); formato,
-clippy, frontera y diff-check terminaron en 0 en ambos sistemas. Cleanup pasó
-en ambos, los runners quedaron quietos y la auditoría independiente aprobó la
-unidad. Esto no constituye un observador de familia normal ni habilita apply o
-recovery.
+El coordinador normal valida el owner antes de empezar. Ejecuta un guard inicial
+y otro final de seis slots: Journal y Context canónicos presentes; Intent
+canónico y los temporales de Journal, Context e Intent ausentes. Los lectores
+estrictos leen los payloads y retienen los wrappers originales de Journal y
+Context. Tras el guard final, las sondas comparan en secuencia las identidades
+nativas de Journal y Context con esos originales y se cierran. El postcheck
+exterior del owner domina el éxito y cualquier error del cuerpo.
+
+El commit B3 añade la fachada privada NormalV2, que conserva indirectamente
+los Files originales sin exponer File, path, owner ni Arc. fase(&self) clasifica
+de forma pura con préstamos locales de Journal y del envelope versionado
+original. La fase devuelta queda ligada al préstamo de la fachada y contiene
+datos, no autoridad. Esta observación no habilita apply, replay, recovery ni
+cleanup.
+
+Las sondas son secuenciales, no un snapshot atómico, y no acreditan estabilidad
+posterior. El contrato tampoco cubre mounts generales, power-loss ni fsync
+completo. No hay caller productivo.
+
+<a name="corte-actual-observacion-legacy-o-ausencia-estricta"></a>
+### Corte actual: observación legacy o ausencia estricta
+
+El commit f4dfd1c966e3b4f752e177fda24212cb0b2964db añade observar_legacy_o_vacio.
+Si el nombre canónico de Journal está presente y se lee como J1, conserva la
+observación y su File original. La ausencia significa que el nombre canónico
+de Journal no estaba presente; no es una selección de versión J1 ausente. Solo
+devuelve None tras esa ausencia inicial, dos comprobaciones de ausencia de los
+cuatro auxiliares canónicos y temporales de Context e Intent, y una sonda final
+de ausencia del Journal canónico. Reaparición, tipo inesperado o error de
+scope, identidad o probe fallan cerrados. journal.tmp queda fuera de este
+contrato legacy y un Journal presente distinto de J1 se rechaza.
+
+La lectura legacy revalida owner (parent, lock y scope) antes y después. El
+postcheck domina Some, None y Err; la sonda final se cierra antes de ese
+postcheck. El resultado es observacional: no es snapshot ni autoridad.
+
+### Historial de cortes anteriores
+
+El CI previo, run 39020870034 para la base
+92cb69fb6e658ba6b8185a39344801761311294b, terminó SUCCESS con Windows
+1237/0/9 y Linux 1258/0/9, e incluyó 38 suites Cargo y 7 pruebas Python por
+job. Precedió a f4dfd1c y 857155b, así que no los cubre; el CI e892 sí los
+incluye en su ancestry.
+
+El helper visible de identidad de 857155b06d0134c07f162976d1e781becbee1dd9
+abre un sibling regular sin seguir enlaces y compara scope e identidad nativa
+desde el mismo handle. Devuelve confirmación o error, no File ni ruta, y no
+revalida owner pre/post por sí solo. Sus seis pruebas focales pasaron 6/0/0 en
+Windows (885 filtradas) y Linux (909); formato, clippy, frontera y diff-check
+terminaron en 0. Cleanup pasó en ambos sistemas, los runners quedaron quietos
+y la auditoría independiente aprobó esa unidad. El helper no hace el postcheck
+exterior del coordinador.
+
+Los gates locales del corte legacy cerraron en Windows y Linux: 8 pruebas
+focales por sistema (877 filtradas en Windows y 901 en Linux); formato, clippy,
+frontera y diff-check terminaron en 0. Cleanup Linux pasó y la auditoría
+independiente aprobó el corte.
 
 La estrategia adoptada conserva Journal v1 y añade Journal v2 paralelo con
 `schema=felix-journal-v2`, kind cerrado `context_required` y cuota propia de
