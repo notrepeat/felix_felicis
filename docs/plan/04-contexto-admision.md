@@ -5,26 +5,29 @@ continúan parciales; el progreso global permanece en 4/9. Este flujo aún no
 tiene caller productivo desde apply ni recovery.
 
 <a name="corte-actual-observacion-normal-versionada"></a>
-## Corte actual: almacenamiento tipado y publicación Journal v2
+## Corte actual: preparación observada del sucesor Journal v2
 
-El CI registrado para HEAD 21b32870855b1f83697e495c52478c621748e659
-(run 39119647096) terminó correctamente: Windows 1334/0/9 y Linux 1355/0/9,
-con 38 suites Cargo, siete pruebas Python y 14 pasos por job. Cubre E1 y E2a;
-es anterior al coordinador bd891f0 y no ejecutó el ADDON adversarial.
+El baseline CI del commit d3f546f (run 39124020051) terminó correctamente:
+Windows 1346/0/9 y Linux 1367/0/9, con 38 resúmenes de suites Cargo por
+sistema. Es anterior a S1a y no cubre estos tres commits.
 
-El coordinador privado consume el recibo Journal y recibe prestado el recibo
-Contexto, bajo el borrow mutable del owner que conserva el recibo Journal.
-Arc::ptr_eq vincula el recibo Contexto al guard compartido: acredita el linaje
-del lock, no unicidad de una instancia owner. La observación inicial contrasta
-scope, ID nativo, longitud, SHA-256 y binding V2; el observador también
-comprueba replay. Solo Prepared llega al publicador Journal v2 NOREPLACE.
+S1a avanzó en tres unidades locales con gates focales Rust 1.88 locked/offline:
+0973221 (155 líneas; Windows 29/0/0, Linux 30/0/0), 97bbade (390 churn;
+Windows 34/0/0, Linux 35/0/0) y b651411 (186; Windows 37/0/0, Linux 38/0/0,
+con tres casos de frontera nuevos). Esos resultados son locales.
 
-Tras un intento de publicación, toma una lectura nueva de Contexto y conserva
-el estado inicial, el de esa lectura —que también puede ser Error o Ausente— y
-el outcome o error del cuerpo hasta el postcheck exterior. Su error domina
-incluso un Confirmado; no infiere ausencia de efecto ni autoriza reintentos o
-limpieza a ciegas. El resultado es un informe privado de datos: no acredita
-admisión ni autoriza apply, recovery o cleanup productivos.
+La preparación consume el préstamo `&ObservacionJournalPersistido` y vuelve a
+validar la identidad nativa y el registro completo del Journal canónico, con
+parent y scope. Cada llamada deriva un sucesor inmediato en orden:
+`Prepared → BackupReady → Installed → Committed`. El recibo nuevo retiene el
+préstamo, candidato e ID nativo, más una observación del TMP asociada a su
+`File`; en la segunda apertura el guard coteja ID nativo y registro esperado.
+
+Un error después de crear o reabrir TMP, o durante el postcheck, puede dejarlo
+presente. Un `Err` no acredita ausencia del efecto ni autoriza limpiar o
+reintentar a ciegas. Las pruebas de rechazo preservan el canónico y los
+canarios. Este corte no habilita callers productivos de apply, recovery o
+cleanup; Journal v1 sigue intacto y U7/fase 04 siguen parciales (4/9).
 
 | Corte | Windows | Linux | Alcance |
 |---|---:|---:|---|

@@ -12,40 +12,23 @@ bytes intactos.
 | Depende de | 03 |
 | Desbloquea | 05, 08 |
 
-### Corte actual: publicación tipada de Journal v2
+### Corte actual: preparación del sucesor Journal v2
 
-El CI registrado para HEAD 21b32870855b1f83697e495c52478c621748e659
-(run 39119647096) terminó correctamente: Windows 1334/0/9 y Linux 1355/0/9,
-con 38 suites Cargo, siete pruebas Python y 14 pasos por job. Cubre E1 y E2a;
-es anterior al coordinador bd891f0 y al ADDON test-only.
+El baseline CI y los resultados focales locales de S1a están detallados en
+[Contexto](04-contexto-admision.md#corte-actual-observacion-normal-versionada).
+El run 39124020051 precede a S1a y no lo cubre.
 
-El coordinador privado consume solo el recibo Journal y recibe prestado el
-recibo Contexto. El primero porta el borrow mutable del owner; Arc::ptr_eq
-vincula el segundo al guard compartido y acredita el linaje del lock, no una
-instancia owner única. La lectura inicial contrasta scope, ID nativo, longitud,
-SHA-256 y binding V2; el observador comprueba replay. Solo se publica Journal
-v2 Prepared con NOREPLACE. Tras cada intento se obtiene una lectura Contexto
-nueva; se retienen el estado inicial, el resultado de esa relectura —que puede
-ser error o ausencia— y el outcome crudo hasta el postcheck exterior dominante.
-Su error domina incluso un Confirmado: no implica ausencia de efecto ni
-autoriza reintento o limpieza a ciegas. El resultado es un informe privado de
-datos, no una admisión ni autoridad de cleanup, y no habilita caller productivo
-de apply o recovery.
-
-El commit bd891f05551ad5dac62011437dde737d1f8935c6 (394/0, cinco pruebas)
-pasó 315/0/0 en Windows (674 filtradas) y 321/0/0 en Linux (692 filtradas).
-Los dos cierres tuvieron limpieza correcta, compilaciones frescas, tres rutas
-del corte verificadas en .d, controles en cero y sin temporales del runner al
-cierre; los temporales adversariales se comprobaron en sus casos. El ADDON
-f14cb64f704210d5068de9639052f76b6ded8d10 añade dos pruebas (161/0): pasó
-317/0/0 en Windows (674 filtradas) y 323/0/0 en Linux (692 filtradas), con
-controles en cero. Sigue siendo test-only y no tiene CI propio.
-
-El baseline y la matriz de gates focales de estas unidades están documentados
-en [Contexto](04-contexto-admision.md#corte-actual-observacion-normal-versionada).
-Journal v1 permanece intacto; U7 y fase 04 siguen parciales (4/9). Las lecturas
-secuenciales no son snapshot atómico ni garantizan estabilidad ante writers
-externos, montajes generales, pérdida de energía o fsync completo.
+La preparación consume el préstamo `&ObservacionJournalPersistido`; revalida
+identidad nativa y registro completo del Journal canónico, parent y scope.
+Cada llamada deriva un solo sucesor inmediato, en orden:
+`Prepared → BackupReady → Installed → Committed`. El recibo nuevo retiene el
+préstamo, candidato e ID nativo, más una observación del TMP con su `File`.
+En la segunda apertura, el guard coteja el ID nativo y el registro esperado.
+Un error después de crear o reabrir TMP, o durante el postcheck, puede dejarlo
+presente; un `Err` no acredita ausencia del efecto ni autoriza limpiar o
+reintentar a ciegas. El resultado queda bajo el owner hasta el postcheck. Este
+corte no concede reemplazo canónico ni autoridad a callers productivos de
+apply, recovery o cleanup.
 
 | Corte | Commit | Cambio | Pruebas focales Windows / Linux |
 |---|---|---:|---|
