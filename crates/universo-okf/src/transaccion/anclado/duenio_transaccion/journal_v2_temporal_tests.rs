@@ -470,3 +470,127 @@ fn postcheck_owner_io_domina_error_real_del_lease_y_preserva_temporal() {
     assert_eq!(identidad_visible(&lock_path), lock_id);
     assert_eq!(fs::read(lock_path).unwrap(), LOCK_CANARY);
 }
+
+#[test]
+fn postcheck_owner_io_domina_no_aplicado_c2_y_preserva_temporal() {
+    let temp = tempdir().unwrap();
+    let ubicacion = ubicacion_en(temp.path());
+    fs::write(ubicacion.lock().as_path(), LOCK_CANARY).unwrap();
+    let lock_path = ubicacion.lock().as_path().to_path_buf();
+    let canonico = ruta_canonica(&ubicacion);
+    let temporal = ruta_temporal(&ubicacion);
+    let lock_id;
+    let temporal_id;
+    let journal_bytes;
+
+    {
+        let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+        lock_id = lock.identidad_archivo_lock().unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let journal = journal_v2(owner.identidad_parent.journal_identity().unwrap());
+        journal_bytes = journal.encode().unwrap();
+        let receipt = owner.crear_temporal_journal_v2(&journal).unwrap();
+        temporal_id = receipt.identidad.identidad_archivo();
+        let body_no_aplicado = Cell::new(false);
+        let postcheck_called = Cell::new(false);
+
+        let result = receipt.publicar_con_owner_con_prueba(
+            |_| {},
+            |owner, identidad, journal| {
+                let lease = owner.journal_temporal_estricto()?;
+                let outcome = lease.publicar_v2_con_prueba(identidad, journal, |_, _| {
+                    Err(super::super::journal_temporal::ErrorJournalAnclado::Io)
+                });
+                body_no_aplicado.set(matches!(
+                    outcome,
+                    super::super::journal_temporal::ResultadoPublicacionJournal::NoAplicado(
+                        super::super::journal_temporal::ErrorJournalAnclado::Io
+                    )
+                ));
+                Ok(outcome)
+            },
+            |_| {
+                postcheck_called.set(true);
+                Err(super::super::journal_temporal::ErrorJournalAnclado::Io)
+            },
+        );
+
+        assert!(matches!(
+            result,
+            super::ResultadoPublicacionJournalV2ConOwner::PostcheckNoVerificado
+        ));
+        assert!(body_no_aplicado.get());
+        assert!(postcheck_called.get());
+        assert!(!canonico.exists());
+        assert_eq!(fs::read(&temporal).unwrap(), journal_bytes);
+        assert_eq!(identidad_visible(&temporal), temporal_id);
+    }
+
+    assert_eq!(identidad_visible(&lock_path), lock_id);
+    assert_eq!(fs::read(lock_path).unwrap(), LOCK_CANARY);
+}
+
+#[test]
+fn postcheck_owner_io_domina_indeterminado_c2_y_preserva_ambos_siblings() {
+    let temp = tempdir().unwrap();
+    let ubicacion = ubicacion_en(temp.path());
+    fs::write(ubicacion.lock().as_path(), LOCK_CANARY).unwrap();
+    let lock_path = ubicacion.lock().as_path().to_path_buf();
+    let canonico = ruta_canonica(&ubicacion);
+    let temporal = ruta_temporal(&ubicacion);
+    let lock_id;
+    let temporal_id;
+    let journal_bytes;
+    let canonical_bytes = b"not-a-journal-v2".to_vec();
+    let canonical_id = Cell::new(None);
+
+    {
+        let mut lock = LockEscritura::adquirir_en(&ubicacion).unwrap();
+        lock_id = lock.identidad_archivo_lock().unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let journal = journal_v2(owner.identidad_parent.journal_identity().unwrap());
+        journal_bytes = journal.encode().unwrap();
+        let receipt = owner.crear_temporal_journal_v2(&journal).unwrap();
+        temporal_id = receipt.identidad.identidad_archivo();
+        let body_indeterminado = Cell::new(false);
+        let postcheck_called = Cell::new(false);
+
+        let result = receipt.publicar_con_owner_con_prueba(
+            |_| {},
+            |owner, identidad, journal| {
+                let lease = owner.journal_temporal_estricto()?;
+                let outcome = lease.publicar_v2_con_prueba(identidad, journal, |_, _| {
+                    fs::write(&canonico, &canonical_bytes)
+                        .map_err(|_| super::super::journal_temporal::ErrorJournalAnclado::Io)?;
+                    canonical_id.set(Some(identidad_visible(&canonico)));
+                    Err(super::super::journal_temporal::ErrorJournalAnclado::Io)
+                });
+                body_indeterminado.set(matches!(
+                    outcome,
+                    super::super::journal_temporal::ResultadoPublicacionJournal::Indeterminado {
+                        ..
+                    }
+                ));
+                Ok(outcome)
+            },
+            |_| {
+                postcheck_called.set(true);
+                Err(super::super::journal_temporal::ErrorJournalAnclado::Io)
+            },
+        );
+
+        assert!(matches!(
+            result,
+            super::ResultadoPublicacionJournalV2ConOwner::PostcheckNoVerificado
+        ));
+        assert!(body_indeterminado.get());
+        assert!(postcheck_called.get());
+        assert_eq!(fs::read(&canonico).unwrap(), canonical_bytes);
+        assert_eq!(identidad_visible(&canonico), canonical_id.get().unwrap());
+        assert_eq!(fs::read(&temporal).unwrap(), journal_bytes);
+        assert_eq!(identidad_visible(&temporal), temporal_id);
+    }
+
+    assert_eq!(identidad_visible(&lock_path), lock_id);
+    assert_eq!(fs::read(lock_path).unwrap(), LOCK_CANARY);
+}
