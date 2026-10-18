@@ -255,6 +255,183 @@ fn postcheck_exterior_retiro_a_domina_exito_y_error_de_binding() {
     }
 }
 
+#[test]
+fn retiro_a_con_identidades_finales_preserva_los_tres_frames() {
+    let rutas = preparar_rutas_retiro_a(false);
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+
+    let observacion = owner.observar_retiro_a_con_identidades_finales().unwrap();
+
+    assert_eq!(
+        format!("{observacion:?}"),
+        "ObservacionRetiroAConIdentidadesFinales { .. }"
+    );
+    drop(observacion);
+    drop(owner);
+    drop(lock);
+    assert_owner_files_preserved(&rutas);
+}
+
+#[test]
+fn identidades_finales_rechazan_reemplazo_de_cada_frame_con_bytes_iguales() {
+    for caso in 0..3 {
+        let mut rutas = preparar_rutas_retiro_a(false);
+        let (canonico, bytes) = canonicos_retiro_a(&rutas)[caso].clone();
+        if caso == 2 {
+            liberar_handle_intent_fixture(&mut rutas.fixture);
+        }
+        let retenido = canonico.with_file_name(format!("original-ra2-{caso}"));
+        let fuente = canonico.with_file_name(format!("reemplazo-ra2-{caso}"));
+        fs::write(&fuente, &bytes).unwrap();
+        let identidad_original = identidad_archivo(&File::open(&canonico).unwrap()).unwrap();
+        let identidad_reemplazo = identidad_archivo(&File::open(&fuente).unwrap()).unwrap();
+        assert_ne!(identidad_original, identidad_reemplazo);
+
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let resultado = owner.observar_retiro_a_con_identidades_finales_con_prueba(
+            |_| {
+                fs::rename(&canonico, &retenido).unwrap();
+                fs::rename(&fuente, &canonico).unwrap();
+            },
+            |owner| owner.parent_revalidado(),
+        );
+
+        assert!(matches!(
+            resultado,
+            Err(crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionRetiroA::ObservationUnverified)
+        ));
+        drop(owner);
+        drop(lock);
+        assert_eq!(fs::read(&rutas.lock).unwrap(), LOCK_CANARY);
+        assert_eq!(fs::read(&retenido).unwrap(), bytes);
+        assert_eq!(fs::read(&canonico).unwrap(), bytes);
+        assert_eq!(
+            identidad_archivo(&File::open(&retenido).unwrap()).unwrap(),
+            identidad_original
+        );
+        assert_eq!(
+            identidad_archivo(&File::open(&canonico).unwrap()).unwrap(),
+            identidad_reemplazo
+        );
+        for (indice, (path, bytes)) in canonicos_retiro_a(&rutas).iter().enumerate() {
+            if indice != caso {
+                assert_eq!(fs::read(path).unwrap().as_slice(), bytes.as_slice());
+            }
+        }
+
+        let despues_de_probe = canonico.with_file_name(format!("despues-de-probe-ra2-{caso}"));
+        fs::rename(&canonico, &despues_de_probe).unwrap();
+        assert_eq!(fs::read(&despues_de_probe).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn identidades_finales_rechazan_ausencia_de_cada_frame_canonico() {
+    for caso in 0..3 {
+        let mut rutas = preparar_rutas_retiro_a(false);
+        let (canonico, bytes) = canonicos_retiro_a(&rutas)[caso].clone();
+        if caso == 2 {
+            liberar_handle_intent_fixture(&mut rutas.fixture);
+        }
+        let retenido = canonico.with_file_name(format!("ausente-ra2-{caso}"));
+        let identidad_original = identidad_archivo(&File::open(&canonico).unwrap()).unwrap();
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+
+        let resultado = owner.observar_retiro_a_con_identidades_finales_con_prueba(
+            |_| fs::rename(&canonico, &retenido).unwrap(),
+            |owner| owner.parent_revalidado(),
+        );
+
+        assert!(matches!(
+            resultado,
+            Err(crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionRetiroA::ObservationUnverified)
+        ));
+        drop(owner);
+        drop(lock);
+        assert_eq!(fs::read(&rutas.lock).unwrap(), LOCK_CANARY);
+        assert!(!canonico.exists());
+        assert_eq!(fs::read(&retenido).unwrap(), bytes);
+        assert_eq!(
+            identidad_archivo(&File::open(&retenido).unwrap()).unwrap(),
+            identidad_original
+        );
+        for (indice, (path, bytes)) in canonicos_retiro_a(&rutas).iter().enumerate() {
+            if indice != caso {
+                assert_eq!(fs::read(path).unwrap().as_slice(), bytes.as_slice());
+            }
+        }
+    }
+}
+
+#[test]
+fn postcheck_exterior_final_domina_candidato_error_ra1_y_error_de_probe() {
+    for caso in 0..3 {
+        let rutas = preparar_rutas_retiro_a(caso == 1);
+        let journal = rutas.ubicacion.journal().as_path().to_path_buf();
+        let retenido = journal.with_file_name("journal-oculto-postcheck-ra2");
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let hook_llamado = std::cell::Cell::new(false);
+        let postcheck_llamado = std::cell::Cell::new(false);
+
+        let resultado = owner.observar_retiro_a_con_identidades_finales_con_prueba(
+            |_| {
+                hook_llamado.set(true);
+                if caso == 2 {
+                    fs::rename(&journal, &retenido).unwrap();
+                }
+            },
+            |_| {
+                postcheck_llamado.set(true);
+                Err(crate::transaccion::anclado::journal_temporal::ErrorJournalAnclado::Io)
+            },
+        );
+
+        assert!(matches!(
+            resultado,
+            Err(crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionRetiroA::OwnerUnverified)
+        ));
+        assert!(postcheck_llamado.get());
+        assert_eq!(hook_llamado.get(), caso != 1);
+        drop(owner);
+        drop(lock);
+        assert_eq!(fs::read(&rutas.lock).unwrap(), LOCK_CANARY);
+        if caso == 2 {
+            assert!(!journal.exists());
+            assert_eq!(fs::read(&retenido).unwrap(), rutas.fixture.bytes_journal);
+            assert_eq!(
+                fs::read(&rutas.fixture.ruta_contexto).unwrap(),
+                rutas.fixture.bytes_contexto
+            );
+            assert_eq!(fs::read(&rutas.intent).unwrap(), rutas.fixture.bytes_intent);
+        } else {
+            assert_owner_files_preserved(&rutas);
+        }
+    }
+}
+
+fn canonicos_retiro_a(rutas: &RutasOwner) -> [(std::path::PathBuf, Vec<u8>); 3] {
+    [
+        (
+            rutas.ubicacion.journal().as_path().to_path_buf(),
+            rutas.fixture.bytes_journal.clone(),
+        ),
+        (
+            rutas.fixture.ruta_contexto.clone(),
+            rutas.fixture.bytes_contexto.clone(),
+        ),
+        (rutas.intent.clone(), rutas.fixture.bytes_intent.clone()),
+    ]
+}
+
+fn liberar_handle_intent_fixture(fixture: &mut IntentFixture) {
+    let reemplazo = fs::File::open(&fixture.ruta_contexto).unwrap();
+    drop(std::mem::replace(&mut fixture.archivo_intent, reemplazo));
+}
+
 fn assert_owner_files_preserved(rutas: &RutasOwner) {
     assert_eq!(fs::read(&rutas.intent).unwrap(), rutas.fixture.bytes_intent);
     assert_owner_sidecars_preserved(rutas);

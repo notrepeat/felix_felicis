@@ -265,6 +265,125 @@ impl DuenioTransaccionAnclado<'_> {
     }
 }
 
+/// Conserva RA1 después de volver a comprobar las identidades de J/C/Intent.
+/// Sigue siendo observación privada; no clasifica fase ni concede autoridad.
+#[must_use]
+pub(super) struct ObservacionRetiroAConIdentidadesFinales {
+    observacion: ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal,
+}
+
+impl fmt::Debug for ObservacionRetiroAConIdentidadesFinales {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionRetiroAConIdentidadesFinales { .. }")
+    }
+}
+
+impl DuenioTransaccionAnclado<'_> {
+    /// Completa RA1 y vuelve a probar las tres identidades nativas retenidas.
+    pub(super) fn observar_retiro_a_con_identidades_finales(
+        &mut self,
+    ) -> Result<ObservacionRetiroAConIdentidadesFinales, ErrorObservacionRetiroA> {
+        self.observar_retiro_a_con_identidades_finales_y_postcheck(
+            |_| {},
+            |owner| owner.parent_revalidado(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_retiro_a_con_identidades_finales_con_prueba<H, P>(
+        &mut self,
+        despues_de_ra1: H,
+        postcheck: P,
+    ) -> Result<ObservacionRetiroAConIdentidadesFinales, ErrorObservacionRetiroA>
+    where
+        H: FnOnce(&mut Self),
+        P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+    {
+        self.observar_retiro_a_con_identidades_finales_y_postcheck(despues_de_ra1, postcheck)
+    }
+
+    fn observar_retiro_a_con_identidades_finales_y_postcheck<H, P>(
+        &mut self,
+        despues_de_ra1: H,
+        postcheck: P,
+    ) -> Result<ObservacionRetiroAConIdentidadesFinales, ErrorObservacionRetiroA>
+    where
+        H: FnOnce(&mut Self),
+        P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+    {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorObservacionRetiroA::OwnerUnverified)?;
+        drop(parent);
+
+        let resultado = (|| {
+            let observacion =
+                self.observar_retiro_a_con_slots_revalidados_pendiente_identidad_final()?;
+            despues_de_ra1(self);
+            self.confirmar_identidades_retiro_a(&observacion)?;
+            Ok(ObservacionRetiroAConIdentidadesFinales { observacion })
+        })();
+
+        let parent = postcheck(self).map_err(|_| ErrorObservacionRetiroA::OwnerUnverified)?;
+        drop(parent);
+        resultado
+    }
+
+    fn confirmar_identidades_retiro_a(
+        &self,
+        observacion: &ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal,
+    ) -> Result<(), ErrorObservacionRetiroA> {
+        let ubicacion = self._lock.ubicacion();
+        let nombre_journal = ubicacion
+            .journal()
+            .as_path()
+            .file_name()
+            .ok_or(ErrorObservacionRetiroA::ObservationUnverified)?
+            .to_os_string();
+        let basename = ubicacion
+            .ruta()
+            .file_name()
+            .ok_or(ErrorObservacionRetiroA::ObservationUnverified)?;
+        let nombre_contexto = super::super::contexto_admision::nombre_canonico(basename)
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+        let nombre_intent = super::observar_siblings_nuevo_flujo::nombre_intent_retiro(basename)
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+        let identidad_journal = observacion.journal.identidad().identidad_archivo();
+        let identidad_contexto = observacion.contexto.identidad_archivo_observado();
+        let identidad_intent = observacion.intent.registro_e_identidad_observados().1;
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorObservacionRetiroA::OwnerUnverified)?;
+
+        let resultado = (|| {
+            super::visible_identity_probe::confirmar_sibling_presente_con_identidad(
+                &parent,
+                &nombre_journal,
+                self.scope_parent,
+                identidad_journal,
+            )
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+            super::visible_identity_probe::confirmar_sibling_presente_con_identidad(
+                &parent,
+                &nombre_contexto,
+                self.scope_parent,
+                identidad_contexto,
+            )
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+            super::visible_identity_probe::confirmar_sibling_presente_con_identidad(
+                &parent,
+                &nombre_intent,
+                self.scope_parent,
+                identidad_intent,
+            )
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)
+        })();
+
+        drop(parent);
+        resultado
+    }
+}
+
 /// Conserva la pareja A1 tras revalidar los dos nombres por identidad nativa.
 /// Es dato de filesystem observado, no representa una fase ni concede autoridad.
 #[must_use]
