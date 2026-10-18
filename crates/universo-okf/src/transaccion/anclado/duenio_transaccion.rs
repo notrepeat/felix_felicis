@@ -149,6 +149,29 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         )
     }
 
+    /// Prepara el sucesor V2 y conserva su resultado hasta el postcheck exterior.
+    #[must_use]
+    pub(super) fn preparar_sucesor_journal_v2<'original>(
+        &mut self,
+        original: &'original super::journal_temporal::versionado::ObservacionJournalPersistido,
+    ) -> ResultadoOwnerPostcheck<
+        Result<
+            super::journal_temporal::ReciboTemporalSucesorJournalV2<'original>,
+            super::journal_temporal::ErrorJournalAnclado,
+        >,
+    > {
+        ejecutar_con_owner_y_postcheck(
+            self,
+            |_| {},
+            |owner| {
+                owner
+                    .journal_temporal_estricto()
+                    .and_then(|lease| lease.preparar_sucesor_temporal_v2(original))
+            },
+            |owner, _| owner.parent_revalidado().map(|_| ()),
+        )
+    }
+
     /// Crea y relee el temporal v2 mientras este owner conserva el lock.
     ///
     /// El resultado es un recibo privado de almacenamiento; no publica el
@@ -575,7 +598,7 @@ pub(super) enum ResultadoPublicacionJournalV2ConOwner {
 }
 
 /// Retiene el resultado completo del cuerpo hasta después del postcheck owner.
-enum ResultadoOwnerPostcheck<T> {
+pub(super) enum ResultadoOwnerPostcheck<T> {
     PrecheckFallido(super::journal_temporal::ErrorJournalAnclado),
     PostcheckNoVerificado {
         cuerpo: T,

@@ -15,8 +15,9 @@ use super::{
     DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, ScopeFilesystem,
     TipoEntradaAnclada, metadata_directorio, scope_filesystem, validar_componente,
 };
+use crate::transaccion::journal::selector::{JournalPersistido, JournalPersistidoError};
 use crate::transaccion::journal::v2::{JournalV2, JournalV2Error};
-use crate::transaccion::journal::{Journal, JournalError, MAX_JOURNAL_BYTES};
+use crate::transaccion::journal::{Journal, JournalError, JournalState, MAX_JOURNAL_BYTES};
 use crate::transaccion::lock::LockEscritura;
 
 use super::IdentidadArchivo;
@@ -189,6 +190,22 @@ pub(crate) struct JournalTemporalAnclado<'lock> {
     _vida_lock: PhantomData<&'lock LockEscritura>,
 }
 
+/// Recibo privado de un sucesor V2 creado y releído en el temporal fijo.
+/// Conserva la observación original; no reemplaza el canónico ni autoriza una acción.
+#[must_use]
+pub(in crate::transaccion::anclado) struct ReciboTemporalSucesorJournalV2<'original> {
+    original: &'original versionado::ObservacionJournalPersistido,
+    candidato: JournalV2,
+    identidad_temporal: IdentidadArchivoJournal,
+    temporal: publicar::ObservacionTemporalVersionada,
+}
+
+impl fmt::Debug for ReciboTemporalSucesorJournalV2<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ReciboTemporalSucesorJournalV2([redacted])")
+    }
+}
+
 impl<'lock> JournalTemporalAnclado<'lock> {
     pub(crate) fn desde_lock(lock: &'lock mut LockEscritura) -> Result<Self, ErrorJournalAnclado> {
         let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
@@ -242,6 +259,67 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             return Err(ErrorJournalAnclado::JournalMismatch);
         }
         Ok(identidad_creada)
+    }
+
+    /// Prepara exclusivamente el sucesor inmediato de una observación retenida.
+    /// Comprueba el canónico por ID y registro completo antes de crear el temporal.
+    pub(in crate::transaccion::anclado) fn preparar_sucesor_temporal_v2<'original>(
+        &self,
+        original: &'original versionado::ObservacionJournalPersistido,
+    ) -> Result<ReciboTemporalSucesorJournalV2<'original>, ErrorJournalAnclado> {
+        if self.raiz_remota {
+            return Err(ErrorJournalAnclado::RemoteUnsupported);
+        }
+        if self.scope_parent.is_none() {
+            return Err(ErrorJournalAnclado::ParentScopeUnverified);
+        }
+        let mut scope_probe = |handle: &File| scope_filesystem(handle);
+        self.validar_parent_con_scope(&mut scope_probe)?;
+
+        let JournalPersistido::V2(anterior) = original.journal() else {
+            return Err(ErrorJournalAnclado::JournalMismatch);
+        };
+        let identidad_parent = self
+            .identidad_parent
+            .journal_identity()
+            .ok_or(ErrorJournalAnclado::ParentIdentityUnavailable)?;
+        if anterior.parent() != &identidad_parent {
+            return Err(ErrorJournalAnclado::ParentIdentityMismatch);
+        }
+        self.validar_canonico_sucesor_v2(original.identidad(), anterior)?;
+
+        let candidato = derivar_sucesor_journal_v2(anterior)?;
+        let identidad_temporal = self.crear_temporal_v2(&candidato)?;
+        let temporal = self
+            .observar_temporal_versionado(&candidato)
+            .map_err(mapear_error_preparacion_v2)?;
+        if temporal.identidad() != identidad_temporal {
+            return Err(ErrorJournalAnclado::IdentityMismatch);
+        }
+        Ok(ReciboTemporalSucesorJournalV2 {
+            original,
+            candidato,
+            identidad_temporal,
+            temporal,
+        })
+    }
+
+    fn validar_canonico_sucesor_v2(
+        &self,
+        identidad_esperada: IdentidadArchivoJournal,
+        journal_esperado: &JournalV2,
+    ) -> Result<(), ErrorJournalAnclado> {
+        let observado = self
+            .observar_versionado()
+            .map_err(mapear_error_preparacion_v2)?
+            .ok_or(ErrorJournalAnclado::SourceMissing)?;
+        if observado.identidad() != identidad_esperada {
+            return Err(ErrorJournalAnclado::IdentityMismatch);
+        }
+        match observado.journal() {
+            JournalPersistido::V2(journal) if journal == journal_esperado => Ok(()),
+            _ => Err(ErrorJournalAnclado::JournalMismatch),
+        }
     }
 
     fn crear_nuevo_con(
@@ -462,6 +540,47 @@ impl<'lock> JournalTemporalAnclado<'lock> {
                 .map_err(|_| ErrorJournalAnclado::SourceScopeUnverified)?;
         }
         Ok(())
+    }
+}
+
+fn derivar_sucesor_journal_v2(original: &JournalV2) -> Result<JournalV2, ErrorJournalAnclado> {
+    let siguiente = match original.state() {
+        JournalState::Prepared => JournalState::BackupReady,
+        JournalState::BackupReady => JournalState::Installed,
+        JournalState::Installed => JournalState::Committed,
+        JournalState::Committed => {
+            return Err(ErrorJournalAnclado::InvalidJournalV2(
+                JournalV2Error::TransitionInvalid,
+            ));
+        }
+    };
+    let mut candidato = original.clone();
+    candidato
+        .advance(siguiente)
+        .map_err(ErrorJournalAnclado::InvalidJournalV2)?;
+    original
+        .validate_successor(&candidato)
+        .map_err(ErrorJournalAnclado::InvalidJournalV2)?;
+    Ok(candidato)
+}
+
+fn mapear_error_preparacion_v2(
+    error: versionado::ErrorLecturaJournalVersionada,
+) -> ErrorJournalAnclado {
+    match error {
+        versionado::ErrorLecturaJournalVersionada::Lease(error) => error,
+        versionado::ErrorLecturaJournalVersionada::Selector(JournalPersistidoError::TooLarge) => {
+            ErrorJournalAnclado::TooLarge
+        }
+        versionado::ErrorLecturaJournalVersionada::Selector(JournalPersistidoError::V2(error)) => {
+            ErrorJournalAnclado::InvalidJournalV2(error)
+        }
+        versionado::ErrorLecturaJournalVersionada::Selector(JournalPersistidoError::V1(error)) => {
+            ErrorJournalAnclado::InvalidJournal(error)
+        }
+        versionado::ErrorLecturaJournalVersionada::Selector(
+            JournalPersistidoError::Malformed | JournalPersistidoError::SchemaUnsupported,
+        ) => ErrorJournalAnclado::JournalMismatch,
     }
 }
 

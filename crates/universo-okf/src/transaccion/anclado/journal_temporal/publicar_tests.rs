@@ -13,6 +13,8 @@ use tempfile::tempdir;
 
 #[path = "successor_observation_support.rs"]
 pub(super) mod successor_observation_support;
+#[path = "successor_prepare_tests.rs"]
+mod successor_prepare_tests;
 
 fn crear_root(parent: &Path) -> PathBuf {
     let root = parent.join("bundle");
