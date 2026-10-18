@@ -1,50 +1,42 @@
 # Contexto privado para reproducir una admisión
 
-**Estado:** Journal v1 permanece intacto y los codecs y lectores versionados
-siguen privados. U7 y la fase 04 continúan parciales; el progreso global
-permanece en 4/9. Este flujo aún no tiene caller productivo desde apply ni recovery.
+**Estado:** Journal v1 y sus recetas siguen intactos. U7 y la fase 04
+continúan parciales; el progreso global permanece en 4/9. Este flujo aún no
+tiene caller productivo desde apply ni recovery.
 
 <a name="corte-actual-observacion-normal-versionada"></a>
-## Corte actual: observación normal versionada
+## Corte actual: almacenamiento tipado y publicación Journal v2
 
-C2 (3e3ec9e, 261 líneas) persiste el envelope tipado v2 en almacenamiento privado.
-El owner codifica el envelope al crear el temporal; el recibo comprueba ID nativo,
-longitud y SHA-256, y el lector versionado valida parent y codec.
-La publicación usa NOREPLACE. Las pruebas comparan los bytes del temporal y del
-canónico; después contrastan el binding estructural leído del canónico con un
-JournalV2 de fixture.
+El almacenamiento de Contexto v2 (3e3ec9e) persiste el envelope con recibo de
+ID nativo, longitud y SHA-256. El lector verifica parent y codec; las pruebas
+comparan el binding estructural con un JournalV2 de fixture. J2a (b0cb5d0)
+añade un lease tipado para JournalV2.
 
-J2a (b0cb5d0, 161 líneas) incorpora el lease tipado para JournalV2. El filtro
-transaccion::anclado::journal_temporal:: pasó 85/0/0 en Windows y 87/0/0
-en Linux con Rust 1.88 locked/offline. El filtro local C2
-contexto_admision::tests:: pasó 51/0/0 en Windows y 54/0/0 en Linux;
-formato, clippy, frontera pública y diff-check también pasaron.
+El CI registrado para d811d96f6a3dabc097463f0dfa8c2c499829d18e
+(run 39109619811) terminó correctamente: Linux 1341/0/9 y Windows 1320/0/9.
+Cada job ejecutó 38 suites Cargo, siete pruebas Python y 14 pasos. Incluye
+J2b, J2c, A y B; no cubre e987d7b, 19ceb25, ac4b674 ni 13c1550.
 
-El CI exacto 01e8b53377ca767061f867b855310624c42b88fa (run 39105202986)
-terminó SUCCESS: Linux 1326/0/9, Windows 1305/0/9; cada job ejecutó
-38 suites Cargo, siete pruebas Python y 14 pasos. Cubre C2 y J2a, pero no los
-cortes locales posteriores J2b, J2c ni los cortes del publicador.
+e987d7b adapta la publicación NOREPLACE de JournalV2 en fase Prepared; aún
+no consume el recibo del owner. Pasó 93/0/0 en Windows y 95/0/0 en Linux.
+19ceb25 prueba la resolución de resultados ambiguos del syscall: pasó
+96/0/0 y 98/0/0, sin postcheck del owner.
 
-J2b (d17f5a2, 373 líneas) crea el temporal J2 desde el owner tipado; sus
-pruebas focales del owner pasaron 293/0/0 en Windows y 299/0/0 en Linux.
-J2c (2fe41fd, 172 líneas) añade cobertura de scope y lock: el filtro
-duenio_transaccion::journal_v2_ pasó 10/0/0 en ambos sistemas, con cinco
-pruebas de J2b y cinco de J2c. El rename nativo en Windows queda limitado por
-sharing del sistema; el resultado no afirma una renombrada efectiva allí.
+D1 (ac4b674) consume el recibo tipado con precheck y postcheck exterior del
+mismo owner. Pasó 302/0/0 en Windows (673 filtradas) y 308/0/0 en Linux
+(691 filtradas), con compilaciones frescas y controles sin errores. Si falla
+el postcheck, devuelve PostcheckNoVerificado incluso después de Confirmado;
+no infiere NoAplicado ni reintenta o limpia a ciegas.
 
-El motor compartido A (b61475a, 78 líneas) conserva la ruta v1; el filtro
-journal_temporal:: pasó 85/0/0 en Windows y 87/0/0 en Linux, incluidas
-las regresiones v1. B (7ceb915, 394 líneas) añade el lector temporal
-versionado: journal_temporal:: pasó 90/0/0 en Windows y 92/0/0 en Linux,
-incluidas cinco pruebas nuevas y las regresiones existentes. Ambos cortes
-pasaron formato, clippy del workspace con todos los targets y -D warnings,
-frontera pública y diff-check; las compilaciones fueron frescas y Linux limpió
-sus temporales con exit 0. El CI anterior no cubre J2b, J2c, A ni B.
+D2 (13c1550) añade dos pruebas de dominancia del postcheck. Pasó 304/0/0 en
+Windows (673 filtradas) y 310/0/0 en Linux (691 filtradas), con limpieza de
+Cargo, compilación fresca y controles auxiliares sin errores.
 
-El flujo sigue siendo de datos privados: no acredita admisión ni habilita
-apply o recovery. El lector no constituye un publicador canónico J2 ni un
-caller productivo; Journal v1 permanece intacto, U7 y fase 04 siguen parciales,
-y el progreso global permanece en 4/9.
+La secuencia que conserva y revalida Contexto antes de publicar Journal aún
+no está coordinada. Los resultados son informes de observación, no admisión
+ni autoridad para recovery o apply productivo. Las publicaciones privadas
+no garantizan un snapshot atómico, estabilidad frente a escritores externos,
+montajes generales, recuperación tras pérdida de energía ni fsync completo.
 
 | Corte | Commit | Cambio medido | Pruebas focales Windows / Linux |
 |---|---|---:|---|

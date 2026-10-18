@@ -12,39 +12,40 @@ bytes intactos.
 | Depende de | 03 |
 | Desbloquea | 05, 08 |
 
-### Corte actual: observación normal versionada
+### Corte actual: publicación tipada de Journal v2
 
-C2 (3e3ec9e, 261 líneas) agrega almacenamiento privado del envelope v2.
-El recibo verifica ID nativo, longitud y SHA-256; el lector valida parent y
-codec.
-La publicación usa NOREPLACE. Las pruebas comparan los bytes del temporal y del
-canónico; después contrastan el binding estructural leído del canónico con un
-JournalV2 de fixture.
+El almacenamiento de Contexto v2 (3e3ec9e) persiste el envelope con recibo de
+ID nativo, longitud y SHA-256. El lector verifica parent y codec; las pruebas
+comparan el binding con un JournalV2 de fixture. J2a (b0cb5d0) añade el lease
+tipado. J2b (d17f5a2), J2c (2fe41fd), A (b61475a) y B (7ceb915) están en el
+CI de referencia descrito abajo.
 
-J2a (b0cb5d0, 161 líneas) añade el lease tipado. El filtro local
-transaccion::anclado::journal_temporal:: pasó 85/0/0 en Windows y 87/0/0
-en Linux; el filtro C2 contexto_admision::tests:: pasó 51/0/0 y 54/0/0.
+El CI registrado para d811d96f6a3dabc097463f0dfa8c2c499829d18e
+(run 39109619811) terminó correctamente: Linux 1341/0/9 y Windows 1320/0/9,
+con 38 suites Cargo, siete pruebas Python y 14 pasos por job. No cubre
+e987d7b, 19ceb25, ac4b674 ni 13c1550.
 
-El CI 01e8b53377ca767061f867b855310624c42b88fa (run 39105202986) terminó
-SUCCESS: Linux 1326/0/9, Windows 1305/0/9; 38 suites Cargo, siete pruebas
-Python y 14 pasos por job. Cubre C2 y J2a, no los cortes locales posteriores.
+e987d7b adapta la publicación NOREPLACE de JournalV2 en fase Prepared, sin
+consumir el recibo del owner; pasó 93/0/0 en Windows y 95/0/0 en Linux.
+19ceb25 prueba la resolución de resultados ambiguos del syscall y pasó
+96/0/0 y 98/0/0; no añade postcheck del owner.
 
-J2b (d17f5a2, 373 líneas) crea el temporal J2 desde el owner tipado; las
-pruebas focales del owner pasaron 293/0/0 en Windows y 299/0/0 en Linux.
-J2c (2fe41fd, 172 líneas) amplía scope y lock; su filtro pasó 10/0/0 en
-ambos sistemas (cinco pruebas de J2b y cinco de J2c). Windows conserva la
-limitación de sharing para el rename nativo.
+D1 (ac4b674) consume el recibo con precheck y postcheck exterior del mismo
+owner. Pasó 302/0/0 en Windows (673 filtradas) y 308/0/0 en Linux
+(691 filtradas), con compilaciones frescas y controles sin errores. El error
+del postcheck se informa como PostcheckNoVerificado aun si el cuerpo confirmó
+la publicación; no se infiere NoAplicado ni se reintenta o limpia a ciegas.
 
-El motor A (b61475a, 78 líneas) comparte la ruta de publicación sin alterar
-v1 y pasó 85/0/0 en Windows y 87/0/0 en Linux. El lector B (7ceb915,
-394 líneas) pasó 90/0/0 y 92/0/0 con cinco pruebas nuevas y regresiones v1.
-Formato, clippy workspace all-targets con -D warnings, frontera pública y
-diff-check pasaron en ambos sistemas; las compilaciones fueron frescas y el
-cleanup Linux terminó en 0. El CI citado no incluye J2b, J2c, A ni B.
+D2 (13c1550) añade dos pruebas de dominancia; pasó 304/0/0 en Windows
+(673 filtradas) y 310/0/0 en Linux (691 filtradas), con limpieza de Cargo,
+compilación fresca y controles auxiliares sin errores.
 
-El alcance es almacenamiento y lectura de datos privados: no hay admisión ni
-caller productivo desde apply o recovery. El publicador canónico J2 sigue
-pendiente; Journal v1 continúa intacto y U7/fase 04 siguen parciales (4/9).
+La coordinación que conserva y revalida Contexto antes de publicar Journal
+sigue pendiente. Estos resultados no acreditan admisión ni habilitan un
+caller productivo de apply o recovery. Journal v1 permanece intacto; U7 y la
+fase 04 siguen parciales (4/9). Las sondas secuenciales no son un snapshot
+atómico ni garantizan estabilidad ante escritores externos, mounts generales,
+pérdida de energía o fsync completo.
 
 | Corte | Commit | Cambio | Pruebas focales Windows / Linux |
 |---|---|---:|---|
