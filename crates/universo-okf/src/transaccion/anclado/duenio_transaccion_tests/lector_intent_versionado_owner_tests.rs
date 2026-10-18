@@ -44,6 +44,217 @@ fn preparar_rutas_owner(version: VersionIntentFixture) -> RutasOwner {
     }
 }
 
+fn preparar_rutas_retiro_a(binding_discordante: bool) -> RutasOwner {
+    let mut rutas = preparar_rutas_owner(VersionIntentFixture::V2);
+    let journal = journal_v2(rutas.fixture.parent_journal.clone());
+    let journal_contexto = if binding_discordante {
+        journal_v2(another_directory_identity(&rutas.fixture.parent_journal))
+    } else {
+        journal.clone()
+    };
+    let bytes_journal = journal.encode().unwrap();
+    let bytes_contexto =
+        crate::transaccion::admision::envelope::v2::EnvelopeContextoAdmisionV2::ligar(
+            crate::transaccion::admision::envelope::tests::contexto(b"\n"),
+            &journal_contexto,
+        )
+        .encode()
+        .unwrap();
+    let identidad_journal =
+        identidad_archivo(&File::open(&rutas.fixture.ruta_journal).unwrap()).unwrap();
+    let identidad_contexto =
+        identidad_archivo(&File::open(&rutas.fixture.ruta_contexto).unwrap()).unwrap();
+    let identidad_intent = rutas.fixture.identidad_intent;
+    let longitud_contexto = u64::try_from(bytes_contexto.len()).unwrap();
+    let sha256_contexto: [u8; 32] = sha2::Sha256::digest(&bytes_contexto).into();
+    let bytes_intent = IntentRetiroPersistidoV2::desde_datos_persistidos(
+        journal,
+        crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida::try_from(
+            identidad_intent,
+        )
+        .unwrap(),
+        crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida::try_from(
+            identidad_journal,
+        )
+        .unwrap(),
+        crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida::try_from(
+            identidad_contexto,
+        )
+        .unwrap(),
+        rutas.fixture.scope.0,
+        longitud_contexto,
+        sha256_contexto,
+    )
+    .unwrap()
+    .encode()
+    .unwrap();
+
+    fs::write(&rutas.fixture.ruta_journal, &bytes_journal).unwrap();
+    fs::write(&rutas.fixture.ruta_contexto, &bytes_contexto).unwrap();
+    fs::write(&rutas.intent, &bytes_intent).unwrap();
+
+    let journal_canonico = rutas.ubicacion.journal().as_path().to_path_buf();
+    let basename = rutas.ubicacion.ruta().file_name().unwrap();
+    let nombre_contexto =
+        crate::transaccion::anclado::contexto_admision::nombre_canonico(basename).unwrap();
+    let contexto_canonico = rutas.fixture._directorio.path().join(nombre_contexto);
+    fs::rename(&rutas.fixture.ruta_journal, &journal_canonico).unwrap();
+    fs::rename(&rutas.fixture.ruta_contexto, &contexto_canonico).unwrap();
+    rutas.fixture.ruta_journal = journal_canonico;
+    rutas.fixture.ruta_contexto = contexto_canonico;
+    rutas.fixture.bytes_journal = bytes_journal;
+    rutas.fixture.bytes_contexto = bytes_contexto;
+    rutas.fixture.bytes_intent = bytes_intent;
+    rutas
+}
+
+#[test]
+fn retiro_a_committed_retiene_los_tres_frames_originales_y_redacta_debug() {
+    let rutas = preparar_rutas_retiro_a(false);
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+
+    let observacion = owner
+        .observar_retiro_a_con_slots_revalidados_pendiente_identidad_final()
+        .unwrap();
+
+    assert_eq!(
+        format!("{observacion:?}"),
+        "ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal { .. }"
+    );
+    drop(observacion);
+    drop(owner);
+    drop(lock);
+    assert_owner_files_preserved(&rutas);
+}
+
+#[test]
+fn binding_discordante_rechaza_retiro_a_y_preserva_los_tres_frames() {
+    let rutas = preparar_rutas_retiro_a(true);
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+
+    assert!(matches!(
+        owner.observar_retiro_a_con_slots_revalidados_pendiente_identidad_final(),
+        Err(crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionRetiroA::ObservationUnverified)
+    ));
+    drop(owner);
+    drop(lock);
+    assert_owner_files_preserved(&rutas);
+}
+
+#[test]
+fn slots_retiro_a_invalidos_al_inicio_o_despues_de_leer_fallan_cerrado() {
+    for caso in 0_usize..7 {
+        let mut rutas = preparar_rutas_retiro_a(false);
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let nombres = NombresIntentVersionado::desde_owner(&owner).unwrap();
+        let temporales = nombres.temporales_os_str();
+        let temporal = rutas
+            .intent
+            .parent()
+            .unwrap()
+            .join(temporales[if caso == 6 { 2 } else { caso.saturating_sub(3) }]);
+        let faltante = match caso {
+            0 => Some(rutas.fixture.ruta_journal.as_path()),
+            1 => Some(rutas.fixture.ruta_contexto.as_path()),
+            2 => Some(rutas.intent.as_path()),
+            _ => None,
+        };
+        if let Some(path) = faltante {
+            if caso == 2 {
+                let reemplazo = File::open(&rutas.fixture.ruta_contexto).unwrap();
+                drop(std::mem::replace(
+                    &mut rutas.fixture.archivo_intent,
+                    reemplazo,
+                ));
+            }
+            fs::remove_file(path).unwrap();
+        } else if caso < 6 {
+            fs::write(&temporal, b"temporary sibling must fail closed").unwrap();
+        }
+
+        if caso == 6 {
+            let observado = owner
+                .observar_retiro_a_con_slots_revalidados_pendiente_identidad_final_con_prueba(
+                    |_| fs::write(&temporal, b"late temporary must fail closed").unwrap(),
+                    |owner| owner.parent_revalidado(),
+                );
+            assert!(matches!(
+                observado,
+                Err(crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionRetiroA::ObservationUnverified)
+            ));
+        } else {
+            assert!(matches!(
+                owner.observar_retiro_a_con_slots_revalidados_pendiente_identidad_final(),
+                Err(crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionRetiroA::ObservationUnverified)
+            ));
+        }
+
+        if faltante.is_none() {
+            fs::remove_file(&temporal).unwrap();
+        }
+        drop(owner);
+        drop(lock);
+        if let Some(path) = faltante {
+            assert!(!path.exists());
+            assert_eq!(fs::read(&rutas.lock).unwrap(), LOCK_CANARY);
+            let siblings = [
+                (
+                    rutas.fixture.ruta_journal.as_path(),
+                    rutas.fixture.bytes_journal.as_slice(),
+                ),
+                (
+                    rutas.fixture.ruta_contexto.as_path(),
+                    rutas.fixture.bytes_contexto.as_slice(),
+                ),
+                (
+                    rutas.intent.as_path(),
+                    rutas.fixture.bytes_intent.as_slice(),
+                ),
+            ];
+            for (indice, (path, bytes)) in siblings.iter().enumerate() {
+                if indice != caso {
+                    assert_eq!(fs::read(path).unwrap().as_slice(), *bytes);
+                }
+            }
+        } else {
+            assert_owner_files_preserved(&rutas);
+        }
+    }
+}
+
+#[test]
+fn postcheck_exterior_retiro_a_domina_exito_y_error_de_binding() {
+    for binding_discordante in [false, true] {
+        let rutas = preparar_rutas_retiro_a(binding_discordante);
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let cuerpo_llamado = std::cell::Cell::new(false);
+        let postcheck_llamado = std::cell::Cell::new(false);
+
+        let resultado = owner
+            .observar_retiro_a_con_slots_revalidados_pendiente_identidad_final_con_prueba(
+                |_| cuerpo_llamado.set(true),
+                |_| {
+                    postcheck_llamado.set(true);
+                    Err(crate::transaccion::anclado::journal_temporal::ErrorJournalAnclado::Io)
+                },
+            );
+
+        assert!(matches!(
+            resultado,
+            Err(crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionRetiroA::OwnerUnverified)
+        ));
+        assert!(postcheck_llamado.get());
+        assert_eq!(cuerpo_llamado.get(), !binding_discordante);
+        drop(owner);
+        drop(lock);
+        assert_owner_files_preserved(&rutas);
+    }
+}
+
 fn assert_owner_files_preserved(rutas: &RutasOwner) {
     assert_eq!(fs::read(&rutas.intent).unwrap(), rutas.fixture.bytes_intent);
     assert_owner_sidecars_preserved(rutas);

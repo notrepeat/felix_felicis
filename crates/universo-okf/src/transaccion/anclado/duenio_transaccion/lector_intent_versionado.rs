@@ -216,6 +216,15 @@ pub(super) struct ObservacionIntentVersionada {
     candidato: CandidatoIntentConVinculosCoincidentes,
 }
 
+impl ObservacionIntentVersionada {
+    /// Presta el registro y su identidad nativa a la clasificación de Retiro A.
+    pub(super) fn registro_e_identidad_observados(
+        &self,
+    ) -> (&IntentRetiroPersistidoVersionado, IdentidadArchivo) {
+        (&self.candidato.envelope, self.candidato.identidad_archivo)
+    }
+}
+
 impl fmt::Debug for ObservacionIntentVersionada {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ObservacionIntentVersionada { .. }")

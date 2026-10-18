@@ -119,6 +119,15 @@ impl ObservacionContextoVersionada {
         &self.envelope
     }
 
+    /// Presta solo la evidencia raw consumida por los vínculos del retiro.
+    pub(super) fn evidencia_raw_retiro(&self) -> (IdentidadArchivo, u64, [u8; 32]) {
+        (
+            self.evidencia.identidad_archivo,
+            self.evidencia.longitud,
+            self.evidencia.sha256,
+        )
+    }
+
     /// Exige la variante V2 y su binding estructural; no presta el envelope.
     pub(super) fn validar_binding_v2(
         &self,

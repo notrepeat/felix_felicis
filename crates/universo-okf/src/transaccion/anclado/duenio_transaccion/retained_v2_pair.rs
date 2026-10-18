@@ -1,6 +1,7 @@
 use std::fmt;
 use std::fs::File;
 
+use crate::transaccion::anclado::identidad_archivo::persistida::IdentidadArchivoPersistida;
 use crate::transaccion::journal::selector::JournalPersistido;
 
 use super::super::contexto_admision::ObservacionContextoVersionada;
@@ -105,6 +106,162 @@ impl DuenioTransaccionAnclado<'_> {
 
         despues_del_binding(self);
         Ok(ParejaV2LeidaLigada { journal, contexto })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ErrorObservacionRetiroA {
+    OwnerUnverified,
+    ObservationUnverified,
+}
+
+impl fmt::Debug for ErrorObservacionRetiroA {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::OwnerUnverified => "OwnerUnverified",
+            Self::ObservationUnverified => "ObservationUnverified",
+        })
+    }
+}
+
+/// Retiene los tres lectores A tras validar slots y bindings; sus identidades
+/// finales aún no se han vuelto a comparar con los nombres canónicos.
+#[must_use]
+pub(super) struct ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal {
+    journal: ObservacionJournalPersistido,
+    contexto: ObservacionContextoVersionada,
+    intent: super::lector_intent_versionado::ObservacionIntentVersionada,
+}
+
+impl fmt::Debug for ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal { .. }")
+    }
+}
+
+impl DuenioTransaccionAnclado<'_> {
+    /// Observa Retiro A y conserva J/C/Intent originales sin confirmar aún sus
+    /// nombres canónicos por identidad nativa tras el guard final.
+    pub(super) fn observar_retiro_a_con_slots_revalidados_pendiente_identidad_final(
+        &mut self,
+    ) -> Result<ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal, ErrorObservacionRetiroA>
+    {
+        self.observar_retiro_a_con_postcheck(|_| {}, |owner| owner.parent_revalidado())
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_retiro_a_con_slots_revalidados_pendiente_identidad_final_con_prueba<
+        H,
+        P,
+    >(
+        &mut self,
+        despues_de_bindings: H,
+        postcheck: P,
+    ) -> Result<ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal, ErrorObservacionRetiroA>
+    where
+        H: FnOnce(&mut Self),
+        P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+    {
+        self.observar_retiro_a_con_postcheck(despues_de_bindings, postcheck)
+    }
+
+    fn observar_retiro_a_con_postcheck<H, P>(
+        &mut self,
+        despues_de_bindings: H,
+        postcheck: P,
+    ) -> Result<ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal, ErrorObservacionRetiroA>
+    where
+        H: FnOnce(&mut Self),
+        P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+    {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorObservacionRetiroA::OwnerUnverified)?;
+        drop(parent);
+
+        let resultado = (|| {
+            self.exigir_forma_retiro_a()?;
+
+            let journal = self
+                .observar_journal_versionado()
+                .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?
+                .ok_or(ErrorObservacionRetiroA::ObservationUnverified)?;
+            let contexto = self
+                .observar_contexto_versionado()
+                .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?
+                .ok_or(ErrorObservacionRetiroA::ObservationUnverified)?;
+            let intent = self
+                .observar_intent_versionado()
+                .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?
+                .ok_or(ErrorObservacionRetiroA::ObservationUnverified)?;
+
+            let crate::transaccion::journal::selector::JournalPersistido::V2(journal_v2) =
+                journal.journal()
+            else {
+                return Err(ErrorObservacionRetiroA::ObservationUnverified);
+            };
+            let (registro_intent, identidad_intent) = intent.registro_e_identidad_observados();
+            let (identidad_contexto, longitud_contexto, sha256_contexto) =
+                contexto.evidencia_raw_retiro();
+            let identidad_intent = IdentidadArchivoPersistida::try_from(identidad_intent)
+                .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+            let identidad_journal =
+                IdentidadArchivoPersistida::try_from(journal.identidad().identidad_archivo())
+                    .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+            let identidad_contexto = IdentidadArchivoPersistida::try_from(identidad_contexto)
+                .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+            let scope = self.scope_parent.0;
+
+            let fase = familia_persistida::clasificar(
+                Some(journal.journal()),
+                Some(contexto.envelope_versionado()),
+                Some(registro_intent),
+            )
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+            if !matches!(&fase, FaseFamiliaPersistida::RetiroA { .. }) {
+                return Err(ErrorObservacionRetiroA::ObservationUnverified);
+            }
+            familia_persistida::validar_bindings_retiro_datos(
+                &fase,
+                (&identidad_intent, scope),
+                Some((&identidad_journal, scope, journal_v2)),
+                Some((
+                    &identidad_contexto,
+                    scope,
+                    longitud_contexto,
+                    &sha256_contexto,
+                )),
+            )
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+
+            despues_de_bindings(self);
+            self.exigir_forma_retiro_a()?;
+
+            Ok(
+                ObservacionRetiroAConSlotsRevalidadosPendienteIdentidadFinal {
+                    journal,
+                    contexto,
+                    intent,
+                },
+            )
+        })();
+
+        let parent = postcheck(self).map_err(|_| ErrorObservacionRetiroA::OwnerUnverified)?;
+        drop(parent);
+        resultado
+    }
+
+    fn exigir_forma_retiro_a(&mut self) -> Result<(), ErrorObservacionRetiroA> {
+        let slots = self
+            .observar_siblings_nuevo_flujo()
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?;
+        match slots
+            .clasificar_forma_slots_retiro_v2()
+            .map_err(|_| ErrorObservacionRetiroA::ObservationUnverified)?
+        {
+            super::observar_siblings_nuevo_flujo::FormaObservadaSlotsRetiroV2::RetiroA => Ok(()),
+            _ => Err(ErrorObservacionRetiroA::ObservationUnverified),
+        }
     }
 }
 
