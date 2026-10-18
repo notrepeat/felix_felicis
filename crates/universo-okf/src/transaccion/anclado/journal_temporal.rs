@@ -267,6 +267,23 @@ impl<'lock> JournalTemporalAnclado<'lock> {
         &self,
         original: &'original versionado::ObservacionJournalPersistido,
     ) -> Result<ReciboTemporalSucesorJournalV2<'original>, ErrorJournalAnclado> {
+        self.preparar_sucesor_temporal_v2_con(original, || {})
+    }
+
+    #[cfg(test)]
+    fn preparar_sucesor_temporal_v2_con_prueba<'original>(
+        &self,
+        original: &'original versionado::ObservacionJournalPersistido,
+        despues_de_crear_temporal: impl FnOnce(),
+    ) -> Result<ReciboTemporalSucesorJournalV2<'original>, ErrorJournalAnclado> {
+        self.preparar_sucesor_temporal_v2_con(original, despues_de_crear_temporal)
+    }
+
+    fn preparar_sucesor_temporal_v2_con<'original>(
+        &self,
+        original: &'original versionado::ObservacionJournalPersistido,
+        despues_de_crear_temporal: impl FnOnce(),
+    ) -> Result<ReciboTemporalSucesorJournalV2<'original>, ErrorJournalAnclado> {
         if self.raiz_remota {
             return Err(ErrorJournalAnclado::RemoteUnsupported);
         }
@@ -290,6 +307,7 @@ impl<'lock> JournalTemporalAnclado<'lock> {
 
         let candidato = derivar_sucesor_journal_v2(anterior)?;
         let identidad_temporal = self.crear_temporal_v2(&candidato)?;
+        despues_de_crear_temporal();
         let temporal = self
             .observar_temporal_versionado(&candidato)
             .map_err(mapear_error_preparacion_v2)?;
