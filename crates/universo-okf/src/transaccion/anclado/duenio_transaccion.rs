@@ -133,7 +133,6 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
     ///
     /// Emite el lease estricto del Journal usado por el consumidor privado
     /// A→Journal→B. Los leases legacy conservan `journal_temporal`.
-    #[allow(dead_code)]
     pub(super) fn journal_temporal_estricto(
         &mut self,
     ) -> Result<
@@ -550,9 +549,10 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
     }
 }
 
-/// Resultado privado que conserva el owner, el registro y la identidad creada.
+/// Recibo privado que conserva el owner, el registro y la identidad creada.
 ///
-/// No permite publicar, leer por ruta ni ejecutar una operación de recovery.
+/// Su consumidor solo publica el Journal retenido; no expone File, ruta ni
+/// operación de recovery.
 #[must_use = "el recibo conserva el owner mientras vive"]
 pub(super) struct ReciboTemporalJournalV2<'owner, 'lock> {
     _owner: &'owner mut DuenioTransaccionAnclado<'lock>,
@@ -564,6 +564,118 @@ impl fmt::Debug for ReciboTemporalJournalV2<'_, '_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ReciboTemporalJournalV2 { .. }")
     }
+}
+
+#[must_use = "el resultado informa solo lo observado al publicar el Journal"]
+pub(super) enum ResultadoPublicacionJournalV2ConOwner {
+    PrecheckFallido(super::journal_temporal::ErrorJournalAnclado),
+    PostcheckNoVerificado,
+    ErrorCuerpo(super::journal_temporal::ErrorJournalAnclado),
+    Publicacion(super::journal_temporal::ResultadoPublicacionJournal),
+}
+
+impl fmt::Debug for ResultadoPublicacionJournalV2ConOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let nombre = match self {
+            Self::PrecheckFallido(_) => "PrecheckFallido",
+            Self::PostcheckNoVerificado => "PostcheckNoVerificado",
+            Self::ErrorCuerpo(_) => "ErrorCuerpo",
+            Self::Publicacion(_) => "Publicacion",
+        };
+        formatter.write_str(nombre)
+    }
+}
+
+impl<'owner, 'lock> ReciboTemporalJournalV2<'owner, 'lock> {
+    /// Consume el recibo y publica sus datos mediante el mismo owner y lock.
+    ///
+    /// El postcheck exterior domina los resultados del cuerpo; si falla, el
+    /// efecto del syscall queda sin verificar y no se informa `NoAplicado`.
+    pub(super) fn publicar_con_owner(self) -> ResultadoPublicacionJournalV2ConOwner {
+        self.publicar_con_owner_core(
+            |_| {},
+            publicar_journal_v2_desde_owner,
+            |owner| owner.parent_revalidado(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn publicar_con_owner_con_prueba<Antes, Publicar, Postcheck>(
+        self,
+        antes_del_cuerpo: Antes,
+        publicar: Publicar,
+        postcheck: Postcheck,
+    ) -> ResultadoPublicacionJournalV2ConOwner
+    where
+        Antes: FnOnce(&mut DuenioTransaccionAnclado<'lock>),
+        Publicar: FnOnce(
+            &mut DuenioTransaccionAnclado<'lock>,
+            super::journal_temporal::IdentidadArchivoJournal,
+            &JournalV2,
+        ) -> Result<
+            super::journal_temporal::ResultadoPublicacionJournal,
+            super::journal_temporal::ErrorJournalAnclado,
+        >,
+        Postcheck: FnOnce(
+            &mut DuenioTransaccionAnclado<'lock>,
+        ) -> Result<File, super::journal_temporal::ErrorJournalAnclado>,
+    {
+        self.publicar_con_owner_core(antes_del_cuerpo, publicar, postcheck)
+    }
+
+    fn publicar_con_owner_core<Antes, Publicar, Postcheck>(
+        self,
+        antes_del_cuerpo: Antes,
+        publicar: Publicar,
+        postcheck: Postcheck,
+    ) -> ResultadoPublicacionJournalV2ConOwner
+    where
+        Antes: FnOnce(&mut DuenioTransaccionAnclado<'lock>),
+        Publicar: FnOnce(
+            &mut DuenioTransaccionAnclado<'lock>,
+            super::journal_temporal::IdentidadArchivoJournal,
+            &JournalV2,
+        ) -> Result<
+            super::journal_temporal::ResultadoPublicacionJournal,
+            super::journal_temporal::ErrorJournalAnclado,
+        >,
+        Postcheck: FnOnce(
+            &mut DuenioTransaccionAnclado<'lock>,
+        ) -> Result<File, super::journal_temporal::ErrorJournalAnclado>,
+    {
+        let Self {
+            _owner: owner,
+            journal,
+            identidad,
+        } = self;
+
+        if let Err(error) = owner.parent_revalidado().map(|_| ()) {
+            return ResultadoPublicacionJournalV2ConOwner::PrecheckFallido(error);
+        }
+
+        antes_del_cuerpo(owner);
+        let resultado_cuerpo = publicar(owner, identidad, &journal);
+        if postcheck(owner).map(|_| ()).is_err() {
+            return ResultadoPublicacionJournalV2ConOwner::PostcheckNoVerificado;
+        }
+
+        match resultado_cuerpo {
+            Ok(resultado) => ResultadoPublicacionJournalV2ConOwner::Publicacion(resultado),
+            Err(error) => ResultadoPublicacionJournalV2ConOwner::ErrorCuerpo(error),
+        }
+    }
+}
+
+fn publicar_journal_v2_desde_owner(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+    identidad: super::journal_temporal::IdentidadArchivoJournal,
+    journal: &JournalV2,
+) -> Result<
+    super::journal_temporal::ResultadoPublicacionJournal,
+    super::journal_temporal::ErrorJournalAnclado,
+> {
+    let lease = owner.journal_temporal_estricto()?;
+    Ok(lease.publicar_v2(identidad, journal))
 }
 
 impl fmt::Debug for DuenioTransaccionAnclado<'_> {

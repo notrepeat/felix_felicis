@@ -52,6 +52,19 @@ impl JournalTemporalAnclado<'_> {
         )
     }
 
+    #[cfg(test)]
+    pub(in crate::transaccion::anclado) fn publicar_v2_con_prueba<P>(
+        &self,
+        esperada: IdentidadArchivoJournal,
+        journal_esperado: &JournalV2,
+        publicar: P,
+    ) -> ResultadoPublicacionJournal
+    where
+        P: FnOnce(&Self, &File) -> Result<(), ErrorJournalAnclado>,
+    {
+        self.publicar_v2_con(esperada, journal_esperado, publicar)
+    }
+
     fn publicar_v2_con<P>(
         &self,
         esperada: IdentidadArchivoJournal,
