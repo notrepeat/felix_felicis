@@ -7,66 +7,52 @@ tiene caller productivo desde apply ni recovery.
 <a name="corte-actual-observacion-normal-versionada"></a>
 ## Corte actual: almacenamiento tipado y publicación Journal v2
 
-El almacenamiento de Contexto v2 (3e3ec9e) persiste el envelope con recibo de
-ID nativo, longitud y SHA-256. El lector verifica parent y codec; las pruebas
-comparan el binding estructural con un JournalV2 de fixture. J2a (b0cb5d0)
-añade un lease tipado para JournalV2.
+El CI registrado para HEAD 21b32870855b1f83697e495c52478c621748e659
+(run 39119647096) terminó correctamente: Windows 1334/0/9 y Linux 1355/0/9,
+con 38 suites Cargo, siete pruebas Python y 14 pasos por job. Cubre E1 y E2a;
+es anterior al coordinador bd891f0 y no ejecutó el ADDON adversarial.
 
-El CI registrado para d811d96f6a3dabc097463f0dfa8c2c499829d18e
-(run 39109619811) terminó correctamente: Linux 1341/0/9 y Windows 1320/0/9.
-Cada job ejecutó 38 suites Cargo, siete pruebas Python y 14 pasos. Incluye
-J2b, J2c, A y B; no cubre e987d7b, 19ceb25, ac4b674 ni 13c1550.
+El coordinador privado consume el recibo Journal y recibe prestado el recibo
+Contexto, bajo el borrow mutable del owner que conserva el recibo Journal.
+Arc::ptr_eq vincula el recibo Contexto al guard compartido: acredita el linaje
+del lock, no unicidad de una instancia owner. La observación inicial contrasta
+scope, ID nativo, longitud, SHA-256 y binding V2; el observador también
+comprueba replay. Solo Prepared llega al publicador Journal v2 NOREPLACE.
 
-e987d7b adapta la publicación NOREPLACE de JournalV2 en fase Prepared; aún
-no consume el recibo del owner. Pasó 93/0/0 en Windows y 95/0/0 en Linux.
-19ceb25 prueba la resolución de resultados ambiguos del syscall: pasó
-96/0/0 y 98/0/0, sin postcheck del owner.
+Tras un intento de publicación, toma una lectura nueva de Contexto y conserva
+el estado inicial, el de esa lectura —que también puede ser Error o Ausente— y
+el outcome o error del cuerpo hasta el postcheck exterior. Su error domina
+incluso un Confirmado; no infiere ausencia de efecto ni autoriza reintentos o
+limpieza a ciegas. El resultado es un informe privado de datos: no acredita
+admisión ni autoriza apply, recovery o cleanup productivos.
 
-D1 (ac4b674) consume el recibo tipado con precheck y postcheck exterior del
-mismo owner. Pasó 302/0/0 en Windows (673 filtradas) y 308/0/0 en Linux
-(691 filtradas), con compilaciones frescas y controles sin errores. Si falla
-el postcheck, devuelve PostcheckNoVerificado incluso después de Confirmado;
-no infiere NoAplicado ni reintenta o limpia a ciegas.
+| Corte | Windows | Linux | Alcance |
+|---|---:|---:|---|
+| e987d7b | 93/0/0 | 95/0/0 | Adaptador Prepared, publicación NOREPLACE |
+| 19ceb25 | 96/0/0 | 98/0/0 | Pruebas de resultados ambiguos del syscall |
+| ac4b674 | 302/0/0 | 308/0/0 | Recibo y pre/postcheck del owner |
+| 13c1550 | 304/0/0 | 310/0/0 | Dos pruebas adicionales de postcheck dominante |
+| Fixture b95472c | 306/0/0 | 312/0/0 | 121 churn; Contexto/Journal replayable |
+| Observador 6e60548 | 309/0/0 | 315/0/0 | 260 churn; continuidad de Contexto |
+| Soporte 3e579f5 | 310/0/0 | 316/0/0 | 76 churn; soporte test-only |
+| Coordinador bd891f0 | 315/0/0 (674 filtradas) | 321/0/0 (692 filtradas) | 394/0; cinco pruebas; controles 0 |
+| ADDON f14cb64 | 317/0/0 (674 filtradas) | 323/0/0 (692 filtradas) | 161/0; dos pruebas; controles 0 |
 
-D2 (13c1550) añade dos pruebas de dominancia del postcheck. Pasó 304/0/0 en
-Windows (673 filtradas) y 310/0/0 en Linux (691 filtradas), con limpieza de
-Cargo, compilación fresca y controles auxiliares sin errores.
+El coordinador bd891f05551ad5dac62011437dde737d1f8935c6 cerró gates focales
+Windows y Linux con limpieza correcta, compilaciones frescas, las tres rutas
+del corte en .d verificadas, controles auxiliares en cero y sin temporales del
+runner al cierre. Los temporales adversariales de Journal se verificaron en
+sus casos.
+El ADDON f14cb64f704210d5068de9639052f76b6ded8d10, hijo del coordinador,
+cerró también gates en ambos sistemas; sigue siendo test-only y no está cubierto
+por el CI de referencia. Los cierres focales usaron Rust/Cargo 1.88.0
+locked/offline; formato, clippy del workspace con todos los targets y
+-D warnings, frontera, diff y C0 dieron 0.
 
-El CI exacto de `3c8e1e73486032bc705991fb20a977c563e70e0d` (run `39115327479`) terminó
-SUCCESS: Windows `1332/0/9` y Linux `1353/0/9`; cada job ejecutó 38 suites Cargo, siete
-pruebas Python y 14 pasos. Ese run verifica únicamente ese SHA. Los commits E1 `99f620c` y
-E2a `514cce9` aún no tienen CI propio.
-
-E1 (`99f620c`, hijo de `3c8e1e7`, 134 líneas) añade un guard privado de continuidad del
-recibo Contexto v2. Compara la identidad del token compartido (`Arc`), el parent y el scope
-del lease con el recibo; verifica ID nativo, longitud y SHA-256 de la observación retenida,
-y exige que su binding V2 completo coincida con `JournalV2`. Devuelve solo `Result<(),
-ErrorContextoAdmisionAnclado>` con error fijo; no reabre el basename ni coordina Contexto →
-Journal.
-
-E2a (`514cce9`, hijo de `99f620c`, 157 líneas de churn) añade el helper privado que retiene
-el resultado del cuerpo y su error hasta que termina el postcheck del owner. La prueba nueva
-verifica que el valor y el error del cuerpo siguen retenidos hasta completar ese postcheck.
-La coordinación Contexto → Journal sigue pendiente; un caller posterior debe obtener una
-observación nueva después de publicar Journal. Estos guards no conceden admisión ni
-habilitan apply, recovery o cleanup.
-
-El filtro local `contexto_admision::tests::` pasó con Rust/Cargo 1.88.0 y `--locked
---offline`: Windows 52 passed/0 failed/0 ignored (926 filtradas) y Linux 55/0/0 (947
-filtradas). El filtro `duenio_transaccion::`, que incluye la prueba nueva de E2a, pasó
-Windows 305/0/0 (674 filtradas) y Linux 311/0/0 (692 filtradas).
-
-Ambos cortes limpiaron `universo-okf` antes de compilar (387 archivos en Windows y 386 en
-Linux), verificaron los artefactos focales frescos y su `.d` con las dos rutas de cada corte, y
-cerraron sin procesos de build o test. `cargo fmt --all -- --check`, clippy de
-workspace/all-targets con `-D warnings`, frontera pública, `git diff --check` y C0/DEL
-terminaron en exit 0; la limpieza del runner Linux también terminó en 0.
-
-La secuencia que conserva y revalida Contexto antes de publicar Journal aún
-no está coordinada. Los resultados son informes de observación, no admisión
-ni autoridad para recovery o apply productivo. Las publicaciones privadas
-no garantizan un snapshot atómico, estabilidad frente a escritores externos,
-montajes generales, recuperación tras pérdida de energía ni fsync completo.
+Journal v1 y sus recetas siguen intactos. U7 y la fase 04 continúan parciales;
+el progreso global permanece en 4/9. Las lecturas son secuenciales, no un
+snapshot atómico ni una garantía de estabilidad ante writers externos,
+montajes generales, pérdida de energía o fsync completo.
 
 | Corte | Commit | Cambio medido | Pruebas focales Windows / Linux |
 |---|---|---:|---|

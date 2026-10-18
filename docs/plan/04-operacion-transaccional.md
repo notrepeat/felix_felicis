@@ -14,68 +14,38 @@ bytes intactos.
 
 ### Corte actual: publicación tipada de Journal v2
 
-El almacenamiento de Contexto v2 (3e3ec9e) persiste el envelope con recibo de
-ID nativo, longitud y SHA-256. El lector verifica parent y codec; las pruebas
-comparan el binding con un JournalV2 de fixture. J2a (b0cb5d0) añade el lease
-tipado. J2b (d17f5a2), J2c (2fe41fd), A (b61475a) y B (7ceb915) están en el
-CI de referencia descrito abajo.
+El CI registrado para HEAD 21b32870855b1f83697e495c52478c621748e659
+(run 39119647096) terminó correctamente: Windows 1334/0/9 y Linux 1355/0/9,
+con 38 suites Cargo, siete pruebas Python y 14 pasos por job. Cubre E1 y E2a;
+es anterior al coordinador bd891f0 y al ADDON test-only.
 
-El CI registrado para d811d96f6a3dabc097463f0dfa8c2c499829d18e
-(run 39109619811) terminó correctamente: Linux 1341/0/9 y Windows 1320/0/9,
-con 38 suites Cargo, siete pruebas Python y 14 pasos por job. No cubre
-e987d7b, 19ceb25, ac4b674 ni 13c1550.
+El coordinador privado consume solo el recibo Journal y recibe prestado el
+recibo Contexto. El primero porta el borrow mutable del owner; Arc::ptr_eq
+vincula el segundo al guard compartido y acredita el linaje del lock, no una
+instancia owner única. La lectura inicial contrasta scope, ID nativo, longitud,
+SHA-256 y binding V2; el observador comprueba replay. Solo se publica Journal
+v2 Prepared con NOREPLACE. Tras cada intento se obtiene una lectura Contexto
+nueva; se retienen el estado inicial, el resultado de esa relectura —que puede
+ser error o ausencia— y el outcome crudo hasta el postcheck exterior dominante.
+Su error domina incluso un Confirmado: no implica ausencia de efecto ni
+autoriza reintento o limpieza a ciegas. El resultado es un informe privado de
+datos, no una admisión ni autoridad de cleanup, y no habilita caller productivo
+de apply o recovery.
 
-e987d7b adapta la publicación NOREPLACE de JournalV2 en fase Prepared, sin
-consumir el recibo del owner; pasó 93/0/0 en Windows y 95/0/0 en Linux.
-19ceb25 prueba la resolución de resultados ambiguos del syscall y pasó
-96/0/0 y 98/0/0; no añade postcheck del owner.
+El commit bd891f05551ad5dac62011437dde737d1f8935c6 (394/0, cinco pruebas)
+pasó 315/0/0 en Windows (674 filtradas) y 321/0/0 en Linux (692 filtradas).
+Los dos cierres tuvieron limpieza correcta, compilaciones frescas, tres rutas
+del corte verificadas en .d, controles en cero y sin temporales del runner al
+cierre; los temporales adversariales se comprobaron en sus casos. El ADDON
+f14cb64f704210d5068de9639052f76b6ded8d10 añade dos pruebas (161/0): pasó
+317/0/0 en Windows (674 filtradas) y 323/0/0 en Linux (692 filtradas), con
+controles en cero. Sigue siendo test-only y no tiene CI propio.
 
-D1 (ac4b674) consume el recibo con precheck y postcheck exterior del mismo
-owner. Pasó 302/0/0 en Windows (673 filtradas) y 308/0/0 en Linux
-(691 filtradas), con compilaciones frescas y controles sin errores. El error
-del postcheck se informa como PostcheckNoVerificado aun si el cuerpo confirmó
-la publicación; no se infiere NoAplicado ni se reintenta o limpia a ciegas.
-
-D2 (13c1550) añade dos pruebas de dominancia; pasó 304/0/0 en Windows
-(673 filtradas) y 310/0/0 en Linux (691 filtradas), con limpieza de Cargo,
-compilación fresca y controles auxiliares sin errores.
-
-El CI exacto de `3c8e1e73486032bc705991fb20a977c563e70e0d` (run `39115327479`) terminó
-SUCCESS: Windows `1332/0/9` y Linux `1353/0/9`; cada job ejecutó 38 suites Cargo, siete
-pruebas Python y 14 pasos. Ese run verifica únicamente ese SHA. Los commits E1 `99f620c` y
-E2a `514cce9` aún no tienen CI propio.
-
-E1 (`99f620c`, hijo de `3c8e1e7`, 134 líneas) añade un guard privado de continuidad del
-recibo Contexto v2. Compara la identidad del token compartido (`Arc`), el parent y el scope
-del lease con el recibo; verifica ID nativo, longitud y SHA-256 de la observación retenida,
-y exige que su binding V2 completo coincida con `JournalV2`. Devuelve solo `Result<(),
-ErrorContextoAdmisionAnclado>` con error fijo; no reabre el basename ni coordina Contexto →
-Journal.
-
-E2a (`514cce9`, hijo de `99f620c`, 157 líneas de churn) añade el helper privado que retiene
-el resultado del cuerpo y su error hasta que termina el postcheck del owner. La prueba nueva
-verifica que el valor y el error del cuerpo siguen retenidos hasta completar ese postcheck.
-La coordinación Contexto → Journal sigue pendiente; un caller posterior debe obtener una
-observación nueva después de publicar Journal. Estos guards no conceden admisión ni
-habilitan apply, recovery o cleanup.
-
-El filtro local `contexto_admision::tests::` pasó con Rust/Cargo 1.88.0 y `--locked
---offline`: Windows 52 passed/0 failed/0 ignored (926 filtradas) y Linux 55/0/0 (947
-filtradas). El filtro `duenio_transaccion::`, que incluye la prueba nueva de E2a, pasó
-Windows 305/0/0 (674 filtradas) y Linux 311/0/0 (692 filtradas).
-
-Ambos cortes limpiaron `universo-okf` antes de compilar (387 archivos en Windows y 386 en
-Linux), verificaron los artefactos focales frescos y su `.d` con las dos rutas de cada corte, y
-cerraron sin procesos de build o test. `cargo fmt --all -- --check`, clippy de
-workspace/all-targets con `-D warnings`, frontera pública, `git diff --check` y C0/DEL
-terminaron en exit 0; la limpieza del runner Linux también terminó en 0.
-
-La coordinación que conserva y revalida Contexto antes de publicar Journal
-sigue pendiente. Estos resultados no acreditan admisión ni habilitan un
-caller productivo de apply o recovery. Journal v1 permanece intacto; U7 y la
-fase 04 siguen parciales (4/9). Las sondas secuenciales no son un snapshot
-atómico ni garantizan estabilidad ante escritores externos, mounts generales,
-pérdida de energía o fsync completo.
+El baseline y la matriz de gates focales de estas unidades están documentados
+en [Contexto](04-contexto-admision.md#corte-actual-observacion-normal-versionada).
+Journal v1 permanece intacto; U7 y fase 04 siguen parciales (4/9). Las lecturas
+secuenciales no son snapshot atómico ni garantizan estabilidad ante writers
+externos, montajes generales, pérdida de energía o fsync completo.
 
 | Corte | Commit | Cambio | Pruebas focales Windows / Linux |
 |---|---|---:|---|
