@@ -505,6 +505,9 @@ mod captura_soportada_tests;
 #[path = "duenio_transaccion/comparar_root_replay.rs"]
 mod comparar_root_replay;
 
+#[path = "duenio_transaccion/comparar_root_normal_v2.rs"]
+mod comparar_root_normal_v2;
+
 #[path = "duenio_transaccion/observar_root.rs"]
 mod observar_root;
 
