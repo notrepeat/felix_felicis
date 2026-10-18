@@ -26,6 +26,37 @@ impl JournalTemporalAnclado<'_> {
         journal_esperado: &Journal,
         publicar: impl FnOnce(&Self, &File) -> Result<(), ErrorJournalAnclado>,
     ) -> ResultadoPublicacionJournal {
+        self.publicar_motor_con(
+            esperada,
+            journal_esperado,
+            |capability, identidad, journal| match capability.temporal_es(identidad, journal) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(ErrorJournalAnclado::SourceMissing),
+                Err(error) => Err(error),
+            },
+            |capability, identidad, journal| capability.canonico_es(identidad, journal),
+            |capability, identidad, journal| capability.temporal_es(identidad, journal),
+            publicar,
+        )
+    }
+
+    /// Ejecuta el protocolo no-replace sin conocer el formato del registro.
+    /// Los adapters conservan la validación y los errores de cada versión.
+    fn publicar_motor_con<T, V, C, O, P>(
+        &self,
+        esperada: IdentidadArchivoJournal,
+        registro_esperado: &T,
+        validar_temporal: V,
+        observar_canonico: C,
+        observar_temporal: O,
+        publicar: P,
+    ) -> ResultadoPublicacionJournal
+    where
+        V: FnOnce(&Self, &IdentidadArchivoJournal, &T) -> Result<(), ErrorJournalAnclado>,
+        C: Fn(&Self, &IdentidadArchivoJournal, &T) -> Result<bool, ErrorJournalAnclado>,
+        O: Fn(&Self, &IdentidadArchivoJournal, &T) -> Result<bool, ErrorJournalAnclado>,
+        P: FnOnce(&Self, &File) -> Result<(), ErrorJournalAnclado>,
+    {
         if self.raiz_remota {
             return ResultadoPublicacionJournal::PrecondicionFallida(
                 ErrorJournalAnclado::RemoteUnsupported,
@@ -37,7 +68,7 @@ impl JournalTemporalAnclado<'_> {
         let fuente = match abrir_temporal(&self.parent, &self.nombre) {
             Ok(fuente) => fuente,
             Err(ErrorJournalAnclado::SourceMissing) => {
-                return match self.canonico_es(&esperada, journal_esperado) {
+                return match observar_canonico(self, &esperada, registro_esperado) {
                     Ok(true) => {
                         resultado_con_limpieza_confirmada(EstadoLimpiezaPublicacion::Completa)
                     }
@@ -63,31 +94,29 @@ impl JournalTemporalAnclado<'_> {
             }
             Err(error) => return ResultadoPublicacionJournal::PrecondicionFallida(error),
         }
-        match self.cargar_temporal() {
-            Ok((identidad, _)) if identidad != esperada => {
-                return ResultadoPublicacionJournal::PrecondicionFallida(
-                    ErrorJournalAnclado::IdentityMismatch,
-                );
-            }
-            Ok((_, journal)) if &journal != journal_esperado => {
-                return ResultadoPublicacionJournal::PrecondicionFallida(
-                    ErrorJournalAnclado::JournalMismatch,
-                );
-            }
-            Ok(_) => {}
-            Err(error) => return ResultadoPublicacionJournal::PrecondicionFallida(error),
+        if let Err(error) = validar_temporal(self, &esperada, registro_esperado) {
+            return ResultadoPublicacionJournal::PrecondicionFallida(error);
         }
 
         match publicar(self, &fuente) {
-            Ok(()) => self.resultado_despues_de_commit(
+            Ok(()) => self.resultado_despues_de_commit_observando(
                 esperada,
-                journal_esperado,
+                registro_esperado,
+                observar_canonico,
                 |capability, identidad| capability.limpiar_temporal_si_coincide(identidad),
             ),
-            Err(error) => self.resolver_error_publicacion(esperada, journal_esperado, error),
+            Err(error) => self.resolver_error_publicacion_observando(
+                esperada,
+                registro_esperado,
+                error,
+                observar_canonico,
+                observar_temporal,
+                |capability, identidad| capability.limpiar_temporal_si_coincide(identidad),
+            ),
         }
     }
 
+    #[cfg(test)]
     fn resultado_despues_de_commit(
         &self,
         esperada: IdentidadArchivoJournal,
@@ -102,14 +131,14 @@ impl JournalTemporalAnclado<'_> {
         )
     }
 
-    fn resultado_despues_de_commit_observando(
+    fn resultado_despues_de_commit_observando<T>(
         &self,
         esperada: IdentidadArchivoJournal,
-        journal_esperado: &Journal,
+        journal_esperado: &T,
         observar_canonico: impl FnOnce(
             &Self,
             &IdentidadArchivoJournal,
-            &Journal,
+            &T,
         ) -> Result<bool, ErrorJournalAnclado>,
         limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> EstadoLimpiezaPublicacion,
     ) -> ResultadoPublicacionJournal {
@@ -124,6 +153,7 @@ impl JournalTemporalAnclado<'_> {
         }
     }
 
+    #[cfg(test)]
     fn resolver_error_publicacion(
         &self,
         esperada: IdentidadArchivoJournal,
@@ -140,20 +170,20 @@ impl JournalTemporalAnclado<'_> {
         )
     }
 
-    fn resolver_error_publicacion_observando(
+    fn resolver_error_publicacion_observando<T>(
         &self,
         esperada: IdentidadArchivoJournal,
-        journal_esperado: &Journal,
+        journal_esperado: &T,
         error_publicacion: ErrorJournalAnclado,
         observar_canonico: impl FnOnce(
             &Self,
             &IdentidadArchivoJournal,
-            &Journal,
+            &T,
         ) -> Result<bool, ErrorJournalAnclado>,
         observar_temporal: impl FnOnce(
             &Self,
             &IdentidadArchivoJournal,
-            &Journal,
+            &T,
         ) -> Result<bool, ErrorJournalAnclado>,
         limpiar: impl FnOnce(&Self, IdentidadArchivoJournal) -> EstadoLimpiezaPublicacion,
     ) -> ResultadoPublicacionJournal {
