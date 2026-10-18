@@ -13,6 +13,7 @@ use crate::transaccion::captura::{
     ConfigRawCapturada, Snapshot, capturar_snapshot_soportado_anclado,
     capturar_snapshot_soportado_con_cas_anclado,
 };
+use crate::transaccion::journal::v2::JournalV2;
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::snapshot::{ErrorSnapshot, SnapshotToken};
 
@@ -147,6 +148,103 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
             self.scope_parent,
             Arc::clone(&self._autoridad),
         )
+    }
+
+    /// Crea y relee el temporal v2 mientras este owner conserva el lock.
+    ///
+    /// El resultado es un recibo privado de almacenamiento; no publica el
+    /// journal ni concede una acción posterior.
+    pub(super) fn crear_temporal_journal_v2<'owner>(
+        &'owner mut self,
+        journal: &JournalV2,
+    ) -> Result<ReciboTemporalJournalV2<'owner, 'lock>, super::journal_temporal::ErrorJournalAnclado>
+    {
+        self.crear_temporal_journal_v2_con(
+            journal,
+            || {},
+            || {},
+            |owner, _| owner.parent_revalidado(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn crear_temporal_journal_v2_con_prueba<'owner, Antes, Despues, Postcheck>(
+        &'owner mut self,
+        journal: &JournalV2,
+        antes_de_lease: Antes,
+        despues_de_lease: Despues,
+        postcheck: Postcheck,
+    ) -> Result<ReciboTemporalJournalV2<'owner, 'lock>, super::journal_temporal::ErrorJournalAnclado>
+    where
+        Antes: FnOnce(),
+        Despues: FnOnce(),
+        Postcheck: FnOnce(
+            &mut Self,
+            &Result<
+                super::journal_temporal::IdentidadArchivoJournal,
+                super::journal_temporal::ErrorJournalAnclado,
+            >,
+        ) -> Result<File, super::journal_temporal::ErrorJournalAnclado>,
+    {
+        self.crear_temporal_journal_v2_con(journal, antes_de_lease, despues_de_lease, postcheck)
+    }
+
+    fn crear_temporal_journal_v2_con<'owner, Antes, Despues, Postcheck>(
+        &'owner mut self,
+        journal: &JournalV2,
+        antes_de_lease: Antes,
+        despues_de_lease: Despues,
+        postcheck: Postcheck,
+    ) -> Result<ReciboTemporalJournalV2<'owner, 'lock>, super::journal_temporal::ErrorJournalAnclado>
+    where
+        Antes: FnOnce(),
+        Despues: FnOnce(),
+        Postcheck: FnOnce(
+            &mut Self,
+            &Result<
+                super::journal_temporal::IdentidadArchivoJournal,
+                super::journal_temporal::ErrorJournalAnclado,
+            >,
+        ) -> Result<File, super::journal_temporal::ErrorJournalAnclado>,
+    {
+        use super::journal_temporal::ErrorJournalAnclado;
+
+        self.parent_revalidado()?;
+        let parent_esperado = self.identidad_parent.journal_identity();
+        antes_de_lease();
+
+        let lectura = match parent_esperado {
+            None => Err(ErrorJournalAnclado::ParentIdentityUnavailable),
+            Some(parent) if journal.parent() != &parent => {
+                Err(ErrorJournalAnclado::ParentIdentityMismatch)
+            }
+            Some(_) => self
+                .journal_temporal_estricto()
+                .and_then(|lease| lease.crear_temporal_v2(journal)),
+        };
+        despues_de_lease();
+
+        let verificacion = lectura.and_then(|identidad| {
+            let nombre_temporal = self._lock.ubicacion().nombre_journal_temporal();
+            visible_identity_probe::confirmar_sibling_presente_con_identidad(
+                &self.parent,
+                &nombre_temporal,
+                self.scope_parent,
+                identidad.identidad_archivo(),
+            )
+            .map_err(|_| ErrorJournalAnclado::IdentityMismatch)?;
+            Ok(identidad)
+        });
+
+        let resultado_postcheck = postcheck(self, &verificacion);
+        resultado_postcheck?;
+        let identidad = verificacion?;
+
+        Ok(ReciboTemporalJournalV2 {
+            _owner: self,
+            journal: journal.clone(),
+            identidad,
+        })
     }
 
     /// Devuelve datos versionados solo tras volver a validar el owner.
@@ -452,6 +550,22 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
     }
 }
 
+/// Resultado privado que conserva el owner, el registro y la identidad creada.
+///
+/// No permite publicar, leer por ruta ni ejecutar una operación de recovery.
+#[must_use = "el recibo conserva el owner mientras vive"]
+pub(super) struct ReciboTemporalJournalV2<'owner, 'lock> {
+    _owner: &'owner mut DuenioTransaccionAnclado<'lock>,
+    journal: JournalV2,
+    identidad: super::journal_temporal::IdentidadArchivoJournal,
+}
+
+impl fmt::Debug for ReciboTemporalJournalV2<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ReciboTemporalJournalV2 { .. }")
+    }
+}
+
 impl fmt::Debug for DuenioTransaccionAnclado<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("DuenioTransaccionAnclado { .. }")
@@ -560,3 +674,7 @@ mod tests;
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion/observer_namespace_tests.rs"]
 mod observer_namespace_tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/journal_v2_temporal_tests.rs"]
+mod journal_v2_temporal_tests;
