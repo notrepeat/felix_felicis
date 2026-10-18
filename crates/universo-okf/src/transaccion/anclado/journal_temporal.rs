@@ -15,6 +15,7 @@ use super::{
     DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, ScopeFilesystem,
     TipoEntradaAnclada, metadata_directorio, scope_filesystem, validar_componente,
 };
+use crate::transaccion::journal::v2::{JournalV2, JournalV2Error};
 use crate::transaccion::journal::{Journal, JournalError, MAX_JOURNAL_BYTES};
 use crate::transaccion::lock::LockEscritura;
 
@@ -39,6 +40,7 @@ pub(crate) enum ErrorJournalAnclado {
     ParentScopeUnverified,
     SourceScopeUnverified,
     InvalidJournal(JournalError),
+    InvalidJournalV2(JournalV2Error),
 }
 
 impl ErrorJournalAnclado {
@@ -60,6 +62,7 @@ impl ErrorJournalAnclado {
             Self::ParentScopeUnverified => "journal_parent_scope_unverified",
             Self::SourceScopeUnverified => "journal_source_scope_unverified",
             Self::InvalidJournal(error) => error.code(),
+            Self::InvalidJournalV2(error) => error.code(),
         }
     }
 }
@@ -212,6 +215,33 @@ impl<'lock> JournalTemporalAnclado<'lock> {
             },
             |archivo| archivo.sync_all().map_err(|_| ErrorJournalAnclado::Io),
         )
+    }
+
+    /// Escribe y relee un JournalV2 usando solo el scope retenido por el owner.
+    /// La comparación del nombre visible se hace después, en el owner.
+    pub(super) fn crear_temporal_v2(
+        &self,
+        journal: &JournalV2,
+    ) -> Result<IdentidadArchivoJournal, ErrorJournalAnclado> {
+        if self.scope_parent.is_none() {
+            return Err(ErrorJournalAnclado::ParentScopeUnverified);
+        }
+
+        let bytes = journal
+            .encode()
+            .map_err(ErrorJournalAnclado::InvalidJournalV2)?;
+        let identidad_creada = self.crear_nuevo(&bytes)?;
+        let (identidad_leida, bytes_leidas) = self.abrir_y_leer()?;
+        if identidad_leida != identidad_creada {
+            return Err(ErrorJournalAnclado::IdentityMismatch);
+        }
+
+        let observado =
+            JournalV2::parse(&bytes_leidas).map_err(ErrorJournalAnclado::InvalidJournalV2)?;
+        if observado != *journal {
+            return Err(ErrorJournalAnclado::JournalMismatch);
+        }
+        Ok(identidad_creada)
     }
 
     fn crear_nuevo_con(
@@ -543,3 +573,7 @@ fn mapear_error_io(error: std::io::Error) -> ErrorJournalAnclado {
 #[cfg(test)]
 #[path = "journal_temporal_tests.rs"]
 mod tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "journal_temporal/journal_v2_typed_tests.rs"]
+mod journal_v2_typed_tests;
