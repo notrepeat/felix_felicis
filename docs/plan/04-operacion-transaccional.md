@@ -14,9 +14,25 @@ bytes intactos.
 
 ### Corte actual: observación normal versionada
 
-El CI del coordinador en a089f69 (run 39097637362) terminó SUCCESS: Linux 1309/0/9 y
-Windows 1288/0/9; cada sistema ejecutó 38 suites Cargo, siete pruebas Python
-y 14 pasos. Ese CI no cubre los cortes RA0, RA1 y RA2.
+C2 local (`3e3ec9e`, 261 líneas) agrega almacenamiento privado del envelope v2:
+codificación tipada, recibo ligado al owner por ID, longitud y SHA-256, publicación sin reemplazo y
+lectura de vuelta que valida el parent estructural del envelope. Las pruebas
+recorren esa relectura y comparan bytes y binding estructural con un JournalV2
+de fixture. No acredita admisión ni activa
+apply/recovery.
+
+J2a local (`b0cb5d0`, 161 líneas) incorpora el lease tipado para JournalV2; su filtro
+`transaccion::anclado::journal_temporal::` pasó `85/0/0` en Windows y `87/0/0` en Linux con Rust 1.88 locked/offline. Aún no tiene CI propio.
+
+El filtro `contexto_admision::tests::` pasó `51/0/0` en Windows
+(cinco nuevas y 46 previas) y `54/0/0` en Linux (cinco nuevas y 49 previas);
+formato, clippy, frontera pública y diff-check terminaron en 0 en ambos
+sistemas. C2 y J2a son posteriores al CI de referencia y no tienen CI propio.
+
+El último CI publicado del coordinador se ejecutó en `0442bd0` (run
+`39100830488`) y terminó SUCCESS: Linux `1318/0/9`, Windows `1297/0/9`;
+cada sistema ejecutó 38 suites Cargo, siete pruebas Python y 14 pasos. Cubre
+RA0–RA2, pero antecede a C2 y J2a; ninguno está incluido.
 
 | Corte | Commit | Cambio | Pruebas focales Windows / Linux |
 |---|---|---:|---|

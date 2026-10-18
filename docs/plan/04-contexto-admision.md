@@ -7,9 +7,31 @@ permanece en 4/9. Este flujo aún no tiene caller productivo desde apply ni reco
 <a name="corte-actual-observacion-normal-versionada"></a>
 ## Corte actual: observación normal versionada
 
-El CI del coordinador en a089f69 (run 39097637362) terminó SUCCESS: Linux 1309/0/9 y
-Windows 1288/0/9. Cada sistema ejecutó 38 suites Cargo, siete pruebas Python
-y 14 pasos. Ese CI no cubre RA0, RA1 ni RA2.
+C2 local (`3e3ec9e`, 261 líneas de churn) agrega almacenamiento privado del
+envelope tipado v2. El owner lo codifica al crear el temporal. La verificación
+del recibo comprueba ID nativo, longitud y SHA-256; el lector
+versionado valida el parent estructural del envelope. La publicación usa
+`NOREPLACE`. Las pruebas recorren la relectura versionada y comparan bytes
+y binding estructural con un JournalV2 de fixture.
+
+Si falla el codec, el error es privado y no se crea ni modifica el temporal ni
+el canonical.
+
+J2a local (`b0cb5d0`, 161 líneas) incorpora el lease tipado para JournalV2; su filtro
+`transaccion::anclado::journal_temporal::` pasó `85/0/0` en Windows y `87/0/0` en Linux con Rust 1.88 locked/offline. Aún no tiene CI propio.
+
+El filtro `contexto_admision::tests::` pasó `51/0/0` en Windows (cinco pruebas
+nuevas y 46 anteriores) y `54/0/0` en Linux (cinco nuevas y 49 anteriores),
+con Rust 1.88 locked/offline y paquete limpio. Formato, clippy del workspace
+con todos los targets y `-D warnings`, frontera pública y diff-check pasaron
+en ambos sistemas; los artefactos fueron frescos y cleanup Linux terminó en 0.
+Es almacenamiento de datos: no acredita admisión ni habilita apply/recovery. Journal
+v1 no cambió; C2 aún no tiene CI propio.
+
+El último CI publicado del coordinador se ejecutó en `0442bd0` (run
+`39100830488`) y terminó SUCCESS: Linux `1318/0/9`, Windows `1297/0/9`;
+cada sistema ejecutó 38 suites Cargo, siete pruebas Python y 14 pasos. Cubre
+RA0–RA2, pero antecede a C2 y J2a; ninguno está incluido.
 
 | Corte | Commit | Cambio medido | Pruebas focales Windows / Linux |
 |---|---|---:|---|
