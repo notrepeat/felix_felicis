@@ -839,3 +839,7 @@ mod journal_v2_temporal_tests;
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion/owner_body_retention_tests.rs"]
 mod owner_body_retention_tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/context_journal_fixture_tests.rs"]
+mod context_journal_fixture_tests;
