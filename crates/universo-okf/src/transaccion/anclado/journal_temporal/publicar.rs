@@ -2,9 +2,16 @@ use super::versionado::{
     ErrorLecturaJournalVersionada, EtapaLecturaJournalVersionada, EtapaProbeScopeJournalVersionada,
 };
 use super::*;
-use crate::transaccion::journal::selector::{self, JournalPersistido, MAX_VERSIONED_JOURNAL_BYTES};
+use crate::transaccion::journal::selector::{
+    self, JournalPersistido, JournalPersistidoError, MAX_VERSIONED_JOURNAL_BYTES,
+};
 use std::ffi::OsStr;
 use std::io::Seek;
+
+struct FuentePublicacion<A, V> {
+    abrir: A,
+    validar: V,
+}
 
 impl JournalTemporalAnclado<'_> {
     /// Publica el temporal fijo sin reemplazar el basename canónico del journal.
@@ -25,6 +32,60 @@ impl JournalTemporalAnclado<'_> {
         })
     }
 
+    /// Publica solo el registro inicial V2 preparado por este flujo.
+    pub(crate) fn publicar_v2(
+        &self,
+        esperada: IdentidadArchivoJournal,
+        journal_esperado: &JournalV2,
+    ) -> ResultadoPublicacionJournal {
+        if journal_esperado.state() != crate::transaccion::journal::JournalState::Prepared {
+            return ResultadoPublicacionJournal::PrecondicionFallida(
+                ErrorJournalAnclado::JournalMismatch,
+            );
+        }
+
+        self.publicar_motor_con(
+            esperada,
+            journal_esperado,
+            FuentePublicacion {
+                abrir: |capability: &Self| {
+                    capability.abrir_temporal_versionado_para_publicar(journal_esperado)
+                },
+                validar: |capability: &Self,
+                          fuente: &mut File,
+                          _identidad: &IdentidadArchivoJournal,
+                          journal: &JournalV2| {
+                    let mut etapas = |_etapa: EtapaLecturaJournalVersionada| {};
+                    capability
+                        .validar_temporal_versionado_en_handle(
+                            fuente,
+                            journal,
+                            &mut etapas,
+                            |_etapa: EtapaProbeScopeJournalVersionada, handle: &File| {
+                                scope_filesystem(handle)
+                            },
+                        )
+                        .map(|_| ())
+                        .map_err(mapear_error_lectura_versionada)
+                },
+            },
+            |capability: &Self, identidad: &IdentidadArchivoJournal, journal: &JournalV2| {
+                capability.canonico_v2_es(identidad, journal)
+            },
+            |capability: &Self, identidad: &IdentidadArchivoJournal, journal: &JournalV2| {
+                capability.temporal_v2_es(identidad, journal)
+            },
+            |capability: &Self, fuente: &File| {
+                publicar_plataforma(
+                    &capability.parent,
+                    &capability.nombre,
+                    &capability.nombre_journal,
+                    fuente,
+                )
+            },
+        )
+    }
+
     fn publicar_con(
         &self,
         esperada: IdentidadArchivoJournal,
@@ -34,10 +95,18 @@ impl JournalTemporalAnclado<'_> {
         self.publicar_motor_con(
             esperada,
             journal_esperado,
-            |capability, identidad, journal| match capability.temporal_es(identidad, journal) {
-                Ok(true) => Ok(()),
-                Ok(false) => Err(ErrorJournalAnclado::SourceMissing),
-                Err(error) => Err(error),
+            FuentePublicacion {
+                abrir: |capability: &Self| abrir_temporal(&capability.parent, &capability.nombre),
+                validar: |capability: &Self,
+                          _fuente: &mut File,
+                          identidad: &IdentidadArchivoJournal,
+                          journal: &Journal| match capability
+                    .temporal_es(identidad, journal)
+                {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err(ErrorJournalAnclado::SourceMissing),
+                    Err(error) => Err(error),
+                },
             },
             |capability, identidad, journal| capability.canonico_es(identidad, journal),
             |capability, identidad, journal| capability.temporal_es(identidad, journal),
@@ -47,21 +116,28 @@ impl JournalTemporalAnclado<'_> {
 
     /// Ejecuta el protocolo no-replace sin conocer el formato del registro.
     /// Los adapters conservan la validación y los errores de cada versión.
-    fn publicar_motor_con<T, V, C, O, P>(
+    fn publicar_motor_con<T, A, V, C, O, P>(
         &self,
         esperada: IdentidadArchivoJournal,
         registro_esperado: &T,
-        validar_temporal: V,
+        fuente_publicacion: FuentePublicacion<A, V>,
         observar_canonico: C,
         observar_temporal: O,
         publicar: P,
     ) -> ResultadoPublicacionJournal
     where
-        V: FnOnce(&Self, &IdentidadArchivoJournal, &T) -> Result<(), ErrorJournalAnclado>,
+        A: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+        V: FnOnce(
+            &Self,
+            &mut File,
+            &IdentidadArchivoJournal,
+            &T,
+        ) -> Result<(), ErrorJournalAnclado>,
         C: Fn(&Self, &IdentidadArchivoJournal, &T) -> Result<bool, ErrorJournalAnclado>,
         O: Fn(&Self, &IdentidadArchivoJournal, &T) -> Result<bool, ErrorJournalAnclado>,
         P: FnOnce(&Self, &File) -> Result<(), ErrorJournalAnclado>,
     {
+        let FuentePublicacion { abrir, validar } = fuente_publicacion;
         if self.raiz_remota {
             return ResultadoPublicacionJournal::PrecondicionFallida(
                 ErrorJournalAnclado::RemoteUnsupported,
@@ -70,7 +146,7 @@ impl JournalTemporalAnclado<'_> {
         if let Err(error) = self.validar_parent() {
             return ResultadoPublicacionJournal::PrecondicionFallida(error);
         }
-        let fuente = match abrir_temporal(&self.parent, &self.nombre) {
+        let mut fuente = match abrir(self) {
             Ok(fuente) => fuente,
             Err(ErrorJournalAnclado::SourceMissing) => {
                 return match observar_canonico(self, &esperada, registro_esperado) {
@@ -99,7 +175,7 @@ impl JournalTemporalAnclado<'_> {
             }
             Err(error) => return ResultadoPublicacionJournal::PrecondicionFallida(error),
         }
-        if let Err(error) = validar_temporal(self, &esperada, registro_esperado) {
+        if let Err(error) = validar(self, &mut fuente, &esperada, registro_esperado) {
             return ResultadoPublicacionJournal::PrecondicionFallida(error);
         }
 
@@ -360,17 +436,43 @@ impl JournalTemporalAnclado<'_> {
 
         let mut archivo = abrir_temporal_para_lectura_versionada(&self.parent, &self.nombre)
             .map_err(ErrorLecturaJournalVersionada::Lease)?;
-        validar_archivo_regular(&archivo).map_err(ErrorLecturaJournalVersionada::Lease)?;
+        let (journal, identidad) = self.validar_temporal_versionado_en_handle(
+            &mut archivo,
+            journal_esperado,
+            &mut despues_de_etapa,
+            &mut scope_probe,
+        )?;
+
+        Ok(ObservacionTemporalVersionada {
+            journal,
+            identidad,
+            _archivo: archivo,
+        })
+    }
+
+    fn validar_temporal_versionado_en_handle<F, P>(
+        &self,
+        archivo: &mut File,
+        journal_esperado: &JournalV2,
+        mut despues_de_etapa: F,
+        mut scope_probe: P,
+    ) -> Result<(JournalV2, IdentidadArchivoJournal), ErrorLecturaJournalVersionada>
+    where
+        F: FnMut(EtapaLecturaJournalVersionada),
+        P: FnMut(
+            EtapaProbeScopeJournalVersionada,
+            &File,
+        ) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        validar_archivo_regular(archivo).map_err(ErrorLecturaJournalVersionada::Lease)?;
         {
             let mut probe = |handle: &File| {
                 scope_probe(EtapaProbeScopeJournalVersionada::SourceInicial, handle)
             };
-            self.validar_scope_source_con(&archivo, &mut probe)
+            self.validar_scope_source_con(archivo, &mut probe)
                 .map_err(ErrorLecturaJournalVersionada::Lease)?;
         }
-        let identidad =
-            identidad_archivo(&archivo).map_err(ErrorLecturaJournalVersionada::Lease)?;
-
+        let identidad = identidad_archivo(archivo).map_err(ErrorLecturaJournalVersionada::Lease)?;
         let cuota = MAX_VERSIONED_JOURNAL_BYTES;
         let limite = cuota
             .checked_add(1)
@@ -397,7 +499,7 @@ impl JournalTemporalAnclado<'_> {
             .seek(std::io::SeekFrom::Start(0))
             .map_err(|_| ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::Io))?;
         let mut bytes = Vec::with_capacity(limite);
-        (&mut archivo)
+        (&mut *archivo)
             .take(limite_u64)
             .read_to_end(&mut bytes)
             .map_err(|_| ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::Io))?;
@@ -451,11 +553,74 @@ impl JournalTemporalAnclado<'_> {
             ));
         }
 
-        Ok(ObservacionTemporalVersionada {
-            journal,
-            identidad,
-            _archivo: archivo,
-        })
+        Ok((journal, identidad))
+    }
+
+    fn abrir_temporal_versionado_para_publicar(
+        &self,
+        journal_esperado: &JournalV2,
+    ) -> Result<File, ErrorJournalAnclado> {
+        if self.scope_parent.is_none() {
+            return Err(ErrorJournalAnclado::ParentScopeUnverified);
+        }
+        let mut probe = |handle: &File| scope_filesystem(handle);
+        self.validar_parent_con_scope(&mut probe)?;
+        let parent_nativo = self
+            .identidad_parent
+            .journal_identity()
+            .ok_or(ErrorJournalAnclado::ParentIdentityUnavailable)?;
+        if journal_esperado.parent() != &parent_nativo {
+            return Err(ErrorJournalAnclado::ParentIdentityMismatch);
+        }
+        abrir_temporal_para_lectura_versionada(&self.parent, &self.nombre)
+    }
+
+    fn canonico_v2_es(
+        &self,
+        esperada: &IdentidadArchivoJournal,
+        journal_esperado: &JournalV2,
+    ) -> Result<bool, ErrorJournalAnclado> {
+        let Some(observacion) = self
+            .observar_versionado()
+            .map_err(mapear_error_lectura_versionada)?
+        else {
+            return Ok(false);
+        };
+        if observacion.identidad() != *esperada {
+            return Err(ErrorJournalAnclado::CanonicalConflict);
+        }
+        match observacion.journal() {
+            JournalPersistido::V2(journal) if journal == journal_esperado => Ok(true),
+            _ => Err(ErrorJournalAnclado::JournalMismatch),
+        }
+    }
+
+    fn temporal_v2_es(
+        &self,
+        esperada: &IdentidadArchivoJournal,
+        journal_esperado: &JournalV2,
+    ) -> Result<bool, ErrorJournalAnclado> {
+        match self.observar_temporal_versionado(journal_esperado) {
+            Ok(observacion) if observacion.identidad() == *esperada => Ok(true),
+            Ok(_) => Err(ErrorJournalAnclado::IdentityMismatch),
+            Err(ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::SourceMissing)) => {
+                Ok(false)
+            }
+            Err(error) => Err(mapear_error_lectura_versionada(error)),
+        }
+    }
+}
+
+fn mapear_error_lectura_versionada(error: ErrorLecturaJournalVersionada) -> ErrorJournalAnclado {
+    match error {
+        ErrorLecturaJournalVersionada::Lease(error) => error,
+        ErrorLecturaJournalVersionada::Selector(JournalPersistidoError::TooLarge) => {
+            ErrorJournalAnclado::TooLarge
+        }
+        ErrorLecturaJournalVersionada::Selector(JournalPersistidoError::V2(error)) => {
+            ErrorJournalAnclado::InvalidJournalV2(error)
+        }
+        ErrorLecturaJournalVersionada::Selector(_) => ErrorJournalAnclado::JournalMismatch,
     }
 }
 

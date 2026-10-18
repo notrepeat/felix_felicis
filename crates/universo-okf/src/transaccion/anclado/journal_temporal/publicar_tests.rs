@@ -2,7 +2,9 @@ use super::super::{ErrorJournalAnclado, IdentidadArchivoJournal};
 use super::super::{JournalTemporalAnclado, ResultadoPublicacionJournal};
 use crate::transaccion::journal::selector::JournalPersistidoError;
 use crate::transaccion::journal::v2::JournalV2;
-use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
+use crate::transaccion::journal::{
+    ArtifactFingerprint, DirectoryIdentity, Journal, JournalState, RawTreeDigest,
+};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::{anclado::journal_temporal::identidad_archivo, raiz::UbicacionRaiz};
 use std::fs::{self, File};
@@ -935,4 +937,132 @@ fn lector_temporal_v2_rechaza_reemplazo_de_mismos_bytes_con_otro_id() {
     assert_ne!(identidad_reemplazo, identidad_original);
     assert_eq!(fs::read(&temporal).unwrap(), bytes);
     assert_eq!(fs::read(&desplazado).unwrap(), bytes);
+}
+
+#[test]
+fn publicacion_v2_preparada_conserva_el_registro_y_limpia_su_identidad() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let canonico = nombre_journal(&root);
+    let journal = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    let esperada = capability.crear_nuevo(&bytes).unwrap();
+
+    let resultado = capability.publicar_v2(esperada, &journal);
+
+    assert_eq!(
+        resultado,
+        ResultadoPublicacionJournal::Confirmado {
+            limpieza: super::super::LimpiezaConfirmadaJournal::Completa,
+        }
+    );
+    assert_eq!(
+        JournalV2::parse(&fs::read(canonico).unwrap()).unwrap(),
+        journal
+    );
+    assert_eq!(identidad(&nombre_journal(&root)), esperada);
+    assert!(!temporal.exists());
+    assert_eq!(
+        capability.publicar_v2(esperada, &journal),
+        ResultadoPublicacionJournal::Confirmado {
+            limpieza: super::super::LimpiezaConfirmadaJournal::Completa,
+        }
+    );
+    assert!(!temporal.exists());
+}
+
+#[test]
+fn publicacion_v2_rechaza_scope_ausente_fase_y_registros_distintos() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let canonico = nombre_journal(&root);
+    let journal = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    let esperada = capability.crear_nuevo(&bytes).unwrap();
+
+    capability.scope_parent = None;
+    assert_eq!(
+        capability.publicar_v2(esperada, &journal),
+        ResultadoPublicacionJournal::PrecondicionFallida(
+            ErrorJournalAnclado::ParentScopeUnverified
+        )
+    );
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+    capability.scope_parent = Some(super::super::scope_filesystem(&capability.parent).unwrap());
+
+    #[cfg(unix)]
+    let parent_foraneo = DirectoryIdentity::unix(7, 99);
+    #[cfg(windows)]
+    let parent_foraneo = DirectoryIdentity::windows(7, format!("{:032x}", 99));
+    let journal_parent_foraneo = JournalV2::new(
+        "2123456789abcdef0123456789abcdef",
+        parent_foraneo,
+        journal.old().clone(),
+        journal.new_fingerprint().clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        capability.publicar_v2(esperada, &journal_parent_foraneo),
+        ResultadoPublicacionJournal::PrecondicionFallida(
+            ErrorJournalAnclado::ParentIdentityMismatch
+        )
+    );
+
+    let mut fase_invalida = journal.clone();
+    fase_invalida.advance(JournalState::BackupReady).unwrap();
+    assert_eq!(
+        capability.publicar_v2(esperada, &fase_invalida),
+        ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::JournalMismatch)
+    );
+    let registro_distinto = journal_v2_prueba(&capability, "1123456789abcdef0123456789abcdef");
+    let decoy = temp.path().join("temporal-decoy");
+    fs::write(&decoy, &bytes).unwrap();
+    let otra_identidad = identidad(&decoy);
+    assert_ne!(otra_identidad, esperada);
+    assert_eq!(
+        capability.publicar_v2(otra_identidad, &registro_distinto),
+        ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::IdentityMismatch)
+    );
+    assert_eq!(
+        capability.publicar_v2(esperada, &registro_distinto),
+        ResultadoPublicacionJournal::PrecondicionFallida(ErrorJournalAnclado::JournalMismatch)
+    );
+    assert!(!canonico.exists());
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+}
+
+#[test]
+fn publicacion_v2_no_interpreta_canonico_v1_como_confirmacion() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let canonico = nombre_journal(&root);
+    let temporal_viejo = temp.path().join("temporal-v1-original");
+    let (_, bytes_v1, _) = preparar_temporal(&capability);
+    fs::rename(&temporal, &temporal_viejo).unwrap();
+
+    let journal_v2 = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes_v2 = journal_v2.encode().unwrap();
+    let esperada = capability.crear_nuevo(&bytes_v2).unwrap();
+    fs::write(&canonico, &bytes_v1).unwrap();
+    let identidad_canonica = identidad(&canonico);
+
+    assert_eq!(
+        capability.publicar_v2(esperada, &journal_v2),
+        ResultadoPublicacionJournal::NoAplicado(ErrorJournalAnclado::CanonicalConflict)
+    );
+    assert_eq!(identidad(&canonico), identidad_canonica);
+    assert_eq!(fs::read(&canonico).unwrap(), bytes_v1);
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes_v2);
+    assert_eq!(fs::read(temporal_viejo).unwrap(), bytes_v1);
 }
