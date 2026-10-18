@@ -1066,3 +1066,98 @@ fn publicacion_v2_no_interpreta_canonico_v1_como_confirmacion() {
     assert_eq!(fs::read(&temporal).unwrap(), bytes_v2);
     assert_eq!(fs::read(temporal_viejo).unwrap(), bytes_v1);
 }
+
+#[test]
+fn error_de_syscall_v2_antes_del_efecto_preserva_el_temporal() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let canonico = nombre_journal(&root);
+    let journal = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    let esperada = capability.crear_nuevo(&bytes).unwrap();
+
+    let resultado = capability.publicar_v2_con(
+        esperada,
+        &journal,
+        |_: &super::super::JournalTemporalAnclado<'_>, _: &File| Err(ErrorJournalAnclado::Io),
+    );
+
+    assert_eq!(
+        resultado,
+        ResultadoPublicacionJournal::NoAplicado(ErrorJournalAnclado::Io)
+    );
+    assert!(!canonico.exists());
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+}
+
+#[test]
+fn error_de_syscall_v2_despues_del_efecto_confirma_y_limpia_solo_el_temporal() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let canonico = nombre_journal(&root);
+    let journal = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    let esperada = capability.crear_nuevo(&bytes).unwrap();
+
+    let resultado = capability.publicar_v2_con(
+        esperada,
+        &journal,
+        |capability: &super::super::JournalTemporalAnclado<'_>, fuente: &File| {
+            super::publicar_plataforma(
+                &capability.parent,
+                &capability.nombre,
+                &capability.nombre_journal,
+                fuente,
+            )?;
+            Err(ErrorJournalAnclado::Io)
+        },
+    );
+
+    assert_eq!(
+        resultado,
+        ResultadoPublicacionJournal::Confirmado {
+            limpieza: super::super::LimpiezaConfirmadaJournal::Completa,
+        }
+    );
+    assert_eq!(identidad(&canonico), esperada);
+    assert_eq!(fs::read(canonico).unwrap(), bytes);
+    assert!(!temporal.exists());
+}
+
+#[test]
+fn error_de_syscall_v2_con_canonico_inverificable_queda_indeterminado() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let canonico = nombre_journal(&root);
+    let bytes_canonicos = b"invalid synthetic canonical record";
+    let journal = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    let esperada = capability.crear_nuevo(&bytes).unwrap();
+
+    let resultado = capability.publicar_v2_con(
+        esperada,
+        &journal,
+        |_capability: &super::super::JournalTemporalAnclado<'_>, _fuente: &File| {
+            fs::write(&canonico, bytes_canonicos).unwrap();
+            Err(ErrorJournalAnclado::Io)
+        },
+    );
+
+    assert!(matches!(
+        resultado,
+        ResultadoPublicacionJournal::Indeterminado { .. }
+    ));
+    assert_eq!(fs::read(canonico).unwrap(), bytes_canonicos.to_vec());
+    assert_eq!(identidad(&temporal), esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+}

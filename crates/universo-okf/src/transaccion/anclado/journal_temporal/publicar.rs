@@ -38,6 +38,29 @@ impl JournalTemporalAnclado<'_> {
         esperada: IdentidadArchivoJournal,
         journal_esperado: &JournalV2,
     ) -> ResultadoPublicacionJournal {
+        self.publicar_v2_con(
+            esperada,
+            journal_esperado,
+            |capability: &Self, fuente: &File| {
+                publicar_plataforma(
+                    &capability.parent,
+                    &capability.nombre,
+                    &capability.nombre_journal,
+                    fuente,
+                )
+            },
+        )
+    }
+
+    fn publicar_v2_con<P>(
+        &self,
+        esperada: IdentidadArchivoJournal,
+        journal_esperado: &JournalV2,
+        publicar: P,
+    ) -> ResultadoPublicacionJournal
+    where
+        P: FnOnce(&Self, &File) -> Result<(), ErrorJournalAnclado>,
+    {
         if journal_esperado.state() != crate::transaccion::journal::JournalState::Prepared {
             return ResultadoPublicacionJournal::PrecondicionFallida(
                 ErrorJournalAnclado::JournalMismatch,
@@ -75,14 +98,7 @@ impl JournalTemporalAnclado<'_> {
             |capability: &Self, identidad: &IdentidadArchivoJournal, journal: &JournalV2| {
                 capability.temporal_v2_es(identidad, journal)
             },
-            |capability: &Self, fuente: &File| {
-                publicar_plataforma(
-                    &capability.parent,
-                    &capability.nombre,
-                    &capability.nombre_journal,
-                    fuente,
-                )
-            },
+            publicar,
         )
     }
 
