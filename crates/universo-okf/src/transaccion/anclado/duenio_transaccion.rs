@@ -574,6 +574,18 @@ pub(super) enum ResultadoPublicacionJournalV2ConOwner {
     Publicacion(super::journal_temporal::ResultadoPublicacionJournal),
 }
 
+/// Retiene el resultado completo del cuerpo hasta después del postcheck owner.
+enum ResultadoOwnerPostcheck<T> {
+    PrecheckFallido(super::journal_temporal::ErrorJournalAnclado),
+    PostcheckNoVerificado {
+        cuerpo: T,
+        error: super::journal_temporal::ErrorJournalAnclado,
+    },
+    PostcheckVerificado {
+        cuerpo: T,
+    },
+}
+
 impl fmt::Debug for ResultadoPublicacionJournalV2ConOwner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let nombre = match self {
@@ -649,20 +661,53 @@ impl<'owner, 'lock> ReciboTemporalJournalV2<'owner, 'lock> {
             identidad,
         } = self;
 
-        if let Err(error) = owner.parent_revalidado().map(|_| ()) {
-            return ResultadoPublicacionJournalV2ConOwner::PrecheckFallido(error);
+        match ejecutar_con_owner_y_postcheck(
+            owner,
+            antes_del_cuerpo,
+            |owner| publicar(owner, identidad, &journal),
+            |owner, _| postcheck(owner).map(|_| ()),
+        ) {
+            ResultadoOwnerPostcheck::PrecheckFallido(error) => {
+                ResultadoPublicacionJournalV2ConOwner::PrecheckFallido(error)
+            }
+            ResultadoOwnerPostcheck::PostcheckNoVerificado { cuerpo, error } => {
+                let _ = cuerpo;
+                let _ = error;
+                ResultadoPublicacionJournalV2ConOwner::PostcheckNoVerificado
+            }
+            ResultadoOwnerPostcheck::PostcheckVerificado {
+                cuerpo: Ok(resultado),
+            } => ResultadoPublicacionJournalV2ConOwner::Publicacion(resultado),
+            ResultadoOwnerPostcheck::PostcheckVerificado { cuerpo: Err(error) } => {
+                ResultadoPublicacionJournalV2ConOwner::ErrorCuerpo(error)
+            }
         }
+    }
+}
 
-        antes_del_cuerpo(owner);
-        let resultado_cuerpo = publicar(owner, identidad, &journal);
-        if postcheck(owner).map(|_| ()).is_err() {
-            return ResultadoPublicacionJournalV2ConOwner::PostcheckNoVerificado;
-        }
+fn ejecutar_con_owner_y_postcheck<'lock, T, Antes, Cuerpo, Postcheck>(
+    owner: &mut DuenioTransaccionAnclado<'lock>,
+    antes_del_cuerpo: Antes,
+    cuerpo: Cuerpo,
+    postcheck: Postcheck,
+) -> ResultadoOwnerPostcheck<T>
+where
+    Antes: FnOnce(&mut DuenioTransaccionAnclado<'lock>),
+    Cuerpo: FnOnce(&mut DuenioTransaccionAnclado<'lock>) -> T,
+    Postcheck: FnOnce(
+        &mut DuenioTransaccionAnclado<'lock>,
+        &T,
+    ) -> Result<(), super::journal_temporal::ErrorJournalAnclado>,
+{
+    if let Err(error) = owner.parent_revalidado().map(|_| ()) {
+        return ResultadoOwnerPostcheck::PrecheckFallido(error);
+    }
 
-        match resultado_cuerpo {
-            Ok(resultado) => ResultadoPublicacionJournalV2ConOwner::Publicacion(resultado),
-            Err(error) => ResultadoPublicacionJournalV2ConOwner::ErrorCuerpo(error),
-        }
+    antes_del_cuerpo(owner);
+    let cuerpo = cuerpo(owner);
+    match postcheck(owner, &cuerpo) {
+        Ok(()) => ResultadoOwnerPostcheck::PostcheckVerificado { cuerpo },
+        Err(error) => ResultadoOwnerPostcheck::PostcheckNoVerificado { cuerpo, error },
     }
 }
 
@@ -790,3 +835,7 @@ mod observer_namespace_tests;
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion/journal_v2_temporal_tests.rs"]
 mod journal_v2_temporal_tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/owner_body_retention_tests.rs"]
+mod owner_body_retention_tests;
