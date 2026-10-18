@@ -1,5 +1,10 @@
+use super::versionado::{
+    ErrorLecturaJournalVersionada, EtapaLecturaJournalVersionada, EtapaProbeScopeJournalVersionada,
+};
 use super::*;
+use crate::transaccion::journal::selector::{self, JournalPersistido, MAX_VERSIONED_JOURNAL_BYTES};
 use std::ffi::OsStr;
+use std::io::Seek;
 
 impl JournalTemporalAnclado<'_> {
     /// Publica el temporal fijo sin reemplazar el basename canónico del journal.
@@ -277,6 +282,215 @@ impl JournalTemporalAnclado<'_> {
             Err(_) => EstadoLimpiezaPublicacion::Pendiente,
         }
     }
+}
+
+pub(super) struct ObservacionTemporalVersionada {
+    journal: JournalV2,
+    identidad: IdentidadArchivoJournal,
+    _archivo: File,
+}
+
+impl ObservacionTemporalVersionada {
+    pub(super) fn journal(&self) -> &JournalV2 {
+        &self.journal
+    }
+
+    pub(super) fn identidad(&self) -> IdentidadArchivoJournal {
+        self.identidad
+    }
+}
+
+impl fmt::Debug for ObservacionTemporalVersionada {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionTemporalVersionada([redacted])")
+    }
+}
+
+impl JournalTemporalAnclado<'_> {
+    pub(super) fn observar_temporal_versionado(
+        &self,
+        journal_esperado: &JournalV2,
+    ) -> Result<ObservacionTemporalVersionada, ErrorLecturaJournalVersionada> {
+        self.observar_temporal_versionado_con(
+            journal_esperado,
+            |_| {},
+            |_, handle| scope_filesystem(handle),
+        )
+    }
+
+    #[cfg(test)]
+    fn observar_temporal_versionado_con_prueba<F>(
+        &self,
+        journal_esperado: &JournalV2,
+        despues_de_etapa: F,
+    ) -> Result<ObservacionTemporalVersionada, ErrorLecturaJournalVersionada>
+    where
+        F: FnMut(EtapaLecturaJournalVersionada),
+    {
+        self.observar_temporal_versionado_con(journal_esperado, despues_de_etapa, |_, handle| {
+            scope_filesystem(handle)
+        })
+    }
+
+    fn observar_temporal_versionado_con<F, P>(
+        &self,
+        journal_esperado: &JournalV2,
+        mut despues_de_etapa: F,
+        mut scope_probe: P,
+    ) -> Result<ObservacionTemporalVersionada, ErrorLecturaJournalVersionada>
+    where
+        F: FnMut(EtapaLecturaJournalVersionada),
+        P: FnMut(
+            EtapaProbeScopeJournalVersionada,
+            &File,
+        ) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+    {
+        if self.scope_parent.is_none() {
+            return Err(ErrorLecturaJournalVersionada::Lease(
+                ErrorJournalAnclado::ParentScopeUnverified,
+            ));
+        }
+        {
+            let mut probe = |handle: &File| {
+                scope_probe(EtapaProbeScopeJournalVersionada::ParentInicial, handle)
+            };
+            self.validar_parent_con_scope(&mut probe)
+                .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        }
+
+        let mut archivo = abrir_temporal_para_lectura_versionada(&self.parent, &self.nombre)
+            .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        validar_archivo_regular(&archivo).map_err(ErrorLecturaJournalVersionada::Lease)?;
+        {
+            let mut probe = |handle: &File| {
+                scope_probe(EtapaProbeScopeJournalVersionada::SourceInicial, handle)
+            };
+            self.validar_scope_source_con(&archivo, &mut probe)
+                .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        }
+        let identidad =
+            identidad_archivo(&archivo).map_err(ErrorLecturaJournalVersionada::Lease)?;
+
+        let cuota = MAX_VERSIONED_JOURNAL_BYTES;
+        let limite = cuota
+            .checked_add(1)
+            .ok_or(ErrorLecturaJournalVersionada::Lease(
+                ErrorJournalAnclado::TooLarge,
+            ))?;
+        let limite_u64 = u64::try_from(limite)
+            .map_err(|_| ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::TooLarge))?;
+        let cuota_u64 = u64::try_from(cuota)
+            .map_err(|_| ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::TooLarge))?;
+        if archivo
+            .metadata()
+            .map_err(|_| ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::Io))?
+            .len()
+            > cuota_u64
+        {
+            return Err(ErrorLecturaJournalVersionada::Lease(
+                ErrorJournalAnclado::TooLarge,
+            ));
+        }
+        despues_de_etapa(EtapaLecturaJournalVersionada::DespuesDeMetadata);
+
+        archivo
+            .seek(std::io::SeekFrom::Start(0))
+            .map_err(|_| ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::Io))?;
+        let mut bytes = Vec::with_capacity(limite);
+        (&mut archivo)
+            .take(limite_u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::Io))?;
+        if bytes.len() > cuota {
+            return Err(ErrorLecturaJournalVersionada::Lease(
+                ErrorJournalAnclado::TooLarge,
+            ));
+        }
+
+        let journal =
+            match selector::parse(&bytes).map_err(ErrorLecturaJournalVersionada::Selector)? {
+                JournalPersistido::V1(_) => {
+                    return Err(ErrorLecturaJournalVersionada::Lease(
+                        ErrorJournalAnclado::JournalMismatch,
+                    ));
+                }
+                JournalPersistido::V2(journal) => journal,
+            };
+        let parent_esperado = self.identidad_parent.journal_identity().ok_or(
+            ErrorLecturaJournalVersionada::Lease(ErrorJournalAnclado::ParentIdentityUnavailable),
+        )?;
+        if journal.parent() != &parent_esperado {
+            return Err(ErrorLecturaJournalVersionada::Lease(
+                ErrorJournalAnclado::ParentIdentityMismatch,
+            ));
+        }
+        if &journal != journal_esperado {
+            return Err(ErrorLecturaJournalVersionada::Lease(
+                ErrorJournalAnclado::JournalMismatch,
+            ));
+        }
+
+        despues_de_etapa(EtapaLecturaJournalVersionada::AntesDeSondaVisible);
+        let visible = abrir_temporal(&self.parent, &self.nombre).map_err(|error| {
+            ErrorLecturaJournalVersionada::Lease(if error == ErrorJournalAnclado::SourceMissing {
+                ErrorJournalAnclado::IdentityMismatch
+            } else {
+                error
+            })
+        })?;
+        validar_archivo_regular(&visible).map_err(ErrorLecturaJournalVersionada::Lease)?;
+        {
+            let mut probe =
+                |handle: &File| scope_probe(EtapaProbeScopeJournalVersionada::VisibleFinal, handle);
+            self.validar_scope_source_con(&visible, &mut probe)
+                .map_err(ErrorLecturaJournalVersionada::Lease)?;
+        }
+        if identidad_archivo(&visible).map_err(ErrorLecturaJournalVersionada::Lease)? != identidad {
+            return Err(ErrorLecturaJournalVersionada::Lease(
+                ErrorJournalAnclado::IdentityMismatch,
+            ));
+        }
+
+        Ok(ObservacionTemporalVersionada {
+            journal,
+            identidad,
+            _archivo: archivo,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn abrir_temporal_para_lectura_versionada(
+    parent: &File,
+    nombre: &OsStr,
+) -> Result<File, ErrorJournalAnclado> {
+    abrir_entrada_relativa(parent, nombre, TipoEntradaAnclada::Archivo)
+        .map_err(mapear_error_temporal)
+}
+
+#[cfg(windows)]
+fn abrir_temporal_para_lectura_versionada(
+    parent: &File,
+    nombre: &OsStr,
+) -> Result<File, ErrorJournalAnclado> {
+    use fs_at::os::windows::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_READ_ATTRIBUTES, FILE_READ_DATA};
+
+    let mut opciones = OpenOptionsAt::default();
+    opciones
+        .desired_access(FILE_READ_DATA | FILE_READ_ATTRIBUTES | DELETE)
+        .follow(false);
+    opciones
+        .open_at(parent, std::path::Path::new(nombre))
+        .map_err(mapear_error_apertura_temporal)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn abrir_temporal_para_lectura_versionada(
+    _parent: &File,
+    _nombre: &OsStr,
+) -> Result<File, ErrorJournalAnclado> {
+    Err(ErrorJournalAnclado::Io)
 }
 
 type EstadoLimpiezaPublicacion = LimpiezaConfirmadaJournal;

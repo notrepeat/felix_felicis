@@ -1,5 +1,7 @@
 use super::super::{ErrorJournalAnclado, IdentidadArchivoJournal};
 use super::super::{JournalTemporalAnclado, ResultadoPublicacionJournal};
+use crate::transaccion::journal::selector::JournalPersistidoError;
+use crate::transaccion::journal::v2::JournalV2;
 use crate::transaccion::journal::{ArtifactFingerprint, DirectoryIdentity, Journal, RawTreeDigest};
 use crate::transaccion::lock::LockEscritura;
 use crate::transaccion::{anclado::journal_temporal::identidad_archivo, raiz::UbicacionRaiz};
@@ -27,6 +29,12 @@ fn nombre_journal(root: &Path) -> PathBuf {
 
 fn identidad(path: &Path) -> IdentidadArchivoJournal {
     identidad_archivo(&File::open(path).unwrap()).unwrap()
+}
+
+fn capability_con_scope_parent_real(lock: &mut LockEscritura) -> JournalTemporalAnclado<'_> {
+    let mut capability = lock.journal_temporal_anclado().unwrap();
+    capability.scope_parent = Some(super::super::scope_filesystem(&capability.parent).unwrap());
+    capability
 }
 
 fn confirmado(resultado: ResultadoPublicacionJournal) -> bool {
@@ -67,6 +75,33 @@ fn preparar_temporal(
     let bytes = journal.encode().unwrap();
     let identidad = capability.crear_nuevo(&bytes).unwrap();
     (journal, bytes, identidad)
+}
+
+fn journal_v2_prueba(capability: &JournalTemporalAnclado<'_>, transaction_id: &str) -> JournalV2 {
+    let parent = capability.identidad_parent.journal_identity().unwrap();
+    let directory = |id: u64| {
+        #[cfg(unix)]
+        {
+            DirectoryIdentity::unix(7, id)
+        }
+        #[cfg(windows)]
+        {
+            DirectoryIdentity::windows(7, format!("{id:032x}"))
+        }
+    };
+    let fingerprint = |id: u64, byte: char| {
+        ArtifactFingerprint::new(
+            directory(id),
+            RawTreeDigest::from_hex(byte.to_string().repeat(64)).unwrap(),
+        )
+    };
+    JournalV2::new(
+        transaction_id,
+        parent,
+        fingerprint(4, 'c'),
+        fingerprint(5, 'd'),
+    )
+    .unwrap()
 }
 
 #[cfg(unix)]
@@ -755,4 +790,149 @@ fn junction_canonica_en_conflicto_conserva_temporal_y_canary() {
     );
     assert_eq!(fs::read(temporal).unwrap(), bytes_temporal);
     assert_eq!(fs::read(outside.join("canary")).unwrap(), b"outside canary");
+}
+
+#[test]
+fn lector_temporal_v2_retiene_handle_y_verifica_parent_y_bytes() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let journal = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    let identidad_esperada = capability.crear_nuevo(&bytes).unwrap();
+
+    let observacion = capability.observar_temporal_versionado(&journal).unwrap();
+
+    assert_eq!(observacion.journal(), &journal);
+    assert_eq!(observacion.identidad(), identidad_esperada);
+    assert_eq!(
+        format!("{observacion:?}"),
+        "ObservacionTemporalVersionada([redacted])"
+    );
+    drop(observacion);
+    assert_eq!(identidad(&temporal), identidad_esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+}
+
+#[test]
+fn lector_temporal_v2_compara_el_registro_completo() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let journal_guardado = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let journal_esperado = journal_v2_prueba(&capability, "1123456789abcdef0123456789abcdef");
+    let bytes = journal_guardado.encode().unwrap();
+    let identidad_esperada = capability.crear_nuevo(&bytes).unwrap();
+
+    assert_eq!(
+        capability
+            .observar_temporal_versionado(&journal_esperado)
+            .unwrap_err(),
+        super::super::versionado::ErrorLecturaJournalVersionada::Lease(
+            ErrorJournalAnclado::JournalMismatch
+        )
+    );
+    assert_eq!(identidad(&temporal), identidad_esperada);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+}
+
+#[test]
+fn lector_temporal_v2_rechaza_journal_v1_y_bytes_malformados() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let journal_esperado = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let (_, bytes_v1, _) = preparar_temporal(&capability);
+    assert_eq!(
+        capability
+            .observar_temporal_versionado(&journal_esperado)
+            .unwrap_err(),
+        super::super::versionado::ErrorLecturaJournalVersionada::Lease(
+            ErrorJournalAnclado::JournalMismatch
+        )
+    );
+    assert_eq!(fs::read(&temporal).unwrap(), bytes_v1);
+    drop(capability);
+    drop(lock);
+
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let bytes_malformados = b"{ invalid selector";
+    let journal_esperado = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    capability.crear_nuevo(bytes_malformados).unwrap();
+
+    assert_eq!(
+        capability
+            .observar_temporal_versionado(&journal_esperado)
+            .unwrap_err(),
+        super::super::versionado::ErrorLecturaJournalVersionada::Selector(
+            JournalPersistidoError::Malformed
+        )
+    );
+    assert_eq!(
+        fs::read(nombre_temporal(temp.path())).unwrap(),
+        bytes_malformados
+    );
+}
+
+#[test]
+fn lector_temporal_v2_falla_cerrado_sin_scope_parent() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let mut capability = lock.journal_temporal_anclado().unwrap();
+    let temporal = nombre_temporal(temp.path());
+    let journal = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    capability.crear_nuevo(&bytes).unwrap();
+    capability.scope_parent = None;
+
+    assert_eq!(
+        capability
+            .observar_temporal_versionado(&journal)
+            .unwrap_err(),
+        super::super::versionado::ErrorLecturaJournalVersionada::Lease(
+            ErrorJournalAnclado::ParentScopeUnverified
+        )
+    );
+    assert_eq!(fs::read(temporal).unwrap(), bytes);
+}
+
+#[test]
+fn lector_temporal_v2_rechaza_reemplazo_de_mismos_bytes_con_otro_id() {
+    let temp = tempdir().unwrap();
+    let root = crear_root(temp.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let capability = capability_con_scope_parent_real(&mut lock);
+    let temporal = nombre_temporal(temp.path());
+    let desplazado = temp.path().join("temporal-original");
+    let journal = journal_v2_prueba(&capability, "0123456789abcdef0123456789abcdef");
+    let bytes = journal.encode().unwrap();
+    let identidad_original = capability.crear_nuevo(&bytes).unwrap();
+
+    let resultado = capability.observar_temporal_versionado_con_prueba(&journal, |etapa| {
+        if etapa == super::super::versionado::EtapaLecturaJournalVersionada::AntesDeSondaVisible {
+            fs::rename(&temporal, &desplazado).unwrap();
+            fs::write(&temporal, &bytes).unwrap();
+        }
+    });
+
+    assert_eq!(
+        resultado.unwrap_err(),
+        super::super::versionado::ErrorLecturaJournalVersionada::Lease(
+            ErrorJournalAnclado::IdentityMismatch
+        )
+    );
+    let identidad_reemplazo = identidad(&temporal);
+    assert_ne!(identidad_reemplazo, identidad_original);
+    assert_eq!(fs::read(&temporal).unwrap(), bytes);
+    assert_eq!(fs::read(&desplazado).unwrap(), bytes);
 }
