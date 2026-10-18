@@ -114,6 +114,11 @@ impl fmt::Debug for ObservacionContextoVersionada {
 }
 
 impl ObservacionContextoVersionada {
+    /// Presta el envelope original ya leído, sin exponer su archivo ni su ruta.
+    pub(super) fn envelope_versionado(&self) -> &EnvelopeAdmisionVersionada {
+        &self.envelope
+    }
+
     /// Exige la variante V2 y su binding estructural; no presta el envelope.
     pub(super) fn validar_binding_v2(
         &self,

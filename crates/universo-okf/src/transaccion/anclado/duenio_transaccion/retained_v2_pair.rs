@@ -8,6 +8,7 @@ use super::super::journal_temporal::{
     ErrorJournalAnclado, versionado::ObservacionJournalPersistido,
 };
 use super::DuenioTransaccionAnclado;
+use super::familia_persistida::{self, FaseFamiliaPersistida};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ErrorObservacionPareadaV2 {
@@ -313,12 +314,52 @@ impl fmt::Debug for ObservacionParejaV2ConIdentidadesFinales {
     }
 }
 
+/// Fachada privada para la pareja normal cuya observación ya cerró B2b.
+/// Retiene indirectamente los registros originales; no concede autoridad.
+#[must_use]
+pub(super) struct NormalV2 {
+    observacion: ObservacionParejaV2ConIdentidadesFinales,
+}
+
+impl fmt::Debug for NormalV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("NormalV2 { .. }")
+    }
+}
+
+impl NormalV2 {
+    /// Reclasifica los registros originales; el préstamo devuelto queda ligado a `&self`.
+    pub(super) fn fase(&self) -> Result<FaseFamiliaPersistida<'_>, ErrorObservacionPareadaV2> {
+        let pareja = &self.observacion.observacion.pareja.pareja;
+        let fase = familia_persistida::clasificar(
+            Some(pareja.journal.journal()),
+            Some(pareja.contexto.envelope_versionado()),
+            None,
+        )
+        .map_err(|_| ErrorObservacionPareadaV2::PairUnverified)?;
+
+        match fase {
+            normal @ FaseFamiliaPersistida::NormalV2 { .. } => Ok(normal),
+            _ => Err(ErrorObservacionPareadaV2::PairUnverified),
+        }
+    }
+}
+
 impl DuenioTransaccionAnclado<'_> {
     /// Repite J/C por identidad después de B2a y vuelve a comprobar el owner.
     pub(super) fn observar_pareja_v2_con_identidades_finales(
         &mut self,
     ) -> Result<ObservacionParejaV2ConIdentidadesFinales, ErrorObservacionPareadaV2> {
         self.observar_identidades_con_postcheck(|_| {}, |owner| owner.parent_revalidado())
+    }
+
+    /// Construye la fachada normal solo después de B2b y de clasificar sus lecturas.
+    pub(super) fn observar_normal_v2(&mut self) -> Result<NormalV2, ErrorObservacionPareadaV2> {
+        let normal = NormalV2 {
+            observacion: self.observar_pareja_v2_con_identidades_finales()?,
+        };
+        normal.fase()?;
+        Ok(normal)
     }
 
     /// El hook corre después del guard final y postcheck propios de B2a, justo

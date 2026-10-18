@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::transaccion::admision::envelope::v2::EnvelopeContextoAdmisionV2;
+use crate::transaccion::anclado::duenio_transaccion::familia_persistida::FaseFamiliaPersistida;
 use crate::transaccion::anclado::duenio_transaccion::retained_v2_pair::ErrorObservacionPareadaV2;
 use crate::transaccion::anclado::{IdentidadArchivo, identidad_archivo as identidad_nativa};
 use crate::transaccion::journal::JournalState;
@@ -996,6 +997,85 @@ fn b2b_postcheck_exterior_domina_candidato_error_b2a_y_error_de_probe() {
             );
             assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
         }
+        drop(owner);
+        drop(lock);
+        verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
+    }
+}
+
+#[test]
+fn normal_v2_presta_fase_pura_y_preserva_los_registros_originales() {
+    let temp = tempdir().unwrap();
+    let rutas = preparar_rutas(&temp);
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let (bytes_journal, bytes_contexto) =
+        escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+
+    let normal = owner.observar_normal_v2().unwrap();
+    assert_eq!(format!("{normal:?}"), "NormalV2 { .. }");
+    let fase = normal.fase().unwrap();
+    assert_eq!(
+        format!("{fase:?}"),
+        "FaseFamiliaPersistida::NormalV2([redacted])"
+    );
+    assert!(matches!(
+        fase,
+        FaseFamiliaPersistida::NormalV2 { journal, .. }
+            if journal.state() == JournalState::BackupReady
+    ));
+    assert_eq!(
+        fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+        bytes_journal
+    );
+    assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+
+    drop(normal);
+    drop(owner);
+    drop(lock);
+    verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
+}
+
+#[test]
+fn fabrica_normal_v2_rechaza_journal_v1_contexto_v1_y_binding_mismatch() {
+    for caso in 0..3 {
+        let temp = tempdir().unwrap();
+        let rutas = preparar_rutas(&temp);
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let diferencia = if caso == 2 {
+            DiferenciaBinding::TransactionId
+        } else {
+            DiferenciaBinding::Ninguna
+        };
+        let (mut bytes_journal, mut bytes_contexto) = escribir_pareja(&owner, &rutas, diferencia);
+        let parent = owner.identidad_parent.journal_identity().unwrap();
+        if caso == 0 {
+            bytes_journal = Journal::new(
+                TRANSACTION_ID,
+                parent,
+                fingerprint_journal_prueba(2, 'a'),
+                fingerprint_journal_prueba(3, 'b'),
+            )
+            .unwrap()
+            .encode()
+            .unwrap();
+            fs::write(rutas.ubicacion.journal().as_path(), &bytes_journal).unwrap();
+        } else if caso == 1 {
+            bytes_contexto = frame_v1(parent);
+            fs::write(&rutas.contexto, &bytes_contexto).unwrap();
+        }
+
+        assert!(matches!(
+            owner.observar_normal_v2(),
+            Err(ErrorObservacionPareadaV2::PairUnverified)
+        ));
+        assert_eq!(
+            fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+            bytes_journal
+        );
+        assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+
         drop(owner);
         drop(lock);
         verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
