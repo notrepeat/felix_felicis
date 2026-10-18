@@ -141,3 +141,7 @@ impl<'owner, 'lock> ReciboTemporalJournalV2<'owner, 'lock> {
 #[cfg(test)]
 #[path = "context_journal_v2_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "context_journal_v2_adversarial_tests.rs"]
+mod adversarial_tests;
