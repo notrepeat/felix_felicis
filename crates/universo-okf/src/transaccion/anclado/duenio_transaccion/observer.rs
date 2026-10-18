@@ -78,6 +78,43 @@ impl fmt::Debug for SiblingsRecoveryV2Raw {
     }
 }
 
+impl SiblingsRecoveryV2Raw {
+    /// Clasifica solo las muestras retenidas; nunca valida replay ni root nuevo.
+    pub(super) fn clasificar_inventario_recovery_v2(&self) -> RecoveryInventory {
+        let root = self
+            .root
+            .as_ref()
+            .map(|fingerprint| ObservedArtifact::new(fingerprint.clone()));
+        let backup = self
+            .backup
+            .as_ref()
+            .map(|fingerprint| ObservedArtifact::new(fingerprint.clone()));
+        let stage = self
+            .stage
+            .as_ref()
+            .map(|fingerprint| ObservedArtifact::new(fingerprint.clone()));
+
+        RecoveryInventory {
+            root: classify_artifact(
+                root.as_ref(),
+                self.journal.old(),
+                self.journal.new_fingerprint(),
+            ),
+            backup: classify_backup_artifact(
+                backup.as_ref(),
+                self.journal.old(),
+                self.journal.new_fingerprint(),
+            ),
+            stage: classify_stage_artifact(
+                stage.as_ref(),
+                self.journal.old(),
+                self.journal.new_fingerprint(),
+            ),
+            root_new_validated: false,
+        }
+    }
+}
+
 impl DuenioTransaccionAnclado<'_> {
     /// Observa los tres nombres derivados de J2, sin clasificar sus muestras.
     pub(super) fn observar_siblings_recovery_v2_raw(
@@ -297,3 +334,7 @@ mod journal_datos_tests;
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "observer_recovery_v2_raw_tests.rs"]
 mod recovery_v2_raw_tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "observer_recovery_v2_classification_tests.rs"]
+mod recovery_v2_classification_tests;
