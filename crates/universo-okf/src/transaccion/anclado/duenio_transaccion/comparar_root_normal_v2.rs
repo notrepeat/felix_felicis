@@ -136,108 +136,28 @@ impl DuenioTransaccionAnclado<'_> {
 #[cfg(all(test, any(target_os = "linux", windows)))]
 mod tests {
     use super::*;
-    use crate::transaccion::admision::envelope::{
-        tests as fixtures, v2::EnvelopeContextoAdmisionV2,
-    };
     use crate::transaccion::anclado::duenio_transaccion::fixture_root_replay::{
-        FixturePublicada, contexto_path, id_archivo, materializar, preparar_con_tags,
-        verificar_arbol,
+        materializar, verificar_arbol,
     };
-    use crate::transaccion::journal::v2::JournalV2;
-    use crate::transaccion::journal::{ArtifactFingerprint, Journal, RawTreeDigest};
+    use crate::transaccion::anclado::duenio_transaccion::normal_v2_test_support::{
+        capturar_storage, crear_canary, preparar_normal_v2_con_tags, verificar_canary,
+        verificar_storage,
+    };
+    use crate::transaccion::journal::{ArtifactFingerprint, JournalState};
     use crate::transaccion::lock::LockEscritura;
     use crate::transaccion::replay::semantica_archivada::{POLICY_ID_V1, VERSION_MOTOR_V1};
     use std::fs;
-    use std::path::{Path, PathBuf};
     use tempfile::tempdir;
-
-    const CANARY: &[u8] = b"unrelated sibling remains unchanged";
-
-    struct Storage {
-        contexto: Vec<u8>,
-        journal: Vec<u8>,
-        identidad_contexto: crate::transaccion::anclado::IdentidadArchivo,
-        identidad_journal: crate::transaccion::anclado::IdentidadArchivo,
-    }
-
-    fn preparar_normal_v2(
-        parent: &Path,
-        motor: &str,
-        policy: &str,
-    ) -> (FixturePublicada, Option<RawTreeDigest>) {
-        let mut fixture = preparar_con_tags(parent, motor, policy);
-        let journal_v1 = Journal::parse(&fixture.bytes_journal).unwrap();
-        let journal_v2 = JournalV2::new(
-            journal_v1.transaction_id(),
-            journal_v1.parent().clone(),
-            journal_v1.old().clone(),
-            journal_v1.new_fingerprint().clone(),
-        )
-        .unwrap();
-        let envelope = EnvelopeContextoAdmisionV2::ligar(
-            fixtures::contexto_con_tags(b"\n", motor, policy),
-            &journal_v2,
-        );
-        let digest = envelope
-            .calcular_new_esperado(&journal_v2)
-            .ok()
-            .map(|new| new.digest().clone());
-        if let Some(digest) = &digest {
-            let esperado =
-                ArtifactFingerprint::new(fixture.esperado.identity().clone(), digest.clone());
-            assert!(esperado == fixture.esperado);
-        }
-
-        fixture.bytes_journal = journal_v2.encode().unwrap();
-        fixture.bytes_contexto = envelope.encode().unwrap();
-        fs::write(
-            fixture.ubicacion.journal().as_path(),
-            &fixture.bytes_journal,
-        )
-        .unwrap();
-        fs::write(contexto_path(&fixture.ubicacion), &fixture.bytes_contexto).unwrap();
-        (fixture, digest)
-    }
-
-    fn capturar_storage(fixture: &FixturePublicada) -> Storage {
-        let contexto = contexto_path(&fixture.ubicacion);
-        let journal = fixture.ubicacion.journal().as_path().to_path_buf();
-        Storage {
-            contexto: fs::read(&contexto).unwrap(),
-            journal: fs::read(&journal).unwrap(),
-            identidad_contexto: id_archivo(&contexto),
-            identidad_journal: id_archivo(&journal),
-        }
-    }
-
-    fn verificar_storage(fixture: &FixturePublicada, storage: &Storage) {
-        crate::transaccion::anclado::duenio_transaccion::fixture_root_replay::assert_storage_unchanged(
-            fixture,
-            &storage.contexto,
-            &storage.journal,
-            storage.identidad_contexto,
-            storage.identidad_journal,
-        );
-    }
-
-    fn crear_canary(
-        fixture: &FixturePublicada,
-    ) -> (PathBuf, crate::transaccion::anclado::IdentidadArchivo) {
-        let path = fixture.root.parent().unwrap().join("unrelated-canary");
-        fs::write(&path, CANARY).unwrap();
-        (path.clone(), id_archivo(&path))
-    }
-
-    fn verificar_canary(path: &Path, identidad: crate::transaccion::anclado::IdentidadArchivo) {
-        assert_eq!(fs::read(path).unwrap(), CANARY);
-        assert!(id_archivo(path) == identidad);
-    }
 
     #[test]
     fn nominal_coincide_y_postcheck_domina_el_resultado_exitoso() {
         let temp = tempdir().unwrap();
-        let (fixture, digest) =
-            preparar_normal_v2(&temp.path().join("parent"), VERSION_MOTOR_V1, POLICY_ID_V1);
+        let (fixture, digest) = preparar_normal_v2_con_tags(
+            &temp.path().join("parent"),
+            JournalState::Prepared,
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        );
         assert!(digest.is_some());
         let (canary, identidad_canary) = crear_canary(&fixture);
         let storage = capturar_storage(&fixture);
@@ -264,8 +184,12 @@ mod tests {
     #[test]
     fn root_ausente_devuelve_ausente_sin_tocar_storage() {
         let temp = tempdir().unwrap();
-        let (fixture, digest) =
-            preparar_normal_v2(&temp.path().join("parent"), VERSION_MOTOR_V1, POLICY_ID_V1);
+        let (fixture, digest) = preparar_normal_v2_con_tags(
+            &temp.path().join("parent"),
+            JournalState::Prepared,
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        );
         assert!(digest.is_some());
         let retenida = temp.path().join("root-retained");
         fs::rename(&fixture.root, &retenida).unwrap();
@@ -288,8 +212,12 @@ mod tests {
     #[test]
     fn mismo_digest_con_identidad_distinta_es_diferente() {
         let temp = tempdir().unwrap();
-        let (fixture, digest) =
-            preparar_normal_v2(&temp.path().join("parent"), VERSION_MOTOR_V1, POLICY_ID_V1);
+        let (fixture, digest) = preparar_normal_v2_con_tags(
+            &temp.path().join("parent"),
+            JournalState::Prepared,
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        );
         let digest = digest.unwrap();
         let retenida = temp.path().join("root-original-retained");
         fs::rename(&fixture.root, &retenida).unwrap();
@@ -319,8 +247,12 @@ mod tests {
     #[test]
     fn digest_alterado_con_identidad_igual_es_diferente() {
         let temp = tempdir().unwrap();
-        let (fixture, digest) =
-            preparar_normal_v2(&temp.path().join("parent"), VERSION_MOTOR_V1, POLICY_ID_V1);
+        let (fixture, digest) = preparar_normal_v2_con_tags(
+            &temp.path().join("parent"),
+            JournalState::Prepared,
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        );
         let digest = digest.unwrap();
         let entrada = fixture
             .entradas
@@ -354,8 +286,9 @@ mod tests {
     #[test]
     fn replay_incompatible_falla_y_postcheck_domina_el_error() {
         let temp = tempdir().unwrap();
-        let (fixture, digest) = preparar_normal_v2(
+        let (fixture, digest) = preparar_normal_v2_con_tags(
             &temp.path().join("parent"),
+            JournalState::Prepared,
             "engine-unsupported/1",
             "policy-unsupported/1",
         );
