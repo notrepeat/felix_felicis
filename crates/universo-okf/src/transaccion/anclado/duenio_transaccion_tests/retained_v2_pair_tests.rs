@@ -782,3 +782,222 @@ fn b2a_conserva_pareja_y_deja_identidad_final_pendiente() {
     drop(lock);
     verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
 }
+
+#[test]
+fn b2b_confirma_identidades_despues_de_b2a_y_conserva_frames() {
+    let temp = tempdir().unwrap();
+    let rutas = preparar_rutas(&temp);
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let (bytes_journal, bytes_contexto) =
+        escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+
+    let observado = owner.observar_pareja_v2_con_identidades_finales().unwrap();
+
+    assert_eq!(
+        format!("{observado:?}"),
+        "ObservacionParejaV2ConIdentidadesFinales { .. }"
+    );
+    assert_eq!(
+        fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+        bytes_journal
+    );
+    assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+    drop(observado);
+    drop(owner);
+    drop(lock);
+    verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
+}
+
+#[test]
+fn b2b_rechaza_journal_y_contexto_reemplazados_despues_del_guard_b2a() {
+    for reemplazar_journal in [true, false] {
+        let temp = tempdir().unwrap();
+        let rutas = preparar_rutas(&temp);
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let (bytes_journal, bytes_contexto) =
+            escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+        let siblings = nombres_siblings_b2a(&rutas);
+        let indice = if reemplazar_journal { 0 } else { 2 };
+        let parent = rutas.contexto.parent().unwrap();
+        let retenido = parent.join(if reemplazar_journal {
+            "journal-original-retained-b2b"
+        } else {
+            "context-original-retained-b2b"
+        });
+        let fuente = parent.join(if reemplazar_journal {
+            "journal-replacement-source-b2b"
+        } else {
+            "context-replacement-source-b2b"
+        });
+        let bytes_reemplazo = if reemplazar_journal {
+            bytes_journal.clone()
+        } else {
+            bytes_contexto.clone()
+        };
+        fs::write(&fuente, &bytes_reemplazo).unwrap();
+        let id_original = identidad_real(&siblings[indice]);
+        let id_reemplazo = identidad_real(&fuente);
+        assert_ne!(id_original, id_reemplazo);
+        let hook_llamado = Cell::new(false);
+
+        let resultado = owner.observar_pareja_v2_con_identidades_finales_con_prueba(
+            |_| {
+                hook_llamado.set(true);
+                fs::rename(&siblings[indice], &retenido).unwrap();
+                fs::rename(&fuente, &siblings[indice]).unwrap();
+            },
+            |owner| owner.parent_revalidado(),
+        );
+
+        assert!(hook_llamado.get());
+        assert!(matches!(
+            resultado,
+            Err(ErrorObservacionPareadaV2::PairUnverified)
+        ));
+        assert_eq!(fs::read(&retenido).unwrap(), bytes_reemplazo);
+        assert_eq!(fs::read(&siblings[indice]).unwrap(), bytes_reemplazo);
+        assert_eq!(identidad_real(&retenido), id_original);
+        assert_eq!(identidad_real(&siblings[indice]), id_reemplazo);
+
+        let probe_liberado = parent.join(if reemplazar_journal {
+            "journal-probe-released-b2b"
+        } else {
+            "context-probe-released-b2b"
+        });
+        fs::rename(&siblings[indice], &probe_liberado).unwrap();
+        assert_eq!(identidad_real(&probe_liberado), id_reemplazo);
+        fs::rename(&probe_liberado, &siblings[indice]).unwrap();
+        if reemplazar_journal {
+            assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+        } else {
+            assert_eq!(
+                fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+                bytes_journal
+            );
+        }
+        drop(owner);
+        drop(lock);
+        verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
+    }
+}
+
+#[test]
+fn b2b_rechaza_ausencia_final_de_journal_o_contexto_y_preserva_original() {
+    for indice in [0, 2] {
+        let temp = tempdir().unwrap();
+        let rutas = preparar_rutas(&temp);
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let (bytes_journal, bytes_contexto) =
+            escribir_pareja(&owner, &rutas, DiferenciaBinding::Ninguna);
+        let siblings = nombres_siblings_b2a(&rutas);
+        let retenido = rutas.contexto.parent().unwrap().join(if indice == 0 {
+            "journal-original-absent-b2b"
+        } else {
+            "context-original-absent-b2b"
+        });
+        let bytes = if indice == 0 {
+            bytes_journal.clone()
+        } else {
+            bytes_contexto.clone()
+        };
+        let id_original = identidad_real(&siblings[indice]);
+
+        let resultado = owner.observar_pareja_v2_con_identidades_finales_con_prueba(
+            |_| fs::rename(&siblings[indice], &retenido).unwrap(),
+            |owner| owner.parent_revalidado(),
+        );
+
+        assert!(matches!(
+            resultado,
+            Err(ErrorObservacionPareadaV2::PairUnverified)
+        ));
+        assert!(!siblings[indice].exists());
+        assert_eq!(fs::read(&retenido).unwrap(), bytes);
+        assert_eq!(identidad_real(&retenido), id_original);
+        if indice == 0 {
+            assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+        } else {
+            assert_eq!(
+                fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+                bytes_journal
+            );
+        }
+        drop(owner);
+        drop(lock);
+        verificar_lock_y_contexto(
+            &rutas,
+            if indice == 0 {
+                Some(&bytes_contexto)
+            } else {
+                None
+            },
+        );
+    }
+}
+
+#[test]
+fn b2b_postcheck_exterior_domina_candidato_error_b2a_y_error_de_probe() {
+    for caso in 0..3 {
+        let temp = tempdir().unwrap();
+        let rutas = preparar_rutas(&temp);
+        let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+        let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+        let diferencia = if caso == 1 {
+            DiferenciaBinding::TransactionId
+        } else {
+            DiferenciaBinding::Ninguna
+        };
+        let (bytes_journal, bytes_contexto) = escribir_pareja(&owner, &rutas, diferencia);
+        let siblings = nombres_siblings_b2a(&rutas);
+        let retenido = rutas
+            .contexto
+            .parent()
+            .unwrap()
+            .join("journal-original-postcheck-b2b");
+        let id_original = if caso == 2 {
+            Some(identidad_real(&siblings[0]))
+        } else {
+            None
+        };
+        let hook_llamado = Cell::new(false);
+        let postcheck_llamado = Cell::new(false);
+
+        let resultado = owner.observar_pareja_v2_con_identidades_finales_con_prueba(
+            |_| {
+                hook_llamado.set(true);
+                if caso == 2 {
+                    fs::rename(&siblings[0], &retenido).unwrap();
+                }
+            },
+            |_| {
+                postcheck_llamado.set(true);
+                Err(crate::transaccion::anclado::journal_temporal::ErrorJournalAnclado::Io)
+            },
+        );
+
+        assert!(matches!(
+            resultado,
+            Err(ErrorObservacionPareadaV2::OwnerUnverified)
+        ));
+        assert!(postcheck_llamado.get());
+        assert_eq!(hook_llamado.get(), caso != 1);
+        if caso == 2 {
+            assert!(!siblings[0].exists());
+            assert_eq!(fs::read(&retenido).unwrap(), bytes_journal);
+            assert_eq!(identidad_real(&retenido), id_original.unwrap());
+            assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+        } else {
+            assert_eq!(
+                fs::read(rutas.ubicacion.journal().as_path()).unwrap(),
+                bytes_journal
+            );
+            assert_eq!(fs::read(&rutas.contexto).unwrap(), bytes_contexto);
+        }
+        drop(owner);
+        drop(lock);
+        verificar_lock_y_contexto(&rutas, Some(&bytes_contexto));
+    }
+}

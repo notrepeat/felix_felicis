@@ -299,3 +299,67 @@ impl DuenioTransaccionAnclado<'_> {
         .map_err(|_| ErrorObservacionPareadaV2::PairUnverified)
     }
 }
+
+/// Conserva B2a tras repetir las identidades nativas después del guard de slots.
+/// Es observación privada; no clasifica fase ni concede autoridad.
+#[must_use]
+pub(super) struct ObservacionParejaV2ConIdentidadesFinales {
+    observacion: ObservacionParejaV2ConSlotsVerificadosPendienteIdentidad,
+}
+
+impl fmt::Debug for ObservacionParejaV2ConIdentidadesFinales {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionParejaV2ConIdentidadesFinales { .. }")
+    }
+}
+
+impl DuenioTransaccionAnclado<'_> {
+    /// Repite J/C por identidad después de B2a y vuelve a comprobar el owner.
+    pub(super) fn observar_pareja_v2_con_identidades_finales(
+        &mut self,
+    ) -> Result<ObservacionParejaV2ConIdentidadesFinales, ErrorObservacionPareadaV2> {
+        self.observar_identidades_con_postcheck(|_| {}, |owner| owner.parent_revalidado())
+    }
+
+    /// El hook corre después del guard final y postcheck propios de B2a, justo
+    /// antes de reabrir J/C para comparar sus identidades.
+    #[cfg(test)]
+    pub(super) fn observar_pareja_v2_con_identidades_finales_con_prueba<H, P>(
+        &mut self,
+        despues_de_b2a: H,
+        postcheck: P,
+    ) -> Result<ObservacionParejaV2ConIdentidadesFinales, ErrorObservacionPareadaV2>
+    where
+        H: FnOnce(&mut Self),
+        P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+    {
+        self.observar_identidades_con_postcheck(despues_de_b2a, postcheck)
+    }
+
+    fn observar_identidades_con_postcheck<H, P>(
+        &mut self,
+        despues_de_b2a: H,
+        postcheck: P,
+    ) -> Result<ObservacionParejaV2ConIdentidadesFinales, ErrorObservacionPareadaV2>
+    where
+        H: FnOnce(&mut Self),
+        P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+    {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorObservacionPareadaV2::OwnerUnverified)?;
+        drop(parent);
+
+        let resultado = (|| {
+            let observacion =
+                self.observar_pareja_v2_con_slots_verificados_pendiente_identidad()?;
+            despues_de_b2a(self);
+            self.confirmar_identidades_pareja(&observacion.pareja.pareja)?;
+            Ok(ObservacionParejaV2ConIdentidadesFinales { observacion })
+        })();
+
+        let parent = postcheck(self).map_err(|_| ErrorObservacionPareadaV2::OwnerUnverified)?;
+        drop(parent);
+        resultado
+    }
+}
