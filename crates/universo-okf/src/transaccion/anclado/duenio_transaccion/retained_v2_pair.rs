@@ -120,6 +120,83 @@ impl fmt::Debug for ParejaV2Revalidada {
     }
 }
 
+/// Retiene la pareja A2 tras comprobar los seis slots antes y después.
+/// La identidad final de Journal y Context sigue pendiente tras el guard final.
+/// Es una observación privada, no clasifica fase ni concede autoridad.
+#[must_use]
+pub(super) struct ObservacionParejaV2ConSlotsVerificadosPendienteIdentidad {
+    pareja: ParejaV2Revalidada,
+}
+
+impl fmt::Debug for ObservacionParejaV2ConSlotsVerificadosPendienteIdentidad {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ObservacionParejaV2ConSlotsVerificadosPendienteIdentidad { .. }")
+    }
+}
+
+impl DuenioTransaccionAnclado<'_> {
+    /// Comprueba slots antes y después de A2; B2b aún debe repetir ambas identidades.
+    pub(super) fn observar_pareja_v2_con_slots_verificados_pendiente_identidad(
+        &mut self,
+    ) -> Result<ObservacionParejaV2ConSlotsVerificadosPendienteIdentidad, ErrorObservacionPareadaV2>
+    {
+        self.observar_slots_con_postcheck(|_| {}, |owner| owner.parent_revalidado())
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_pareja_v2_con_slots_verificados_pendiente_identidad_con_prueba<H, P>(
+        &mut self,
+        despues_de_a2: H,
+        postcheck: P,
+    ) -> Result<ObservacionParejaV2ConSlotsVerificadosPendienteIdentidad, ErrorObservacionPareadaV2>
+    where
+        H: FnOnce(&mut Self),
+        P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+    {
+        self.observar_slots_con_postcheck(despues_de_a2, postcheck)
+    }
+
+    fn observar_slots_con_postcheck<H, P>(
+        &mut self,
+        despues_de_a2: H,
+        postcheck: P,
+    ) -> Result<ObservacionParejaV2ConSlotsVerificadosPendienteIdentidad, ErrorObservacionPareadaV2>
+    where
+        H: FnOnce(&mut Self),
+        P: FnOnce(&Self) -> Result<File, ErrorJournalAnclado>,
+    {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorObservacionPareadaV2::OwnerUnverified)?;
+        drop(parent);
+
+        let resultado = (|| {
+            let inicial = self
+                .observar_siblings_nuevo_flujo()
+                .map_err(|_| ErrorObservacionPareadaV2::PairUnverified)?;
+            inicial
+                .exigir_slots_normal_v2()
+                .map_err(|_| ErrorObservacionPareadaV2::PairUnverified)?;
+
+            let pareja = self.revalidar_pareja_v2()?;
+            despues_de_a2(self);
+
+            let final_observado = self
+                .observar_siblings_nuevo_flujo()
+                .map_err(|_| ErrorObservacionPareadaV2::PairUnverified)?;
+            final_observado
+                .exigir_slots_normal_v2()
+                .map_err(|_| ErrorObservacionPareadaV2::PairUnverified)?;
+
+            Ok(ObservacionParejaV2ConSlotsVerificadosPendienteIdentidad { pareja })
+        })();
+
+        let parent = postcheck(self).map_err(|_| ErrorObservacionPareadaV2::OwnerUnverified)?;
+        drop(parent);
+        resultado
+    }
+}
+
 impl DuenioTransaccionAnclado<'_> {
     /// Revalida los nombres canónicos de la pareja retenida bajo el owner.
     pub(super) fn revalidar_pareja_v2(
