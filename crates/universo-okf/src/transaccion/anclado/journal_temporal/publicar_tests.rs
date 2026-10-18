@@ -11,6 +11,9 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
+#[path = "successor_observation_support.rs"]
+pub(super) mod successor_observation_support;
+
 fn crear_root(parent: &Path) -> PathBuf {
     let root = parent.join("bundle");
     fs::create_dir(&root).unwrap();
