@@ -32,6 +32,36 @@ D2 (13c1550) añade dos pruebas de dominancia del postcheck. Pasó 304/0/0 en
 Windows (673 filtradas) y 310/0/0 en Linux (691 filtradas), con limpieza de
 Cargo, compilación fresca y controles auxiliares sin errores.
 
+El CI exacto de `3c8e1e73486032bc705991fb20a977c563e70e0d` (run `39115327479`) terminó
+SUCCESS: Windows `1332/0/9` y Linux `1353/0/9`; cada job ejecutó 38 suites Cargo, siete
+pruebas Python y 14 pasos. Ese run verifica únicamente ese SHA. Los commits E1 `99f620c` y
+E2a `514cce9` aún no tienen CI propio.
+
+E1 (`99f620c`, hijo de `3c8e1e7`, 134 líneas) añade un guard privado de continuidad del
+recibo Contexto v2. Compara la identidad del token compartido (`Arc`), el parent y el scope
+del lease con el recibo; verifica ID nativo, longitud y SHA-256 de la observación retenida,
+y exige que su binding V2 completo coincida con `JournalV2`. Devuelve solo `Result<(),
+ErrorContextoAdmisionAnclado>` con error fijo; no reabre el basename ni coordina Contexto →
+Journal.
+
+E2a (`514cce9`, hijo de `99f620c`, 157 líneas de churn) añade el helper privado que retiene
+el resultado del cuerpo y su error hasta que termina el postcheck del owner. La prueba nueva
+verifica que el valor y el error del cuerpo siguen retenidos hasta completar ese postcheck.
+La coordinación Contexto → Journal sigue pendiente; un caller posterior debe obtener una
+observación nueva después de publicar Journal. Estos guards no conceden admisión ni
+habilitan apply, recovery o cleanup.
+
+El filtro local `contexto_admision::tests::` pasó con Rust/Cargo 1.88.0 y `--locked
+--offline`: Windows 52 passed/0 failed/0 ignored (926 filtradas) y Linux 55/0/0 (947
+filtradas). El filtro `duenio_transaccion::`, que incluye la prueba nueva de E2a, pasó
+Windows 305/0/0 (674 filtradas) y Linux 311/0/0 (692 filtradas).
+
+Ambos cortes limpiaron `universo-okf` antes de compilar (387 archivos en Windows y 386 en
+Linux), verificaron los artefactos focales frescos y su `.d` con las dos rutas de cada corte, y
+cerraron sin procesos de build o test. `cargo fmt --all -- --check`, clippy de
+workspace/all-targets con `-D warnings`, frontera pública, `git diff --check` y C0/DEL
+terminaron en exit 0; la limpieza del runner Linux también terminó en 0.
+
 La secuencia que conserva y revalida Contexto antes de publicar Journal aún
 no está coordinada. Los resultados son informes de observación, no admisión
 ni autoridad para recovery o apply productivo. Las publicaciones privadas
