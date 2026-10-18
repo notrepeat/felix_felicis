@@ -843,3 +843,6 @@ mod owner_body_retention_tests;
 #[cfg(all(test, any(target_os = "linux", windows)))]
 #[path = "duenio_transaccion/context_journal_fixture_tests.rs"]
 mod context_journal_fixture_tests;
+
+#[path = "duenio_transaccion/context_journal_v2_observation.rs"]
+mod context_journal_v2_observation;

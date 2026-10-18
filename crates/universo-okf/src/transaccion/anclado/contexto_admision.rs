@@ -214,6 +214,7 @@ mod eliminar;
 mod evidencia;
 #[path = "contexto_admision/publicar.rs"]
 mod publicar;
+pub(super) use publicar::ReciboContextoPublicado;
 pub(super) use publicar::renombrar_no_reemplazar;
 #[path = "contexto_admision/lector_versionado.rs"]
 mod lector_versionado;
