@@ -512,6 +512,9 @@ mod comparar_root_normal_v2;
 #[path = "duenio_transaccion/normal_v2_test_support.rs"]
 pub(super) mod normal_v2_test_support;
 
+#[path = "duenio_transaccion/normal_replay_inventory_v2.rs"]
+mod normal_replay_inventory_v2;
+
 #[path = "duenio_transaccion/observar_root.rs"]
 mod observar_root;
 
