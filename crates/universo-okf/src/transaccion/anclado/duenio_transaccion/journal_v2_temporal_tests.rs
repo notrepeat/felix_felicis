@@ -9,6 +9,11 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
+#[path = "journal_v2_failure_tests.rs"]
+mod failure_mode_tests;
+#[path = "journal_v2_native_lock_tests.rs"]
+mod native_lock_tests;
+
 const LOCK_CANARY: &[u8] = b"journal-v2-owner-lock-canary";
 
 fn ubicacion_en(temp: &Path) -> UbicacionRaiz {
