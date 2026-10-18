@@ -14,25 +14,37 @@ bytes intactos.
 
 ### Corte actual: observación normal versionada
 
-C2 local (`3e3ec9e`, 261 líneas) agrega almacenamiento privado del envelope v2:
-codificación tipada, recibo ligado al owner por ID, longitud y SHA-256, publicación sin reemplazo y
-lectura de vuelta que valida el parent estructural del envelope. Las pruebas
-recorren esa relectura y comparan bytes y binding estructural con un JournalV2
-de fixture. No acredita admisión ni activa
-apply/recovery.
+C2 (3e3ec9e, 261 líneas) agrega almacenamiento privado del envelope v2.
+El recibo verifica ID nativo, longitud y SHA-256; el lector valida parent y
+codec.
+La publicación usa NOREPLACE. Las pruebas comparan los bytes del temporal y del
+canónico; después contrastan el binding estructural leído del canónico con un
+JournalV2 de fixture.
 
-J2a local (`b0cb5d0`, 161 líneas) incorpora el lease tipado para JournalV2; su filtro
-`transaccion::anclado::journal_temporal::` pasó `85/0/0` en Windows y `87/0/0` en Linux con Rust 1.88 locked/offline. Aún no tiene CI propio.
+J2a (b0cb5d0, 161 líneas) añade el lease tipado. El filtro local
+transaccion::anclado::journal_temporal:: pasó 85/0/0 en Windows y 87/0/0
+en Linux; el filtro C2 contexto_admision::tests:: pasó 51/0/0 y 54/0/0.
 
-El filtro `contexto_admision::tests::` pasó `51/0/0` en Windows
-(cinco nuevas y 46 previas) y `54/0/0` en Linux (cinco nuevas y 49 previas);
-formato, clippy, frontera pública y diff-check terminaron en 0 en ambos
-sistemas. C2 y J2a son posteriores al CI de referencia y no tienen CI propio.
+El CI 01e8b53377ca767061f867b855310624c42b88fa (run 39105202986) terminó
+SUCCESS: Linux 1326/0/9, Windows 1305/0/9; 38 suites Cargo, siete pruebas
+Python y 14 pasos por job. Cubre C2 y J2a, no los cortes locales posteriores.
 
-El último CI publicado del coordinador se ejecutó en `0442bd0` (run
-`39100830488`) y terminó SUCCESS: Linux `1318/0/9`, Windows `1297/0/9`;
-cada sistema ejecutó 38 suites Cargo, siete pruebas Python y 14 pasos. Cubre
-RA0–RA2, pero antecede a C2 y J2a; ninguno está incluido.
+J2b (d17f5a2, 373 líneas) crea el temporal J2 desde el owner tipado; las
+pruebas focales del owner pasaron 293/0/0 en Windows y 299/0/0 en Linux.
+J2c (2fe41fd, 172 líneas) amplía scope y lock; su filtro pasó 10/0/0 en
+ambos sistemas (cinco pruebas de J2b y cinco de J2c). Windows conserva la
+limitación de sharing para el rename nativo.
+
+El motor A (b61475a, 78 líneas) comparte la ruta de publicación sin alterar
+v1 y pasó 85/0/0 en Windows y 87/0/0 en Linux. El lector B (7ceb915,
+394 líneas) pasó 90/0/0 y 92/0/0 con cinco pruebas nuevas y regresiones v1.
+Formato, clippy workspace all-targets con -D warnings, frontera pública y
+diff-check pasaron en ambos sistemas; las compilaciones fueron frescas y el
+cleanup Linux terminó en 0. El CI citado no incluye J2b, J2c, A ni B.
+
+El alcance es almacenamiento y lectura de datos privados: no hay admisión ni
+caller productivo desde apply o recovery. El publicador canónico J2 sigue
+pendiente; Journal v1 continúa intacto y U7/fase 04 siguen parciales (4/9).
 
 | Corte | Commit | Cambio | Pruebas focales Windows / Linux |
 |---|---|---:|---|

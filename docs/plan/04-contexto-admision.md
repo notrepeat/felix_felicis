@@ -7,31 +7,44 @@ permanece en 4/9. Este flujo aún no tiene caller productivo desde apply ni reco
 <a name="corte-actual-observacion-normal-versionada"></a>
 ## Corte actual: observación normal versionada
 
-C2 local (`3e3ec9e`, 261 líneas de churn) agrega almacenamiento privado del
-envelope tipado v2. El owner lo codifica al crear el temporal. La verificación
-del recibo comprueba ID nativo, longitud y SHA-256; el lector
-versionado valida el parent estructural del envelope. La publicación usa
-`NOREPLACE`. Las pruebas recorren la relectura versionada y comparan bytes
-y binding estructural con un JournalV2 de fixture.
+C2 (3e3ec9e, 261 líneas) persiste el envelope tipado v2 en almacenamiento privado.
+El owner codifica el envelope al crear el temporal; el recibo comprueba ID nativo,
+longitud y SHA-256, y el lector versionado valida parent y codec.
+La publicación usa NOREPLACE. Las pruebas comparan los bytes del temporal y del
+canónico; después contrastan el binding estructural leído del canónico con un
+JournalV2 de fixture.
 
-Si falla el codec, el error es privado y no se crea ni modifica el temporal ni
-el canonical.
+J2a (b0cb5d0, 161 líneas) incorpora el lease tipado para JournalV2. El filtro
+transaccion::anclado::journal_temporal:: pasó 85/0/0 en Windows y 87/0/0
+en Linux con Rust 1.88 locked/offline. El filtro local C2
+contexto_admision::tests:: pasó 51/0/0 en Windows y 54/0/0 en Linux;
+formato, clippy, frontera pública y diff-check también pasaron.
 
-J2a local (`b0cb5d0`, 161 líneas) incorpora el lease tipado para JournalV2; su filtro
-`transaccion::anclado::journal_temporal::` pasó `85/0/0` en Windows y `87/0/0` en Linux con Rust 1.88 locked/offline. Aún no tiene CI propio.
+El CI exacto 01e8b53377ca767061f867b855310624c42b88fa (run 39105202986)
+terminó SUCCESS: Linux 1326/0/9, Windows 1305/0/9; cada job ejecutó
+38 suites Cargo, siete pruebas Python y 14 pasos. Cubre C2 y J2a, pero no los
+cortes locales posteriores J2b, J2c ni los cortes del publicador.
 
-El filtro `contexto_admision::tests::` pasó `51/0/0` en Windows (cinco pruebas
-nuevas y 46 anteriores) y `54/0/0` en Linux (cinco nuevas y 49 anteriores),
-con Rust 1.88 locked/offline y paquete limpio. Formato, clippy del workspace
-con todos los targets y `-D warnings`, frontera pública y diff-check pasaron
-en ambos sistemas; los artefactos fueron frescos y cleanup Linux terminó en 0.
-Es almacenamiento de datos: no acredita admisión ni habilita apply/recovery. Journal
-v1 no cambió; C2 aún no tiene CI propio.
+J2b (d17f5a2, 373 líneas) crea el temporal J2 desde el owner tipado; sus
+pruebas focales del owner pasaron 293/0/0 en Windows y 299/0/0 en Linux.
+J2c (2fe41fd, 172 líneas) añade cobertura de scope y lock: el filtro
+duenio_transaccion::journal_v2_ pasó 10/0/0 en ambos sistemas, con cinco
+pruebas de J2b y cinco de J2c. El rename nativo en Windows queda limitado por
+sharing del sistema; el resultado no afirma una renombrada efectiva allí.
 
-El último CI publicado del coordinador se ejecutó en `0442bd0` (run
-`39100830488`) y terminó SUCCESS: Linux `1318/0/9`, Windows `1297/0/9`;
-cada sistema ejecutó 38 suites Cargo, siete pruebas Python y 14 pasos. Cubre
-RA0–RA2, pero antecede a C2 y J2a; ninguno está incluido.
+El motor compartido A (b61475a, 78 líneas) conserva la ruta v1; el filtro
+journal_temporal:: pasó 85/0/0 en Windows y 87/0/0 en Linux, incluidas
+las regresiones v1. B (7ceb915, 394 líneas) añade el lector temporal
+versionado: journal_temporal:: pasó 90/0/0 en Windows y 92/0/0 en Linux,
+incluidas cinco pruebas nuevas y las regresiones existentes. Ambos cortes
+pasaron formato, clippy del workspace con todos los targets y -D warnings,
+frontera pública y diff-check; las compilaciones fueron frescas y Linux limpió
+sus temporales con exit 0. El CI anterior no cubre J2b, J2c, A ni B.
+
+El flujo sigue siendo de datos privados: no acredita admisión ni habilita
+apply o recovery. El lector no constituye un publicador canónico J2 ni un
+caller productivo; Journal v1 permanece intacto, U7 y fase 04 siguen parciales,
+y el progreso global permanece en 4/9.
 
 | Corte | Commit | Cambio medido | Pruebas focales Windows / Linux |
 |---|---|---:|---|
