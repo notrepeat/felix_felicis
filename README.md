@@ -21,12 +21,26 @@ Implementado:
 - `check --explain decide|enumerate` opt-in, con explicaciones redactadas en texto o JSON v2; el resultado baseline conserva JSON v1;
 - CLI (`atomos`, `validate`, `check`, `propose`; `verificar` es alias compatible de `validate`);
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
+- servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check` y `why`, sin escritura del bundle;
+- [Code Mode local opcional](tools/codemode-local/README.md) con SDK Cloudflare real y sandbox adicional Linux; [comparación reproducible](docs/codemode-comparacion.md), sin enviar bundles a la nube;
 - pruebas unitarias, de propiedades, compile-fail y round-trip.
 
 En construcción:
 
-- revisión avanzada y recuperación de conocimiento por patrones;
-- servidor MCP.
+- revisión avanzada y recuperación de conocimiento por patrones.
+
+## Loop de corrección por MCP
+
+```sh
+cargo build -p universo-mcp -p universo-cli
+python tools/demo_mcp.py --binary target/debug/universo-mcp --cli target/debug/universo
+```
+
+En Windows usa los ejecutables `.exe`. La demo consulta contexto, obtiene un
+rechazo, deriva la corrección de las respuestas y la readmite; comprueba paridad
+con la CLI, reinicio determinista y archivos intactos. Es un agente sintético
+determinista, no una medición de utilidad de un modelo. MCP directo es la opción
+predeterminada; Code Mode es una capa opcional de composición.
 
 ## Probar el ejemplo
 

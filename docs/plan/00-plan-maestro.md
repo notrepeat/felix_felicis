@@ -12,8 +12,8 @@ resultado de un agente en escenarios reproducibles.
 | Estado | en curso |
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
-| Progreso | 5/9 fases completas: 01–05. Fase 04 cerrada en `f0e6c45`, CI `44139242078`: Linux 1491/0/18 y Windows 1467/0/18, 42 suites. |
-| Foco actual | Fase 06 en curso: loop de agentes por MCP. Apply/CLI y recovery de fase 04 están completos dentro del contrato de escritores cooperantes; no se afirma power-loss durability ni atomicidad ante mutaciones hostiles. |
+| Progreso | 6/9 fases completas: 01–06. Fase 06 cerrada en `6f9eb99`, CI `44147088907`: Linux 1501/0/19 y Windows 1477/0/19, 45 suites; Code Mode opcional validado localmente en Linux. |
+| Foco actual | Fase 07 pendiente: validación empírica. MCP directo y loop de corrección completos; Code Mode es opcional y mantiene bundles locales. No se inicia la integración privada de fase 08. |
 | Última actualización | 2026-11-17 |
 
 ### Registro histórico anterior al cierre de fase 04
@@ -174,7 +174,7 @@ flowchart LR
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
 | [04](04-operacion-transaccional.md) | Operación transaccional | completo | 03 | Type, simulación, apply público/CLI, recovery-before-CAS, lock retenido, staging, Journal/Context v2 e Intent v3, rollback/cleanup y privacidad verificados en `f0e6c45`; CI Linux/Windows verde y ejemplo reproducible. |
 | [05](05-demo-publica.md) | Demo pública | completo | 01–03 + subconjunto de 04 (propuesta/evaluación core usadas por la demo) | La historia de contradicción, corrección y readmisión se reproduce con un comando; CI `38500576872` pasó en Linux y Windows. Este alcance no requiere completar apply, publicación ni recovery de fase 04. |
-| [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | en curso | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
+| [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | completo | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
 | [08](08-integracion-privada.md) | Integración privada | pendiente | 04 | El bundle real valida el motor sin filtrarse al repositorio público. |
 | [09](09-versionado-y-evidencia.md) | Versionado y evidencia | pendiente | 07–08 | Cada tag corresponde a capacidades demostradas y CI verde. |
@@ -198,16 +198,18 @@ flowchart LR
 - [x] 03 — Los veredictos explican contradicciones y vacíos mediante árboles testigo abstractos y acotados; los tests los relacionan con casos concretos sin exponer sus átomos, y verifican privacidad y presupuesto.
 - [x] 04 — Las propuestas son transaccionales: API/CLI, recovery y gates del SHA exacto `f0e6c45`; evidencia en el [cierre de fase 04](04-operacion-transaccional.md#cierre-verificado-2026-11-17).
 - [x] 05 — La demo pública se reproduce con un comando, compara goldens y CI pasa en Linux y Windows; el criterio 3 correlaciona el testigo con la fixture solo dentro del test y conserva redactada la salida pública.
-- [ ] 06 — El loop MCP funciona de extremo a extremo.
+- [x] 06 — El loop MCP funciona de extremo a extremo; paridad CLI, rechazo/corrección/readmisión, reinicio y privacidad verificados. Code Mode opcional tiene evidencia local separada de CI.
 - [ ] 07 — La evaluación comparativa tiene resultados publicados.
 - [ ] 08 — La integración privada pasa sin exponer datos.
 - [ ] 09 — Se publica el tag correspondiente con evidencia enlazada.
 
 ## Próximo paso
 
-Comenzar Fase 06 según su plan: integrar el loop de agentes por MCP sobre las
-APIs públicas verificadas. No está implementada por este cierre. Fases 07–09
-permanecen pendientes; la integración privada 08 mantiene su propia frontera.
+La [fase 06](06-loop-de-agentes-mcp.md) está cerrada. El próximo frente es la
+[validación empírica de fase 07](07-validacion-empirica.md), todavía pendiente:
+la comparación sintética de transportes no acredita utilidad de un modelo.
+Fases 08–09 permanecen pendientes; la integración privada 08 mantiene su propia
+frontera y no se ejecutó en este trabajo.
 
 ### Próximo paso histórico antes del cierre (2026-10-14)
 

@@ -68,3 +68,8 @@ independiente repitió las ocho pruebas con éxito.
 El benchmark incluye 12 muestras en total y todos los resultados coinciden.
 Las cifras son de esta máquina y ejecutable debug; repetirlas puede cambiar
 el tiempo. La comparación no modifica los contratos ni las cuotas del motor.
+
+La CI del repositorio valida el workspace Rust y MCP en Linux y Windows; no
+ejecuta esta integración opcional de Node/workerd/bubblewrap. La evidencia
+de Code Mode aquí registrada es local en Linux y repetida por un revisor
+independiente. No se presenta como cobertura CI ni soporte Windows del adaptador.

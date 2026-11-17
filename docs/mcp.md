@@ -113,8 +113,8 @@ Validación local Rust 1.88: workspace 1501 pruebas aprobadas, cero fallos y 19
 ignored, en 45 suites; fmt y clippy pasan. Los ignored incluyen helpers de
 proceso invocados por pruebas padre y harnesses opt-in. La demo MCP con CLI real
 pasó rechazo, corrección, paridad, reinicio e igualdad de archivos;
-[transcript sintético](fixtures/mcp-transcript.json). CI del commit exacto se
-registrará antes del cierre de la fase.
+[transcript sintético](fixtures/mcp-transcript.json). CI del servidor directo `8ac2c69`, ejecución `44146216036`, pasó en Linux
+(1501/0/19) y Windows (1477/0/19), con 45 suites por plataforma.
 
 Contrato de referencia: [ciclo de vida MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
 y [herramientas](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
@@ -122,3 +122,11 @@ y [herramientas](https://modelcontextprotocol.io/specification/2025-11-25/server
 ## Code Mode opcional
 
 El mismo servidor puede usarse desde el [adaptador Code Mode local](../tools/codemode-local/README.md), con SDK Cloudflare real, workerd y aislamiento adicional de sistema operativo. [La comparación reproducible](codemode-comparacion.md) conserva MCP directo como opción predeterminada; no cambia los permisos ni publica deltas.
+
+La CI Rust/Linux/Windows ejecuta el servidor MCP y sus pruebas; **no ejecuta el
+adaptador Code Mode opcional**. Este último tiene validación local en Linux con
+bubblewrap: ocho pruebas de aislamiento y 12 muestras A/B, repetidas por revisión
+independiente. No se afirma soporte Windows ni cobertura CI para ese adaptador.
+
+Cierre de fase 06: código `6f9eb99`, CI `44147088907` aprobada en ambas
+plataformas para el workspace Rust. [Checklist y evidencia completa](plan/06-loop-de-agentes-mcp.md).
