@@ -13,7 +13,7 @@ resultado de un agente en escenarios reproducibles.
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
 | Progreso | 5/9 fases completas: 01–05. Fase 04 cerrada en `f0e6c45`, CI `44139242078`: Linux 1491/0/18 y Windows 1467/0/18, 42 suites. |
-| Foco actual | Fase 06 pendiente: loop de agentes por MCP. Apply/CLI y recovery de fase 04 están completos dentro del contrato de escritores cooperantes; no se afirma power-loss durability ni atomicidad ante mutaciones hostiles. |
+| Foco actual | Fase 06 en curso: loop de agentes por MCP. Apply/CLI y recovery de fase 04 están completos dentro del contrato de escritores cooperantes; no se afirma power-loss durability ni atomicidad ante mutaciones hostiles. |
 | Última actualización | 2026-11-17 |
 
 ### Registro histórico anterior al cierre de fase 04
@@ -174,7 +174,7 @@ flowchart LR
 | [03](03-veredictos-explicables.md) | Veredictos explicables | completo | 02 | Criterios 01–17 cerrados con suites de `universo-core`/`universo-cli`; los conflictos funcionales del delta quedan asignados al gate de aceptación de fase 04. |
 | [04](04-operacion-transaccional.md) | Operación transaccional | completo | 03 | Type, simulación, apply público/CLI, recovery-before-CAS, lock retenido, staging, Journal/Context v2 e Intent v3, rollback/cleanup y privacidad verificados en `f0e6c45`; CI Linux/Windows verde y ejemplo reproducible. |
 | [05](05-demo-publica.md) | Demo pública | completo | 01–03 + subconjunto de 04 (propuesta/evaluación core usadas por la demo) | La historia de contradicción, corrección y readmisión se reproduce con un comando; CI `38500576872` pasó en Linux y Windows. Este alcance no requiere completar apply, publicación ni recovery de fase 04. |
-| [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | pendiente | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
+| [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | en curso | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
 | [08](08-integracion-privada.md) | Integración privada | pendiente | 04 | El bundle real valida el motor sin filtrarse al repositorio público. |
 | [09](09-versionado-y-evidencia.md) | Versionado y evidencia | pendiente | 07–08 | Cada tag corresponde a capacidades demostradas y CI verde. |

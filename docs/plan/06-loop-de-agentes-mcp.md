@@ -8,9 +8,14 @@ al bundle.
 
 | Campo | Valor |
 |---|---|
-| Estado | pendiente |
+| Estado | en curso |
 | Depende de | 05 |
 | Desbloquea | 07 |
+
+Contrato implementado y límites: [guía MCP](../mcp.md). Se añadió por decisión
+del usuario una comparación con [Code Mode local opcional](../codemode-comparacion.md),
+sin mover bundles a la nube. La validación local pasó; falta CI del commit exacto
+para marcar el cierre.
 
 ## Herramientas mínimas
 
@@ -55,7 +60,8 @@ cargo test --workspace --test loop_mcp
 
 | Fecha | Commit/PR | Evidencia | Resultado |
 |---|---|---|---|
-| — | — | — | — |
+| 2026-11-17 | `8ac2c69` | MCP directo: workspace Rust 1501/0/19, 45 suites; fmt/clippy y demo con CLI real, reinicio y bytes intactos. | Local pasa; CI exacto pendiente. |
+| 2026-11-17 | Adaptador opcional, commit pendiente | SDK Cloudflare real local: aislamiento 8/8 y comparación A/B de 12 muestras. | Local pasa; no se infiere ahorro de tokens ni utilidad de un LLM. |
 
 ## Siguiente fase
 

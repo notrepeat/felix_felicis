@@ -118,3 +118,7 @@ registrará antes del cierre de la fase.
 
 Contrato de referencia: [ciclo de vida MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
 y [herramientas](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+
+## Code Mode opcional
+
+El mismo servidor puede usarse desde el [adaptador Code Mode local](../tools/codemode-local/README.md), con SDK Cloudflare real, workerd y aislamiento adicional de sistema operativo. [La comparación reproducible](codemode-comparacion.md) conserva MCP directo como opción predeterminada; no cambia los permisos ni publica deltas.

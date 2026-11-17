@@ -1,0 +1,19 @@
+{
+  "name": "felix-codemode-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@cloudflare/codemode": "0.5.6",
+    "miniflare": "4.20260730.0",
+    "esbuild": "0.25.12"
+  },
+  "scripts": {
+    "setup": "node bootstrap.mjs",
+    "test": "node --test sandbox.test.mjs",
+    "compare": "node compare.mjs"
+  }
+}
