@@ -244,9 +244,20 @@ y no inflar artificialmente el tamaño de muestra.
 La prioridad 1 tiene ya una primera parte: `evaluation/trajectory.py` deriva,
 de los registros existentes, la adopción, el primer delta, los rechazos, la
 reparación, el estado final y el lugar del error. Además compara cada veredicto
-de Felix con el oracle. Falta registrar en el proxy la latencia y el costo de
-cada llamada, y eso exige una versión nueva del protocolo, no un cambio sobre
-el piloto 173. [Trayectorias](../evaluation/paired-report.md#trayectorias-por-ejecución-derivadas-después).
+de Felix con el oracle. [Trayectorias](../evaluation/paired-report.md#trayectorias-por-ejecución-derivadas-después).
+
+La segunda parte es un proxy nuevo, `evaluation/mcp_proxy_v2.py`, con ledger
+`felix-mcp-ledger-v2`. Por cada `tools/call` registra `latency_ms` (tiempo
+monotónico entre reenviar la petición al servidor y leer su respuesta),
+`request_bytes`/`response_bytes` (bytes UTF-8 de la línea JSON-RPC intercambiada
+con el agente) y `forwarded`; las llamadas denegadas por presupuesto llevan
+`latency_ms: null` porque no llegan al servidor. No registra tokens por llamada:
+el cliente del agente sólo los informa por ejecución. `mcp_proxy.py` y el resto
+de fuentes del piloto 173 siguen intactos, y un test comprueba sus hashes contra
+`results/pilot-173/plan.json`. El proxy v2 todavía no está conectado a
+`run_paired.py`: hacerlo cambia el hash del runner y corresponde a la versión
+nueva del protocolo, que no se abre sin decisión explícita. Tampoco hay
+mediciones reales con él.
 
 No hace falta reescribir el motor para probar estas hipótesis. El trabajo de las
 fases 04 y 06 aporta componentes reutilizables; la fase 07 mostró qué afirmación
