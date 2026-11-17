@@ -13,7 +13,7 @@ resultado de un agente en escenarios reproducibles.
 | Versión de partida | `v0.1.0` |
 | Próximo gate | `v0.2.0` |
 | Progreso | 6/9 fases completas: 01–06. Fase 06 cerrada en `6f9eb99`, CI `44147088907`: Linux 1501/0/19 y Windows 1477/0/19, 45 suites; Code Mode opcional validado localmente en Linux. |
-| Foco actual | Fase 07 pendiente: validación empírica. MCP directo y loop de corrección completos; Code Mode es opcional y mantiene bundles locales. No se inicia la integración privada de fase 08. |
+| Foco actual | Fase 07 en curso: validación empírica con protocolo pareado prerregistrado. MCP directo y loop de corrección completos; Code Mode es opcional y mantiene bundles locales. No se inicia la integración privada de fase 08. |
 | Última actualización | 2026-11-17 |
 
 ### Registro histórico anterior al cierre de fase 04
@@ -175,7 +175,7 @@ flowchart LR
 | [04](04-operacion-transaccional.md) | Operación transaccional | completo | 03 | Type, simulación, apply público/CLI, recovery-before-CAS, lock retenido, staging, Journal/Context v2 e Intent v3, rollback/cleanup y privacidad verificados en `f0e6c45`; CI Linux/Windows verde y ejemplo reproducible. |
 | [05](05-demo-publica.md) | Demo pública | completo | 01–03 + subconjunto de 04 (propuesta/evaluación core usadas por la demo) | La historia de contradicción, corrección y readmisión se reproduce con un comando; CI `38500576872` pasó en Linux y Windows. Este alcance no requiere completar apply, publicación ni recovery de fase 04. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | completo | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
-| [07](07-validacion-empirica.md) | Validación empírica | pendiente | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
+| [07](07-validacion-empirica.md) | Validación empírica | en curso | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
 | [08](08-integracion-privada.md) | Integración privada | pendiente | 04 | El bundle real valida el motor sin filtrarse al repositorio público. |
 | [09](09-versionado-y-evidencia.md) | Versionado y evidencia | pendiente | 07–08 | Cada tag corresponde a capacidades demostradas y CI verde. |
 
@@ -206,7 +206,7 @@ flowchart LR
 ## Próximo paso
 
 La [fase 06](06-loop-de-agentes-mcp.md) está cerrada. El próximo frente es la
-[validación empírica de fase 07](07-validacion-empirica.md), todavía pendiente:
+[validación empírica de fase 07](07-validacion-empirica.md), en curso:
 la comparación sintética de transportes no acredita utilidad de un modelo.
 Fases 08–09 permanecen pendientes; la integración privada 08 mantiene su propia
 frontera y no se ejecutó en este trabajo.

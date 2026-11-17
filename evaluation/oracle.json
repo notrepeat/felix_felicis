@@ -1,0 +1,203 @@
+{
+  "schema": "felix-paired-oracle-v1",
+  "cases": {
+    "type_a": {
+      "required": [
+        "Type(n/a, ready)",
+        "Maturity(n/a, accepted)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Type:n/a",
+        "Ext:Maturity:n/a"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "type_b": {
+      "required": [
+        "Type(n/b, ready)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Type:n/b"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "label_copy": {
+      "required": [
+        "HasLab(n/a, \"Beta\")"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "HasLab:n/a"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "label_swap": {
+      "required": [
+        "HasLab(n/a, \"Gamma\")",
+        "HasLab(n/c, \"Alpha\")"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "HasLab:n/a",
+        "HasLab:n/c"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "parent_move": {
+      "required": [
+        "Parent(n/a, n/c)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Parent:n/a"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "parent_rotate": {
+      "required": [
+        "Parent(n/b, n/a)",
+        "Parent(n/a, n/c)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Parent:n/a",
+        "Parent:n/b"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "owner_copy": {
+      "required": [
+        "Owner(n/a, blue)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Owner:n/a"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "maturity_accept": {
+      "required": [
+        "Maturity(n/c, accepted)",
+        "Type(n/c, draft)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Maturity:n/c"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "release_c": {
+      "required": [
+        "Type(n/c, ready)",
+        "HasLab(n/c, \"Published\")",
+        "Parent(n/c, n/b)",
+        "Maturity(n/c, accepted)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Type:n/c",
+        "HasLab:n/c",
+        "Parent:n/c",
+        "Ext:Maturity:n/c"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "archive_a": {
+      "required": [
+        "Type(n/a, archive)",
+        "HasLab(n/a, \"Archived\")",
+        "Owner(n/a, blue)"
+      ],
+      "forbidden": [
+        "Parent(n/a, n/b)"
+      ],
+      "forbidden_keys": [
+        "Parent:n/a"
+      ],
+      "mutable_keys": [
+        "Type:n/a",
+        "HasLab:n/a",
+        "Ext:Owner:n/a",
+        "Parent:n/a"
+      ],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "noop_owner": {
+      "required": [
+        "Owner(n/b, blue)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    },
+    "noop_parent": {
+      "required": [],
+      "forbidden": [],
+      "forbidden_keys": [
+        "Parent:n/c"
+      ],
+      "mutable_keys": [],
+      "constraints": [
+        {
+          "kind": "ready_requires_accepted"
+        }
+      ]
+    }
+  }
+}

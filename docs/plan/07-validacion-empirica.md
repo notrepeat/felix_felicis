@@ -7,9 +7,25 @@ reproducibles, incluidos los resultados negativos y los límites encontrados.
 
 | Campo | Valor |
 |---|---|
-| Estado | pendiente |
+| Estado | en curso |
 | Depende de | 05, 06 |
 | Desbloquea | 09 |
+
+## Corte de trabajo: protocolo fijado antes del piloto
+
+El [protocolo pareado](../../evaluation/paired_methodology.md) y el
+[plan de 24 ejecuciones](../../evaluation/results/pilot-173/plan.json) se fijan
+antes de observar respuestas a tareas. Se seleccionan seis tareas sintéticas,
+una por familia, con dos brazos y dos repeticiones. Dataset y oracle tienen
+hashes separados; el oracle no se entrega al agente. Todavía no se afirma
+utilidad ni mejora del modelo.
+
+El [corpus y benchmark](../../evaluation/formal-and-performance.md) ya tienen
+evidencia local: 46 casos etiquetados con coincidencia exacta, 14 variantes AST,
+tres clases de conflicto y cero falsos admit. La matriz de 14 puntos × cinco
+repeticiones conserva 65 admisiones y cinco agotamientos del presupuesto de
+evaluación; estos últimos son resultados adversos, no admisiones lentas.
+La CI del checkpoint y el piloto real permanecen pendientes.
 
 ## Tres evaluaciones
 
@@ -46,18 +62,25 @@ Si Felix no mejora corrección o capacidad de reparación, no se avanza a
 revisión AGM ni recuperación avanzada. Primero se explica el fallo del loop
 mínimo y se revisa la hipótesis.
 
-## Verificación prevista
+## Verificación reproducible
 
 ```powershell
-cargo bench --workspace
-python evaluation/run_paired.py
+cargo fetch --locked
+python evaluation/run_formal.py --output evaluation/formal-results.json
+python evaluation/benchmark_matrix.py --repetitions 5 --output evaluation/benchmark-results.json
+python evaluation/run_paired.py --help
 ```
+
+El piloto necesita una instalación autenticada de Codex CLI indicada mediante
+`--codex-dir`; no se incluyen credenciales en el repositorio. Las opciones y
+versiones efectivas se conservan en su plan, sin inventar snapshot del proveedor,
+semilla de muestreo o costo monetario no observados.
 
 ## Registro de evidencia
 
 | Fecha | Commit/PR | Evidencia | Resultado |
 |---|---|---|---|
-| — | — | — | — |
+| 2026-11-17 | Prerregistro, commit pendiente | Corpus formal 46 casos + 3 conflictos, tests exactos; matriz de 70 muestras; pruebas Python del runner/oracle y controles de frontera. | Evidencia local, sin resultados de utilidad todavía. |
 
 ## Siguiente fase
 

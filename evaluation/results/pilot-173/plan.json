@@ -1,0 +1,166 @@
+{
+  "schema": "felix-real-agent-pilot-v1",
+  "configured_model_alias": "gpt-6-astra",
+  "provider_model_snapshot": null,
+  "schedule_seed": 173,
+  "sampling_seed": null,
+  "cases": [
+    "release_c",
+    "owner_copy",
+    "label_swap",
+    "noop_owner",
+    "parent_rotate",
+    "type_a"
+  ],
+  "runs": 24,
+  "timeout_seconds_per_run": 120,
+  "mcp_tool_call_budget": 8,
+  "dataset_sha256": "fb525f58a9e129dc7ccfe4970d49f2030a25b6f5f3fe3607f4c8d00a1f0c17af",
+  "cli_version": "codex-cli 0.169.0",
+  "source_sha256": {
+    "run_paired.py": "b0e40db1720ba714020c053ccc6054550ae66661ce4148b8ba2a32866175d92a",
+    "mcp_proxy.py": "ddd4a31a035f0428f010dc9dc69233a376443ae1da729ba565d8d7502daa25e5",
+    "scoring.py": "3e05e755e3a008c910e91bb6e692d99477e63ce4e5175a9683930272e5bdaf69",
+    "tasks.json": "b42e1b07beef427da365680d1a4c1709cc9fc357739a3f38cebf3339025e9bc0",
+    "oracle.json": "6a6c6e744f9c5dffe2c5ea3bed2cf18d26be34c3b5813f1d63aec6430b978ee2"
+  },
+  "disabled_features": [
+    "shell_tool",
+    "apps",
+    "browser_use",
+    "multi_agent",
+    "multi_agent_v2",
+    "memories",
+    "plugins",
+    "remote_plugin",
+    "skill_search",
+    "view_image",
+    "image_generation"
+  ],
+  "isolation": "bubblewrap_readonly_fixtures_no_repository_oracle_or_host_home",
+  "output_byte_limit_per_stream": 8388608,
+  "schema_sha256": "186df79ed77bfebcfb3719d8bd327a2930f23fd1c22748bfd4d09a10c3a78346",
+  "instruction": "Solve the synthetic graph-edit task. Return only the required felix-delta-v1 JSON delta. Use only supplied facts and rules. Do not inspect files, use network, or execute commands. If verification tools are available, you may use them to check and repair your proposal. You have at most 8 verification tool calls. Minimize unrelated edits.",
+  "schedule": [
+    {
+      "case": "parent_rotate",
+      "repetition": 1,
+      "arm": "with_felix"
+    },
+    {
+      "case": "parent_rotate",
+      "repetition": 1,
+      "arm": "without_felix"
+    },
+    {
+      "case": "noop_owner",
+      "repetition": 1,
+      "arm": "without_felix"
+    },
+    {
+      "case": "noop_owner",
+      "repetition": 1,
+      "arm": "with_felix"
+    },
+    {
+      "case": "type_a",
+      "repetition": 1,
+      "arm": "without_felix"
+    },
+    {
+      "case": "type_a",
+      "repetition": 1,
+      "arm": "with_felix"
+    },
+    {
+      "case": "owner_copy",
+      "repetition": 1,
+      "arm": "with_felix"
+    },
+    {
+      "case": "owner_copy",
+      "repetition": 1,
+      "arm": "without_felix"
+    },
+    {
+      "case": "release_c",
+      "repetition": 1,
+      "arm": "with_felix"
+    },
+    {
+      "case": "release_c",
+      "repetition": 1,
+      "arm": "without_felix"
+    },
+    {
+      "case": "label_swap",
+      "repetition": 1,
+      "arm": "with_felix"
+    },
+    {
+      "case": "label_swap",
+      "repetition": 1,
+      "arm": "without_felix"
+    },
+    {
+      "case": "parent_rotate",
+      "repetition": 2,
+      "arm": "without_felix"
+    },
+    {
+      "case": "parent_rotate",
+      "repetition": 2,
+      "arm": "with_felix"
+    },
+    {
+      "case": "release_c",
+      "repetition": 2,
+      "arm": "without_felix"
+    },
+    {
+      "case": "release_c",
+      "repetition": 2,
+      "arm": "with_felix"
+    },
+    {
+      "case": "label_swap",
+      "repetition": 2,
+      "arm": "without_felix"
+    },
+    {
+      "case": "label_swap",
+      "repetition": 2,
+      "arm": "with_felix"
+    },
+    {
+      "case": "type_a",
+      "repetition": 2,
+      "arm": "with_felix"
+    },
+    {
+      "case": "type_a",
+      "repetition": 2,
+      "arm": "without_felix"
+    },
+    {
+      "case": "noop_owner",
+      "repetition": 2,
+      "arm": "with_felix"
+    },
+    {
+      "case": "noop_owner",
+      "repetition": 2,
+      "arm": "without_felix"
+    },
+    {
+      "case": "owner_copy",
+      "repetition": 2,
+      "arm": "without_felix"
+    },
+    {
+      "case": "owner_copy",
+      "repetition": 2,
+      "arm": "with_felix"
+    }
+  ]
+}

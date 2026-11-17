@@ -1,0 +1,923 @@
+{
+  "schema": "felix-benchmark-matrix-v1",
+  "unit": "microseconds",
+  "scope": "in-memory-proponer-including-candidate",
+  "samples": [
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 638.815,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 581.879,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 588.396,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 591.176,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 610.482,
+      "status": "admit"
+    },
+    {
+      "nodes": 16,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 601.207,
+      "status": "admit"
+    },
+    {
+      "nodes": 16,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 607.479,
+      "status": "admit"
+    },
+    {
+      "nodes": 16,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 627.097,
+      "status": "admit"
+    },
+    {
+      "nodes": 16,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 631.981,
+      "status": "admit"
+    },
+    {
+      "nodes": 16,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 626.194,
+      "status": "admit"
+    },
+    {
+      "nodes": 128,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 1186.829,
+      "status": "admit"
+    },
+    {
+      "nodes": 128,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 1244.479,
+      "status": "admit"
+    },
+    {
+      "nodes": 128,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 1189.063,
+      "status": "admit"
+    },
+    {
+      "nodes": 128,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 1207.152,
+      "status": "admit"
+    },
+    {
+      "nodes": 128,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 1211.41,
+      "status": "admit"
+    },
+    {
+      "nodes": 512,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 3955.614,
+      "status": "admit"
+    },
+    {
+      "nodes": 512,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 3781.715,
+      "status": "admit"
+    },
+    {
+      "nodes": 512,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 3895.624,
+      "status": "admit"
+    },
+    {
+      "nodes": 512,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 3856.26,
+      "status": "admit"
+    },
+    {
+      "nodes": 512,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 3768.204,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 0,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 196.827,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 0,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 177.658,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 0,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 175.421,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 0,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 175.722,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 0,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 172.898,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 256,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 5785.097,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 256,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 5814.237,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 256,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 5874.151,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 256,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 5747.147,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 256,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 5850.868,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 1,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 497.78,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 1,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 476.026,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 1,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 467.136,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 1,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 474.258,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 1,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 482.561,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 16,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 1322.984,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 16,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 1327.903,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 16,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 1353.008,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 16,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 1326.056,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 16,
+      "variables": 1,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 1368.004,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 0,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 433.31,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 0,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 435.01,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 0,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 425.063,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 0,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 431.441,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 0,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 425.586,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 2,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 1397.062,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 2,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 1302.37,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 2,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 1314.867,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 2,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 1296.446,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 2,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 1318.507,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 3,
+      "delta_atoms": 8,
+      "repetition": 1,
+      "elapsed_us": 29553.35,
+      "status": "evaluation_budget_exhausted"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 3,
+      "delta_atoms": 8,
+      "repetition": 2,
+      "elapsed_us": 30723.715,
+      "status": "evaluation_budget_exhausted"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 3,
+      "delta_atoms": 8,
+      "repetition": 3,
+      "elapsed_us": 31235.057,
+      "status": "evaluation_budget_exhausted"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 3,
+      "delta_atoms": 8,
+      "repetition": 4,
+      "elapsed_us": 29619.776,
+      "status": "evaluation_budget_exhausted"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 3,
+      "delta_atoms": 8,
+      "repetition": 5,
+      "elapsed_us": 30773.025,
+      "status": "evaluation_budget_exhausted"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 0,
+      "repetition": 1,
+      "elapsed_us": 564.217,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 0,
+      "repetition": 2,
+      "elapsed_us": 562.469,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 0,
+      "repetition": 3,
+      "elapsed_us": 556.461,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 0,
+      "repetition": 4,
+      "elapsed_us": 557.414,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 0,
+      "repetition": 5,
+      "elapsed_us": 549.691,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 32,
+      "repetition": 1,
+      "elapsed_us": 702.407,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 32,
+      "repetition": 2,
+      "elapsed_us": 722.772,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 32,
+      "repetition": 3,
+      "elapsed_us": 703.998,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 32,
+      "repetition": 4,
+      "elapsed_us": 705.274,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 32,
+      "repetition": 5,
+      "elapsed_us": 688.61,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 64,
+      "repetition": 1,
+      "elapsed_us": 756.263,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 64,
+      "repetition": 2,
+      "elapsed_us": 712.254,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 64,
+      "repetition": 3,
+      "elapsed_us": 735.823,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 64,
+      "repetition": 4,
+      "elapsed_us": 736.326,
+      "status": "admit"
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 64,
+      "repetition": 5,
+      "elapsed_us": 736.862,
+      "status": "admit"
+    }
+  ],
+  "environment": {
+    "os": "Linux",
+    "machine": "x86_64",
+    "python": "3.15.2",
+    "rustc": "rustc 1.88.0 (6b00bc388 2025-06-23)",
+    "profile": "release",
+    "logical_cpus": 8,
+    "git_head": "79f1baadcc7e5aad0479e8f584610e94fef407d2"
+  },
+  "source_sha256": {
+    "crates/universo-core/examples/benchmark_matrix.rs": "8b175bf017773aa155280a3ee5730d39ef1aa83faa4af51295076a94db45fdff",
+    "evaluation/benchmark_matrix.py": "4407e5c60ec16ac3ef8b5f5a5c8b7e3d0ce0cb19e4b53ce972e6e104e820ad09"
+  },
+  "outcome_counts": {
+    "admit": 65,
+    "evaluation_budget_exhausted": 5
+  },
+  "summary": [
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "median_us": 591.176,
+      "min_us": 581.879,
+      "max_us": 638.815,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 16,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "median_us": 626.194,
+      "min_us": 601.207,
+      "max_us": 631.981,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 128,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "median_us": 1207.152,
+      "min_us": 1186.829,
+      "max_us": 1244.479,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 512,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "median_us": 3856.26,
+      "min_us": 3768.204,
+      "max_us": 3955.614,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 0,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "median_us": 175.722,
+      "min_us": 172.898,
+      "max_us": 196.827,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 256,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 8,
+      "median_us": 5814.237,
+      "min_us": 5747.147,
+      "max_us": 5874.151,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 1,
+      "variables": 1,
+      "delta_atoms": 8,
+      "median_us": 476.026,
+      "min_us": 467.136,
+      "max_us": 497.78,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 16,
+      "variables": 1,
+      "delta_atoms": 8,
+      "median_us": 1327.903,
+      "min_us": 1322.984,
+      "max_us": 1368.004,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 0,
+      "delta_atoms": 8,
+      "median_us": 431.441,
+      "min_us": 425.063,
+      "max_us": 435.01,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 2,
+      "delta_atoms": 8,
+      "median_us": 1314.867,
+      "min_us": 1296.446,
+      "max_us": 1397.062,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 3,
+      "delta_atoms": 8,
+      "median_us": 30723.715,
+      "min_us": 29553.35,
+      "max_us": 31235.057,
+      "samples": 5,
+      "outcomes": {
+        "evaluation_budget_exhausted": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 0,
+      "median_us": 557.414,
+      "min_us": 549.691,
+      "max_us": 564.217,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 32,
+      "median_us": 703.998,
+      "min_us": 688.61,
+      "max_us": 722.772,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    },
+    {
+      "nodes": 32,
+      "edges": 32,
+      "invariants": 4,
+      "variables": 1,
+      "delta_atoms": 64,
+      "median_us": 736.326,
+      "min_us": 712.254,
+      "max_us": 756.263,
+      "samples": 5,
+      "outcomes": {
+        "admit": 5
+      }
+    }
+  ],
+  "limits": "Single host; one-factor-at-a-time, warm core only; excludes file I/O, process startup, model inference and billing. No RSS or SLA claim."
+}
