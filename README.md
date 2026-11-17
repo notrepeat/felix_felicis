@@ -29,6 +29,14 @@ En construcción:
 
 - revisión avanzada y recuperación de conocimiento por patrones.
 
+## Evaluación publicada
+
+El [piloto real pareado](docs/validacion-empirica.md) obtuvo 12/12 ejecuciones correctas
+sin Felix y 12/12 con Felix disponible, sobre seis tareas repetidas; el modelo no utilizó las herramientas.
+No se demostró mejora ni capacidad de reparación asistida en ese escenario.
+La fase 07 queda cerrada como medición publicada, con límites y resultados
+adversos conservados; el gate para AGM y recuperación avanzada no se supera.
+
 ## Loop de corrección por MCP
 
 ```sh

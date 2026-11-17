@@ -173,3 +173,9 @@ y exportador 2. El piloto se ejecutó
 localmente en Linux y sus 24 puntajes, hashes pareados y preservación del plan
 fueron recalculados por revisión independiente. El exportador público elimina
 metadatos de sesión mediante lista permitida y tiene pruebas específicas.
+
+El informe publicado `3f2cfe6` pasó después CI `44152198690` en Linux y Windows
+con el mismo alcance: Rust/corpus y gates del repositorio, no inferencia remota
+ni scripts Python de evaluación. El cierre de fase 07 registra la evaluación
+realizada y su resultado neutral; no supera el gate de beneficio para funciones
+avanzadas.

@@ -60,3 +60,13 @@ cuota para ocultar el límite. Cada punto incluye sus conteos de outcomes.
 Los resultados son de un solo host y no constituyen SLA, cota RSS ni una medida
 del costo monetario de un agente. Los costos/uso del modelo pertenecen al piloto
 pareado y se registran por separado.
+
+## Identidad del código medido
+
+El campo `environment.git_head` del benchmark conserva `79f1baa`, el HEAD que
+existía al medir mientras las fuentes nuevas aún no estaban comprometidas. No
+significa que el benchmark estuviera incluido en ese commit. Los campos
+`source_sha256` identifican el script y ejemplo Rust efectivamente ejecutados;
+el checkpoint posterior `e076e74` conserva esas fuentes prerregistradas. El
+corpus formal también identifica sus fuentes y etiquetas por hash. No se atribuye
+una medición a un árbol limpio distinto del que realmente se ejecutó.

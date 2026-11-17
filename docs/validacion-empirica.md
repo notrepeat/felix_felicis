@@ -22,3 +22,8 @@ La decisión del plan se mantiene: **no avanzar a AGM ni recuperación avanzada*
 con esta evidencia; primero debe revisarse la hipótesis y explicar la falta de
 beneficio en el loop mínimo. No se ejecutó la integración privada de fase 08.
 La fase documenta mediciones y límites, sin una promesa de superioridad del agente.
+
+Cierre verificable: informe `3f2cfe6`, CI `44152198690` aprobada en Linux y
+Windows para Rust/corpus. El piloto real, los benchmarks y 19 pruebas Python
+se ejecutaron localmente en Linux y se revisaron por separado.
+[Checklist de fase 07](plan/07-validacion-empirica.md).
