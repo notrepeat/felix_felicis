@@ -74,6 +74,8 @@ mod eliminar;
 mod publicar;
 #[path = "journal_temporal/reemplazar.rs"]
 mod reemplazar;
+mod sucesor_v2;
+pub(in crate::transaccion::anclado) use sucesor_v2::EstadoPublicacionSucesorV2;
 #[path = "journal_temporal/versionado.rs"]
 pub(super) mod versionado;
 

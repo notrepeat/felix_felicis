@@ -187,7 +187,7 @@ pub(super) fn calcular_inventario_raw_repropuesto(
     Ok(InventarioRawRepropuesto { entradas, digest })
 }
 
-fn derivar_parent_overrides(
+pub(crate) fn derivar_parent_overrides(
     snapshot: &Estructura,
     candidato: &Estructura,
 ) -> Result<Vec<ParentOverride>, ErrorNewEsperado> {

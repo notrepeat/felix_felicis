@@ -224,6 +224,26 @@ medición guardado se ejecutó después sobre binario debug: 1/10/100 MiB
 registraron 31.941672/358.160849/3528.006156 ms, todos admit/exit 0. No son
 umbrales ni mediciones de RSS. Estos resultados no cubren el productor nuevo.
 
+### U9: preparación bajo owner (2026-11-17)
+
+`preparar_apply` conserva un único owner desde el CAS hasta un stage validado.
+Exige los seis slots de Journal/Context/Intent y el backup ausentes; compara
+el token antes de parsear configuración, separa rechazo semántico de error
+técnico y captura Context. Deriva los cambios Parent, serializa el candidato
+y materializa un stage exclusivo, conservando auxiliares raw. Recaptura root
+con CAS e identidad después del staging y verifica el owner antes de devolver
+Journal v2 Prepared, Context, snapshot y stage retenidos. Los errores después
+de efectos conservan la capability o el error de escritura con su evidencia;
+no hay cleanup automático ni publicación del root o sidecars. Los stages
+huérfanos ajenos no se eliminan: la creación usa un nombre nuevo exclusivo.
+Cinco pruebas focales pasaron en Linux con Rust 1.88: preparación Type y replay
+coincidente, stale antes del parseo/rechazo sin stage, namespace ocupado, root
+cambiado y sustitución Unix del lock después del staging. La matriz conjunta
+con publicación de sucesores pasó 1451/0/9 en 41 suites; formato, frontera
+pública y diff-check pasaron.
+El caller todavía debe ejecutar recovery antes del CAS y conectar publicación,
+cleanup y CLI; esta unidad por sí sola no cierra U9 ni la fase 04.
+
 ### Corte actual: preparación del sucesor Journal v2
 
 El baseline CI y los resultados focales locales de S1a están detallados en

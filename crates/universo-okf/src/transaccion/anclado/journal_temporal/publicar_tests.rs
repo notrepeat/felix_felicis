@@ -17,6 +17,8 @@ pub(super) mod successor_observation_support;
 mod successor_prepare_boundary_tests;
 #[path = "successor_prepare_tests.rs"]
 mod successor_prepare_tests;
+#[path = "successor_publish_tests.rs"]
+mod successor_publish_tests;
 
 fn crear_root(parent: &Path) -> PathBuf {
     let root = parent.join("bundle");

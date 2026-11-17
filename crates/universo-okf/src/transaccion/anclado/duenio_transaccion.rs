@@ -172,6 +172,28 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         )
     }
 
+    /// Publicación de almacenamiento; el caller debe acreditar la fila del filesystem.
+    pub(super) fn publicar_sucesor_journal_v2(
+        &mut self,
+        recibo: &super::journal_temporal::ReciboTemporalSucesorJournalV2<'_>,
+    ) -> ResultadoOwnerPostcheck<
+        Result<
+            super::journal_temporal::EstadoPublicacionSucesorV2,
+            super::journal_temporal::ErrorJournalAnclado,
+        >,
+    > {
+        ejecutar_con_owner_y_postcheck(
+            self,
+            |_| {},
+            |owner| {
+                owner
+                    .journal_temporal_estricto()
+                    .and_then(|lease| lease.publicar_sucesor_v2(recibo))
+            },
+            |owner, _| owner.parent_revalidado().map(|_| ()),
+        )
+    }
+
     /// Crea y relee el temporal v2 mientras este owner conserva el lock.
     ///
     /// El resultado es un recibo privado de almacenamiento; no publica el
@@ -878,3 +900,5 @@ mod context_journal_v2;
 
 #[path = "duenio_transaccion/publicar_intent_v3.rs"]
 mod publicar_intent_v3;
+
+pub(crate) mod preparar_apply;
