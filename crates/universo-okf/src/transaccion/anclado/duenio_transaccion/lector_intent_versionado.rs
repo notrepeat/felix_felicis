@@ -1,5 +1,8 @@
 //! Recolecta un frame RETIRE acotado desde el mismo handle ya abierto.
 
+#[path = "lector_intent_versionado/v3.rs"]
+mod v3;
+
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::File;

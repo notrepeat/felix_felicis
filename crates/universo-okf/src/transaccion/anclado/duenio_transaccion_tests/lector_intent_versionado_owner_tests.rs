@@ -697,3 +697,78 @@ fn postcheck_fallido_domina_none_candidata_y_preserva_objetos() {
     );
     assert_owner_sidecars_preserved(&rutas);
 }
+
+#[test]
+fn owner_v3_observes_bound_frame_and_rejects_canonical_replacement() {
+    use crate::transaccion::anclado::intent_persistido_v3::IntentRetiroPersistidoV3;
+    let rutas = preparar_rutas_retiro_a(false);
+    let meta = IntentRetiroPersistidoV2::decode(&rutas.fixture.bytes_intent).unwrap();
+    let frame = IntentRetiroPersistidoV3::encode(&meta, &rutas.fixture.bytes_contexto).unwrap();
+    fs::write(&rutas.intent, &frame).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let observado = owner.observar_intent_v3().unwrap();
+    assert_eq!(
+        observado.intent.contexto_original(),
+        rutas.fixture.bytes_contexto
+    );
+    drop(observado);
+    let error = owner
+        .observar_intent_v3_con_hook(|| {
+            fs::rename(&rutas.intent, rutas.intent.with_extension("old")).unwrap();
+            fs::write(&rutas.intent, &frame).unwrap();
+        })
+        .err()
+        .unwrap();
+    assert_eq!(error, ErrorObservacionIntentVersionada::CanonicalUnverified);
+}
+
+#[test]
+fn owner_v3_requires_present_canonical_and_absent_temporaries() {
+    use crate::transaccion::anclado::intent_persistido_v3::IntentRetiroPersistidoV3;
+    let rutas = preparar_rutas_retiro_a(false);
+    let meta = IntentRetiroPersistidoV2::decode(&rutas.fixture.bytes_intent).unwrap();
+    let frame = IntentRetiroPersistidoV3::encode(&meta, &rutas.fixture.bytes_contexto).unwrap();
+    fs::write(&rutas.intent, frame).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let temporal = rutas
+        .ubicacion
+        .ruta()
+        .parent()
+        .unwrap()
+        .join(rutas.ubicacion.nombre_journal_temporal());
+    let error = owner
+        .observar_intent_v3_con_hook(|| fs::write(&temporal, b"canary").unwrap())
+        .err()
+        .unwrap();
+    assert_eq!(error, ErrorObservacionIntentVersionada::OwnerUnverified);
+    assert_eq!(fs::read(&temporal).unwrap(), b"canary");
+    fs::remove_file(temporal).unwrap();
+    fs::remove_file(&rutas.intent).unwrap();
+    assert_eq!(
+        owner.observar_intent_v3().err().unwrap(),
+        ErrorObservacionIntentVersionada::CanonicalUnverified
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn owner_v3_rejects_lock_replacement_after_reading() {
+    use crate::transaccion::anclado::intent_persistido_v3::IntentRetiroPersistidoV3;
+    let rutas = preparar_rutas_retiro_a(false);
+    let meta = IntentRetiroPersistidoV2::decode(&rutas.fixture.bytes_intent).unwrap();
+    let frame = IntentRetiroPersistidoV3::encode(&meta, &rutas.fixture.bytes_contexto).unwrap();
+    fs::write(&rutas.intent, &frame).unwrap();
+    let mut lock = LockEscritura::adquirir_en(&rutas.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let error = owner
+        .observar_intent_v3_con_hook(|| {
+            fs::rename(&rutas.lock, rutas.lock.with_extension("old")).unwrap();
+            fs::write(&rutas.lock, b"replacement").unwrap();
+        })
+        .err()
+        .unwrap();
+    assert_eq!(error, ErrorObservacionIntentVersionada::OwnerUnverified);
+    assert_eq!(fs::read(&rutas.intent).unwrap(), frame);
+}

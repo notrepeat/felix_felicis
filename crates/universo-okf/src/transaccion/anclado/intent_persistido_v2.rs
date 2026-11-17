@@ -89,6 +89,10 @@ impl IntentRetiroPersistidoV2 {
     pub(super) fn journal(&self) -> &JournalV2 {
         &self.journal
     }
+    /// Longitud y digest del Context original conservado por el registro.
+    pub(super) fn evidencia_contexto_original(&self) -> (u64, [u8; 32]) {
+        (self.longitud_contexto, self.digest_contexto)
+    }
 
     /// Construye desde DTOs ya parseados; no consulta identidades nativas.
     pub(super) fn desde_datos_persistidos(

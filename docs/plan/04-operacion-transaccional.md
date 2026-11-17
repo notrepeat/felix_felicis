@@ -12,6 +12,142 @@ bytes intactos.
 | Depende de | 03 |
 | Desbloquea | 05, 08 |
 
+### Reanudación del 2026-11-17: orden de cierre
+
+El punto de partida local es `1e09e13` (preflight de Intent/RETIRE v3),
+con cambios sin commit en el codec v3 y el observador de recovery. Este
+registro no acredita esos cambios como validados ni como publicados. La fase
+sigue en curso; los resultados de S1a que siguen son históricos.
+
+El cierre requiere estas unidades, en este orden de dependencia:
+
+1. **Intent v3 autocontenido:** validar framing, cuotas y correspondencia del
+   Context original con los metadatos; conectar lectura persistida y replay
+   bajo el owner, conservando compatibilidad y rechazo de versiones inválidas.
+   El codec puro por sí solo no autoriza operaciones filesystem.
+2. **U7, journal y recovery:** completar publicación de sucesores y retiro,
+   `KeepValidated`/`Committed`, reconciliación tras interrupción y limpieza
+   conservadora. Conservar evidencia hasta comprobar el estado final. El
+   dispatcher legacy solo implementa `KeepOld`, `RestoreOld` y
+   `DiscardNewRestoreOld`; la observación versionada no equivale a ejecución.
+3. **Completar operaciones core:** definir y probar `Type`, incluyendo el
+   contrato de existencia de nodos. Hoy `construir_candidato` rechaza esa
+   operación; no debe marcarse completa solo por detectar conflictos de tipo.
+4. **U8, simulación:** integrar captura y propuesta sin escritura, exponer
+   `propose` y token exclusivamente opt-in, con presupuesto de configuración
+   antes del lock y diagnóstico redactado.
+5. **U9, aplicación:** conectar una API `aplicar` y CLI con recovery antes del
+   CAS, re-evaluación bajo el mismo lock, stage validado, publicación y cleanup.
+   Ni `aplicar.rs` ni el comando CLI `propose` existen en el punto de partida.
+6. **Pruebas de extremo a extremo:** rechazo con bytes intactos; snapshot stale;
+   dos writers con busy/stale; interrupción y reapertura interproceso en las
+   transiciones y cleanup; canarios privados en JSON/texto; preservación de
+   auxiliares y rechazo de links. Los tests de primitivas no sustituyen esto.
+7. **U10 y gate final:** ejemplo ejecutable, documentación de comandos y
+   recuperación, mediciones reproducibles y decisión sobre optimización;
+   workspace, formato, Clippy, frontera pública y CI del candidato exacto en
+   Linux y Windows. Registrar límites sin afirmar power-loss durability.
+
+Las unidades core y la simulación pueden desarrollarse en paralelo con U7
+si no introducen un camino de publicación que eluda recovery. La fase solo
+se cierra al satisfacer las casillas de aceptación de este documento.
+
+### Evidencia local de reanudación: Intent v3
+
+Sobre el árbol de trabajo derivado de `1e09e13`, Rust 1.88.0 con
+`--locked --offline` ejecutó 11 pruebas focales v3 sin fallos: cinco de
+preflight y seis de codec, lector acotado y replay. La fixture heredada usaba
+`#` donde el parser de invariantes exige `;`; se corrigió ese dato de prueba.
+El lector valida el header antes de reservar/leer el payload y exige EOF;
+el replay usa el Context retenido para calcular `NewEsperadoV2`. El frame
+retiene los bytes originales, pero la validación y replay decodifican Context:
+no se afirma zero-copy total ni una cota de RSS.
+
+La unidad posterior `intent_persistido_v3/archivo.rs` pasó tres pruebas
+focales adicionales en Linux con la misma versión y flags. Lee desde el
+`File` recibido, retiene ese handle y comprueba tipo regular, scope e identidad
+antes/después, además del binding persistido del intent y parent esperado.
+Las pruebas cubren rebobinado, conservación de handle, copia de bytes a otro
+archivo, scope/parent incorrectos y truncación. Esta primitiva sola no prueba
+que el handle siga siendo el nombre canónico ni que exista un owner válido;
+no autoriza mutaciones ni demuestra snapshot atómico frente a writers externos.
+
+La observación posterior bajo `DuenioTransaccionAnclado`, en
+`duenio_transaccion/lector_intent_versionado/v3.rs`, pasó tres pruebas focales
+Linux adicionales. Exige el Intent canónico presente, abre relativamente sin
+seguir enlaces, valida temporales y owner antes/después y compara una sonda
+fresca del nombre con la identidad y scope del archivo retenido. Cubre cambio
+del nombre canónico, aparición de temporal, ausencia y sustitución del lock
+(en Unix). Las comprobaciones son secuenciales: no establecen snapshot atómico.
+La nueva ruta está separada del selector legacy; no amplía los estados ABC ni
+conecta un caller productivo de recovery, publicación o cleanup.
+
+El workspace Linux previo a la unidad de archivo registró 1387 passed,
+0 failed y 9 ignored en 38 resúmenes; Python pasó 7/7. Ese resultado no
+acredita las unidades posteriores ni runtime Windows. El primer workspace
+bajo sandbox falló en tres pruebas de sockets Unix con EPERM; la corrida
+completa fuera del sandbox pasó. El corte integrado con lector de archivo y observación owner-bound pasó después
+1393/0/9 en 38 resúmenes Cargo, además de formato, Clippy, frontera pública,
+diff-check y demo (4 estados, 16 salidas golden). Estos gates son Linux local,
+no Windows ni CI remoto. Preceden a selector/familia v3.
+
+El siguiente corte añade un selector de lectura separado con cuotas propias
+para v1/v2/v3, sin ampliar las cuotas del lector legacy ni hacer fallback.
+La familia v3 clasifica A/B/C con igualdad del Journal completo y Context raw
+exacto; C conserva el Context dentro del Intent. Nueve pruebas nuevas cubren
+selección, límites legacy, fragmentación, truncaciones, errores redactados y
+familias incompatibles; el filtro `intent_persistido_v3::` pasó 18/18
+(incluye nueve pruebas anteriores, excluye el preflight por el nombre del
+filtro). Estos resultados no acreditan aún ejecución productiva de recovery.
+
+El corte selector/familia pasó además workspace Linux 1402/0/9 en 38
+resúmenes, formato, Clippy, frontera y diff-check. Ese gate precede al
+checkpoint C descrito a continuación.
+
+El checkpoint `duenio_transaccion/retiro_c_v3.rs` obtiene evidencia C con
+Journal y Context ausentes e Intent presente. Reproduce el Context retenido,
+compara identidad y digest completos de New con el root observado y exige
+backup/stage ausentes. Reobserva los slots y el Intent (identidad, metadatos y
+Context raw); la revalidación exterior del owner domina éxito y error. El
+resultado retiene el préstamo mutable del owner y el archivo observado.
+Cuatro pruebas focales Linux Rust 1.88 locked/offline pasaron: éxito sin
+modificar root/Intent, rechazo de root modificado o reemplazado, rechazo de
+Journal, Context, backup, stage o temporal inesperados conservando canarios,
+y rechazo del replay por policy no soportada con framing y binding válidos.
+El workspace del checkpoint C previo a ese último test pasó 1405/0/9 en
+38 resúmenes; formato, Clippy, frontera y diff-check pasaron. Tras añadir
+únicamente el caso de policy, se ejecutaron las cuatro pruebas C y Clippy
+workspace con todos los targets y `-D warnings`, ambos verdes; no se atribuye
+una nueva corrida completa a ese último cambio. No hubo runtime Windows ni
+CI remoto nuevos. La demo y Python no cambiaron desde sus gates anteriores.
+Esta evidencia no habilita retirar el Intent ni publicar cambios; tampoco
+elimina carreras frente a escritores externos. Recovery mutante, caller
+`apply`, `Type`, CLI y cierre de fase siguen pendientes.
+
+### Decisión de alcance pendiente: `Type`
+
+La siguiente unidad propuesta es **cambio de tipo de un nodo existente**:
+retirar el tipo exacto vigente y añadir un único tipo declarado; mantener
+path, handle, etiqueta, anexos, padres e incidencias. Un alta idéntica puede
+ser no-op; un alta diferente sin retirar el tipo anterior debe conservar el
+tratamiento de conflicto funcional. Un retiro sin reemplazo y un alta sobre
+sujeto inexistente deben rechazarse explícitamente en esta unidad.
+
+Es una propuesta de contrato, no comportamiento implementado ni cierre de
+`Type`. El código actual devuelve `UnsupportedOperation` para cualquier
+`Type`, y las suites `candidato_delta` y `proponer_transaccional` lo exigen.
+La implementación debe actualizar deliberadamente esa compatibilidad,
+probar la prioridad de errores técnicos frente a conflictos funcionales,
+evaluar invariantes sobre el tipo nuevo y verificar el round-trip OKF.
+No debe crear/eliminar nodos implícitamente ni descartar incidencias o anexos.
+
+Para cerrar el alcance completo de `Type` aún se debe resolver si las altas
+sobre sujetos nuevos y los retiros sin reemplazo representan creación y
+eliminación. `Estructura::insertar_nodo` requiere tipo y etiqueta; por tanto
+un átomo `Type` aislado no basta para fabricar un nodo con semántica fiel.
+La decisión de lifecycle debe definir además referencias, anexos y orden de
+operaciones, o excluir expresamente esas formas del contrato de esta fase.
+
 ### Corte actual: preparación del sucesor Journal v2
 
 El baseline CI y los resultados focales locales de S1a están detallados en

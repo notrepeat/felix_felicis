@@ -832,6 +832,7 @@ pub(in crate::transaccion::anclado::duenio_transaccion) mod intent_retiro;
 
 #[path = "duenio_transaccion/familia_persistida.rs"]
 mod familia_persistida;
+mod retiro_c_v3;
 
 #[path = "duenio_transaccion/lector_intent_versionado.rs"]
 mod lector_intent_versionado;
