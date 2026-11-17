@@ -76,19 +76,20 @@ impl DuenioTransaccionAnclado<'_> {
                         out
                     }),
                 AccionRecoveryV2::PublicarIntentRetiro => {
-                    let result = self
-                        .publicar_intent_v3_desde_committed()
-                        .map_err(|_| ErrorConfirmacionV2::nuevo())
-                        .and_then(|()| {
-                            reanudar_retiro_v3(self).map_err(|error| {
-                                let mut out = ErrorConfirmacionV2::nuevo();
-                                out.retiro = Some(error);
-                                out
-                            })
-                        });
-                    return result.map_err(|mut error| {
+                    if self.publicar_intent_v3_desde_committed().is_err() {
+                        let mut error = ErrorConfirmacionV2::nuevo();
                         error.normal = Some(Box::new(observed));
-                        error
+                        return Err(error);
+                    }
+                    // Intent ya contiene el Context exacto. El runner ABC toma
+                    // esa evidencia y conserva sus errores; Windows necesita
+                    // cerrar los lectores J/C anteriores antes del delete.
+                    drop(observed);
+                    drop(anterior);
+                    return reanudar_retiro_v3(self).map_err(|error| {
+                        let mut out = ErrorConfirmacionV2::nuevo();
+                        out.retiro = Some(error);
+                        out
                     });
                 }
                 _ => Err(ErrorConfirmacionV2::nuevo()),
