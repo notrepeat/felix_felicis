@@ -19,12 +19,13 @@ Implementado:
 - AST y parser de invariantes FO bisortidos;
 - validación estática, expansión de esquemas y evaluador de referencia en la API de `universo-core`;
 - `check --explain decide|enumerate` opt-in, con explicaciones redactadas en texto o JSON v2; el resultado baseline conserva JSON v1;
-- CLI (`atomos`, `validate`, `check`; `verificar` es alias compatible de `validate`);
+- CLI (`atomos`, `validate`, `check`, `propose`; `verificar` es alias compatible de `validate`);
+- propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
 - pruebas unitarias, de propiedades, compile-fail y round-trip.
 
 En construcción:
 
-- revisión, recuperación por patrones y operaciones transaccionales (fase 04, parcial);
+- revisión avanzada y recuperación de conocimiento por patrones;
 - servidor MCP.
 
 ## Probar el ejemplo

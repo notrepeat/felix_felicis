@@ -1,11 +1,25 @@
 # Contexto privado para reproducir una admisión
 
-**Estado:** Journal v1 y sus recetas siguen intactos. U7 y la fase 04
+**Estado actual (2026-11-17): fase 04 completa.** El caller público
+`aplicar_archivo` integra Context/Journal v2 e Intent v3 con recovery, CAS,
+publicación y cleanup bajo el mismo owner. El commit `f0e6c45` pasó CI
+`44139242078`
+en Linux (1491/0/18) y Windows (1467/0/18), 42 suites por sistema. Véanse el
+[cierre verificado](04-operacion-transaccional.md#cierre-verificado-2026-11-17)
+y la [guía operativa](../operacion-transaccional.md). No se afirma durabilidad
+ante pérdida de energía ni snapshot atómico frente a escritores hostiles.
+
+## Registro histórico de diseño y cortes
+
+Los estados parciales que siguen pertenecen a los commits descritos; se
+conservan como trazabilidad, no como pendientes actuales del caller.
+
+**Estado histórico previo al cierre:** Journal v1 y sus recetas siguen intactos. U7 y la fase 04
 continúan parciales; el progreso global permanece en 4/9. Este flujo aún no
 tiene caller productivo desde apply ni recovery.
 
 <a name="corte-actual-observacion-normal-versionada"></a>
-## Corte actual: preparación observada del sucesor Journal v2
+## Corte histórico: preparación observada del sucesor Journal v2
 
 El baseline CI del commit d3f546f (run 39124020051) terminó correctamente:
 Windows 1346/0/9 y Linux 1367/0/9, con 38 resúmenes de suites Cargo por

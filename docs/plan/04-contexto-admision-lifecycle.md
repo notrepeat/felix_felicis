@@ -1,6 +1,20 @@
 # Lifecycle del contexto privado de admisión
 
-**Estado:** están implementados los leases de lectura canónica, la creación
+**Estado actual (2026-11-17): fase 04 completa.** El caller público
+`aplicar_archivo` integra Context/Journal v2 e Intent v3 con recovery, CAS,
+publicación y cleanup bajo el mismo owner. El commit `f0e6c45` pasó CI
+`44139242078`
+en Linux (1491/0/18) y Windows (1467/0/18), 42 suites por sistema. Véanse el
+[cierre verificado](04-operacion-transaccional.md#cierre-verificado-2026-11-17)
+y la [guía operativa](../operacion-transaccional.md). No se afirma durabilidad
+ante pérdida de energía ni snapshot atómico frente a escritores hostiles.
+
+## Registro histórico de diseño y cortes
+
+Los estados parciales que siguen pertenecen a los commits descritos; se
+conservan como trazabilidad, no como pendientes actuales del caller.
+
+**Estado histórico previo al cierre:** están implementados los leases de lectura canónica, la creación
 exclusiva y verificación del temporal, publicación canónica, verificación raw
 y operación privada de retiro del Context; el flujo de transacción sigue
 incompleto. Ya existe un DTO privado,

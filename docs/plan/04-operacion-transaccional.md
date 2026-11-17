@@ -1,28 +1,36 @@
 # 04 — Evaluar propuestas sin corromper el universo vigente
 
 El objetivo es recibir un delta, construir un candidato aislado y publicar el
-cambio únicamente cuando el check lo admita. Todo rechazo debe dejar estado y
-bytes intactos.
+cambio únicamente cuando el check lo admita. Un rechazo del candidato no inicia
+una publicación nueva y conserva los bytes
+del root limpio; recovery puede completar una transacción anterior antes del
+veredicto y el lockfile reutilizable puede quedar creado.
 
 ## Estado
 
 | Campo | Valor |
 |---|---|
-| Estado | en curso |
+| Estado | completo |
 | Depende de | 03 |
 | Desbloquea | 05, 08 |
 
-### Estado actual del candidato de cierre (2026-11-17)
+### Cierre verificado (2026-11-17)
 
 El caller público `aplicar_archivo` y `propose --apply --expect-snapshot` están
 integrados. Focales Linux: CLI 9/9, API pública 6/0/2, proveedor 2/2 y recovery
 automático con configuración interna y root ausente 1/0/1. Los helpers ignored
-se invocan expresamente desde las pruebas padre o el harness release. La matriz final Linux Rust 1.88 pasó 1491/0/18 en 42 suites; Clippy del
+se invocan expresamente desde las pruebas padre o el harness release. La matriz
+final Linux Rust 1.88 pasó 1491/0/18 en 42 suites; Clippy del
 workspace, formato, frontera pública, diff-check, smoke CLI, arquitectura/demo
 (16 goldens), herramientas Python 7/7 y `tools/demo_apply.py --binary
 target/debug/universo` pasaron. El ejemplo confirmó admit, root actualizado,
-auxiliares preservados y cleanup. El CI del candidato exacto todavía debe
-acreditar el cierre; la fase sigue en curso hasta ese gate remoto.
+auxiliares preservados y cleanup. El CI del commit exacto
+`f0e6c45335d958780f6fc6fc64d065fd313d77da` pasó en ambos sistemas: Linux
+1491/0/18 y Windows 1467/0/18, 42 suites por sistema, run
+`44139242078`.
+La fase 04 queda cerrada con esa implementación y evidencia. Los 18 ignored
+no se presentan como 18 casos ejecutados por defecto: los hijos y el harness
+release citados tienen invocaciones explícitas registradas.
 
 La configuración externa se captura acotada antes del lock; la interna se
 resuelve desde el root anclado después de recovery, también si root faltaba.
@@ -40,7 +48,7 @@ La base publicada `5a3ced3`, CI `44137330491`, pasó Linux 1479/0/15 y Windows
 1454/0/15 en 41 suites. Esa evidencia precede al caller público y a sus pruebas.
 Las secciones siguientes registran los pasos históricos de la reanudación.
 
-### Reanudación del 2026-11-17: orden de cierre
+### Registro histórico de reanudación: orden de cierre
 
 El punto de partida local es `1e09e13` (preflight de Intent/RETIRE v3),
 con cambios sin commit en el codec v3 y el observador de recovery. Este
@@ -421,17 +429,23 @@ Legacy: [detalle](04-contexto-admision.md#corte-actual-observacion-legacy-o-ause
 
 ## Objetivo
 
-Definir y entregar una transacción v1 que evalúe un delta contra un snapshot
-identificado, construya un candidato aislado y publique solo tras aceptación
-explícita. Un rechazo o error previo al commit conserva intactos el estado
-vigente y sus bytes.
+Entregar el delta público JSON v1 sobre snapshots identificados, con candidato
+aislado y publicación admitida mediante Journal/Context v2 e Intent v3. Un
+rechazo no publica el candidato; errores de I/O después de efectos parciales
+conservan evidencia para recovery y no prometen root continuamente visible.
 
 La fase 03 asigna a esta fase la aceptación de conflictos funcionales de un
 delta (tipo, etiqueta, padre e incidencia). Esta asignación de alcance cierra
-el criterio 17 de fase 03; no afirma que la detección o diagnóstico ya estén
-implementados.
+el criterio 17 de fase 03; la detección y el diagnóstico quedan verificados
+por los criterios y gates de esta fase.
 
-Estado de entrega: las Unidades 0–4 están cerradas dentro de sus límites; U5,
+Estado de entrega actual: U0–U10 cerradas dentro del contrato y límites
+documentados; la evidencia y las rutas reales de pruebas están en el cierre
+verificado y en los criterios de aceptación.
+
+### Antecedentes de entrega anteriores al caller público
+
+Estado de entrega histórico: las Unidades 0–4 están cerradas dentro de sus límites; U5,
 U7 y U8 conservan avance parcial, y U6 está cerrada para root anclado y
 staging. U7 incluye filas exactas `KeepOld`, `RestoreOld` y
 `DiscardNewRestoreOld`. `KeepOld` limpia stage `New`/`PartialNew` con root
@@ -1202,15 +1216,13 @@ Chain strategy: feature-branch-chain
   ```text
   cargo test --release -p universo-okf runtime_snapshot_mide_bundles_de_1_10_y_100_mib -- --ignored --nocapture
   ```
-- [ ] 5 — Lock single-writer: `crates/universo-okf/src/transaccion/lock.rs` y
-  validación de raíz en `raiz.rs`. El lockfile sibling reutilizable mantiene
-  un handle `fs4`, responde `busy`, y el OS lo libera al cerrar el handle o el
-  proceso. La prueba de contención del registro confirma una adquisición por
-  proceso en escenarios de 2 y 8 escritores. Es avance parcial: apply aún no
-  integra lock, recovery-before-CAS ni retención hasta cleanup; la inspección
-  de raíz por ruta no cierra la sustitución concurrente de ancestros. U6 ya
-  aporta una capability anclada para las operaciones de staging; falta integrar
-  estas primitivas al flujo de apply.
+- [x] 5 — Lock single-writer integrado por `aplicar_archivo`: un único guard
+  desde recovery-before-CAS hasta cleanup, con parent retenido y ausencia
+  prospectiva de root admitida para recovery. `apply_publico.rs` y el harness
+  release de dos procesos verifican un Aplicada y busy/stale; los cortes de
+  instalación readquieren el lock en otro proceso y recargan evidencia del disco.
+
+  Registro histórico de las primitivas previas al caller:
 
   Muestra release multiproceso más reciente en este checkout:
 
@@ -1287,7 +1299,13 @@ Chain strategy: feature-branch-chain
   cleanup suma 758 inserciones, por encima del objetivo de partición de
   `<400 líneas authored`; se registra aquí sin afirmar que ese objetivo se
   cumplió.
-- [ ] 7 — Journal, commit y recovery. La eliminación canónica verificada está
+- [x] 7 — Journal, commit y recovery v2 conectados al dispatcher público de
+  apply, con rollback, confirmación, limpieza de backup parcial e Intent v3.
+  Los tests `instalar_prepared_tests.rs`, `recovery_v2_tests.rs`,
+  `limpiar_backup_committed_v2_tests.rs` y el caso de configuración interna
+  cubren cortes, relectura desde otro proceso y rechazo conservador de huérfanos.
+
+  Registro histórico de las primitivas legacy: la eliminación canónica está
   en `crates/universo-okf/src/transaccion/anclado/journal_temporal/eliminar.rs`
   (`6cf6cfc`), con pruebas en
   `crates/universo-okf/src/transaccion/anclado/journal_temporal/eliminar_tests.rs`
@@ -1443,22 +1461,19 @@ Chain strategy: feature-branch-chain
   JSON/texto: path, label, valor Ext, edge id, fórmula, delta y token no salen.
   Runtime: 1/10/100 MiB, latencia; rollback: simulate no escribe. Objetivo por
   slice: <400 líneas authored.
-- [ ] 9 — CLI apply: `crates/universo-okf/src/transaccion/aplicar.rs` y
-  `crates/universo-cli/src/propose.rs`.
-  Test `crates/universo-cli/tests/apply_transaccional.rs`
-  (`cargo test -p universo-cli --test apply_transaccional`) verifica comando
-  completo, recovery-before-CAS, re-evaluación, stale, rechazo sin cambios y
-  RED canaries en JSON/texto sin path, label, valor Ext, edge id, fórmula,
-  delta ni token de entrada en output. Runtime: dos writers/10 MiB, ms y
-  busy/stale; rollback:
-  restaurar old si no llega a installed. Objetivo por slice: <400 líneas authored.
-- [ ] 10 — Docs/ejemplo: `README.md`, `docs/04-recuperacion.md` y
-  `docs/plan/04-operacion-transaccional.md`.
-  Test `crates/universo-cli/tests/docs_transaccional.rs`
-  (`cargo test -p universo-cli --test docs_transaccional`) contrasta comandos
-  y recovery documentados. Runtime: ejemplo temporal, ms/bytes; rollback:
-  borrar bundle temporal y verificar root original. Objetivo por slice:
-  <400 líneas authored.
+- [x] 9 — API `crates/universo-okf/src/transaccion/aplicar.rs` y CLI
+  `crates/universo-cli/src/propose.rs`/`apply.rs` conectan recovery, CAS,
+  propuesta, publicación y cleanup. Evidencia real:
+  `crates/universo-okf/tests/apply_publico.rs`, `crates/universo-cli/tests/propose_transaccional.rs` y
+  `instalar_prepared_apply_tests.rs`. Los nombres de pruebas planificados
+  `apply_transaccional.rs` no se crearon ni se presentan como ejecutados.
+  Runtime de dos escritores sobre 1/10 MiB y diez muestras en
+  [mediciones release](../04-mediciones-apply.md).
+- [x] 10 — `README.md`, [guía operativa](../operacion-transaccional.md),
+  referencia desde `docs/04-recuperacion.md` y `tools/demo_apply.py`. El ejemplo
+  ejecutado confirmó root actualizado, auxiliares preservados y cleanup;
+  las pruebas CLI ejercitan los comandos documentados. El nombre planificado
+  `docs_transaccional.rs` no se creó ni se atribuye a un gate.
 
 ## Entregables
 
@@ -1509,28 +1524,30 @@ Chain strategy: feature-branch-chain
   `parent_not_persistable`.
 - [x] La salida separa error técnico de veredicto funcional y redacta valores
   privados por defecto.
-- [ ] `universo-core::proponer(...)` no hace I/O; `universo-okf`/CLI
+- [x] `universo-core::proponer(...)` no hace I/O; `universo-okf`/CLI
   `aplicar(..., expected_snapshot, ...)` conecta recovery, CAS, re-evaluación
-  y publicación bajo lock. La primitiva U4 aún no está integrada en `apply`.
+  y publicación bajo lock mediante `aplicar_archivo`.
 - [x] Los conflictos funcionales se distinguen de las violaciones de
   invariantes y se informan sin publicar valores privados por defecto.
 - [x] Un error al construir candidato no muta la estructura snapshot en memoria.
-- [ ] Un delta rechazado por la transacción completa no cambia los archivos.
+- [x] Un delta rechazado no publica su candidato y conserva los archivos del
+  root limpio; recovery de una operación previa y creación del lockfile son
+  efectos separados documentados.
 - [x] Simulación no escribe y omite el token; `--emit-snapshot-token` lo
   entrega solo bajo solicitud. U8 y sus seis pruebas CLI acreditan el contrato.
-- [ ] Apply usa el comando completo de arriba y reevalúa/revalida bajo lock.
-- [ ] El lock advisory/exclusivo usa un file handle del lockfile sibling
+- [x] Apply usa el comando completo de arriba y reevalúa/revalida bajo lock.
+- [x] El lock advisory/exclusivo usa un file handle del lockfile sibling
   reutilizable, se libera al morir el proceso y recovery corre siempre después
   de adquirir lock y antes del stale recheck. Testea crash/restart con lock.
-- [ ] Un writer mantiene el lock desde recovery hasta cleanup; un concurrente
+- [x] Un writer mantiene el lock desde recovery hasta cleanup; un concurrente
   resulta `busy` o `stale`, nunca last-write-wins.
-- [ ] Staging de apply rechaza cualquier symlink/junction/reparse dentro de
+- [x] Staging de apply rechaza cualquier symlink/junction/reparse dentro de
   root; preserva archivos/directorios auxiliares regulares byte a byte y
   recarga/compara el candidato.
-- [ ] CLI privacy tests usan RED canaries de path, label, valor Ext, edge id,
+- [x] CLI privacy tests usan RED canaries de path, label, valor Ext, edge id,
   fórmula, delta y snapshot token; los secretos no aparecen por defecto ni
   se refleja el token de entrada en apply. El token solo sale con opt-in.
-- [ ] Recovery conserva old para `prepared`/`backup_ready`; `installed` sin
+- [x] Recovery conserva old para `prepared`/`backup_ready`; `installed` sin
   backup conserva new solo si root valida el candidato; `committed` limpia
   restos. V2 confirma Committed antes de limpiar backup; publica Intent v3
   y retira Journal, Context y por último Intent. En rollback retira Context
@@ -1542,10 +1559,11 @@ Chain strategy: feature-branch-chain
   entrada.
 - [x] El mismo delta contra el mismo estado produce el mismo veredicto
   funcional.
-- [ ] Un delta contra un estado diferente se detecta y no se aplica a ciegas
-  en el flujo completo de apply; U4 solo entrega el CAS interno.
-- [ ] Decidir optimización incremental con mediciones reproducibles y
-  suficientes; las muestras actuales son orientativas y no definen SLA.
+- [x] Un delta contra un estado diferente se detecta y no se aplica a ciegas
+  en el flujo completo de apply, incluyendo stale antes del parseo.
+- [x] Decidir optimización incremental con mediciones reproducibles y
+  suficientes: diez muestras release de dos procesos sobre 1/10 MiB respaldan
+  conservar validación completa y replay; no definen SLA ni sustituyen perfiles.
 
 ## Prueba de seguridad central
 
@@ -1693,6 +1711,11 @@ cargo test -p universo-cli --test docs_transaccional
 | 2026-10-14 | CI `38626804482` | Éxito para `1d5a02b` en Linux y Windows: tests de workspace, fmt, clippy y frontera pública pasan. U7/04 continúan parciales; progreso 4/9. |
 | 2026-10-14 | `26eb9c4` | Tercer corte interproceso: desde `Installed`, el hijo realiza cleanup real y reobserva root `Absent`/backup `Old`/stage `Absent`, con journal intacto; termina con código 88 en `antes_de_renombrar`, antes de backup→root. El proceso padre permanece vivo, readquiere el lock y el dispatcher real clasifica `RestoreOld`, restaura `Old` y retira stage/backup/journal. Solo demuestra terminación de proceso, no power-loss, caída del SO o durabilidad `fsync`; no scope/bind real, todos los estados/cortes ni caller productivo. U7/fase 04 parciales, 4/9. |
 | 2026-10-14 | CI `38629690255` | Éxito Linux y Windows para `26eb9c4`. Acredita la prueba del tercer corte descrito; no amplía evidencia a power-loss, caída del SO, `fsync`, frontera real scope/bind, todos los estados de recovery o caller productivo. U7/fase 04 siguen parciales, 4/9. |
+### Tabla histórica de unidades antes de la reanudación final
+
+Esta tabla conserva el estado de sus commits históricos; el estado actual es
+el cierre y checklist verificados al principio de este documento.
+
 | Unidad | Evidencia requerida | Resultado |
 |---|---|---|
 | 0 | Core `delta_transaccional` + OKF `delta_json_v1`: contrato typed, parser JSON v1, canonicalización, deduplicación typed, rechazo de duplicados JSON y colisiones reservadas | Cerrada; evidencia arriba |
@@ -1709,11 +1732,11 @@ cargo test -p universo-cli --test docs_transaccional
 
 El plan original colocaba la Fase 05 después de esta fase; la demo pública ya
 está completa con el subconjunto de propuesta/evaluación que necesitaba. El
-foco vigente sigue en Fase 04, Unidad 7; cerrar el recovery transaccional de
-esta fase no es un requisito pendiente de la demo 05.
+cierre verificado de Fase 04 añade el caller transaccional completo; la demo
+05 ya estaba cerrada. El siguiente frente del plan es Fase 06, todavía pendiente.
 
 La decisión de contexto privado para volver a validar una admisión `New`, y
-los pendientes de su almacenamiento, se documentan en
+el historial de su almacenamiento, se documentan en
 [04-contexto-admision.md](04-contexto-admision.md).
 
 [05 — Demo pública](05-demo-publica.md) (completa).
