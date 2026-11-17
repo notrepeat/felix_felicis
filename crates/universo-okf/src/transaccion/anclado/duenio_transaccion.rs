@@ -907,3 +907,5 @@ pub(crate) mod preparar_apply;
 pub(crate) mod limpiar_backup_committed_v2;
 
 pub(crate) mod publicar_prepared;
+
+pub(crate) mod instalar_prepared;

@@ -20,6 +20,7 @@ pub(super) struct EstadoPublicacionPrepared<'owner, 'lock> {
     pub(super) envelope: EnvelopeContextoAdmisionV2,
     pub(super) stage: StageAnclado,
     pub(super) journal: JournalV2,
+    pub(super) journal_id: Option<super::super::journal_temporal::IdentidadArchivoJournal>,
     pub(super) contexto_publicado: Option<ReciboContextoPublicado>,
     pub(super) resultado_journal: Option<Box<ResultadoOwnerPostcheck<CuerpoContextoJournalV2>>>,
 }
@@ -61,6 +62,7 @@ impl<'owner, 'lock> PreparacionApply<'owner, 'lock> {
             envelope,
             stage,
             journal,
+            journal_id: None,
             contexto_publicado: None,
             resultado_journal: None,
         };
@@ -126,6 +128,7 @@ impl EstadoPublicacionPrepared<'_, '_> {
         hook(3);
         self.validar_artefactos()?;
         self.validar_slots(true, true, false)?;
+        self.journal_id = Some(identidad_temporal);
         let observado = self
             .owner
             .observar_journal_versionado()
@@ -153,7 +156,7 @@ impl EstadoPublicacionPrepared<'_, '_> {
         self.owner.parent_revalidado().map_err(|_| ())?;
         Ok(())
     }
-    fn validar_artefactos(&mut self) -> Result<(), ()> {
+    pub(super) fn validar_artefactos(&mut self) -> Result<(), ()> {
         self.owner.parent_revalidado().map_err(|_| ())?;
         let root = self.owner.abrir_root_lectura().map_err(|_| ())?.ok_or(())?;
         let actual = capturar_snapshot_soportado_con_cas_anclado(
@@ -185,7 +188,12 @@ impl EstadoPublicacionPrepared<'_, '_> {
         self.owner.parent_revalidado().map_err(|_| ())?;
         Ok(())
     }
-    fn validar_slots(&mut self, context: bool, journal: bool, journal_tmp: bool) -> Result<(), ()> {
+    pub(super) fn validar_slots(
+        &mut self,
+        context: bool,
+        journal: bool,
+        journal_tmp: bool,
+    ) -> Result<(), ()> {
         let slots = self.owner.observar_siblings_nuevo_flujo().map_err(|_| ())?;
         let expected = |present| {
             if present {

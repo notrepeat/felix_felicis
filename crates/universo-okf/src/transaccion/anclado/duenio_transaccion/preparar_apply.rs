@@ -64,6 +64,8 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         despues_stage: impl FnOnce(),
     ) -> Result<ResultadoPreparacionApply<'owner, 'lock>, ErrorPreparacionApply> {
         self.exigir_namespace_apply_vacio()?;
+        self.exigir_stages_ausentes(None)
+            .map_err(|_| ErrorPreparacionApply::nuevo("apply_orphan_stage"))?;
         let mut raiz = self
             .abrir_root_lectura()
             .map_err(|_| ErrorPreparacionApply::nuevo("apply_owner_invalid"))?
@@ -89,6 +91,8 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         let plan = planificar_staging(&snapshot, &documentos)
             .map_err(|e| ErrorPreparacionApply::nuevo(e.codigo()))?;
         self.exigir_namespace_apply_vacio()?;
+        self.exigir_stages_ausentes(None)
+            .map_err(|_| ErrorPreparacionApply::nuevo("apply_orphan_stage"))?;
         // Sólo habilita la creación exclusiva de un sibling mediante el parent
         // retenido por este owner. El root continúa siendo de solo lectura.
         raiz.puede_crear_stage_sibling = true;
@@ -106,6 +110,8 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         despues_stage();
         let result = (|| {
             self.exigir_namespace_apply_vacio()?;
+            self.exigir_stages_ausentes(Some(stage.componente()))
+                .map_err(|_| ErrorPreparacionApply::nuevo("apply_orphan_stage"))?;
             let root_actual = self
                 .abrir_root_lectura()
                 .map_err(|_| ErrorPreparacionApply::nuevo("apply_owner_invalid"))?

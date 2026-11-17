@@ -117,6 +117,17 @@ impl fmt::Debug for ObservacionContextoVersionada {
 }
 
 impl ObservacionContextoVersionada {
+    /// Transfiere datos y evidencia cerrando el lector; no concede autoridad de borrado.
+    pub(super) fn into_evidencia_sin_handle(
+        self,
+    ) -> (
+        EnvelopeAdmisionVersionada,
+        (IdentidadArchivo, u64, [u8; 32]),
+    ) {
+        let raw = self.evidencia_raw_retiro();
+        (self.envelope, raw)
+    }
+
     /// Presta el envelope original ya leído, sin exponer su archivo ni su ruta.
     pub(super) fn envelope_versionado(&self) -> &EnvelopeAdmisionVersionada {
         &self.envelope

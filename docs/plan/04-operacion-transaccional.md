@@ -310,6 +310,37 @@ façade apply y CLI. El gate integrado Linux Rust 1.88 pasó 1468/0/12 en
 41 suites, con formato, frontera pública y diff-check aprobados; los helpers
 hijos ignored se ejecutan expresamente desde las pruebas padre.
 
+El CI exacto `c6afd3a`, run `44136061734`, pasó Linux 1468/0/12 y Windows
+1443/0/12, 41 suites por sistema; acredita la base publicada de cleanup,
+Prepared y confirmación con las correcciones Windows, anterior a instalación
+y rollback del root que se describen a continuación.
+
+### U9: instalación del root preparado (2026-11-17)
+
+`PreparacionPublicada::instalar` verifica los recibos Journal/Context y los
+artefactos, renombra Old a backup sin reemplazo, publica BackupReady, renombra
+stage a root y publica Installed. El espacio de renames usa exclusivamente el
+parent retenido por el mismo owner, sin reabrir la ubicación por ruta. Cada
+paso reobserva identidades y digests y cada sucesor conserva evidencia hasta
+el postcheck. Un error no reintenta el rename ni hace rollback implícito.
+`finalizar` vuelve a comprobar Installed y cierra las lecturas Context de la
+publicación inicial antes de llamar al dispatcher de confirmación, para no
+impedir el retiro en Windows; los errores conservan evidencia.
+
+Focal Linux Rust 1.88: cuatro pruebas pasaron más un helper hijo invocado por
+el padre. Cubren el camino completo hasta cleanup, backup ocupado/Journal de
+igual contenido con otro ID, mutaciones después de rename y cuatro cortes
+reales (101–104). El padre coteja los artefactos del corte y lanza un segundo
+proceso distinto del escritor: este readquiere lock, recarga Journal del disco
+y ejecuta rollback en los cortes Prepared/BackupReady o confirmación en
+Installed. Los cuatro terminan con root y lock solamente; sus huellas son Old
+en los tres primeros y New en el último. La fachada pública de recovery/apply
+y sus pruebas CLI siguen pendientes. Estos tests no prueban
+power-loss durability ni visibilidad continua del root. El gate integrado
+Linux Rust 1.88 pasó 1479/0/15 en 41 suites; formato, Clippy del workspace,
+frontera pública y diff-check pasaron. Los nuevos helpers ignored se ejecutan
+desde sus pruebas padre. La fachada pública y CLI permanecen pendientes.
+
 ### Corte actual: preparación del sucesor Journal v2
 
 El baseline CI y los resultados focales locales de S1a están detallados en

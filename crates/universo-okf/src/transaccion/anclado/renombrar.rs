@@ -105,6 +105,28 @@ impl DirectorioSiblingAnclado<'_> {
 }
 
 impl<'lock> EspacioTransaccionalAnclado<'lock> {
+    /// Reutiliza exclusivamente el parent ya comprobado por el owner.
+    pub(in crate::transaccion::anclado) fn desde_parent_retenido(
+        lock: &'lock mut LockEscritura,
+        parent: File,
+        identidad_parent: IdentidadDirectorio,
+        scope_parent: super::ScopeFilesystem,
+    ) -> Result<Self, ErrorRenombrarAnclado> {
+        if metadata_directorio(&parent).map_err(mapear_error_directorio)? != identidad_parent
+            || scope_filesystem(&parent).map_err(mapear_error_directorio)? != scope_parent
+        {
+            return Err(ErrorRenombrarAnclado::FuenteNoHermana);
+        }
+        let autoridad = lock.autoridad();
+        Ok(Self {
+            _lock: lock,
+            parent,
+            identidad_parent,
+            scope_parent,
+            autoridad,
+        })
+    }
+
     pub(crate) fn desde_lock(
         lock: &'lock mut LockEscritura,
     ) -> Result<EspacioTransaccionalAnclado<'lock>, ErrorRenombrarAnclado> {

@@ -1,10 +1,18 @@
 //! Contrato V2: confirmar Committed antes de limpiar el backup.
 //! La tabla V1 permanece intacta. Los estados sin evidencia fallan cerrado.
 use super::familia_persistida::FaseFamiliaPersistida;
+#[path = "recovery_v2/dispatch.rs"]
+pub(super) mod dispatch;
 #[path = "recovery_v2/forward.rs"]
-mod forward;
+pub(super) mod forward;
+#[path = "recovery_v2/rollback.rs"]
+pub(super) mod rollback;
+#[path = "recovery_v2/stages.rs"]
+mod stages;
 #[path = "recovery_v2/temporal.rs"]
 mod temporal;
+#[path = "recovery_v2/terminal.rs"]
+pub(super) mod terminal;
 
 use super::{DuenioTransaccionAnclado, retained_v2_pair::NormalV2};
 use crate::transaccion::journal::recovery::{ArtifactState, RecoveryInventory};
