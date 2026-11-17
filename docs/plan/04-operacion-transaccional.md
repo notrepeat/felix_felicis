@@ -30,9 +30,9 @@ El cierre requiere estas unidades, en este orden de dependencia:
    conservadora. Conservar evidencia hasta comprobar el estado final. El
    dispatcher legacy solo implementa `KeepOld`, `RestoreOld` y
    `DiscardNewRestoreOld`; la observación versionada no equivale a ejecución.
-3. **Completar operaciones core:** definir y probar `Type`, incluyendo el
-   contrato de existencia de nodos. Hoy `construir_candidato` rechaza esa
-   operación; no debe marcarse completa solo por detectar conflictos de tipo.
+3. **Operaciones core:** el corte Type de esta reanudación implementa el
+   tipado total sobre identidades existentes y su round-trip OKF; véase el
+   contrato y su evidencia más abajo. La matriz integrada sigue como gate.
 4. **U8, simulación:** integrar captura y propuesta sin escritura, exponer
    `propose` y token exclusivamente opt-in, con presupuesto de configuración
    antes del lock y diagnóstico redactado.
@@ -121,32 +121,46 @@ workspace con todos los targets y `-D warnings`, ambos verdes; no se atribuye
 una nueva corrida completa a ese último cambio. No hubo runtime Windows ni
 CI remoto nuevos. La demo y Python no cambiaron desde sus gates anteriores.
 Esta evidencia no habilita retirar el Intent ni publicar cambios; tampoco
-elimina carreras frente a escritores externos. Recovery mutante, caller
-`apply`, `Type`, CLI y cierre de fase siguen pendientes.
+elimina carreras frente a escritores externos. En ese checkpoint seguían pendientes recovery mutante, caller `apply`,
+`Type`, CLI y cierre de fase; los cortes posteriores de retiro y Type están
+registrados más abajo.
 
-### Decisión de alcance pendiente: `Type`
+### Contrato implementado de `Type` (2026-11-17)
 
-La siguiente unidad propuesta es **cambio de tipo de un nodo existente**:
-retirar el tipo exacto vigente y añadir un único tipo declarado; mantener
-path, handle, etiqueta, anexos, padres e incidencias. Un alta idéntica puede
-ser no-op; un alta diferente sin retirar el tipo anterior debe conservar el
-tratamiento de conflicto funcional. Un retiro sin reemplazo y un alta sobre
-sujeto inexistente deben rechazarse explícitamente en esta unidad.
+`Type(v, k)` modifica la función total de tipado `τV: V → KV`, no el
+conjunto de identidades `V`. Esta decisión sigue la separación explícita entre
+identidad y tipado en [01 — Universo](../01-universo.md), secciones «Definición»
+y «El nodo es identidad, no conocimiento». No se infiere una eliminación en
+cascada ni se inventa una etiqueta para crear una identidad desde un átomo.
+Crear/eliminar nodos corresponde a una operación explícita de evolución de
+la estructura; no es el significado del parche de tipado de esta fase.
 
-Es una propuesta de contrato, no comportamiento implementado ni cierre de
-`Type`. El código actual devuelve `UnsupportedOperation` para cualquier
-`Type`, y las suites `candidato_delta` y `proponer_transaccional` lo exigen.
-La implementación debe actualizar deliberadamente esa compatibilidad,
-probar la prioridad de errores técnicos frente a conflictos funcionales,
-evaluar invariantes sobre el tipo nuevo y verificar el round-trip OKF.
-No debe crear/eliminar nodos implícitamente ni descartar incidencias o anexos.
+El contrato de candidato/propuesta ahora admite:
 
-Para cerrar el alcance completo de `Type` aún se debe resolver si las altas
-sobre sujetos nuevos y los retiros sin reemplazo representan creación y
-eliminación. `Estructura::insertar_nodo` requiere tipo y etiqueta; por tanto
-un átomo `Type` aislado no basta para fabricar un nodo con semántica fiel.
-La decisión de lifecycle debe definir además referencias, anexos y orden de
-operaciones, o excluir expresamente esas formas del contrato de esta fase.
+- Alta idéntica al tipo vigente: no-op.
+- Reemplazo: retirar el tipo exacto y añadir un único tipo declarado.
+- Varias sortes finales: conflicto funcional `Type`, agregado con los otros
+  conflictos por `proponer`, sin sobreescritura silenciosa.
+- Retiro inexistente: `remove_not_found`; sujeto nuevo: `subject_not_found`;
+  sorte no declarada: `unknown_node_sort`; retiro sin reemplazo:
+  `type_replacement_required`. Todos son errores técnicos redactados.
+
+El cambio conserva path/handle, etiqueta, anexos, padres, aristas y atributos.
+No elimina incidencias; las invariantes se evalúan sobre el candidato con el
+tipo nuevo. Los errores técnicos de las otras operaciones siguen precediendo
+al rechazo funcional. Se reemplaza deliberadamente el antiguo contrato de
+`UnsupportedOperation` para cualquier Type, conservando la variante pública
+del enum por compatibilidad de código fuente.
+
+Evidencia focal local Rust 1.88 `--locked --offline`: `candidato_delta` 3/3,
+`proponer_transaccional` 10/10 y `type_transaccional` 6/6. La nueva prueba OKF
+`type_persistible` pasó 1/1: alias de sorte en disco, átomos/anexos conservados
+tras recarga e idempotencia de la serialización. La revisión independiente aprobó este alcance y la matriz Linux integrada
+con retiro v3 pasó 1420/0/9 en 40 suites, con formato, Clippy, frontera pública
+y diff-check verdes. El retiro mutante v3 pasó además 11 pruebas focales.
+Estos resultados corresponden al árbol local del corte; no acreditan `apply`
+ni la fase completa. CI `44126277011` del checkpoint anterior `19639a6` pasó
+en Linux y Windows, pero precede y no cubre este nuevo corte Type/retiro.
 
 ### Corte actual: preparación del sucesor Journal v2
 
@@ -1257,8 +1271,9 @@ Chain strategy: feature-branch-chain
 
 - [x] Para las operaciones soportadas por Unidad 0/1, un delta válido produce
   el candidato esperado y no modifica el snapshot de entrada.
-- [ ] La transacción implementa `Type`; sigue siendo una operación técnica no
-  soportada por `proponer`.
+- [x] La transacción implementa `Type` sobre identidades existentes conforme
+  al contrato de tipado total anterior, con revisión independiente, pruebas
+  focales core/OKF y matriz Linux integrada 1420/0/9 (40 suites).
 - [x] El candidato core construye cambios de `Parent` y `HasLab` de nodo; la
   serialización en memoria de `Parent` queda limitada a `layout.parent_key` y
   `serializar_candidato`.

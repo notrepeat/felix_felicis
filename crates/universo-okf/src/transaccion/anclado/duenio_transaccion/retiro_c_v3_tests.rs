@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-fn fixture(parent: &Path) -> (FixturePublicada, PathBuf, Vec<u8>) {
+pub(super) fn fixture(parent: &Path) -> (FixturePublicada, PathBuf, Vec<u8>) {
     fixture_con_policy(parent, false)
 }
 

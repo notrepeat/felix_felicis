@@ -1,4 +1,7 @@
 //! Observación autocontenida de C; mantiene el owner y no habilita limpieza.
+#[path = "retiro_c_v3/retirar.rs"]
+mod retirar;
+
 use super::DuenioTransaccionAnclado;
 use super::observar_siblings_nuevo_flujo::FormaObservadaSlotsRetiroV2;
 use crate::transaccion::anclado::identidad_archivo;

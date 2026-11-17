@@ -643,7 +643,11 @@ fn confirmar_retiro(
     }
 }
 
-fn retirar_nombre_plataforma(parent: &File, nombre: &OsStr, archivo: File) -> Result<(), ()> {
+pub(super) fn retirar_nombre_plataforma(
+    parent: &File,
+    nombre: &OsStr,
+    archivo: File,
+) -> Result<(), ()> {
     #[cfg(unix)]
     {
         use std::ffi::CString;
@@ -721,7 +725,7 @@ fn validar_temporales(
 }
 
 #[cfg(windows)]
-fn abrir_final_con_delete(
+pub(super) fn abrir_final_con_delete(
     parent: &File,
     nombre: &OsStr,
 ) -> Result<File, ErrorDuenioTransaccionAnclado> {
