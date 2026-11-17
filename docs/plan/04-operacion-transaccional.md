@@ -162,6 +162,36 @@ Estos resultados corresponden al árbol local del corte; no acreditan `apply`
 ni la fase completa. CI `44126277011` del checkpoint anterior `19639a6` pasó
 en Linux y Windows, pero precede y no cubre este nuevo corte Type/retiro.
 
+### Simulación U8 implementada (2026-11-17)
+
+La fachada pública `transaccion::simulacion::{simular, simular_archivo}`
+compone captura raw acotada y `proponer`; descarta el candidato sin publicar
+ni adquirir lock. Motor/policy usan las constantes archivadas v1, sin tags
+arbitrarios suministrados por el caller. El delta tiene cuota de 16 MiB previa
+al parseo; su lectura reutiliza el lector regular nonblocking/no-follow ya
+probado. La revisión detectó que abrir un FIFO antes de comprobar metadata
+bloqueaba la primera versión del lector CLI; se sustituyó por esa primitiva y
+se añadió regresión con proceso hijo y deadline.
+
+`universo propose` admite los argumentos del contrato de simulación y
+`--emit-snapshot-token`; apply/expected-token siguen rechazados hasta U9.
+JSON v1 contiene command/mode/status, contadores y códigos redactados; el token
+solo aparece bajo opt-in y nunca se refleja desde un argumento de entrada.
+Errores de dominio usan stdout y salida 1; uso inválido usa stderr y salida 2.
+Seis pruebas focales Linux pasaron (Rust 1.88 locked/offline): admit/reject/error
+sin alterar inventario/bytes, token opt-in determinista y sensible a cambios
+raw, conflicto funcional, delta inválido/ausente/excesivo, argumentos
+incompatibles, FIFO y symlinks. Incluyen canarios de rutas, etiquetas, Ext,
+arista, fórmula, delta y token. No hay recovery ni escritura en esta ruta.
+
+Medición local única sobre binario debug, incluyendo arranque de proceso:
+auxiliares raw de 1/10/100 MiB dieron respectivamente 46.527315 ms,
+453.876353 ms y 3888.292033 ms. Son muestras orientativas, sin umbral de CI ni
+SLA. El script `tools/measure_propose.py` conserva la receta reproducible.
+La captura por ruta mantiene su límite TOCTOU; el cierre U9 requiere captura
+anclada, recovery-before-CAS y lock retenido, no reutilizar esta simulación
+como publicador.
+
 ### Corte actual: preparación del sucesor Journal v2
 
 El baseline CI y los resultados focales locales de S1a están detallados en

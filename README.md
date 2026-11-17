@@ -86,6 +86,33 @@ Para el comando `check`, una admisión de este ejemplo tiene la forma:
 La fixture falsa produce `status: "reject"`, `failed: 1` y código 1; no añade
 una explicación porque ese comando no solicita `--explain`.
 
+## Simular una propuesta
+
+`propose` evalúa un delta JSON v1 sin escribir en el bundle ni crear un lock.
+
+```text
+universo propose <raiz> --manifiesto <m.toml> --invariantes <i.sx> --delta <d.json> --format json
+```
+
+El resultado tiene `command: "propose"`, `mode: "simulate"`, `status`
+`admit|reject|error`, contadores `conflicts`/`failed_invariants` y códigos de
+error redactados. Devuelve 0 para admit, 1 para reject/error y 2 para uso
+inválido. En JSON escribe un objeto por stdout y deja stderr vacío; un error
+de uso solo escribe la ayuda por stderr. El texto también omite datos privados.
+
+`--emit-snapshot-token` añade explícitamente el token sensible del snapshot;
+por defecto no se incluye. El token identifica árbol raw, configuración y
+semántica del motor; no es una autorización de escritura. La captura por ruta
+no garantiza una instantánea frente a cambios externos. `--apply` y
+`--expect-snapshot` todavía se rechazan como uso inválido.
+
+El delta se lee de un archivo regular con una cuota de 16 MiB antes del
+parseo; se rechazan enlaces finales y entradas especiales. El árbol y la
+configuración usan sus cuotas de captura existentes. No se afirma un límite
+total de memoria. Las medidas locales de lectura pueden reproducirse con
+`python tools/measure_propose.py --binary target/debug/universo` después de
+compilar la CLI.
+
 ## Desarrollo
 
 ```powershell

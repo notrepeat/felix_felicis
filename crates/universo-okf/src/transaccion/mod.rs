@@ -16,5 +16,6 @@ pub mod lock;
 pub(crate) mod raiz;
 #[allow(dead_code)]
 pub(crate) mod replay;
+pub mod simulacion;
 pub mod snapshot;
 pub(crate) mod stage;
