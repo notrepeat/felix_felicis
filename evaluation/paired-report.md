@@ -127,12 +127,31 @@ antes de expandir funciones avanzadas. No se cambian estos casos ni se obliga a
 usar herramientas después de ver el resultado para producir una mejora aparente.
 Cualquier estudio distinto requerirá otro protocolo y resultados separados.
 
+## Trayectorias por ejecución (derivadas después)
+
+`trajectory.py` reconstruye, para cada ejecución registrada, la adopción de
+herramientas, el primer delta, los rechazos, la reparación y el estado final.
+Puntúa con el oracle independiente cada delta que el agente envió a Felix y lo
+compara con el veredicto de Felix. La comparación es solo sobre validez
+(formato, estructura y restricciones), porque Felix no conoce el objetivo de la
+tarea. También clasifica dónde aparece el error: `none`, `repaired`,
+`persisted`, `introduced_later` o `no_delta`. No llama a modelos ni al motor y
+no modifica los resultados.
+
+En el piloto 173 la [derivación](results/pilot-173/trajectory.json) repite lo
+que ya estaba publicado: cero adopción, primer delta igual al final y `none` en
+las 24 ejecuciones. No es un análisis prerregistrado ni agrega evidencia de
+beneficio. Su utilidad está en los estudios futuros. Tiene límites: no reparte
+tokens ni latencia por llamada, porque el registro no los guarda, y en el brazo
+sin Felix no se ve ninguna reparación interna.
+
 ## Reproducción
 
 ```sh
 python -m unittest discover -s evaluation -p 'test_*.py'
 python evaluation/verify_dataset.py --binary target/debug/universo
 python evaluation/summarize_paired.py evaluation/results/pilot-173
+python evaluation/trajectory.py evaluation/results/pilot-173
 python evaluation/run_paired.py --help
 ```
 

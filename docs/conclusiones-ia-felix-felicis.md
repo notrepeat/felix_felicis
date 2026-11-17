@@ -241,6 +241,13 @@ y no inflar artificialmente el tamaño de muestra.
 | 3 | Prerregistrar el estudio con baseline, opcional, obligatorio y control de revisión. | Mejora atribuible, preservación del objetivo y costo total medido. |
 | 4 | Sólo después, probar contexto selectivo, presupuesto/modelo y batching Code Mode. | Calidad comparable o mejor y ahorro observado, no sólo menos llamadas exteriores. |
 
+La prioridad 1 tiene ya una primera parte: `evaluation/trajectory.py` deriva,
+de los registros existentes, la adopción, el primer delta, los rechazos, la
+reparación, el estado final y el lugar del error. Además compara cada veredicto
+de Felix con el oracle. Falta registrar en el proxy la latencia y el costo de
+cada llamada, y eso exige una versión nueva del protocolo, no un cambio sobre
+el piloto 173. [Trayectorias](../evaluation/paired-report.md#trayectorias-por-ejecución-derivadas-después).
+
 No hace falta reescribir el motor para probar estas hipótesis. El trabajo de las
 fases 04 y 06 aporta componentes reutilizables; la fase 07 mostró qué afirmación
 no podemos sostener todavía. **La evaluación está completada, pero el gate de
