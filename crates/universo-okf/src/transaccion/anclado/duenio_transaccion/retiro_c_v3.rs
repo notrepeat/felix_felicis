@@ -1,6 +1,6 @@
 //! Observación autocontenida de C; mantiene el owner y no habilita limpieza.
 #[path = "retiro_c_v3/retirar.rs"]
-mod retirar;
+pub(super) mod retirar;
 
 use super::DuenioTransaccionAnclado;
 use super::observar_siblings_nuevo_flujo::FormaObservadaSlotsRetiroV2;
@@ -81,4 +81,4 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
 
 #[cfg(test)]
 #[path = "retiro_c_v3_tests.rs"]
-mod tests;
+pub(super) mod tests;

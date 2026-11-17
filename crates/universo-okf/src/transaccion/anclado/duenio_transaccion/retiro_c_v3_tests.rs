@@ -18,6 +18,14 @@ pub(super) fn fixture(parent: &Path) -> (FixturePublicada, PathBuf, Vec<u8>) {
 }
 
 fn fixture_con_policy(parent: &Path, unsupported: bool) -> (FixturePublicada, PathBuf, Vec<u8>) {
+    fixture_con_sidecars(parent, unsupported, false)
+}
+
+pub(in crate::transaccion::anclado::duenio_transaccion) fn fixture_con_sidecars(
+    parent: &Path,
+    unsupported: bool,
+    retain: bool,
+) -> (FixturePublicada, PathBuf, Vec<u8>) {
     let (mut fixture, _) = preparar_normal_v2(parent, JournalState::Committed);
     if unsupported {
         use crate::transaccion::admision::envelope::{
@@ -47,8 +55,10 @@ fn fixture_con_policy(parent: &Path, unsupported: bool) -> (FixturePublicada, Pa
     .unwrap();
     let frame = IntentRetiroPersistidoV3::encode(&metadata, &fixture.bytes_contexto).unwrap();
     fs::write(&intent, &frame).unwrap();
-    fs::remove_file(fixture.ubicacion.journal().as_path()).unwrap();
-    fs::remove_file(contexto_path(&fixture.ubicacion)).unwrap();
+    if !retain {
+        fs::remove_file(fixture.ubicacion.journal().as_path()).unwrap();
+        fs::remove_file(contexto_path(&fixture.ubicacion)).unwrap();
+    }
     (fixture, intent, frame)
 }
 
