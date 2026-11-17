@@ -1,10 +1,10 @@
-//! CLI de simulación: privacidad por defecto y token opt-in.
+//! CLI de propuesta: privacidad por defecto y token opt-in.
 use super::{Formato, escribir_salida};
 use serde_json::{Value, json};
 use std::{io::Write, path::PathBuf};
 use universo_okf::transaccion::simulacion::{EstadoSimulacion, simular_archivo};
 
-pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--emit-snapshot-token]\nSimula sin escribir. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
+pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--emit-snapshot-token | --apply --expect-snapshot <token>]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
 pub(super) struct Solicitud {
     raiz: PathBuf,
     manifiesto: PathBuf,
@@ -12,6 +12,8 @@ pub(super) struct Solicitud {
     delta: PathBuf,
     formato: Formato,
     emit_token: bool,
+    aplicar: bool,
+    esperado: Option<String>,
 }
 
 pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
@@ -22,9 +24,19 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     let mut delta = None;
     let mut formato = None;
     let mut emit_token = false;
+    let mut aplicar = false;
+    let mut esperado = None;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
+        if arg == "--apply" {
+            if aplicar {
+                return Err(fail());
+            }
+            aplicar = true;
+            i += 1;
+            continue;
+        }
         if arg == "--emit-snapshot-token" {
             if emit_token {
                 return Err(fail());
@@ -56,6 +68,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
             "--manifiesto" if manifiesto.is_none() => manifiesto = Some(PathBuf::from(value)),
             "--invariantes" if invariantes.is_none() => invariantes = Some(PathBuf::from(value)),
             "--delta" if delta.is_none() => delta = Some(PathBuf::from(value)),
+            "--expect-snapshot" if esperado.is_none() => esperado = Some(value.to_owned()),
             "--format" if formato.is_none() => {
                 formato = Some(match value {
                     "text" => Formato::Texto,
@@ -67,6 +80,9 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
         }
         i += consumed;
     }
+    if aplicar != esperado.is_some() || aplicar && emit_token {
+        return Err(fail());
+    }
     Ok(Solicitud {
         raiz: raiz.ok_or_else(fail)?,
         manifiesto: manifiesto.ok_or_else(fail)?,
@@ -74,6 +90,8 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
         delta: delta.ok_or_else(fail)?,
         formato: formato.unwrap_or(Formato::Texto),
         emit_token,
+        aplicar,
+        esperado,
     })
 }
 
@@ -82,6 +100,20 @@ pub(super) fn ejecutar(
     salida: &mut impl Write,
     error: &mut impl Write,
 ) -> i32 {
+    if solicitud.aplicar {
+        return super::apply::ejecutar(
+            super::apply::SolicitudApply {
+                raiz: solicitud.raiz,
+                manifiesto: solicitud.manifiesto,
+                invariantes: solicitud.invariantes,
+                delta: solicitud.delta,
+                formato: solicitud.formato,
+                esperado: solicitud.esperado.unwrap(),
+            },
+            salida,
+            error,
+        );
+    }
     let result = simular_archivo(
         &solicitud.raiz,
         &solicitud.manifiesto,

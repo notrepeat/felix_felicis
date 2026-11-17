@@ -12,6 +12,34 @@ bytes intactos.
 | Depende de | 03 |
 | Desbloquea | 05, 08 |
 
+### Estado actual del candidato de cierre (2026-11-17)
+
+El caller público `aplicar_archivo` y `propose --apply --expect-snapshot` están
+integrados. Focales Linux: CLI 9/9, API pública 6/0/2, proveedor 2/2 y recovery
+automático con configuración interna y root ausente 1/0/1. Los helpers ignored
+se invocan expresamente desde las pruebas padre o el harness release. La matriz final Linux Rust 1.88 pasó 1491/0/18 en 42 suites; Clippy del
+workspace, formato, frontera pública, diff-check, smoke CLI, arquitectura/demo
+(16 goldens), herramientas Python 7/7 y `tools/demo_apply.py --binary
+target/debug/universo` pasaron. El ejemplo confirmó admit, root actualizado,
+auxiliares preservados y cleanup. El CI del candidato exacto todavía debe
+acreditar el cierre; la fase sigue en curso hasta ese gate remoto.
+
+La configuración externa se captura acotada antes del lock; la interna se
+resuelve desde el root anclado después de recovery, también si root faltaba.
+Esta decisión ajusta el requisito antiguo de captura previa al lock para no
+impedir recuperación automática. Ambas fuentes mantienen cuota combinada y
+procedencia; el CAS sigue antes de parsear. Los errores públicos conservan
+stage, payload y resultados de storage poseídos sin prestar el owner local.
+
+La [guía operativa](../operacion-transaccional.md), el ejemplo
+`tools/demo_apply.py` y las [mediciones release](../04-mediciones-apply.md)
+completan la documentación del caller. Se conserva validación completa y replay;
+no se introduce optimización incremental sin perfil que la justifique.
+
+La base publicada `5a3ced3`, CI `44137330491`, pasó Linux 1479/0/15 y Windows
+1454/0/15 en 41 suites. Esa evidencia precede al caller público y a sus pruebas.
+Las secciones siguientes registran los pasos históricos de la reanudación.
+
 ### Reanudación del 2026-11-17: orden de cierre
 
 El punto de partida local es `1e09e13` (preflight de Intent/RETIRE v3),
@@ -341,7 +369,7 @@ Linux Rust 1.88 pasó 1479/0/15 en 41 suites; formato, Clippy del workspace,
 frontera pública y diff-check pasaron. Los nuevos helpers ignored se ejecutan
 desde sus pruebas padre. La fachada pública y CLI permanecen pendientes.
 
-### Corte actual: preparación del sucesor Journal v2
+### Corte histórico: preparación del sucesor Journal v2
 
 El baseline CI y los resultados focales locales de S1a están detallados en
 [Contexto](04-contexto-admision.md#corte-actual-observacion-normal-versionada).
@@ -1504,8 +1532,10 @@ Chain strategy: feature-branch-chain
   se refleja el token de entrada en apply. El token solo sale con opt-in.
 - [ ] Recovery conserva old para `prepared`/`backup_ready`; `installed` sin
   backup conserva new solo si root valida el candidato; `committed` limpia
-  restos. Backup se elimina antes que journal y el journal al final. Testea
-  crash/restart durante cleanup. No se afirma visibilidad continua ni
+  restos. V2 confirma Committed antes de limpiar backup; publica Intent v3
+  y retira Journal, Context y por último Intent. En rollback retira Context
+  antes de Journal. La tabla v1 conserva su contrato. Testea crash/restart
+  durante cleanup. No se afirma visibilidad continua ni
   recuperación garantizada ante pérdida de energía.
 - [x] El mismo delta y snapshot producen el mismo candidato para las
   operaciones soportadas; los retiros de Edge son independientes del orden de

@@ -3184,3 +3184,5 @@ ignorados = ["ignored.md"]
         std::os::unix::fs::symlink(destino, enlace).unwrap();
     }
 }
+
+pub(crate) mod configuracion_apply;

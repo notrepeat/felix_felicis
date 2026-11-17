@@ -250,3 +250,104 @@ fn delta_symlink_y_root_symlink_se_rechazan_sin_modificar_destino() {
         "snapshot_link_not_allowed"
     );
 }
+
+fn token_apply(f: &Fixture, status: &str, code: i32) -> String {
+    json_output(
+        &run(f, &["--format=json", "--emit-snapshot-token"]),
+        status,
+        code,
+    )["snapshot_token"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+fn apply_json(f: &Fixture, token: &str, status: &str, code: i32) -> Value {
+    let output = run(f, &["--format=json", "--apply", "--expect-snapshot", token]);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains(token));
+    let value = json_output(&output, status, code);
+    assert_eq!(value["mode"], "apply");
+    assert!(value.get("snapshot_token").is_none());
+    value
+}
+#[test]
+fn apply_admit_redacta_canarios_y_token_y_retira_siblings() {
+    let f = fixture();
+    fs::write(f.root.join("payload.bin"), b"PRIVATE_AUXILIARY").unwrap();
+    let token = token_apply(&f, "admit", 0);
+    apply_json(&f, &token, "admit", 0);
+    let node = fs::read_to_string(f.root.join("n/PRIVATE_NODE.md")).unwrap();
+    assert!(node.contains("type: b"));
+    assert!(node.contains("PRIVATE_BODY"));
+    assert_eq!(
+        fs::read(f.root.join("payload.bin")).unwrap(),
+        b"PRIVATE_AUXILIARY"
+    );
+    let transaction_files = fs::read_dir(f.dir.path())
+        .unwrap()
+        .filter_map(|e| {
+            let name = e.unwrap().file_name().to_string_lossy().to_string();
+            name.starts_with(".PRIVATE_ROOT.felix.").then_some(name)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(transaction_files, vec![".PRIVATE_ROOT.felix.lock"]);
+}
+#[test]
+fn apply_reject_y_stale_preservan_root_y_redactan_texto_json() {
+    let f = fixture();
+    fs::write(
+        &f.delta,
+        r#"{"schema":"felix-delta-v1","add":[],"remove":[]}"#,
+    )
+    .unwrap();
+    let token = token_apply(&f, "reject", 1);
+    let before = tree(&f.root);
+    assert_eq!(
+        apply_json(&f, &token, "reject", 1)["summary"]["failed_invariants"],
+        1
+    );
+    let text = run(&f, &["--apply", "--expect-snapshot", &token]);
+    assert_eq!(text.status.code(), Some(1));
+    assert!(text.stderr.is_empty());
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("propose apply: reject"));
+    assert!(!text.contains("PRIVATE") && !text.contains(&token));
+    assert_eq!(tree(&f.root), before);
+    fs::write(&f.invariants, "PRIVATE_INVALID(").unwrap();
+    assert_eq!(
+        apply_json(&f, &token, "error", 1)["errors"][0]["code"],
+        "stale"
+    );
+    assert_eq!(tree(&f.root), before);
+}
+#[test]
+fn apply_entrada_token_invalida_y_combinaciones_no_se_reflejan() {
+    let f = fixture();
+    let before = tree(f.dir.path());
+    assert_eq!(
+        apply_json(&f, "PRIVATE_INPUT_TOKEN", "error", 1)["errors"][0]["code"],
+        "snapshot_token_invalid"
+    );
+    assert_eq!(tree(f.dir.path()), before);
+    for args in [
+        vec!["--apply"],
+        vec!["--expect-snapshot", "PRIVATE_INPUT_TOKEN"],
+        vec![
+            "--apply",
+            "--expect-snapshot",
+            "PRIVATE_INPUT_TOKEN",
+            "--emit-snapshot-token",
+        ],
+        vec![
+            "--apply",
+            "--apply",
+            "--expect-snapshot",
+            "PRIVATE_INPUT_TOKEN",
+        ],
+    ] {
+        let out = run(&f, &args);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(!String::from_utf8_lossy(&out.stderr).contains("PRIVATE"));
+        assert!(out.stdout.is_empty());
+    }
+    assert_eq!(tree(f.dir.path()), before);
+}

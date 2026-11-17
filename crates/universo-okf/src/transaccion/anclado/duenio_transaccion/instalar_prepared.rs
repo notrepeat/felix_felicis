@@ -295,3 +295,36 @@ impl<'owner, 'lock> InstalacionPreparada<'owner, 'lock> {
             .map_err(|e| ErrorFinalizacionPrepared::Confirmacion(Box::new(e)))
     }
 }
+
+pub(crate) struct EvidenciaInstalacionPrepared {
+    _estado: super::publicar_prepared::EvidenciaPublicacionPrepared,
+    _original: Option<Box<ObservacionJournalPersistido>>,
+    _sucesor: Option<Box<EvidenciaSucesorJournalV2>>,
+}
+impl ErrorInstalacionPrepared<'_, '_> {
+    pub(crate) fn into_evidencia_sin_owner(self) -> EvidenciaInstalacionPrepared {
+        EvidenciaInstalacionPrepared {
+            _estado: self.estado.into_evidencia_sin_owner(),
+            _original: self.original,
+            _sucesor: self.sucesor,
+        }
+    }
+}
+pub(crate) enum EvidenciaFinalizacionPrepared {
+    Precondicion(Box<super::publicar_prepared::EvidenciaPublicacionPrepared>),
+    Confirmacion(Box<super::recovery_v2::forward::ErrorConfirmacionV2>),
+}
+impl ErrorFinalizacionPrepared<'_, '_> {
+    pub(crate) fn into_evidencia_sin_owner(self) -> EvidenciaFinalizacionPrepared {
+        match self {
+            Self::Precondicion(instalada) => EvidenciaFinalizacionPrepared::Precondicion(Box::new(
+                instalada.estado.into_evidencia_sin_owner(),
+            )),
+            Self::Confirmacion(error) => EvidenciaFinalizacionPrepared::Confirmacion(error),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "instalar_prepared_apply_tests.rs"]
+mod apply_recovery_tests;

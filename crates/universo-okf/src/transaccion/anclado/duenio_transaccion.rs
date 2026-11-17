@@ -909,3 +909,7 @@ pub(crate) mod limpiar_backup_committed_v2;
 pub(crate) mod publicar_prepared;
 
 pub(crate) mod instalar_prepared;
+
+pub(crate) use recovery_v2::dispatch::ErrorRecoveryPendienteV2;
+
+mod configuracion_apply;

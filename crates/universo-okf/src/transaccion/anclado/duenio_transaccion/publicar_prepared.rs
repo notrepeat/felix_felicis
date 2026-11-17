@@ -243,3 +243,43 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
 #[cfg(test)]
 #[path = "publicar_prepared_tests.rs"]
 mod tests;
+
+/// Evidencia poseída que puede sobrevivir a la liberación del lock del caller.
+/// No concede una nueva operación y no incluye referencias al owner.
+pub(crate) struct EvidenciaPublicacionPrepared {
+    _snapshot: Snapshot,
+    _envelope: EnvelopeContextoAdmisionV2,
+    _stage: StageAnclado,
+    _journal: JournalV2,
+    _journal_id: Option<super::super::journal_temporal::IdentidadArchivoJournal>,
+    _contexto_publicado: Option<ReciboContextoPublicado>,
+    _resultado_journal: Option<Box<ResultadoOwnerPostcheck<CuerpoContextoJournalV2>>>,
+}
+impl EstadoPublicacionPrepared<'_, '_> {
+    pub(super) fn into_evidencia_sin_owner(self) -> EvidenciaPublicacionPrepared {
+        let Self {
+            owner: _,
+            snapshot,
+            envelope,
+            stage,
+            journal,
+            journal_id,
+            contexto_publicado,
+            resultado_journal,
+        } = self;
+        EvidenciaPublicacionPrepared {
+            _snapshot: snapshot,
+            _envelope: envelope,
+            _stage: stage,
+            _journal: journal,
+            _journal_id: journal_id,
+            _contexto_publicado: contexto_publicado,
+            _resultado_journal: resultado_journal,
+        }
+    }
+}
+impl ErrorPublicacionPrepared<'_, '_> {
+    pub(crate) fn into_evidencia_sin_owner(self) -> EvidenciaPublicacionPrepared {
+        self.estado.into_evidencia_sin_owner()
+    }
+}

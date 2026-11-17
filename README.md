@@ -103,8 +103,24 @@ de uso solo escribe la ayuda por stderr. El texto también omite datos privados.
 `--emit-snapshot-token` añade explícitamente el token sensible del snapshot;
 por defecto no se incluye. El token identifica árbol raw, configuración y
 semántica del motor; no es una autorización de escritura. La captura por ruta
-no garantiza una instantánea frente a cambios externos. `--apply` y
-`--expect-snapshot` todavía se rechazan como uso inválido.
+no garantiza una instantánea frente a cambios externos.
+
+Para publicar, vuelve a ejecutar la misma propuesta con `--apply
+--expect-snapshot <token>`. La aplicación adquiere un lock de escritor,
+recupera una transacción pendiente reconocida, comprueba el snapshot, vuelve
+a evaluar y publica mediante staging. Si cambió el estado devuelve `stale`;
+un escritor concurrente recibe `writer_lock_busy` o `stale`. El modo apply no
+imprime el token recibido y no admite `--emit-snapshot-token`.
+
+```text
+universo propose <raiz> --manifiesto <m.toml> --invariantes <i.sx> --delta <d.json> --apply --expect-snapshot <token> --format json
+python tools/demo_apply.py --binary target/debug/universo
+```
+
+El ejemplo ejecutable usa un directorio temporal, configuración interna y un
+cambio Type; comprueba preservación de auxiliares y cleanup sin mostrar el
+token. [Contrato y recuperación](docs/operacion-transaccional.md) y
+[mediciones reproducibles](docs/04-mediciones-apply.md) describen los límites.
 
 El delta se lee de un archivo regular con una cuota de 16 MiB antes del
 parseo; se rechazan enlaces finales y entradas especiales. El árbol y la
