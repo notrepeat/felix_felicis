@@ -42,6 +42,9 @@ def text_files() -> list[Path]:
         relative = path.relative_to(ROOT)
         if any(part in {".git", "target"} for part in relative.parts):
             continue
+        # Grafo local de Graphify: ignorado por git y con rutas absolutas del host.
+        if relative.parts[0] == "graphify-out":
+            continue
         if path.suffix.lower() in TEXT_SUFFIXES:
             result.append(path)
     return result
