@@ -1,0 +1,44 @@
+{
+  "schema": "felix-evaluation-setup-costs-v1",
+  "excluded_from_paired_results": true,
+  "configured_model_alias": "gpt-6-astra",
+  "provider_model_snapshot": null,
+  "cost_usd": null,
+  "cost_basis": "existing_chatgpt_subscription_no_billing_observation",
+  "note": "Availability and isolation diagnostics before task runs; no task scoring. Capability smoke recorded separately. Failed setup attempts did not report token usage; missing is not zero.",
+  "successful_probes": [
+    {
+      "purpose": "existing_cli_availability_before_environment_isolation",
+      "input_tokens": 15194,
+      "cached_input_tokens": 3712,
+      "output_tokens": 9,
+      "reasoning_output_tokens": 0
+    },
+    {
+      "purpose": "environment_allowlist_without_filesystem_namespace",
+      "input_tokens": 10611,
+      "cached_input_tokens": 0,
+      "output_tokens": 9,
+      "reasoning_output_tokens": 0
+    },
+    {
+      "purpose": "bubblewrap_isolation_and_json_schema",
+      "input_tokens": 9853,
+      "cached_input_tokens": 0,
+      "output_tokens": 26,
+      "reasoning_output_tokens": 0
+    }
+  ],
+  "failed_setup_attempts": [
+    {
+      "purpose": "restricted_cli_state_initialization",
+      "usage": null,
+      "failure": "readonly_state_directory"
+    },
+    {
+      "purpose": "initial_bubblewrap_certificate_mount",
+      "usage": null,
+      "failure": "provider_connection_failed"
+    }
+  ]
+}

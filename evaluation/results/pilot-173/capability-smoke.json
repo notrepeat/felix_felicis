@@ -1,0 +1,59 @@
+{
+  "schema": "felix-agent-capability-smoke-v1",
+  "excluded_from_paired_results": true,
+  "mcp_ready": true,
+  "returncode": 0,
+  "timeout": false,
+  "overflow": false,
+  "usage": [
+    {
+      "input_tokens": 30226,
+      "cached_input_tokens": 9984,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 116,
+      "reasoning_output_tokens": 0
+    }
+  ],
+  "item_types": [
+    "error",
+    "agent_message",
+    "mcp_tool_call",
+    "agent_message"
+  ],
+  "tool_calls": [
+    {
+      "request": {
+        "method": "tools/call",
+        "params": {
+          "name": "check",
+          "arguments": {
+            "schema": "felix-mcp-v1"
+          }
+        }
+      },
+      "response": {
+        "result": {
+          "isError": false,
+          "structuredContent": {
+            "diagnostics": [],
+            "persisted": false,
+            "provenance": [],
+            "schema": "felix-mcp-v1",
+            "status": "admit",
+            "summary": {
+              "conflicts": 0,
+              "failed_invariants": 0
+            },
+            "tool": "check"
+          }
+        }
+      }
+    }
+  ],
+  "stderr_bytes": 0,
+  "configured_model_alias": "gpt-6-astra",
+  "provider_model_snapshot": null,
+  "cli_version": "codex-cli 0.169.0",
+  "preregistered_commit": "e076e74",
+  "prompt": "Capability smoke test, not an evaluation task. Call the Felix check MCP tool with {\"schema\":\"felix-mcp-v1\"} exactly once to verify the unchanged base. Then return the empty felix-delta-v1 delta. Do not solve any edit task."
+}

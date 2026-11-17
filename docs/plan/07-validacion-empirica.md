@@ -17,15 +17,22 @@ El [protocolo pareado](../../evaluation/paired_methodology.md) y el
 [plan de 24 ejecuciones](../../evaluation/results/pilot-173/plan.json) se fijan
 antes de observar respuestas a tareas. Se seleccionan seis tareas sintéticas,
 una por familia, con dos brazos y dos repeticiones. Dataset y oracle tienen
-hashes separados; el oracle no se entrega al agente. Todavía no se afirma
-utilidad ni mejora del modelo.
+hashes separados; el oracle no se entrega al agente. El [piloto real completo](../../evaluation/paired-report.md) produjo 12/12
+éxitos por brazo y cero llamadas a Felix: no demuestra mejora de corrección
+ni reparación. La disponibilidad real se comprobó aparte y los diagnósticos
+no se mezclan con las 24 tareas.
 
 El [corpus y benchmark](../../evaluation/formal-and-performance.md) ya tienen
 evidencia local: 46 casos etiquetados con coincidencia exacta, 14 variantes AST,
 tres clases de conflicto y cero falsos admit. La matriz de 14 puntos × cinco
 repeticiones conserva 65 admisiones y cinco agotamientos del presupuesto de
 evaluación; estos últimos son resultados adversos, no admisiones lentas.
-La CI del checkpoint y el piloto real permanecen pendientes.
+La CI del prerregistro `e076e74`, ejecución `44150586320`, pasó: Linux
+1503/0/19 y Windows 1479/0/19, 46 suites por plataforma. El piloto autenticado
+y las mediciones de rendimiento son evidencia local, no tareas ejecutadas en CI.
+También pasaron localmente 19 pruebas Python de evaluación; el workflow actual
+no las ejecuta.
+El cierre documental espera la publicación y gate del informe final.
 
 ## Tres evaluaciones
 
@@ -80,7 +87,8 @@ semilla de muestreo o costo monetario no observados.
 
 | Fecha | Commit/PR | Evidencia | Resultado |
 |---|---|---|---|
-| 2026-11-17 | Prerregistro, commit pendiente | Corpus formal 46 casos + 3 conflictos, tests exactos; matriz de 70 muestras; pruebas Python del runner/oracle y controles de frontera. | Evidencia local, sin resultados de utilidad todavía. |
+| 2026-11-17 | `e076e74`, CI `44150586320` | Corpus formal 46 casos + 3 conflictos; Rust Linux 1503/0/19 y Windows 1479/0/19, 46 suites. Matriz local de 70 muestras. | Gate aprobado; cinco agotamientos del presupuesto publicados. |
+| 2026-11-17 | Informe final, commit pendiente | 24 tareas reales, seis escenarios × dos brazos × dos repeticiones; oracle y hashes recalculados por revisión independiente. | 12/12 éxitos por brazo; cero llamadas Felix. No se demuestra beneficio ni se avanza a AGM. |
 
 ## Siguiente fase
 
