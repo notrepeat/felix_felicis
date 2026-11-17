@@ -108,6 +108,30 @@ where
     let Some(identidad_stage) = identidad_stage else {
         return Err(ErrorLimpiezaAnclado::IdentidadInconsistente);
     };
+    limpiar_directorio_identificado(
+        directorio,
+        componente,
+        identidad_stage,
+        limites,
+        sonda_scope,
+        eliminar,
+    )
+}
+
+/// Núcleo compartido: la capability del caller decide qué sibling autoriza.
+/// Conserva idénticos preflights de estructura, identidad y scope del stage.
+pub(super) fn limpiar_directorio_identificado<F, S>(
+    directorio: &super::DirectorioAnclado,
+    componente: &OsStr,
+    identidad_stage: IdentidadDirectorio,
+    limites: LimitesInventario,
+    sonda_scope: &mut S,
+    eliminar: &mut F,
+) -> Result<(), ErrorLimpiezaAnclado>
+where
+    F: FnMut(&File, &OsStr, bool) -> Result<(), ErrorDirectorioAnclado>,
+    S: FnMut(&File) -> Result<ScopeFilesystem, ErrorDirectorioAnclado>,
+{
     let identidad_parent = directorio.identidad_parent();
     validar_componente(componente).map_err(ErrorLimpiezaAnclado::Directorio)?;
     if directorio.basename != componente {

@@ -643,7 +643,7 @@ fn confirmar_retiro(
     }
 }
 
-pub(super) fn retirar_nombre_plataforma(
+pub(in crate::transaccion::anclado) fn retirar_nombre_plataforma(
     parent: &File,
     nombre: &OsStr,
     archivo: File,

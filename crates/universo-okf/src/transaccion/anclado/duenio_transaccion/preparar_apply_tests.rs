@@ -4,7 +4,7 @@ use crate::transaccion::{
 };
 use std::fs;
 use universo_core::{Atomo, BundlePath, Sorte};
-fn config() -> ConfigRawCapturada {
+pub(in crate::transaccion::anclado::duenio_transaccion) fn config() -> ConfigRawCapturada {
     ConfigRawCapturada::nueva(
         "version = \"t/1\"\n[nodos]\nsortes = [\"a\", \"b\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n"
             .as_bytes(),
@@ -14,7 +14,7 @@ fn config() -> ConfigRawCapturada {
     )
     .unwrap()
 }
-fn delta() -> Delta {
+pub(in crate::transaccion::anclado::duenio_transaccion) fn delta() -> Delta {
     Delta::nuevo(
         [Atomo::Type {
             sujeto: BundlePath::nuevo("n/node").unwrap(),
@@ -27,7 +27,8 @@ fn delta() -> Delta {
     )
     .unwrap()
 }
-fn fixture() -> (tempfile::TempDir, UbicacionRaiz) {
+pub(in crate::transaccion::anclado::duenio_transaccion) fn fixture()
+-> (tempfile::TempDir, UbicacionRaiz) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("bundle");
     fs::create_dir_all(root.join("n")).unwrap();

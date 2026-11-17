@@ -215,6 +215,9 @@ y Clippy del workspace pasaron. Formato, frontera pública y diff-check
 también pasaron. El conteo de matriz precede a esa corrección final; no se
 atribuye una matriz completa nueva al cambio de retención.
 
+El CI exacto del productor/façade `b0b5de7`, run `44130416494`, pasó
+Linux 1441/0/9 y Windows 1416/0/9, 41 suites por sistema.
+
 El gate U8/ABC anterior pasó 1432/0/9 en 41 suites Linux, formato, Clippy,
 frontera pública, diff-check, smoke CLI y demo (4 estados/16 goldens).
 Los commits publicados son `08cc140` (ABC) y `b42281a` (U8). El CI exacto
@@ -240,9 +243,72 @@ Cinco pruebas focales pasaron en Linux con Rust 1.88: preparación Type y replay
 coincidente, stale antes del parseo/rechazo sin stage, namespace ocupado, root
 cambiado y sustitución Unix del lock después del staging. La matriz conjunta
 con publicación de sucesores pasó 1451/0/9 en 41 suites; formato, frontera
-pública y diff-check pasaron.
+pública, diff-check y Clippy del workspace pasaron (commit `7f26e6d`).
 El caller todavía debe ejecutar recovery antes del CAS y conectar publicación,
 cleanup y CLI; esta unidad por sí sola no cierra U9 ni la fase 04.
+
+### Cleanup de backup Committed v2 (2026-11-17)
+
+El nuevo orden v2 persiste Committed después de verificar New y antes de
+limpiar backup. `limpiar_backup_committed_v2` exige Journal/Context v2
+coherentes, replay admitido, root New exacto, stage ausente, IDs old/new
+distintos y backup ausente o con identidad nativa old exacta. Permite el digest
+parcial de ese mismo backup después de un borrado interrumpido. La tabla v1
+no cambia. Conserva Journal y Context durante toda la limpieza y sólo habilita
+el productor Intent cuando ya no quedan backup/stage.
+
+Una capability propia de backup reutiliza el walker de limpieza: preflight
+completo sin seguir enlaces, límites estructurales, scope e identidad por
+entrada y antes de operaciones destructivas. Verifica además el owner antes
+de cada syscall; vuelve a observar root, Journal y Context antes/después del
+intento. Un error puede dejar borrado parcial y retiene capability y evidencia;
+no se interpreta como ausencia de efecto. La ausencia final se reconfirma.
+
+Focal Linux Rust 1.88: cinco pruebas pasaron y un helper hijo está ignored en
+la enumeración normal. El padre lo invoca expresamente: termina con código 89
+tras un unlink real del backup; el padre permanece vivo, readquiere el lock y
+reanuda con Journal/Context intactos. Este test reutiliza el DTO Journal del
+padre, cotejado contra bytes persistidos; falta la recarga por el dispatcher
+productivo para acreditar recovery de extremo a extremo.
+También cubre retry tras error de syscall, scope de entrada divergente, root o
+Context cambiados, Installed rechazado y backup de igual contenido con otra
+identidad. No acredita power-loss, atomicidad frente a escritores hostiles ni
+`fsync` del directorio. El gate integrado Linux Rust 1.88 pasó 1468/0/12
+en 41 suites, junto a Prepared y confirmación v2; formato, frontera pública
+y diff-check pasaron. Los tres nuevos ignored son helpers de procesos hijos
+invocados por sus pruebas padre, no casos omitidos. Después de esa matriz,
+la confirmación v2 añadió retención en Box y comprobación final del ID nativo
+del Journal; su focal pasó 7/0/1 y Clippy de OKF pasó. No se atribuye a ese
+último ajuste otra matriz workspace completa.
+
+El CI exacto `b61f4c3`, run `44133953418`, pasó Linux 1451/0/9 y Windows
+1426/0/9, 41 suites por sistema. La corrección Windows de reemplazo de
+sucesores usa semántica POSIX del rename, necesaria con handles retenidos;
+ese CI precede al gate local de cleanup/Prepared/confirmación descrito arriba.
+
+### U9: publicación inicial Prepared (2026-11-17)
+
+`PreparacionApply::publicar_prepared` consume la preparación y publica primero
+Context v2, después Journal v2 Prepared, usando los recibos y las operaciones
+no-replace existentes. Entre etapas verifica CAS/root Old por identidad y
+bytes, stage New, backup ausente y slots exactos. El temporal Journal se
+reabre contra la identidad original antes de publicarlo. Sólo emite la nueva
+prueba cuando ambos canónicos, Context ligado y owner quedaron confirmados;
+no renombra root. Un error retiene stage, snapshot, envelope, recibo Context
+y el resultado completo de publicación Journal cuando existe.
+
+Focal Linux Rust 1.88: cinco pruebas pasaron y un helper hijo está ignored
+fuera de su invocación por el padre. Los cortes reales terminan después de
+Context TMP (90), Context canónico (91) o Journal TMP (92). El padre permanece
+vivo, readquiere el lock y comprueba root intacto y bloqueo de otra preparación,
+sin limpiar huérfanos. Es el comportamiento conservador exigido para Context
+sin Journal; no se atribuye recuperación automática ni power-loss durability.
+Otros casos cambian root entre etapas, corrompen el TMP o sustituyen
+Journal/Context canónicos por los mismos bytes con otra identidad; el flujo
+rechaza esos casos y conserva la evidencia. Quedan pendientes publicación del root, recovery del flujo completo,
+façade apply y CLI. El gate integrado Linux Rust 1.88 pasó 1468/0/12 en
+41 suites, con formato, frontera pública y diff-check aprobados; los helpers
+hijos ignored se ejecutan expresamente desde las pruebas padre.
 
 ### Corte actual: preparación del sucesor Journal v2
 

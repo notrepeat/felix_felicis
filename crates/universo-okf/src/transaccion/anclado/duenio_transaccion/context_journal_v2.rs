@@ -38,6 +38,25 @@ impl fmt::Debug for CuerpoContextoJournalV2 {
     }
 }
 
+impl CuerpoContextoJournalV2 {
+    /// Sólo la publicación completa con Context inicial/final observado.
+    /// El caller debe exigir además ResultadoOwnerPostcheck::PostcheckVerificado.
+    pub(super) fn publicacion_confirmada(&self) -> bool {
+        self.error_fase.is_none()
+            && matches!(self.inicial, EstadoContextoJournalV2::Observado(_))
+            && matches!(
+                self.final_contexto,
+                Some(EstadoContextoJournalV2::Observado(_))
+            )
+            && matches!(
+                self.publicacion,
+                Some(Ok(ResultadoPublicacionJournal::Confirmado {
+                    limpieza: super::super::journal_temporal::LimpiezaConfirmadaJournal::Completa,
+                }))
+            )
+    }
+}
+
 impl<'owner, 'lock> ReciboTemporalJournalV2<'owner, 'lock> {
     /// Consume el temporal J2 y conserva el resultado crudo hasta el postcheck.
     ///

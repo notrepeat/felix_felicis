@@ -850,10 +850,11 @@ mod retained_v2_pair;
 mod visible_identity_probe;
 
 #[path = "duenio_transaccion/intent_retiro.rs"]
-pub(in crate::transaccion::anclado::duenio_transaccion) mod intent_retiro;
+pub(in crate::transaccion::anclado) mod intent_retiro;
 
 #[path = "duenio_transaccion/familia_persistida.rs"]
 mod familia_persistida;
+mod recovery_v2;
 mod retiro_c_v3;
 mod retiro_v3;
 pub(crate) use retiro_v3::{EstadoPasoRetiroV3, EvidenciaRetiroPreservada, ResultadoPasoRetiroV3};
@@ -902,3 +903,7 @@ mod context_journal_v2;
 mod publicar_intent_v3;
 
 pub(crate) mod preparar_apply;
+
+pub(crate) mod limpiar_backup_committed_v2;
+
+pub(crate) mod publicar_prepared;

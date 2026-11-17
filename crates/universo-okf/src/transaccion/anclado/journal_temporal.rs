@@ -202,6 +202,26 @@ pub(in crate::transaccion::anclado) struct ReciboTemporalSucesorJournalV2<'origi
     temporal: publicar::ObservacionTemporalVersionada,
 }
 
+/// Evidencia sin borrow del registro original; nunca autoriza otro intento.
+pub(in crate::transaccion::anclado) struct EvidenciaSucesorJournalV2 {
+    _candidato: JournalV2,
+    _identidad_temporal: IdentidadArchivoJournal,
+    _temporal: publicar::ObservacionTemporalVersionada,
+}
+impl ReciboTemporalSucesorJournalV2<'_> {
+    pub(in crate::transaccion::anclado) fn identidad_temporal(&self) -> IdentidadArchivoJournal {
+        self.identidad_temporal
+    }
+
+    pub(in crate::transaccion::anclado) fn into_evidencia(self) -> EvidenciaSucesorJournalV2 {
+        EvidenciaSucesorJournalV2 {
+            _candidato: self.candidato,
+            _identidad_temporal: self.identidad_temporal,
+            _temporal: self.temporal,
+        }
+    }
+}
+
 impl fmt::Debug for ReciboTemporalSucesorJournalV2<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ReciboTemporalSucesorJournalV2([redacted])")

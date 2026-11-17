@@ -10,6 +10,71 @@ pub(in crate::transaccion::anclado) enum EstadoPublicacionSucesorV2 {
 }
 
 impl JournalTemporalAnclado<'_> {
+    /// Reconstruye datos del sucesor inmediato existente, sin crear ni promover.
+    pub(in crate::transaccion::anclado) fn observar_sucesor_existente_v2<'original>(
+        &self,
+        original: &'original versionado::ObservacionJournalPersistido,
+    ) -> Result<ReciboTemporalSucesorJournalV2<'original>, ErrorJournalAnclado> {
+        if self.scope_parent.is_none() {
+            return Err(ErrorJournalAnclado::ParentScopeUnverified);
+        }
+        let JournalPersistido::V2(old) = original.journal() else {
+            return Err(ErrorJournalAnclado::JournalMismatch);
+        };
+        self.validar_canonico_sucesor_v2(original.identidad(), old)?;
+        let candidato = derivar_sucesor_journal_v2(old)?;
+        let temporal = self
+            .observar_temporal_versionado(&candidato)
+            .map_err(mapear_error_preparacion_v2)?;
+        let identidad_temporal = temporal.identidad();
+        Ok(ReciboTemporalSucesorJournalV2 {
+            original,
+            candidato,
+            identidad_temporal,
+            temporal,
+        })
+    }
+
+    /// Descarta sólo un sucesor exacto; el caller conserva el Journal anterior.
+    /// La identidad TMP tras reabrir es observada, no autenticación de su origen.
+    pub(in crate::transaccion::anclado) fn descartar_sucesor_v2(
+        &self,
+        recibo: &ReciboTemporalSucesorJournalV2<'_>,
+    ) -> Result<(), ErrorJournalAnclado> {
+        if self.raiz_remota {
+            return Err(ErrorJournalAnclado::RemoteUnsupported);
+        }
+        if self.scope_parent.is_none() {
+            return Err(ErrorJournalAnclado::ParentScopeUnverified);
+        }
+        let JournalPersistido::V2(old) = recibo.original.journal() else {
+            return Err(ErrorJournalAnclado::JournalMismatch);
+        };
+        old.validate_successor(&recibo.candidato)
+            .map_err(ErrorJournalAnclado::InvalidJournalV2)?;
+        self.validar_canonico_sucesor_v2(recibo.original.identidad(), old)?;
+        let mut source = abrir_fuente(&self.parent, &self.nombre)?;
+        self.verificar_source_sucesor(&mut source, recibo)?;
+        self.validar_parent()?;
+        let _outcome = super::super::duenio_transaccion::intent_retiro::retirar_nombre_plataforma(
+            &self.parent,
+            &self.nombre,
+            source,
+        );
+        self.validar_parent()?;
+        self.validar_canonico_sucesor_v2(recibo.original.identidad(), old)?;
+        let absent = matches!(
+            abrir_entrada_relativa(&self.parent, &self.nombre, TipoEntradaAnclada::Archivo),
+            Err(ErrorDirectorioAnclado::EntradaAusente)
+        );
+        self.validar_parent()?;
+        if absent {
+            Ok(())
+        } else {
+            Err(ErrorJournalAnclado::CanonicalConflict)
+        }
+    }
+
     /// Retiene el recibo en el caller incluso ante resultado ambiguo.
     /// Cooperantes bajo lock; replace no evita carreras de escritores externos.
     pub(in crate::transaccion::anclado) fn publicar_sucesor_v2(

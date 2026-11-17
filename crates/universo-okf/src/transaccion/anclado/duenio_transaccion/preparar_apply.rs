@@ -203,4 +203,4 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
 
 #[cfg(test)]
 #[path = "preparar_apply_tests.rs"]
-mod tests;
+pub(super) mod tests;
