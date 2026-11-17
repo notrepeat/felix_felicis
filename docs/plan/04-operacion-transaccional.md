@@ -192,6 +192,38 @@ La captura por ruta mantiene su límite TOCTOU; el cierre U9 requiere captura
 anclada, recovery-before-CAS y lock retenido, no reutilizar esta simulación
 como publicador.
 
+### Publicación de Intent v3 desde Committed (2026-11-17)
+
+`publicar_intent_v3_desde_committed` exige Journal v2 Committed y Context v2
+coherentes, replay admitido, root New coincidente y backup/stage ausentes.
+Crea un temporal exclusivo, incorpora su identidad nativa en los metadatos y
+conserva el Context raw original. Escribe y sincroniza el archivo, vuelve a
+comprobar Journal/Context por identidad y bytes, root y slots, verifica el
+frame temporal desde el handle y publica con rename no-replace. Windows usa
+un handle final con DELETE. La observación canónica y el postcheck del owner
+confirman el resultado; no se afirma durabilidad del directorio/power-loss.
+
+Seis pruebas focales Rust 1.88 locked/offline pasaron en Linux: publicación
+seguida del retiro A→B→C→final, rechazo de fases previas sin crear temporal,
+root/Context/TMP cambiados, error de syscall antes y después de aplicar rename
+y aparición concurrente de destino preservado. Un error conserva cualquier
+TMP o Intent que haya quedado; no se interpreta como ausencia de efecto ni
+se ejecuta limpieza/retry automático. La matriz integrada Linux pasó
+1440/0/9 en 41 suites. Después se corrigió el error público de recovery para
+retener en un Box la evidencia de un retiro ambiguo; sus tres pruebas focales
+y Clippy del workspace pasaron. Formato, frontera pública y diff-check
+también pasaron. El conteo de matriz precede a esa corrección final; no se
+atribuye una matriz completa nueva al cambio de retención.
+
+El gate U8/ABC anterior pasó 1432/0/9 en 41 suites Linux, formato, Clippy,
+frontera pública, diff-check, smoke CLI y demo (4 estados/16 goldens).
+Los commits publicados son `08cc140` (ABC) y `b42281a` (U8). El CI exacto
+de `b42281a`, run `44128787774`, pasó Linux 1432/0/9 y Windows 1407/0/9,
+41 suites por sistema. El script de
+medición guardado se ejecutó después sobre binario debug: 1/10/100 MiB
+registraron 31.941672/358.160849/3528.006156 ms, todos admit/exit 0. No son
+umbrales ni mediciones de RSS. Estos resultados no cubren el productor nuevo.
+
 ### Corte actual: preparación del sucesor Journal v2
 
 El baseline CI y los resultados focales locales de S1a están detallados en
@@ -1259,7 +1291,7 @@ Chain strategy: feature-branch-chain
   lógico, no garantizan un RSS exacto ni un timeout duro. `LimiteBundleExcedido`
   amplía el enum público y exhaustivo `Regla`; los consumidores con `match`
   exhaustivo deben manejarlo.
-- [ ] 8 — CLI simulate: `crates/universo-cli/src/propose.rs`.
+- [x] 8 — CLI simulate: `crates/universo-cli/src/propose.rs`.
   Test `crates/universo-cli/tests/propose_transaccional.rs`
   (`cargo test -p universo-cli --test propose_transaccional`) ejecuta el binario,
   comprueba token omitido por defecto/opt-in, hashes intactos y RED canaries en
@@ -1339,9 +1371,9 @@ Chain strategy: feature-branch-chain
   invariantes y se informan sin publicar valores privados por defecto.
 - [x] Un error al construir candidato no muta la estructura snapshot en memoria.
 - [ ] Un delta rechazado por la transacción completa no cambia los archivos.
-- [ ] Simulación no escribe y omite el token; `--emit-snapshot-token` lo
-  entrega solo bajo solicitud. Apply usa el comando completo de arriba y
-  reevalúa/revalida bajo lock.
+- [x] Simulación no escribe y omite el token; `--emit-snapshot-token` lo
+  entrega solo bajo solicitud. U8 y sus seis pruebas CLI acreditan el contrato.
+- [ ] Apply usa el comando completo de arriba y reevalúa/revalida bajo lock.
 - [ ] El lock advisory/exclusivo usa un file handle del lockfile sibling
   reutilizable, se libera al morir el proceso y recovery corre siempre después
   de adquirir lock y antes del stale recheck. Testea crash/restart con lock.

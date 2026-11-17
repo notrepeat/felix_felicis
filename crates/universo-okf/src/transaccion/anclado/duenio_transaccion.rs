@@ -834,6 +834,7 @@ pub(in crate::transaccion::anclado::duenio_transaccion) mod intent_retiro;
 mod familia_persistida;
 mod retiro_c_v3;
 mod retiro_v3;
+pub(crate) use retiro_v3::{EstadoPasoRetiroV3, EvidenciaRetiroPreservada, ResultadoPasoRetiroV3};
 
 #[path = "duenio_transaccion/lector_intent_versionado.rs"]
 mod lector_intent_versionado;
@@ -874,3 +875,6 @@ mod context_journal_v2_observation;
 
 #[path = "duenio_transaccion/context_journal_v2.rs"]
 mod context_journal_v2;
+
+#[path = "duenio_transaccion/publicar_intent_v3.rs"]
+mod publicar_intent_v3;

@@ -171,3 +171,63 @@ fn reemplazo_sidecar_entre_observaciones_no_alcanza_syscall() {
     assert!(journal.exists());
     assert_eq!(fs::read(intent).unwrap(), frame);
 }
+
+#[test]
+fn fachada_publica_recupera_desde_a_b_y_c_con_lock_propio() {
+    for fase in 0..3 {
+        let dir = tempfile::tempdir().unwrap();
+        let (fixture, intent, _) = fixture_con_sidecars(dir.path(), false, true);
+        if fase > 0 {
+            let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
+            let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+            for _ in 0..fase {
+                drop(owner.avanzar_retiro_v3().unwrap());
+            }
+        }
+        crate::transaccion::recuperacion::recuperar_retiro(&fixture.root).unwrap();
+        assert!(!intent.exists());
+        assert!(!contexto_path(&fixture.ubicacion).exists());
+        assert!(!fixture.ubicacion.journal().as_path().exists());
+        verificar_arbol(&fixture.root, &fixture.entradas);
+    }
+}
+
+#[test]
+fn fachada_busy_o_root_inconsistente_conserva_evidencia() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fixture, intent, frame) = fixture_con_sidecars(dir.path(), false, true);
+    let lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
+    assert_eq!(
+        crate::transaccion::recuperacion::recuperar_retiro(&fixture.root)
+            .unwrap_err()
+            .codigo(),
+        "writer_lock_busy"
+    );
+    drop(lock);
+    fs::write(fixture.root.join("intruso"), b"canary").unwrap();
+    let error = crate::transaccion::recuperacion::recuperar_retiro(&fixture.root).unwrap_err();
+    assert_eq!(error.codigo(), "recovery_retirement_unverified");
+    assert!(!format!("{error:?}").contains(dir.path().to_str().unwrap()));
+    assert_eq!(fs::read(intent).unwrap(), frame);
+    assert!(contexto_path(&fixture.ubicacion).exists());
+    assert!(fixture.ubicacion.journal().as_path().exists());
+}
+
+#[test]
+fn error_fachada_posee_contexto_del_resultado_ambiguo_y_redacta_debug() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fixture, _, _) = fixture_con_sidecars(dir.path(), false, true);
+    let mut lock = LockEscritura::adquirir_en(&fixture.ubicacion).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let result = owner
+        .avanzar_retiro_v3_con_hooks(|| {}, |_, _, _| Err(()))
+        .unwrap();
+    assert_eq!(result.estado(), EstadoPasoRetiroV3::Indeterminado);
+    let error = crate::transaccion::recuperacion::ErrorRecuperacion::desde_paso(
+        "recovery_retirement_indeterminate",
+        result,
+    );
+    assert!(error.conserva_evidencia());
+    assert_eq!(error.contexto_para_test().unwrap(), fixture.bytes_contexto);
+    assert_eq!(format!("{error:?}"), "recovery_retirement_indeterminate");
+}

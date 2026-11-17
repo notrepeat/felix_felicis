@@ -20,13 +20,19 @@ pub(in crate::transaccion::anclado::duenio_transaccion) enum EstadoRetiroCV3 {
     Indeterminado,
 }
 
-pub(in crate::transaccion::anclado::duenio_transaccion) struct ResultadoRetiroCV3<'owner, 'lock> {
+pub(crate) struct ResultadoRetiroCV3<'owner, 'lock> {
     owner: &'owner mut DuenioTransaccionAnclado<'lock>,
     intent: IntentRetiroPersistidoV3,
     estado: EstadoRetiroCV3,
 }
 
 impl ResultadoRetiroCV3<'_, '_> {
+    pub(in crate::transaccion::anclado::duenio_transaccion) fn into_intent(
+        self,
+    ) -> IntentRetiroPersistidoV3 {
+        self.intent
+    }
+
     pub(in crate::transaccion::anclado::duenio_transaccion) fn estado(&self) -> EstadoRetiroCV3 {
         self.estado
     }

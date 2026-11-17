@@ -14,6 +14,7 @@ pub(crate) mod journal;
 pub(crate) mod limites;
 pub mod lock;
 pub(crate) mod raiz;
+pub mod recuperacion;
 #[allow(dead_code)]
 pub(crate) mod replay;
 pub mod simulacion;

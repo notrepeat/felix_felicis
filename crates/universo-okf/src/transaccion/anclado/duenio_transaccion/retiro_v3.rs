@@ -13,7 +13,7 @@ use std::fs::File;
 mod sidecar;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum EstadoPasoRetiroV3 {
+pub(crate) enum EstadoPasoRetiroV3 {
     AvanzoB,
     AvanzoC,
     Finalizado,
@@ -22,7 +22,11 @@ pub(super) enum EstadoPasoRetiroV3 {
     Indeterminado,
 }
 
-pub(super) enum ResultadoPasoRetiroV3<'owner, 'lock> {
+pub(crate) struct ResultadoPasoRetiroV3<'owner, 'lock> {
+    contenido: ContenidoResultadoPaso<'owner, 'lock>,
+}
+
+enum ContenidoResultadoPaso<'owner, 'lock> {
     Final(ResultadoRetiroCV3<'owner, 'lock>),
     Sidecar {
         owner: &'owner mut DuenioTransaccionAnclado<'lock>,
@@ -31,11 +35,27 @@ pub(super) enum ResultadoPasoRetiroV3<'owner, 'lock> {
     },
 }
 
+pub(crate) struct EvidenciaRetiroPreservada(IntentRetiroPersistidoV3);
+
+impl EvidenciaRetiroPreservada {
+    #[cfg(test)]
+    pub(crate) fn contexto_para_test(&self) -> &[u8] {
+        self.0.contexto_original()
+    }
+}
+
 impl ResultadoPasoRetiroV3<'_, '_> {
-    pub(super) fn estado(&self) -> EstadoPasoRetiroV3 {
-        match self {
-            Self::Sidecar { estado, .. } => *estado,
-            Self::Final(result) => match result.estado() {
+    pub(crate) fn into_evidencia(self) -> EvidenciaRetiroPreservada {
+        EvidenciaRetiroPreservada(match self.contenido {
+            ContenidoResultadoPaso::Sidecar { intent, .. } => intent,
+            ContenidoResultadoPaso::Final(result) => result.into_intent(),
+        })
+    }
+
+    pub(crate) fn estado(&self) -> EstadoPasoRetiroV3 {
+        match &self.contenido {
+            ContenidoResultadoPaso::Sidecar { estado, .. } => *estado,
+            ContenidoResultadoPaso::Final(result) => match result.estado() {
                 EstadoRetiroCV3::Eliminado => EstadoPasoRetiroV3::Finalizado,
                 EstadoRetiroCV3::Ausente => EstadoPasoRetiroV3::Ausente,
                 EstadoRetiroCV3::Conflicto => EstadoPasoRetiroV3::Conflicto,
@@ -46,7 +66,7 @@ impl ResultadoPasoRetiroV3<'_, '_> {
 }
 
 #[derive(Debug)]
-pub(super) struct ErrorPasoRetiroV3;
+pub(crate) struct ErrorPasoRetiroV3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Fase {
@@ -63,7 +83,7 @@ struct Observacion {
 }
 
 impl<'lock> DuenioTransaccionAnclado<'lock> {
-    pub(super) fn avanzar_retiro_v3(
+    pub(crate) fn avanzar_retiro_v3(
         &mut self,
     ) -> Result<ResultadoPasoRetiroV3<'_, 'lock>, ErrorPasoRetiroV3> {
         self.avanzar_retiro_v3_con_hooks(|| {}, super::intent_retiro::retirar_nombre_plataforma)
@@ -84,7 +104,9 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
             let proof = self
                 .observar_retiro_c_v3_consistente()
                 .map_err(|_| ErrorPasoRetiroV3)?;
-            return Ok(ResultadoPasoRetiroV3::Final(proof.retirar()));
+            return Ok(ResultadoPasoRetiroV3 {
+                contenido: ContenidoResultadoPaso::Final(proof.retirar()),
+            });
         }
         let Observacion {
             fase,
@@ -97,10 +119,12 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
         let estado = self.intentar_paso_sidecar(fase, &inicial, intento);
         let IntentV3EnArchivo { archivo, intent } = inicial;
         drop(archivo);
-        Ok(ResultadoPasoRetiroV3::Sidecar {
-            owner: self,
-            intent,
-            estado,
+        Ok(ResultadoPasoRetiroV3 {
+            contenido: ContenidoResultadoPaso::Sidecar {
+                owner: self,
+                intent,
+                estado,
+            },
         })
     }
 
