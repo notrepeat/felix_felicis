@@ -1,6 +1,6 @@
 use universo_core::{
     Anexo, Atomo, BundlePath, ClaseOperacion, Delta, Entrada, ErrorCandidato, Estructura, Etiqueta,
-    IdArista, LadoDelta, Sorte, construir_candidato,
+    IdArista, Sorte, construir_candidato,
 };
 
 fn p(texto: &str) -> BundlePath {
@@ -109,7 +109,7 @@ fn candidato_y_entrada_son_aislados_y_preservan_anexos() {
 }
 
 #[test]
-fn operacion_no_soportada_rechaza_sin_reflejar_datos_privados() {
+fn type_sobre_sujeto_ausente_rechaza_sin_reflejar_datos_privados() {
     let (entrada, _, _, arista) = base();
     let antes = entrada.atomos();
     let delta = Delta::nuevo(
@@ -124,13 +124,13 @@ fn operacion_no_soportada_rechaza_sin_reflejar_datos_privados() {
     let error = construir_candidato(&entrada, &delta).unwrap_err();
     assert!(matches!(
         error,
-        ErrorCandidato::UnsupportedOperation {
-            lado: LadoDelta::Add,
-            clase: ClaseOperacion::Type
+        ErrorCandidato::InvalidOperation {
+            clase: ClaseOperacion::Type,
+            codigo: "subject_not_found"
         }
     ));
     let texto = format!("{error} {error:?}");
-    assert!(texto.contains("unsupported_operation"));
+    assert!(texto.contains("subject_not_found"));
     for canario in ["PRIVATE_PATH", "PRIVATE_TYPE"] {
         assert!(!texto.contains(canario));
     }
@@ -139,7 +139,7 @@ fn operacion_no_soportada_rechaza_sin_reflejar_datos_privados() {
 }
 
 #[test]
-fn type_sigue_fail_closed_en_ambos_lados_y_sin_mutar() {
+fn type_sujeto_ausente_falla_en_ambos_lados_y_sin_mutar() {
     let (entrada, _, _, _) = base();
     let antes = entrada.atomos();
     let casos = [(
@@ -152,17 +152,15 @@ fn type_sigue_fail_closed_en_ambos_lados_y_sin_mutar() {
 
     for (atomo, clase) in casos {
         for (delta, lado) in [
-            (Delta::nuevo([atomo.clone()], []).unwrap(), LadoDelta::Add),
-            (Delta::nuevo([], [atomo]).unwrap(), LadoDelta::Remove),
+            (
+                Delta::nuevo([atomo.clone()], []).unwrap(),
+                "subject_not_found",
+            ),
+            (Delta::nuevo([], [atomo]).unwrap(), "remove_not_found"),
         ] {
             let error = construir_candidato(&entrada, &delta).unwrap_err();
-            assert!(matches!(
-                error,
-                ErrorCandidato::UnsupportedOperation {
-                    lado: actual_lado,
-                    clase: actual_clase
-                } if actual_lado == lado && actual_clase == clase
-            ));
+            assert_eq!(error.codigo(), lado);
+            assert_eq!(error.clase(), Some(clase));
             let texto = format!("{error} {error:?}");
             for canario in ["PRIVATE_PATH", "PRIVATE_TYPE"] {
                 assert!(!texto.contains(canario));

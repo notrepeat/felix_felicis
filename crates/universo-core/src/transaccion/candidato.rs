@@ -4,7 +4,7 @@ use crate::{
     AristaId, Atomo, BundlePath, Delta, Estructura, Etiqueta, IdArista, LadoDelta, Sorte, Sujeto,
 };
 
-use super::{aristas, ext, nodos};
+use super::{aristas, ext, nodos, tipos};
 
 /// Clase pública de operación, sin incluir identidades ni valores del átomo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,36 +116,14 @@ impl Candidato {
 }
 
 /// Construye un candidato aislado con retiros y altas `Edge`, `HasLab`,
-/// `Parent` y `Ext`.
+/// `Parent`, `Type` de nodos existentes y `Ext`.
 pub fn construir_candidato(
     snapshot: &Estructura,
     delta: &Delta,
 ) -> Result<Candidato, ErrorCandidato> {
-    for atomo in delta.agregar() {
-        if !matches!(
-            atomo,
-            Atomo::Edge { .. } | Atomo::Ext { .. } | Atomo::HasLab { .. } | Atomo::Parent { .. }
-        ) {
-            return Err(ErrorCandidato::UnsupportedOperation {
-                lado: LadoDelta::Add,
-                clase: clase(atomo),
-            });
-        }
-    }
-    for atomo in delta.retirar() {
-        if !matches!(
-            atomo,
-            Atomo::Edge { .. } | Atomo::Ext { .. } | Atomo::HasLab { .. } | Atomo::Parent { .. }
-        ) {
-            return Err(ErrorCandidato::UnsupportedOperation {
-                lado: LadoDelta::Remove,
-                clase: clase(atomo),
-            });
-        }
-    }
-
     // Las operaciones Ext y sus handles se resuelven contra el mismo
     // snapshot antes de modificar el candidato aislado.
+    let cambios_tipos = tipos::preparar(snapshot, delta)?;
     let cambios_ext = ext::preparar(snapshot, delta)?;
     let cambios_nodos = nodos::preparar(snapshot, delta)?;
 
@@ -187,12 +165,11 @@ pub fn construir_candidato(
                 }
                 etiquetas_retiradas.insert(handle, etiqueta.clone());
             }
-            Atomo::Ext { .. } | Atomo::Parent { .. } => {}
+            Atomo::Ext { .. } | Atomo::Parent { .. } | Atomo::Type { .. } => {}
             Atomo::HasLab {
                 sujeto: Sujeto::Nodo(_),
                 ..
             } => {}
-            _ => unreachable!("las operaciones se validaron antes de resolver handles"),
         }
     }
     let mut estructura = snapshot.clonar_para_candidato();
@@ -202,6 +179,12 @@ pub fn construir_candidato(
     aplicar_altas(&mut estructura, delta.agregar(), &etiquetas_retiradas)?;
     ext::aplicar(&mut estructura, &cambios_ext)?;
     nodos::aplicar(&mut estructura, &cambios_nodos)?;
+    tipos::aplicar(&mut estructura, &cambios_tipos)?;
+    if cambios_tipos.conflicto {
+        return Err(ErrorCandidato::AddConflict {
+            clase: ClaseOperacion::Type,
+        });
+    }
     if cambios_nodos.conflicto_haslab {
         return Err(ErrorCandidato::AddConflict {
             clase: ClaseOperacion::HasLab,
@@ -332,7 +315,7 @@ fn aplicar_altas_con_indice(
                     .or_default()
                     .push(atomo);
             }
-            Atomo::Ext { .. } | Atomo::Parent { .. } => continue,
+            Atomo::Ext { .. } | Atomo::Parent { .. } | Atomo::Type { .. } => continue,
             Atomo::HasLab {
                 sujeto: Sujeto::Nodo(_),
                 ..
@@ -341,7 +324,6 @@ fn aplicar_altas_con_indice(
                 sujeto: Sujeto::Arista(id),
                 etiqueta,
             } => etiquetas.entry(id.clone()).or_default().push(etiqueta),
-            _ => unreachable!("las altas se validaron antes de agrupar"),
         }
     }
 
@@ -534,16 +516,6 @@ pub(super) fn identidad_arista(estructura: &Estructura, handle: AristaId) -> Opt
         destino: estructura.nodo(arista.destino)?.path.clone(),
         ordinal: arista.ordinal,
     })
-}
-
-fn clase(atomo: &Atomo) -> ClaseOperacion {
-    match atomo {
-        Atomo::Type { .. } => ClaseOperacion::Type,
-        Atomo::Edge { .. } => ClaseOperacion::Edge,
-        Atomo::Parent { .. } => ClaseOperacion::Parent,
-        Atomo::HasLab { .. } => ClaseOperacion::HasLab,
-        Atomo::Ext { .. } => ClaseOperacion::Ext,
-    }
 }
 
 #[cfg(test)]

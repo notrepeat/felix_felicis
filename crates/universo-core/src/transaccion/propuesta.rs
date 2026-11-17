@@ -192,7 +192,12 @@ fn requiere_detector(error: &ErrorCandidato) -> bool {
     error.codigo() == "add_conflict"
         && matches!(
             error.clase(),
-            Some(ClaseOperacion::HasLab | ClaseOperacion::Parent | ClaseOperacion::Edge)
+            Some(
+                ClaseOperacion::HasLab
+                    | ClaseOperacion::Parent
+                    | ClaseOperacion::Edge
+                    | ClaseOperacion::Type
+            )
         )
 }
 

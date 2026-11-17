@@ -856,6 +856,24 @@ impl Estructura {
         Ok(())
     }
 
+    /// Reemplaza el tipado total sin cambiar identidad, incidencia ni anexos.
+    pub(crate) fn reemplazar_tipo_nodo(
+        &mut self,
+        id: NodoId,
+        tipo: Sorte,
+    ) -> Result<(), ErrorEstructura> {
+        if !self.sortes_nodo_index.contains(&tipo) {
+            return Err(ErrorEstructura::SorteNodoDesconocido(
+                tipo.como_str().to_string(),
+            ));
+        }
+        self.nodos
+            .get_mut(id)
+            .ok_or(ErrorEstructura::NodoInexistente)?
+            .tipo = tipo;
+        Ok(())
+    }
+
     pub(crate) fn reemplazar_etiqueta_nodo(
         &mut self,
         id: NodoId,

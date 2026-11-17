@@ -211,28 +211,27 @@ fn proponer_agrega_conflictos_edge_haslab_y_parent_en_orden_redactado() {
 }
 
 #[test]
-fn cualquier_delta_type_es_tecnico_aunque_el_detector_vea_conflicto() {
+fn type_conflictivo_es_funcional_y_sujeto_ausente_es_tecnico() {
     let snapshot = base();
     let antes = snapshot.atomos();
-    let casos = [
-        Atomo::Type {
-            sujeto: p("n/PRIVATE_A"),
-            sorte: Sorte::nuevo("b"),
-        },
-        Atomo::Type {
-            sujeto: p("n/PRIVATE_NEW"),
-            sorte: Sorte::nuevo("PRIVATE_TYPE"),
-        },
-    ];
-
-    for atomo in casos {
-        let error = proponer(&snapshot, &delta([atomo]), &[]).unwrap_err();
-        assert_eq!(error.etapa(), EtapaErrorPropuesta::Candidato);
-        assert_eq!(error.codigo(), "unsupported_operation");
-        assert_eq!(error.clase(), Some(universo_core::ClaseOperacion::Type));
-        assert_redactado(&error, &["PRIVATE_A", "PRIVATE_NEW", "PRIVATE_TYPE"]);
-        assert_eq!(snapshot.atomos(), antes);
-    }
+    let conflict = delta([Atomo::Type {
+        sujeto: p("n/PRIVATE_A"),
+        sorte: Sorte::nuevo("b"),
+    }]);
+    assert!(matches!(
+        proponer(&snapshot, &conflict, &[]).unwrap(),
+        ResultadoPropuesta::RechazadaConflictos(_)
+    ));
+    let absent = delta([Atomo::Type {
+        sujeto: p("n/PRIVATE_NEW"),
+        sorte: Sorte::nuevo("PRIVATE_TYPE"),
+    }]);
+    let error = proponer(&snapshot, &absent, &[]).unwrap_err();
+    assert_eq!(error.etapa(), EtapaErrorPropuesta::Candidato);
+    assert_eq!(error.codigo(), "subject_not_found");
+    assert_eq!(error.clase(), Some(universo_core::ClaseOperacion::Type));
+    assert_redactado(&error, &["PRIVATE_A", "PRIVATE_NEW", "PRIVATE_TYPE"]);
+    assert_eq!(snapshot.atomos(), antes);
 }
 
 #[test]
