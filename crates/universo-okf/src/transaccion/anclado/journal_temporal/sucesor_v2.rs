@@ -20,7 +20,7 @@ impl JournalTemporalAnclado<'_> {
             recibo,
             || {},
             |lease, source| {
-                publicar::reemplazar_plataforma(
+                publicar::reemplazar_sucesor_plataforma(
                     &lease.parent,
                     &lease.nombre,
                     &lease.nombre_journal,

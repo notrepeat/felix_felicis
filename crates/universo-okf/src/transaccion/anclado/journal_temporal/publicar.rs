@@ -784,6 +784,24 @@ pub(super) fn reemplazar_plataforma(
     publicar_plataforma_modo(parent, fuente, canonico, handle_fuente, true)
 }
 
+pub(super) fn reemplazar_sucesor_plataforma(
+    parent: &File,
+    fuente: &OsStr,
+    canonico: &OsStr,
+    handle_fuente: &File,
+) -> Result<(), ErrorJournalAnclado> {
+    #[cfg(not(windows))]
+    {
+        reemplazar_plataforma(parent, fuente, canonico, handle_fuente)
+    }
+    #[cfg(windows)]
+    {
+        let _ = fuente;
+        let estado = renombrar_windows_estado(parent, canonico, handle_fuente, true, true)?;
+        mapear_estado_rename_windows(estado)
+    }
+}
+
 #[cfg(unix)]
 pub(super) fn abrir_temporal(parent: &File, nombre: &OsStr) -> Result<File, ErrorJournalAnclado> {
     abrir_entrada_relativa(parent, nombre, TipoEntradaAnclada::Archivo)
@@ -962,11 +980,38 @@ fn publicar_plataforma_modo(
     handle_fuente: &File,
     reemplazar: bool,
 ) -> Result<(), ErrorJournalAnclado> {
+    let estado = renombrar_windows_estado(parent, canonico, handle_fuente, reemplazar, false)?;
+    mapear_estado_rename_windows(estado)
+}
+
+#[cfg(windows)]
+fn mapear_estado_rename_windows(estado: i32) -> Result<(), ErrorJournalAnclado> {
+    if estado >= 0 {
+        return Ok(());
+    }
+    if estado == 0xC0000035u32 as i32 {
+        return Err(ErrorJournalAnclado::CanonicalConflict);
+    }
+    Err(ErrorJournalAnclado::Io)
+}
+
+// Preserve retained destination evidence when replacing a journal. Unsupported
+// FileRenameInformationEx fails closed; there is no close-handle or legacy retry.
+// https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information
+#[cfg(windows)]
+fn renombrar_windows_estado(
+    parent: &File,
+    canonico: &OsStr,
+    handle_fuente: &File,
+    reemplazar: bool,
+    posix: bool,
+) -> Result<i32, ErrorJournalAnclado> {
     use std::mem::{offset_of, size_of};
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Wdk::Storage::FileSystem::{
-        FILE_RENAME_INFORMATION, FileRenameInformation, NtSetInformationFile,
+        FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS, FILE_RENAME_REPLACE_IF_EXISTS,
+        FileRenameInformation, FileRenameInformationEx, NtSetInformationFile,
     };
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
@@ -986,7 +1031,12 @@ fn publicar_plataforma_modo(
     // SAFETY: storage is usize-aligned and large enough for the fixed header
     // and UTF-16 component. No terminating NUL is part of FileNameLength.
     unsafe {
-        (*informacion).Anonymous.ReplaceIfExists = reemplazar;
+        if posix {
+            (*informacion).Anonymous.Flags =
+                FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS;
+        } else {
+            (*informacion).Anonymous.ReplaceIfExists = reemplazar;
+        }
         (*informacion).RootDirectory = parent.as_raw_handle() as HANDLE;
         (*informacion).FileNameLength = nombre_bytes_u32;
         std::ptr::copy_nonoverlapping(
@@ -1004,16 +1054,14 @@ fn publicar_plataforma_modo(
             &mut estado_io,
             informacion.cast(),
             u32::try_from(byte_len).map_err(|_| ErrorJournalAnclado::Io)?,
-            FileRenameInformation,
+            if posix {
+                FileRenameInformationEx
+            } else {
+                FileRenameInformation
+            },
         )
     };
-    if estado >= 0 {
-        return Ok(());
-    }
-    if estado == 0xC0000035u32 as i32 {
-        return Err(ErrorJournalAnclado::CanonicalConflict);
-    }
-    Err(ErrorJournalAnclado::Io)
+    Ok(estado)
 }
 
 #[cfg(windows)]

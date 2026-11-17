@@ -67,7 +67,7 @@ fn resultado_syscall_no_suplanta_observaciones() {
                 || {},
                 |lease, source| {
                     if mutate {
-                        super::super::reemplazar_plataforma(
+                        super::super::reemplazar_sucesor_plataforma(
                             &lease.parent,
                             &lease.nombre,
                             &lease.nombre_journal,
@@ -153,7 +153,7 @@ fn temporal_reaparecido_tras_replace_impide_confirmar_y_se_preserva() {
             &recibo,
             || {},
             |lease, source| {
-                super::super::reemplazar_plataforma(
+                super::super::reemplazar_sucesor_plataforma(
                     &lease.parent,
                     &lease.nombre,
                     &lease.nombre_journal,
@@ -195,4 +195,77 @@ fn temporal_desaparecido_sin_replace_no_confirma_sucesor() {
         .unwrap();
     assert_eq!(result, EstadoPublicacionSucesorV2::Indeterminada);
     assert_eq!(fs::read(nombre_journal(&root)).unwrap(), old_bytes);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_compara_rename_legacy_y_posix_con_evidencia_retenida() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = crear_root(dir.path());
+    let mut lock = LockEscritura::adquirir(&root).unwrap();
+    let (_, old_bytes, old_id, original) = support::observar_v2_en_fase(
+        &root,
+        &mut lock,
+        "0123456789abcdef0123456789abcdef",
+        JournalState::Prepared,
+    );
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let lease = owner.journal_temporal_estricto().unwrap();
+    let recibo = lease.preparar_sucesor_temporal_v2(&original).unwrap();
+    let resultado = lease
+        .publicar_sucesor_v2_con_prueba(
+            &recibo,
+            || {},
+            |lease, source| {
+                let legacy = super::super::renombrar_windows_estado(
+                    &lease.parent,
+                    &lease.nombre_journal,
+                    source,
+                    true,
+                    false,
+                )
+                .unwrap();
+                std::io::Write::write_fmt(
+                    &mut std::io::stderr(),
+                    format_args!("retained journal legacy NTSTATUS={:#010x}\n", legacy as u32),
+                )
+                .unwrap();
+                assert!(
+                    legacy < 0,
+                    "legacy unexpectedly replaced retained destination"
+                );
+                assert_eq!(fs::read(nombre_journal(&root)).unwrap(), old_bytes);
+                let unchanged = lease.observar_versionado().unwrap().unwrap();
+                assert_eq!(unchanged.identidad(), old_id);
+                assert_eq!(unchanged.journal(), original.journal());
+                let tmp = lease
+                    .observar_temporal_versionado(&recibo.candidato)
+                    .unwrap();
+                assert_eq!(tmp.identidad(), recibo.identidad_temporal);
+                drop(tmp);
+                let posix = super::super::renombrar_windows_estado(
+                    &lease.parent,
+                    &lease.nombre_journal,
+                    source,
+                    true,
+                    true,
+                )
+                .unwrap();
+                std::io::Write::write_fmt(
+                    &mut std::io::stderr(),
+                    format_args!("retained journal POSIX NTSTATUS={:#010x}\n", posix as u32),
+                )
+                .unwrap();
+                assert!(
+                    posix >= 0,
+                    "POSIX replacement failed: {:#010x}",
+                    posix as u32
+                );
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(resultado, EstadoPublicacionSucesorV2::Confirmada);
+    assert_eq!(original.identidad(), old_id);
+    assert!(!nombre_temporal(dir.path()).exists());
 }
