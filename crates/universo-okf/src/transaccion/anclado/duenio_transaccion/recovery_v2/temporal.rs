@@ -87,7 +87,7 @@ impl DuenioTransaccionAnclado<'_> {
                 .observar_sucesor_existente_v2(&original)
                 .map_err(|_| ErrorRecoveryV2)?;
             lease
-                .descartar_sucesor_v2(&recibo)
+                .descartar_sucesor_v2(recibo)
                 .map_err(|_| ErrorRecoveryV2)?;
         }
         let canonico = self

@@ -39,7 +39,7 @@ impl JournalTemporalAnclado<'_> {
     /// La identidad TMP tras reabrir es observada, no autenticación de su origen.
     pub(in crate::transaccion::anclado) fn descartar_sucesor_v2(
         &self,
-        recibo: &ReciboTemporalSucesorJournalV2<'_>,
+        recibo: ReciboTemporalSucesorJournalV2<'_>,
     ) -> Result<(), ErrorJournalAnclado> {
         if self.raiz_remota {
             return Err(ErrorJournalAnclado::RemoteUnsupported);
@@ -54,7 +54,10 @@ impl JournalTemporalAnclado<'_> {
             .map_err(ErrorJournalAnclado::InvalidJournalV2)?;
         self.validar_canonico_sucesor_v2(recibo.original.identidad(), old)?;
         let mut source = abrir_fuente(&self.parent, &self.nombre)?;
-        self.verificar_source_sucesor(&mut source, recibo)?;
+        self.verificar_source_sucesor(&mut source, &recibo)?;
+        // El handle final ya acredita ID y bytes. Cerrar el lector TMP permite
+        // confirmar el unlink Windows; original/candidato/ID siguen retenidos.
+        drop(recibo.temporal);
         self.validar_parent()?;
         let _outcome = super::super::duenio_transaccion::intent_retiro::retirar_nombre_plataforma(
             &self.parent,
