@@ -1,0 +1,77 @@
+{
+  "schema": "felix-mcp-demo-v1",
+  "agent": "deterministic-synthetic",
+  "responses": [
+    {
+      "atoms": [
+        "HasLab(n/item, \"Item\")",
+        "Type(n/item, a)"
+      ],
+      "invariant_selection": "all_conservative",
+      "invariants": [
+        {
+          "column": 1,
+          "formula": "(Type @n/item b)",
+          "line": 1,
+          "source_index": 0
+        }
+      ],
+      "persisted": false,
+      "schema": "felix-mcp-v1",
+      "status": "ok",
+      "summary": {
+        "atoms": 2,
+        "invariants": 1,
+        "nodes": 1
+      },
+      "tool": "context",
+      "values_included": true
+    },
+    {
+      "diagnostics": [
+        {
+          "class": "Type",
+          "count": 1
+        }
+      ],
+      "persisted": false,
+      "provenance": [],
+      "schema": "felix-mcp-v1",
+      "status": "reject",
+      "summary": {
+        "conflicts": 1,
+        "failed_invariants": 0
+      },
+      "tool": "propose"
+    },
+    {
+      "diagnostics": [
+        {
+          "class": "Type",
+          "count": 1
+        }
+      ],
+      "persisted": false,
+      "provenance": [],
+      "schema": "felix-mcp-v1",
+      "status": "reject",
+      "summary": {
+        "conflicts": 1,
+        "failed_invariants": 0
+      },
+      "tool": "why"
+    },
+    {
+      "diagnostics": [],
+      "persisted": false,
+      "provenance": [],
+      "schema": "felix-mcp-v1",
+      "status": "admit",
+      "summary": {
+        "conflicts": 0,
+        "failed_invariants": 0
+      },
+      "tool": "propose"
+    }
+  ]
+}

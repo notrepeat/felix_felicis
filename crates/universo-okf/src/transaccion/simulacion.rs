@@ -45,6 +45,45 @@ impl fmt::Display for ErrorSimulacion {
 }
 impl std::error::Error for ErrorSimulacion {}
 
+/// Vista inmutable para adaptadores de consulta. No concede autoridad de escritura.
+/// La captura conserva las mismas cuotas y política raw de la simulación CLI.
+pub struct VistaSimulacion(super::captura::Snapshot);
+
+impl VistaSimulacion {
+    pub fn capturar(
+        raiz: &Path,
+        manifiesto: &Path,
+        invariantes: &Path,
+    ) -> Result<Self, ErrorSimulacion> {
+        capturar_snapshot(
+            raiz,
+            manifiesto,
+            invariantes,
+            VERSION_MOTOR_V1,
+            POLICY_ID_V1,
+        )
+        .map(Self)
+        .map_err(|error| ErrorSimulacion {
+            codigo: error.codigo(),
+        })
+    }
+
+    pub fn estructura(&self) -> &universo_core::Estructura {
+        self.0.estructura()
+    }
+
+    pub fn invariantes(&self) -> &[universo_core::SentenciaFuente] {
+        self.0.fuentes_invariantes()
+    }
+
+    pub fn proponer(
+        &self,
+        delta: &universo_core::Delta,
+    ) -> Result<ResultadoPropuesta, universo_core::ErrorPropuesta> {
+        proponer(self.estructura(), delta, self.invariantes())
+    }
+}
+
 /// Captura bytes inmutables, propone y descarta el candidato sin publicar.
 /// La captura por ruta no promete una instantánea frente a escritores externos.
 pub fn simular(
