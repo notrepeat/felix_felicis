@@ -168,6 +168,9 @@ ve. Las 6 dejaron un estado inválido. `verificar_dependientes`, cuya respuesta
 correcta es no cambiar nada, se acertó en las dos repeticiones. **Se cumple el
 criterio para seguir al estudio 9c.**
 
+**Estudio 9c.** Corrido el mismo día, con las 96 filas del plan y sin fallos
+técnicos. Resultados e interpretación en el [informe](four_arms_report.md).
+
 ## Medidas
 
 - **Primarias**: sobre las filas sin fallo técnico, `final_invalid_state` (el

@@ -1,0 +1,65 @@
+{
+  "schema": "felix-four-arms-v2-summary",
+  "arms": {
+    "A_baseline": {
+      "runs": 24,
+      "technical_failures": 0,
+      "scored_runs": 24,
+      "final_success": 14,
+      "final_invalid_state": 9,
+      "first_delta_success": 14,
+      "repaired": 0,
+      "escalated": 0,
+      "rounds": 24,
+      "mcp_calls": 0,
+      "final_success_all_rows": 14,
+      "final_invalid_state_worst_case": 9,
+      "technical_failure_causes": {}
+    },
+    "B_felix_opcional": {
+      "runs": 24,
+      "technical_failures": 0,
+      "scored_runs": 24,
+      "final_success": 12,
+      "final_invalid_state": 9,
+      "first_delta_success": 12,
+      "repaired": 0,
+      "escalated": 0,
+      "rounds": 24,
+      "mcp_calls": 0,
+      "final_success_all_rows": 12,
+      "final_invalid_state_worst_case": 9,
+      "technical_failure_causes": {}
+    },
+    "C_obligatorio": {
+      "runs": 24,
+      "technical_failures": 0,
+      "scored_runs": 24,
+      "final_success": 21,
+      "final_invalid_state": 0,
+      "first_delta_success": 12,
+      "repaired": 9,
+      "escalated": 0,
+      "rounds": 39,
+      "mcp_calls": 0,
+      "final_success_all_rows": 21,
+      "final_invalid_state_worst_case": 0,
+      "technical_failure_causes": {}
+    },
+    "D_revision": {
+      "runs": 24,
+      "technical_failures": 0,
+      "scored_runs": 24,
+      "final_success": 12,
+      "final_invalid_state": 9,
+      "first_delta_success": 13,
+      "repaired": 0,
+      "escalated": 0,
+      "rounds": 49,
+      "mcp_calls": 0,
+      "final_success_all_rows": 12,
+      "final_invalid_state_worst_case": 9,
+      "technical_failure_causes": {}
+    }
+  }
+}

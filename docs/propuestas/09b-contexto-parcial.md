@@ -1,6 +1,6 @@
 # Propuesta 09b — Estudio con contexto parcial
 
-Estado: **aprobada; fase 1 hecha** (2026-11-18): tareas v3, regla de contexto, testigo localizado en Felix (`propose --witness`) y runner `felix-four-arms-v2`. Calibración y estudio pendientes de decisión. Aprobada por Romeo tal como se recomendó: radio 1, testigo localizado y 96 corridas con Sonnet 5.5. Extiende la
+Estado: **aprobada; fase 1 hecha** (2026-11-18): tareas v3, regla de contexto, testigo localizado en Felix (`propose --witness`) y runner `felix-four-arms-v2`. Calibración (10 de 16, cumple el criterio) y estudio hechos: ver el [informe](../../evaluation/four_arms_report.md). Aprobada por Romeo tal como se recomendó: radio 1, testigo localizado y 96 corridas con Sonnet 5.5. Extiende la
 [propuesta 09](09-estudio-cuatro-brazos.md); el protocolo
 [`felix-four-arms-v1`](../../evaluation/four_arms_protocol.md) y sus
 calibraciones quedan como están.

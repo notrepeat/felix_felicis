@@ -1,0 +1,11 @@
+{
+  "schema": "felix-four-arms-v2-run",
+  "fase": "estudio",
+  "agente": "claude",
+  "plan_sha256": "7d2e8f1fcd24a8413976cfde7e675bcce0cd2b32567d10ff0e73644b83fb57fc",
+  "git_commit": "fc45a467d9f697bd6a41e5a2f6af4607f5420dd5",
+  "git_dirty": false,
+  "universo_sha256": "99406d657ee6596c58bb3a1ced89d72ce6f16d17a44707446c039dc4c6bf6ae9",
+  "universo_mcp_sha256": "f14db9dc40f3912621479bff7c07ee8a474381a7bde84926979bdc15733f19b7",
+  "agent_cli_version": "2.1.327 (Claude Code)"
+}

@@ -51,10 +51,10 @@ compuerta), y no hay mediciones reales con él.
 |---|---|---|---|
 | E1 | ~~Corregir proxy v2 (bytes, latencia, llamadas en vuelo, robustez de ids) con tests que fallen ante esos defectos~~ **Hecho** (tabla de arriba) | S | No |
 | E2 | Pruebas de `evaluation/` y de `tools/` en CI. **Configurado** en `.github/workflows/ci.yml` para Linux y Windows; en Linux pasan localmente. En Windows aún no se ha ejecutado: dos tests de `run_paired.bounded_capture` se saltan allí porque usan `os.killpg` (POSIX, archivo congelado), y `.gitattributes` fija LF en los cinco archivos con hash del piloto 173 | S | No |
-| E3 | **Preparado** (2026-11-18, [propuesta 09](../propuestas/09-estudio-cuatro-brazos.md), [protocolo](../../evaluation/four_arms_protocol.md); cubre E3–E6): runner `run_four_arms.py` con proxy v2, cuatro brazos, tareas nuevas, oráculo independiente y plan congelado; sin corridas reales. Protocolo v2 con runner que monte el proxy v2 | S | **Sí**: forma parte del estudio nuevo |
-| E4 | Brazos «verificación obligatoria» y «control de revisión sin veredicto» | M | **Sí** |
-| E5 | Tareas nuevas con margen de mejora (dependencias largas, contradicciones reales del baseline), oracle independiente, criterio de detención prerregistrado | M | **Sí** |
-| E6 | Medir también la seguridad del flujo (cambios inválidos aceptados, escrituras fuera de Felix), no solo el acierto del modelo | M | **Sí**, junto con E4 |
+| E3 | **Hecho** (2026-11-18, [informe](../../evaluation/four_arms_report.md)): runner `run_four_arms.py` con proxy v2 y protocolo `felix-four-arms-v2` | S | Decidido |
+| E4 | **Hecho**: brazos «verificación obligatoria» y «control de revisión sin veredicto»; el veredicto con testigo repara 9 de 9 cascadas ocultas y la revisión neutral ninguna | M | Decidido |
+| E5 | **Hecho**: tareas v3 con contexto parcial; con información completa (tareas v1 y v2) el baseline acertó 16 de 16 y no había margen | M | Decidido |
+| E6 | **Hecho**: estados inválidos finales 0 de 24 con verificación obligatoria y 9 de 24 en los otros brazos | M | Decidido |
 
 La conclusión de fase 07 sigue vigente: no avanzar a AGM ni recuperación
 avanzada con esta evidencia. E1 y E2 son preparación que no cruza compuertas.
