@@ -19,8 +19,9 @@ Implementado:
 - AST y parser de invariantes FO bisortidos;
 - validación estática, expansión de esquemas y evaluador de referencia en la API de `universo-core`;
 - `check --explain decide|enumerate` opt-in, con explicaciones redactadas en texto o JSON v2; el resultado baseline conserva JSON v1;
-- CLI (`atomos`, `validate`, `check`, `propose`, `status`, `recover`, `guard`, `seal`, `init`, `log`; `verificar` es alias compatible de `validate`);
+- CLI (`atomos`, `validate`, `check`, `propose`, `status`, `recover`, `guard`, `seal`, `init`, `log`, `show`, `delta`, `search`; `verificar` es alias compatible de `validate`);
 - `universo delta <raiz> --desde <borrador>` calcula el delta que lleva el estado admitido a un borrador editado;
+- `universo search <raiz> --manifiesto <m> <términos...>` busca las notas donde cada término empieza alguna palabra (título, tipo, atributos, otros campos o cuerpo), sin distinguir mayúsculas ni tildes, ordenadas por un puntaje que pesa más el título; es búsqueda por palabras, no semántica, y su salida incluye datos del bundle;
 - `universo init <dir>` crea un repositorio de conocimiento mínimo, válido y sellado (no es atómico: si falla a mitad, borra el directorio y repite); `propose --apply --author <a> --reason <r>` registra la procedencia y el delta aplicado; `universo log` lista los cambios y `universo show <raiz> <n>` muestra los hechos que agregó y retiró uno de ellos (su salida incluye datos del bundle);
 - [guardia](docs/guardia.md) que detecta cambios hechos fuera de Felix (sello del último estado admitido y hook de pre-commit);
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);

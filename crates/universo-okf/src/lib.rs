@@ -1,6 +1,7 @@
 //! Adaptador bundle OKF ↔ estructura del motor.
 
 pub mod bundle;
+pub mod busqueda;
 pub mod delta;
 pub mod diferencia;
 pub mod documento;

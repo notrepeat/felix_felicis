@@ -154,7 +154,7 @@ pub(super) fn parsear_show(args: &[String]) -> Result<SolicitudShow, String> {
 
 /// Texto seguro para un terminal: los caracteres de control (salvo el salto de
 /// línea), invisibles o bidi se muestran como `\u{..}` en vez de enviarse crudos.
-fn visible(texto: &str) -> String {
+pub(super) fn visible(texto: &str) -> String {
     texto
         .chars()
         .map(|c| {
