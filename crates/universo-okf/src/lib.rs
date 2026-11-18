@@ -9,7 +9,10 @@ pub mod serializar;
 pub mod transaccion;
 
 pub use bundle::{cargar_bundle, parsear_bundle};
-pub use delta::{ErrorDeltaJson, LadoDelta, parsear_delta_json_v1, serializar_delta_json_v1};
+pub use delta::{
+    ErrorDeltaJson, LadoDelta, parsear_delta_json, parsear_delta_json_v1, parsear_delta_json_v2,
+    serializar_delta_json_v1, serializar_delta_json_v2,
+};
 pub use documento::{Documento, EntradaCruda, parsear_documento};
 pub use errores::{
     ErrorBundle, ErrorDocumento, ErrorEntrada, ErrorEscritura, ErrorManifiestoArchivo, Regla,

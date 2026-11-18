@@ -14,6 +14,8 @@ pub enum ClaseOperacion {
     Parent,
     HasLab,
     Ext,
+    /// Creación de una nota (nodo) nueva.
+    Nota,
 }
 
 impl std::fmt::Display for ClaseOperacion {
@@ -24,6 +26,7 @@ impl std::fmt::Display for ClaseOperacion {
             Self::Parent => "Parent",
             Self::HasLab => "HasLab",
             Self::Ext => "Ext",
+            Self::Nota => "Nota",
         };
         f.write_str(nombre)
     }
@@ -118,6 +121,15 @@ impl Candidato {
 /// Construye un candidato aislado con retiros y altas `Edge`, `HasLab`,
 /// `Parent`, `Type` de nodos existentes y `Ext`.
 pub fn construir_candidato(
+    snapshot: &Estructura,
+    delta: &Delta,
+) -> Result<Candidato, ErrorCandidato> {
+    let base = super::notas::base_con_notas(snapshot, delta)?;
+    construir_sobre(&base, delta)
+}
+
+/// Construye el candidato sobre una base que ya contiene las notas nuevas.
+pub(super) fn construir_sobre(
     snapshot: &Estructura,
     delta: &Delta,
 ) -> Result<Candidato, ErrorCandidato> {

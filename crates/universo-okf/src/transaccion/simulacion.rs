@@ -1,7 +1,7 @@
 //! Fachada de propuesta de solo lectura. No adquiere locks ni ejecuta recovery.
 use super::replay::semantica_archivada::{POLICY_ID_V1, VERSION_MOTOR_V1};
 use super::{captura::capturar_snapshot, snapshot::SnapshotToken};
-use crate::parsear_delta_json_v1;
+use crate::parsear_delta_json;
 use std::{fmt, path::Path};
 use universo_core::{
     ErrorVeredicto, ModoExplicacion, ResultadoPropuesta, explicar_propuesta, proponer,
@@ -119,7 +119,7 @@ fn simular_con(
             codigo: "delta_resource_limit",
         });
     }
-    let delta = parsear_delta_json_v1(delta_json).map_err(|_| ErrorSimulacion {
+    let delta = parsear_delta_json(delta_json).map_err(|_| ErrorSimulacion {
         codigo: "delta_invalid",
     })?;
     let snapshot = capturar_snapshot(

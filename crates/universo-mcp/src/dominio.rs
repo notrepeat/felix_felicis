@@ -2,7 +2,7 @@
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::PathBuf};
 use universo_core::{Atomo, BundlePath, Delta, ResultadoPropuesta, Sujeto};
-use universo_okf::{parsear_delta_json_v1, transaccion::simulacion::VistaSimulacion};
+use universo_okf::{parsear_delta_json, transaccion::simulacion::VistaSimulacion};
 
 pub struct ServerConfig {
     pub root: PathBuf,
@@ -98,9 +98,9 @@ pub fn ejecutar(nombre: &str, args: Value, config: &ServerConfig) -> Result<Valu
     };
     let delta = if context.is_none() {
         match object.get("delta") {
-            Some(value) if value.is_object() => Some(
-                parsear_delta_json_v1(&value.to_string()).map_err(|_| dominio("delta_invalid"))?,
-            ),
+            Some(value) if value.is_object() => {
+                Some(parsear_delta_json(&value.to_string()).map_err(|_| dominio("delta_invalid"))?)
+            }
             Some(_) => return Err(protocolo()),
             None if nombre == "propose" => return Err(protocolo()),
             None => Some(Delta::nuevo(vec![], vec![]).map_err(|_| dominio("delta_invalid"))?),

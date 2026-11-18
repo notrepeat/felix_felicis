@@ -144,3 +144,20 @@ fn recorre_cargas_de_1_100_y_10000_operaciones() {
         assert!(bytes_parseados > cantidad, "cantidad={cantidad}");
     }
 }
+
+#[test]
+fn v1_no_serializa_un_delta_que_crea_notas() {
+    use universo_core::{BundlePath, Delta, Etiqueta, NotaNueva, Sorte};
+    let delta = Delta::default()
+        .con_notas([NotaNueva {
+            path: BundlePath::nuevo("n/x").unwrap(),
+            tipo: Sorte::nuevo("a"),
+            etiqueta: Etiqueta::nuevo("X"),
+            cuerpo: String::new(),
+        }])
+        .unwrap();
+    assert!(matches!(
+        universo_okf::serializar_delta_json_v1(&delta),
+        Err(universo_okf::ErrorDeltaJson::NotasNoRepresentables)
+    ));
+}

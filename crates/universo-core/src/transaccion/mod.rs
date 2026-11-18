@@ -3,6 +3,7 @@ mod candidato;
 mod conflictos;
 mod ext;
 mod nodos;
+mod notas;
 mod propuesta;
 mod tipos;
 

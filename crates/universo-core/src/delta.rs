@@ -1,4 +1,14 @@
-use crate::Atomo;
+use crate::{Atomo, BundlePath, Etiqueta, Sorte};
+
+/// Nota (nodo) que un delta crea: identidad, tipo, etiqueta (título) y cuerpo
+/// Markdown opcional, que queda como anexo opaco fuera de la garantía formal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotaNueva {
+    pub path: BundlePath,
+    pub tipo: Sorte,
+    pub etiqueta: Etiqueta,
+    pub cuerpo: String,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LadoDelta {
@@ -23,6 +33,7 @@ impl std::fmt::Display for LadoDelta {
 pub struct Delta {
     add: Vec<Atomo>,
     remove: Vec<Atomo>,
+    crear: Vec<NotaNueva>,
 }
 
 /// Error al construir un delta transaccional.
@@ -32,6 +43,8 @@ pub enum ErrorDelta {
     AtomoNoRepresentable { lado: LadoDelta, indice: usize },
     /// Un mismo átomo canónico aparece en ambos lados del parche.
     Solapamiento,
+    /// Dos notas nuevas comparten path (sin distinguir mayúsculas).
+    NotaDuplicada { indice: usize },
 }
 
 impl Delta {
@@ -47,7 +60,38 @@ impl Delta {
             return Err(ErrorDelta::Solapamiento);
         }
 
-        Ok(Self { add, remove })
+        Ok(Self {
+            add,
+            remove,
+            crear: Vec::new(),
+        })
+    }
+
+    /// Añade notas nuevas, ordenadas por path. Rechaza paths repetidos sin
+    /// distinguir mayúsculas (como el bundle en disco).
+    pub fn con_notas(
+        mut self,
+        notas: impl IntoIterator<Item = NotaNueva>,
+    ) -> Result<Self, ErrorDelta> {
+        let mut vistas: std::collections::HashSet<_> = self
+            .crear
+            .iter()
+            .map(|nota| nota.path.clave_case())
+            .collect();
+        for (indice, nota) in notas.into_iter().enumerate() {
+            if !vistas.insert(nota.path.clave_case()) {
+                return Err(ErrorDelta::NotaDuplicada { indice });
+            }
+            self.crear.push(nota);
+        }
+        self.crear
+            .sort_by(|a, b| a.path.como_str().cmp(b.path.como_str()));
+        Ok(self)
+    }
+
+    /// Notas que el delta crea, ordenadas por path.
+    pub fn crear(&self) -> &[NotaNueva] {
+        &self.crear
     }
 
     /// Átomos a añadir, ordenados y sin duplicados.
@@ -83,6 +127,7 @@ impl std::fmt::Debug for Delta {
         f.debug_struct("Delta")
             .field("add_count", &self.add.len())
             .field("remove_count", &self.remove.len())
+            .field("create_count", &self.crear.len())
             .finish()
     }
 }
@@ -95,6 +140,9 @@ impl std::fmt::Display for ErrorDelta {
                 "el átomo en {lado}[{indice}] no tiene representación canónica reversible"
             ),
             ErrorDelta::Solapamiento => write!(f, "add y remove se solapan"),
+            ErrorDelta::NotaDuplicada { indice } => {
+                write!(f, "la nota nueva {indice} repite un path")
+            }
         }
     }
 }
@@ -110,6 +158,10 @@ impl std::fmt::Debug for ErrorDelta {
                 .field("indice", indice)
                 .finish(),
             ErrorDelta::Solapamiento => f.write_str("Solapamiento"),
+            ErrorDelta::NotaDuplicada { indice } => f
+                .debug_struct("NotaDuplicada")
+                .field("indice", indice)
+                .finish(),
         }
     }
 }

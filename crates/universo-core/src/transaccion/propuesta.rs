@@ -8,8 +8,8 @@ use crate::{
 };
 
 use super::{
-    Candidato, ClaseOperacion, ErrorCandidato, ResultadoConflictos, construir_candidato,
-    detectar_conflictos_funcionales,
+    Candidato, ClaseOperacion, ErrorCandidato, ResultadoConflictos, candidato::construir_sobre,
+    conflictos::detectar_sobre,
 };
 use crate::Delta;
 
@@ -145,12 +145,15 @@ fn proponer_con_presupuesto_evaluacion(
     invariantes: &[SentenciaFuente],
     limite_evaluacion: u64,
 ) -> Result<ResultadoPropuesta, ErrorPropuesta> {
-    let candidato = match construir_candidato(snapshot, delta) {
+    // Las notas nuevas forman parte de la base sobre la que se resuelve todo
+    // el delta (conflictos y candidato); un error al crearlas es técnico.
+    let base = super::notas::base_con_notas(snapshot, delta).map_err(error_candidato)?;
+    let snapshot: &Estructura = &base;
+    let candidato = match construir_sobre(snapshot, delta) {
         Ok(candidato) => candidato,
         Err(error) => {
             if requiere_detector(&error) {
-                let conflictos =
-                    detectar_conflictos_funcionales(snapshot, delta).map_err(error_candidato)?;
+                let conflictos = detectar_sobre(snapshot, delta).map_err(error_candidato)?;
                 if conflictos.hay_conflictos() {
                     return Ok(ResultadoPropuesta::RechazadaConflictos(conflictos));
                 }
@@ -159,7 +162,7 @@ fn proponer_con_presupuesto_evaluacion(
         }
     };
 
-    let conflictos = detectar_conflictos_funcionales(snapshot, delta).map_err(error_candidato)?;
+    let conflictos = detectar_sobre(snapshot, delta).map_err(error_candidato)?;
     if conflictos.hay_conflictos() {
         return Ok(ResultadoPropuesta::RechazadaConflictos(conflictos));
     }
@@ -201,11 +204,10 @@ pub fn explicar_propuesta(
     limite: u64,
 ) -> Option<Result<crate::veredicto::ResultadoExplicacionesMedido, crate::veredicto::ErrorVeredicto>>
 {
-    let candidato = construir_candidato(snapshot, delta).ok()?;
-    if detectar_conflictos_funcionales(snapshot, delta)
-        .ok()?
-        .hay_conflictos()
-    {
+    let base = super::notas::base_con_notas(snapshot, delta).ok()?;
+    let snapshot: &Estructura = &base;
+    let candidato = construir_sobre(snapshot, delta).ok()?;
+    if detectar_sobre(snapshot, delta).ok()?.hay_conflictos() {
         return None;
     }
     let expansion = expandir_sentencias_fuente(

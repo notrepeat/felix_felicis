@@ -110,6 +110,15 @@ pub fn detectar_conflictos_funcionales(
     snapshot: &Estructura,
     delta: &Delta,
 ) -> Result<ResultadoConflictos, ErrorCandidato> {
+    let base = super::notas::base_con_notas(snapshot, delta)?;
+    detectar_sobre(&base, delta)
+}
+
+/// Detecta conflictos sobre una base que ya contiene las notas nuevas.
+pub(super) fn detectar_sobre(
+    snapshot: &Estructura,
+    delta: &Delta,
+) -> Result<ResultadoConflictos, ErrorCandidato> {
     let mut tipos = HashMap::<BundlePath, HashSet<Sorte>>::new();
     let mut etiquetas = HashMap::<Sujeto, HashSet<Etiqueta>>::new();
     let mut padres = HashMap::<BundlePath, HashSet<BundlePath>>::new();
