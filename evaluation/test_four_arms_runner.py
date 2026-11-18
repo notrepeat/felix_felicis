@@ -52,40 +52,53 @@ class PlanTests(unittest.TestCase):
 
 
 class FalloDelProveedorTests(unittest.TestCase):
-    def test_limite_de_uso_y_turno_fallido_son_errores_de_entorno(self):
-        aviso = {"type": "item.completed", "item": {"type": "error", "message": "Under-development features enabled"}}
-        limite = [aviso, {"type": "turn.started"},
-                  {"type": "error", "message": "You’ve hit your usage limit. Visit https://example.invalid"},
-                  {"type": "turn.failed", "error": {"message": "You’ve hit your usage limit."}}]
-        self.assertEqual(runner.fallo_del_proveedor(limite), "provider_usage_limit")
-        self.assertEqual(runner.fallo_del_proveedor([{"type": "turn.failed", "error": {"message": "boom"}}]),
+    def test_limite_de_uso_y_error_de_api_son_errores_de_entorno(self):
+        rechazado = {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}
+        self.assertEqual(runner.fallo_del_proveedor([rechazado]), "provider_usage_limit")
+        limite = {"type": "result", "is_error": True, "subtype": "success", "result": "Claude AI usage limit reached"}
+        self.assertEqual(runner.fallo_del_proveedor([limite]), "provider_usage_limit")
+        self.assertEqual(runner.fallo_del_proveedor([{"type": "result", "is_error": True, "result": "API Error: 500"}]),
                          "provider_turn_failed")
-        # Un aviso de la CLI y un turno completo no son fallos del proveedor.
-        normal = [aviso, {"type": "turn.started"}, {"type": "turn.completed", "usage": {"input_tokens": 1}}]
+        # Un turno normal, con la cuota en uso pero permitida, no es un fallo.
+        permitido = {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}}
+        normal = [permitido, {"type": "result", "is_error": False, "structured_output": runner.NULO}]
         self.assertIsNone(runner.fallo_del_proveedor(normal))
 
+    def test_interpretar_el_stream_de_claude(self):
+        delta = {"schema": "felix-delta-v1", "add": ["Estado(n/d1, vigente)"], "remove": []}
+        events = [{"type": "system", "subtype": "init"},
+                  {"type": "assistant", "message": {"content": [
+                      {"type": "tool_use", "name": "mcp__felix__check", "input": {}},
+                      {"type": "text", "text": "pienso"}]}},
+                  {"type": "assistant", "message": {"content": [
+                      {"type": "tool_use", "name": "StructuredOutput", "input": delta}]}},
+                  {"type": "result", "is_error": False}]
+        self.assertEqual(runner.interpretar_claude(events), (delta, ["mcp__felix__check", "StructuredOutput"]))
+        self.assertEqual(runner.interpretar_claude([{"type": "result", "structured_output": delta}])[0], delta)
+        self.assertEqual(runner.interpretar_claude([{"type": "result", "result": "texto"}]), (None, []))
 
-class ComandoCodexTests(unittest.TestCase):
-    def test_comando_aislado_y_mcp_solo_en_el_brazo_b(self):
-        import tempfile
-        from unittest import mock
 
-        with tempfile.TemporaryDirectory() as home:
-            (Path(home) / ".codex").mkdir()
-            (Path(home) / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
-            with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
-                agente = runner.AgenteCodex(home, home, "gpt-6-astra")
-                sin = agente.command(Path(home), Path(home), False)
-                con = agente.command(Path(home), Path(home), True)
+class ComandoClaudeTests(unittest.TestCase):
+    def test_comando_aislado_sin_ajustes_del_usuario_y_mcp_solo_en_b(self):
+        agente = runner.AgenteClaude("/opt/x/claude", "/opt/x/universo-mcp", "claude-sonnet-5-5")
+        sin = agente.command(Path("/w"), Path("/l"), Path("/h"), False)
+        con = agente.command(Path("/w"), Path("/l"), Path("/h"), True)
         for cmd in (sin, con):
             self.assertEqual(cmd[0], "bwrap")
             self.assertIn("--clearenv", cmd)
-            self.assertEqual(cmd[cmd.index("--sandbox") + 1], "read-only")
-            self.assertEqual(cmd[cmd.index("--model") + 1], "gpt-6-astra")
+            self.assertEqual(cmd[cmd.index("--model") + 1], "claude-sonnet-5-5")
+            self.assertEqual(cmd[cmd.index("--tools") + 1], "")
+            self.assertEqual(cmd[cmd.index("--setting-sources") + 1], "")
+            self.assertIn("--strict-mcp-config", cmd)
+            self.assertEqual(cmd[cmd.index("--json-schema") + 1], json.dumps(runner.SCHEMA))
+            self.assertEqual(cmd[cmd.index("HOME") + 1], "/agente-home")
             self.assertNotIn("oracle.json", " ".join(cmd))
-            self.assertEqual(cmd[-1], "-")
-        self.assertFalse(any("mcp_servers" in parte for parte in sin))
-        self.assertIn('mcp_servers.felix.args=["/tools/mcp_proxy_v2.py","/logs/tools.jsonl","8"]', con)
+            self.assertNotIn("gpt", " ".join(cmd))
+        self.assertNotIn("--mcp-config", sin)
+        configuracion = json.loads(con[con.index("--mcp-config") + 1])
+        self.assertEqual(configuracion["mcpServers"]["felix"]["args"], ["/tools/mcp_proxy_v2.py", "/logs/tools.jsonl", "8"])
+        self.assertEqual(con[con.index("--allowedTools") + 1],
+                         "mcp__felix__check,mcp__felix__context,mcp__felix__propose,mcp__felix__why")
 
 
 @unittest.skipUnless(BINARY.is_file(), f"falta {BINARY}; compila con `cargo build -p universo-cli`")
@@ -273,14 +286,13 @@ class EjecucionTests(unittest.TestCase):
             self.assertEqual(manifiesto["plan_sha256"], runner.digest(json.loads(runner.PLAN.read_text(encoding="utf-8"))))
             self.assertEqual(len(manifiesto["universo_sha256"]), 64)
 
-    def test_codex_no_acepta_otro_destino(self):
+    def test_claude_no_acepta_otro_destino(self):
         import subprocess
         import sys
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            codex = subprocess.run([sys.executable, str(runner.HERE / "run_four_arms.py"), "--agente", "codex",
-                                    "--codex-dir=/no/existe", f"--output={Path(tmp) / 'otro'}"],
-                                   capture_output=True, text=True, timeout=120)
-            self.assertIn("con --agente codex el destino es", codex.stderr)
+            salida = subprocess.run([sys.executable, str(runner.HERE / "run_four_arms.py"), "--agente", "claude",
+                                     f"--output={Path(tmp) / 'otro'}"], capture_output=True, text=True, timeout=120)
+            self.assertIn("con --agente claude el destino es", salida.stderr)
             self.assertFalse((Path(tmp) / "otro").exists())

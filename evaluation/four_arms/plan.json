@@ -1,6 +1,6 @@
 {
   "schema": "felix-four-arms-v1",
-  "configured_model_alias": "gpt-6-astra",
+  "configured_model_alias": "claude-sonnet-5-5",
   "provider_model_snapshot": null,
   "sampling_seed": null,
   "schedule_seed": 914,
@@ -30,11 +30,13 @@
     "evaluation/four_arms/oracle.json": "f61811dd0c0d221bbb7f3030b984720a6a4c90318d0375e9416acd48a15c9066",
     "evaluation/four_arms_dataset.py": "28cd3578d2710bf29908b1d7da3c1188ce0209b1f61b8b354d33937beeb08f9d",
     "evaluation/four_arms_scoring.py": "3d9978f538775c7eae46f8bfb66e77bbd98757daa8910fcdd11292b24f7bc0de",
-    "evaluation/run_four_arms.py": "2627b73ea0449032568220aab09252eb4f7d36f7d90bf8f89e9100dd3ad07ed4",
+    "evaluation/run_four_arms.py": "88d09b8fec2b0a97f44d2d181e658303739ccd32095e7d082c3c1f92e431670e",
     "evaluation/mcp_proxy_v2.py": "8483dae9882d5e4b81e8c96ca28d822055049bb9cdb44caf1eb3cdeaad0523e1",
     "evaluation/run_paired.py": "b0e40db1720ba714020c053ccc6054550ae66661ce4148b8ba2a32866175d92a",
     "tools/orquestador.py": "edd77ccdcaf50b56d807efc5a3c4a0a215accce13d4d23b33da2965ccc0b83f6"
   },
+  "agent_cli": "claude-code",
+  "system_prompt": "Eres un agente que resuelve tareas sintéticas de edición de un grafo de conocimiento. Entrega tu respuesta final como un único delta felix-delta-v1 con la herramienta de salida estructurada.",
   "instruction": "Resuelve la tarea sintética de edición de un grafo de conocimiento. Devuelve sólo el delta JSON felix-delta-v1 pedido. Usa sólo los hechos y reglas dados. No inspecciones archivos, no uses la red ni ejecutes comandos. Minimiza los cambios ajenos al objetivo. Un delta vacío (add y remove vacíos) significa no cambiar nada.",
   "mcp_note": " Tienes herramientas de verificación de Felix (context, check, propose, why); puedes usarlas para comprobar y reparar tu propuesta, con un máximo de 8 llamadas.",
   "neutral_review": "Revisa tu propuesta anterior contra las reglas y el objetivo. Devuelve el delta final; si ya es correcto, devuélvelo sin cambios.",

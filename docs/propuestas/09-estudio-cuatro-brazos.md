@@ -82,8 +82,10 @@ Cada fase se detiene y espera tu decisión antes de la siguiente.
 ## Decisiones tomadas
 
 Aprobadas por Romeo el 2026-11-18 tal como se recomendaron: sólo 9a por ahora,
-Codex CLI con `gpt-6-astra` y sandbox de solo lectura, 8 × 4 × 3 = 96 corridas
-y 3 rondas en C y D.
+8 × 4 × 3 = 96 corridas y 3 rondas en C y D. El modelo recomendado era Codex
+CLI con `gpt-6-astra`, como el piloto; Romeo no había pedido GPT y el
+2026-11-18 decidió usar **Claude** (Claude Code con su suscripción). El runner
+se cambió a `AgenteClaude` y el plan se volvió a congelar.
 
 Cambio respecto de la propuesta, decidido al implementar 9a: en C, los errores
 de forma del delta (por ejemplo `add_conflict`) también vuelven al agente para

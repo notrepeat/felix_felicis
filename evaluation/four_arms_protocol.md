@@ -13,7 +13,7 @@ textos de instrucción y el SHA-256 de cada fuente que decide el resultado:
 tareas, claves del oráculo, generador, oráculo, runner, `run_paired.py` (de donde
 se toman la captura acotada y el parseo), proxy MCP v2 y orquestador. Lo que el
 plan no puede fijar porque depende de la máquina, como los SHA-256 de los
-binarios `universo` y `universo-mcp`, la versión de Codex CLI y el commit, se
+binarios `universo` y `universo-mcp`, la versión de Claude Code y el commit, se
 escribe en `run.json` al empezar. Esos valores se **registran**, no se fijan de
 antemano (los binarios `debug` no son reproducibles byte a byte), con tres
 reglas:
@@ -21,7 +21,7 @@ reglas:
 - una reanudación con otros valores se rechaza
   (`run_manifest_changed_refusing_to_resume`), y cada reanudación deja en
   `run.json` el commit desde el que se hizo;
-- el estudio 9c se niega a correr si sus binarios o su versión de Codex difieren
+- el estudio 9c se niega a correr si sus binarios o su versión de Claude Code difieren
   de los de la calibración 9b;
 - una corrida real con el árbol de trabajo sucio se rechaza, sin contar
   `evaluation/results/`.
@@ -30,6 +30,19 @@ Cada registro lleva `fase` y `plan_sha256`. `run_four_arms.py` se niega a correr
 fuentes actuales (`plan_changed_refusing_to_run`), y un test lo comprueba en CI.
 Cambiar cualquiera de esas fuentes obliga a regenerar el plan y a revisarlo de
 nuevo antes de correr.
+
+## Agente
+
+El agente bajo estudio es Claude: Claude Code en modo no interactivo
+(`claude -p --output-format stream-json`) con la suscripción de Claude del
+usuario, dentro de bubblewrap. Su HOME es un temporal, así que no carga ajustes,
+hooks, plugins, memoria ni CLAUDE.md del usuario (`--setting-sources ""`). No
+tiene herramientas integradas (`--tools ""`): entrega el delta con la salida
+estructurada (`--json-schema`), y en el brazo B dispone además de las cuatro
+herramientas MCP de Felix por el proxy v2. El modelo es el
+`configured_model_alias` del plan y el system prompt fijo queda en
+`system_prompt`. El piloto 173 usó GPT vía Codex CLI; este estudio no usa
+modelos de otro proveedor.
 
 ## Tareas
 
@@ -95,7 +108,7 @@ Esas filas se publican y se cuentan por brazo (`technical_failures`) y por
 causa (`technical_failure_causes`), pero quedan fuera de los endpoints
 primarios: su `score` es `null`. Una fila fallida no se repite al reanudar.
 
-Un **error de entorno** (falta bubblewrap, el login de Codex o un binario; no se
+Un **error de entorno** (falta bubblewrap, el login de Claude o un binario; no se
 puede lanzar el proceso) no es un fallo técnico del brazo. El runner lo comprueba
 antes de la primera fila (`preflight`) y, si aparece durante una fila, aborta sin
 escribirla, para que `--resume` la corra al arreglar el entorno. Un fallo del
@@ -133,22 +146,22 @@ y no entra en ningún análisis.
 
 1. **9a, preparación (este commit):** dataset, oráculo, runner, plan congelado y
    ensayo completo con `--agente guionizado` (96 filas, sin LLM).
-2. **9b, calibración:** `--agente codex --fase calibracion`, que corre sólo el
+2. **9b, calibración:** `--agente claude --fase calibracion`, que corre sólo el
    baseline con 2 repeticiones (16 corridas). Si el baseline acierta todo, las
    tareas se reescriben y el plan se vuelve a congelar **antes** de 9c. La
    calibración se publica aparte y no entra en el análisis.
-3. **9c, estudio:** `--agente codex --fase estudio`, las 96 filas del plan. Se
+3. **9c, estudio:** `--agente claude --fase estudio`, las 96 filas del plan. Se
    publican todas, incluidos timeouts y errores; no se amplía la muestra ni se
    repiten corridas desfavorables.
 
-9b y 9c necesitan cada una una decisión explícita, una instalación autenticada de
-Codex CLI y Linux con bubblewrap. Con `--agente codex` el destino es fijo,
+9b y 9c necesitan cada una una decisión explícita, Claude Code con la sesión de
+la suscripción de Claude iniciada y Linux con bubblewrap. Con `--agente claude` el destino es fijo,
 `evaluation/results/four-arms-v1-<fase>/`, para que no se pueda correr el
 estudio en otro directorio y quedarse con la mejor corrida.
 
 ```sh
 python evaluation/run_four_arms.py --agente guionizado --output /tmp/ensayo
-python evaluation/run_four_arms.py --agente codex --codex-dir <dir> --fase calibracion
+python evaluation/run_four_arms.py --agente claude --fase calibracion
 ```
 
 ## Límites conocidos

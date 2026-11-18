@@ -15,7 +15,8 @@ Brazos, con el mismo modelo, información y presupuesto por ronda:
 El runner del piloto 173 (``run_paired.py``) no se modifica; de él sólo se
 reutilizan funciones de captura acotada y parseo de eventos.
 
-Las corridas reales necesitan una instalación autenticada de Codex CLI y una
+Las corridas reales usan Claude Code (`claude -p`) con la suscripción de Claude
+del usuario y necesitan una
 decisión explícita (fases 9b y 9c de la propuesta); ``--agente guionizado``
 recorre el mismo camino con respuestas deterministas, sin LLM.
 """
@@ -47,6 +48,8 @@ SEMILLA = 914
 TIMEOUT_RONDA_S = 120
 MCP_LLAMADAS = 8
 MAX_CORRIDAS = 96
+# Modelo del agente bajo estudio (pendiente de confirmación de Romeo antes de 9b).
+MODELO = "claude-sonnet-5-5"
 DATA = HERE / "four_arms"
 PLAN = DATA / "plan.json"
 SOURCES = [
@@ -71,6 +74,9 @@ NOTA_MCP = (f" Tienes herramientas de verificación de Felix (context, check, pr
             f"comprobar y reparar tu propuesta, con un máximo de {MCP_LLAMADAS} llamadas.")
 REVISION_NEUTRAL = ("Revisa tu propuesta anterior contra las reglas y el objetivo. Devuelve el delta final; "
                     "si ya es correcto, devuélvelo sin cambios.")
+SYSTEM_PROMPT = ("Eres un agente que resuelve tareas sintéticas de edición de un grafo de conocimiento. "
+                 "Entrega tu respuesta final como un único delta felix-delta-v1 con la herramienta de salida "
+                 "estructurada.")
 NULO = {"schema": "felix-delta-v1", "add": [], "remove": []}
 
 
@@ -105,6 +111,7 @@ def build_plan(model, seed=SEMILLA, repetitions=REPETICIONES):
         "timeout_seconds_per_round": TIMEOUT_RONDA_S, "mcp_tool_call_budget_b": MCP_LLAMADAS,
         "cases": [c["id"] for c in tasks["cases"]], "runs": len(rows),
         "source_sha256": {name: file_sha256(name) for name in SOURCES},
+        "agent_cli": "claude-code", "system_prompt": SYSTEM_PROMPT,
         "instruction": INSTRUCCION, "mcp_note": NOTA_MCP, "neutral_review": REVISION_NEUTRAL,
         "schema_sha256": digest(SCHEMA),
         "primary_endpoints": ["final_invalid_state (oráculo)", "final_success (oráculo)"],
@@ -138,23 +145,27 @@ def materialize(case, root):
 
 
 class ErrorDeEntorno(RuntimeError):
-    """El entorno no permite correr (sin bwrap, sin login, sin Codex): aborta sin consumir la fila."""
+    """El entorno no permite correr (sin bwrap, sin login, sin cuota): aborta sin consumir la fila."""
 
 
 def fallo_del_proveedor(events):
-    """Código de un fallo del proveedor (cuota, límite de uso, turno fallido), o None.
+    """Código de un fallo del proveedor (límite de uso, error de la API), o None.
 
     Es un error de entorno, no una respuesta del agente: el modelo no llegó a
-    contestar. Los avisos de la CLI (eventos `item` de tipo `error`) no cuentan.
+    contestar. Un `result` con `is_error` sin delta, o un `rate_limit_event`
+    rechazado, abortan la corrida en vez de consumir la fila.
     """
     for event in events:
-        if event.get("type") not in ("error", "turn.failed"):
-            continue
-        mensaje = event.get("message") or (event.get("error") or {}).get("message") or ""
-        texto = str(mensaje).lower()
-        if "usage limit" in texto or "rate limit" in texto or "quota" in texto:
+        tipo = event.get("type")
+        if tipo == "rate_limit_event" and (event.get("rate_limit_info") or {}).get("status") == "rejected":
             return "provider_usage_limit"
-        return "provider_turn_failed"
+        if tipo == "result" and event.get("is_error"):
+            texto = " ".join(str(event.get(k) or "") for k in ("result", "subtype", "error")).lower()
+            if any(marca in texto for marca in ("usage limit", "rate limit", "quota", "limit reached")):
+                return "provider_usage_limit"
+            if event.get("subtype") in ("error_max_turns",):
+                return None
+            return "provider_turn_failed"
     return None
 
 
@@ -174,68 +185,82 @@ class AgenteGuionizado:
         return {"status": "completed", "delta": delta, "usage": [], "elapsed_seconds": 0.0, "tool_calls": []}
 
 
-class AgenteCodex:
-    """Codex CLI aislado con bubblewrap, como en el piloto; MCP vía proxy v2 en el brazo B."""
+class AgenteClaude:
+    """Claude Code en modo no interactivo (`claude -p`), aislado con bubblewrap.
 
-    DISABLED = ["shell_tool", "apps", "browser_use", "multi_agent", "multi_agent_v2", "memories", "plugins",
-                "remote_plugin", "skill_search", "view_image", "image_generation"]
+    Usa la suscripción de Claude del usuario. Dentro del sandbox el HOME es un
+    temporal: no se cargan ajustes, hooks, plugins, memoria ni CLAUDE.md del
+    usuario (`--setting-sources ""`), no hay herramientas integradas
+    (`--tools ""`; sólo queda `StructuredOutput`, que entrega el delta con el
+    esquema) y, en el brazo B, sólo las cuatro herramientas MCP de Felix por el
+    proxy v2. El archivo de credenciales se monta en lectura y escritura para que
+    la CLI pueda renovar el token; el agente no tiene herramientas para tocarlo.
+    """
 
-    def __init__(self, codex_dir, mcp_binary, model, timeout=TIMEOUT_RONDA_S):
-        self.codex_dir = Path(codex_dir).resolve()
+    PERMITIDAS = {"StructuredOutput"}
+
+    def __init__(self, claude_binary, mcp_binary, model, timeout=TIMEOUT_RONDA_S):
+        self.claude_binary = Path(claude_binary).resolve()
         self.mcp_binary = Path(mcp_binary).resolve()
         self.model = model
         self.timeout = timeout
 
-    def command(self, work, logs, con_mcp):
-        home = Path.home()
-        auth = home / ".codex/auth.json"
-        if not auth.is_file():
-            raise ErrorDeEntorno("existing_codex_file_login_required")
+    @staticmethod
+    def credenciales():
+        return Path.home() / ".claude/.credentials.json"
+
+    def command(self, work, logs, home, con_mcp):
         cmd = ["bwrap", "--unshare-all", "--share-net", "--die-with-parent", "--new-session", "--clearenv"]
         for path in ["/usr", "/bin", "/lib", "/lib64", "/etc/ssl", "/etc/ca-certificates", "/etc/resolv.conf",
                      "/etc/hosts", "/etc/nsswitch.conf"]:
             if Path(path).exists():
                 cmd += ["--ro-bind", path, path]
-        cmd += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--dir", str(home / ".codex"),
-                "--ro-bind", str(auth), str(auth), "--ro-bind", str(self.codex_dir), "/opt/codex",
+        cmd += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+                "--bind", str(home), "/agente-home",
+                "--bind", str(self.credenciales()), "/agente-home/.claude/.credentials.json",
+                "--ro-bind", str(self.claude_binary), "/opt/claude/claude",
                 "--ro-bind", str(self.mcp_binary), "/tools/universo-mcp",
                 "--ro-bind", str(HERE / "mcp_proxy_v2.py"), "/tools/mcp_proxy_v2.py",
                 "--ro-bind", str(work), "/work", "--bind", str(logs), "/logs", "--chdir", "/work",
-                "--setenv", "HOME", str(home), "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "LANG", "C.UTF-8",
-                "/opt/codex/bin/codex", "exec", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
-                "--sandbox", "read-only", "--model", self.model, "-c", 'model_reasoning_effort="low"',
-                "-c", 'web_search="disabled"', "-c", "project_doc_max_bytes=0",
-                "--enable", "skip_host_skill_discovery", "--output-schema", "/work/schema.json", "--json"]
-        for feature in self.DISABLED:
-            cmd += ["--disable", feature]
+                "--setenv", "HOME", "/agente-home", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "LANG", "C.UTF-8",
+                "/opt/claude/claude", "-p", "--output-format", "stream-json", "--verbose",
+                "--model", self.model, "--tools", "", "--setting-sources", "", "--strict-mcp-config",
+                "--no-session-persistence", "--max-turns", str(MCP_LLAMADAS + 4),
+                "--system-prompt", SYSTEM_PROMPT, "--json-schema", json.dumps(SCHEMA)]
         if con_mcp:
-            cmd += ["-c", 'mcp_servers.felix.command="/usr/bin/python3"',
-                    "-c", f'mcp_servers.felix.args=["/tools/mcp_proxy_v2.py","/logs/tools.jsonl","{MCP_LLAMADAS}"]',
-                    "-c", "mcp_servers.felix.startup_timeout_sec=10", "-c", "mcp_servers.felix.tool_timeout_sec=10"]
-        return cmd + ["-"]
+            servidor = {"mcpServers": {"felix": {"command": "/usr/bin/python3", "args": [
+                "/tools/mcp_proxy_v2.py", "/logs/tools.jsonl", str(MCP_LLAMADAS)]}}}
+            cmd += ["--mcp-config", json.dumps(servidor),
+                    "--allowedTools", ",".join(f"mcp__felix__{t}" for t in MCP_TOOLS)]
+        return cmd
 
     def preflight(self):
         """Comprueba el entorno antes de la primera fila, sin llamar al modelo."""
         if os.name == "nt" or shutil.which("bwrap") is None:
             raise ErrorDeEntorno("bwrap_required")
-        if not (Path.home() / ".codex/auth.json").is_file():
-            raise ErrorDeEntorno("existing_codex_file_login_required")
-        for ruta in (self.codex_dir / "bin/codex", self.mcp_binary):
+        if not self.credenciales().is_file():
+            raise ErrorDeEntorno("claude_login_required")
+        for ruta in (self.claude_binary, self.mcp_binary):
             if not ruta.is_file():
                 raise ErrorDeEntorno(f"missing_{ruta.name}")
+
+    def version(self):
+        return subprocess.check_output([str(self.claude_binary), "--version"], text=True,
+                                       stderr=subprocess.DEVNULL).strip()
 
     def responder(self, case, texto, con_mcp, ronda):
         from run_paired import bounded_capture, parse_events
 
         with tempfile.TemporaryDirectory(prefix="felix-four-arms-") as temporary:
             root = Path(temporary)
-            work, logs = root / "work", root / "logs"
+            work, logs, home = root / "work", root / "logs", root / "home"
             work.mkdir()
             logs.mkdir()
+            (home / ".claude").mkdir(parents=True)
             materialize(case, work)
             start = time.monotonic()
             try:
-                process = subprocess.Popen(self.command(work, logs, con_mcp), stdin=subprocess.PIPE,
+                process = subprocess.Popen(self.command(work, logs, home, con_mcp), stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
                                            env={"PATH": "/usr/bin:/bin"})
             except OSError as error:
@@ -248,22 +273,11 @@ class AgenteCodex:
                 # Se aborta sin escribir la fila: al recuperar la cuota,
                 # `--resume` la corre.
                 raise ErrorDeEntorno(proveedor)
-            messages = [e["item"]["text"] for e in events if e.get("type") == "item.completed"
-                        and e.get("item", {}).get("type") == "agent_message"]
-            delta = None
-            if messages:
-                try:
-                    delta = json.loads(messages[-1])
-                except ValueError:
-                    delta = None
+            delta, usos = interpretar_claude(events)
             ledger = logs / "tools.jsonl"
             tools = [json.loads(line) for line in ledger.read_text().splitlines()] if ledger.exists() else []
-            items = [e.get("item", {}) for e in events if e.get("type") in ["item.completed", "item.started"]]
-            # Como en el piloto: sólo se admiten mensajes, razonamiento y, en B,
-            # las cuatro herramientas de Felix.
-            unexpected = [item for item in items if item.get("type") not in ["agent_message", "reasoning", "error"]
-                          and not (con_mcp and item.get("type") == "mcp_tool_call" and item.get("server") == "felix"
-                                   and item.get("tool") in MCP_TOOLS)]
+            permitidas = self.PERMITIDAS | ({f"mcp__felix__{t}" for t in MCP_TOOLS} if con_mcp else set())
+            unexpected = [nombre for nombre in usos if nombre not in permitidas]
             ready = None
             if con_mcp:
                 try:
@@ -275,7 +289,27 @@ class AgenteCodex:
                       "completed" if process.returncode == 0 and delta is not None else "execution_failed")
             return {"status": status, "delta": delta, "elapsed_seconds": elapsed, "tool_calls": tools,
                     "mcp_ready": ready,
-                    "usage": [e["usage"] for e in events if e.get("type") == "turn.completed" and "usage" in e]}
+                    "usage": [e.get("usage") for e in events if e.get("type") == "result" and "usage" in e]}
+
+
+def interpretar_claude(events):
+    """(delta, nombres de herramientas usadas) desde el stream-json de Claude Code.
+
+    El delta es la salida estructurada del evento `result`; si falta, la
+    entrada de la última llamada a `StructuredOutput`."""
+    usos, delta = [], None
+    for event in events:
+        if event.get("type") != "assistant":
+            continue
+        for bloque in (event.get("message") or {}).get("content") or []:
+            if isinstance(bloque, dict) and bloque.get("type") == "tool_use":
+                usos.append(bloque.get("name"))
+                if bloque.get("name") == "StructuredOutput":
+                    delta = bloque.get("input")
+    for event in events:
+        if event.get("type") == "result" and isinstance(event.get("structured_output"), dict):
+            delta = event["structured_output"]
+    return (delta if isinstance(delta, dict) else None), usos
 
 
 # --- Brazos ---------------------------------------------------------------------------
@@ -446,26 +480,25 @@ def _git(*argumentos):
 
 def run_manifest(args, plan):
     """Lo que el plan congelado no puede fijar: binarios, versión del agente y commit."""
-    codex = None
-    if args.agente == "codex":
-        codex = subprocess.check_output([str(Path(args.codex_dir) / "bin/codex"), "--version"], text=True,
-                                        stderr=subprocess.DEVNULL).strip()
+    cli = None
+    if args.agente == "claude":
+        cli = AgenteClaude(args.claude_binary, args.mcp_binary, args.model).version()
     return {"schema": PROTOCOL + "-run", "fase": args.fase, "agente": args.agente, "plan_sha256": digest(plan),
             # Los resultados de corridas en curso no cuentan como árbol sucio.
             "git_commit": _git("rev-parse", "HEAD"),
             "git_dirty": bool(_git("status", "--porcelain", "--", ".", ":(exclude)evaluation/results")),
             "universo_sha256": _sha256(args.binary), "universo_mcp_sha256": _sha256(args.mcp_binary),
-            "codex_cli_version": codex}
+            "agent_cli_version": cli}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--model", default="gpt-6-astra")
-    parser.add_argument("--agente", choices=["codex", "guionizado"], required=True)
-    parser.add_argument("--codex-dir")
+    parser.add_argument("--model", default=MODELO)
+    parser.add_argument("--agente", choices=["claude", "guionizado"], required=True)
+    parser.add_argument("--claude-binary", default=shutil.which("claude") or "claude")
     parser.add_argument("--mcp-binary", default=str(REPO / "target/debug" / ("universo-mcp.exe" if os.name == "nt" else "universo-mcp")))
     parser.add_argument("--binary", default=str(REPO / "target/debug" / ("universo.exe" if os.name == "nt" else "universo")))
-    parser.add_argument("--output", type=Path, help="sólo con --agente guionizado; con codex el destino es fijo")
+    parser.add_argument("--output", type=Path, help="sólo con --agente guionizado; con claude el destino es fijo")
     parser.add_argument("--fase", choices=["calibracion", "estudio"], default="estudio")
     parser.add_argument("--plan-only", action="store_true", help="escribe el plan y termina")
     parser.add_argument("--resume", action="store_true")
@@ -482,16 +515,14 @@ def main():
     # fuentes, tareas o calendario obliga a regenerarlo y revisarlo antes.
     if json.loads(PLAN.read_text(encoding="utf-8")) != plan:
         raise SystemExit("plan_changed_refusing_to_run")
-    if args.agente == "codex":
-        if not args.codex_dir:
-            raise SystemExit("--codex-dir es obligatorio con --agente codex")
+    if args.agente == "claude":
         # Un único destino por fase: no se puede correr el estudio en otro
         # directorio y quedarse con la mejor corrida.
         fijo = RESULTS / f"four-arms-v1-{args.fase}"
         if args.output is not None and args.output.resolve() != fijo.resolve():
-            raise SystemExit(f"con --agente codex el destino es {fijo}")
+            raise SystemExit(f"con --agente claude el destino es {fijo}")
         args.output = fijo
-        agente = AgenteCodex(args.codex_dir, args.mcp_binary, args.model)
+        agente = AgenteClaude(args.claude_binary, args.mcp_binary, args.model)
         try:
             agente.preflight()
         except ErrorDeEntorno as error:
@@ -503,15 +534,15 @@ def main():
 
         agente = AgenteGuionizado(lambda case_id, ronda, texto: referencias.REFERENCES[case_id])
     manifest = run_manifest(args, plan)
-    if args.agente == "codex" and manifest["git_dirty"]:
+    if args.agente == "claude" and manifest["git_dirty"]:
         raise SystemExit("working_tree_dirty: commitea antes de una corrida real")
-    if args.agente == "codex" and args.fase == "estudio":
-        # 9c corre con los mismos binarios y la misma versión de Codex que la
+    if args.agente == "claude" and args.fase == "estudio":
+        # 9c corre con los mismos binarios y la misma versión de Claude Code que la
         # calibración 9b, si existe.
         calibracion = RESULTS / "four-arms-v1-calibracion" / "run.json"
         if calibracion.exists():
             previo = json.loads(calibracion.read_text(encoding="utf-8"))
-            claves = ["universo_sha256", "universo_mcp_sha256", "codex_cli_version"]
+            claves = ["universo_sha256", "universo_mcp_sha256", "agent_cli_version"]
             if {k: previo.get(k) for k in claves} != {k: manifest[k] for k in claves}:
                 raise SystemExit("binarios_distintos_de_la_calibracion")
     tasks, _ = scoring.load()
@@ -526,7 +557,7 @@ def main():
     manifest_path = args.output / "run.json"
     if manifest_path.exists():
         previo = json.loads(manifest_path.read_text(encoding="utf-8"))
-        claves = ["fase", "agente", "plan_sha256", "universo_sha256", "universo_mcp_sha256", "codex_cli_version"]
+        claves = ["fase", "agente", "plan_sha256", "universo_sha256", "universo_mcp_sha256", "agent_cli_version"]
         if {k: previo.get(k) for k in claves} != {k: manifest[k] for k in claves}:
             raise SystemExit("run_manifest_changed_refusing_to_resume")
         # Cada reanudación deja rastro del commit desde el que se hizo.
