@@ -66,7 +66,7 @@ escrita del plan y por tanto **requiere decisión explícita de Romeo**.
 | 8 | **Prototipo hecho** 2026-11-18 ([propuesta](../propuestas/08-orquestador-obligatorio.md), `tools/orquestador.py`): verificación obligatoria, reparación con presupuesto, publicación sólo por el ejecutor con CAS, detección de escrituras externas; agentes guionizados, sin LLM. Original: Prototipo de orquestador obligatorio (prioridad 2 de las conclusiones) | M | Decidido 2026-11-18 |
 | 9 | **Hecho** 2026-11-18 ([propuestas 09](../propuestas/09-estudio-cuatro-brazos.md) y [09b](../propuestas/09b-contexto-parcial.md), [protocolo](../../evaluation/four_arms_protocol.md), [informe](../../evaluation/four_arms_report.md)): estudio de 96 corridas con Claude Sonnet 5.5 y contexto parcial; C 21/24 y 0 inválidos, frente a 9 inválidos en A, B y D | M | Decidido 2026-11-18 |
 | 10 | Reparación sugerida (delta mínimo) | L | **Sí**: roza revisión AGM, excluida hasta probar valor |
-| 11 | Fase 08 (licencia AGPL) y 09 (tag `v0.2.0`) | S–M | **Sí** |
+| 11 | **Hecho** 2026-11-18: fase 08 corrida contra la instancia privada (motor fijado en `v0.2.0`; revisión de licencia AGPL de la integración) y `v0.2.0` publicada como tag y release ([notas](../release/v0.2.0.md)) | S–M | Decidido 2026-11-18 |
 | — | AGM con preorden, recuperación por patrones, DPO/SqPO | L | **Sí**, excluidas por el plan |
 
 Los puntos 1–6 hacen verdaderas A3 (como detección), A4, A7, A8 y gran parte de
