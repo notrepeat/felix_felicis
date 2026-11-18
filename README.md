@@ -20,9 +20,9 @@ cargo install --locked --path crates/universo-mcp
 universo --version
 ```
 
-Eso instala `universo` (la CLI) y `universo-mcp` (el servidor MCP). Desde la
-próxima versión publicada, cada release trae también binarios para Linux,
-macOS y Windows con su `.sha256`. Ver [instalación](docs/instalacion.md).
+Eso instala `universo` (la CLI) y `universo-mcp` (el servidor MCP). Desde
+`v0.3.0`, cada release trae también binarios para Linux, macOS y Windows con
+su `.sha256`. Ver [instalación](docs/instalacion.md).
 
 ## Estado
 

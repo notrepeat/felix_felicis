@@ -1,9 +1,26 @@
 # Changelog
 
-Los cambios se agrupan por release. La sección `Unreleased` es una propuesta
-para el próximo gate `0.2.0`; aún no hay tag ni actualización de versiones.
+Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
+está en sus notas (`docs/release/`); aquí queda el resumen.
 
-## Unreleased — candidato a 0.2.0
+## 0.3.0 — preparada, sin tag
+
+Búsqueda léxica (`universo search` y `search` en el MCP, con opt-in),
+historial consultable (`show`, y `diff` compuesto con el efecto real de cada
+apply, con detección de huecos), `why` en el MCP, conflicto de atributo como
+rechazo de clase `Ext`, instalación con `cargo install`, `--version` y
+workflow de binarios de release. Dos cambios incompatibles pre-1.0. Ver
+[notas](docs/release/v0.3.0.md).
+
+## 0.2.1 — 2026-11-18
+
+Restricción de rango por aristas en el veredicto; compatible con `0.2.0`. Ver
+[notas](docs/release/v0.2.1.md).
+
+## 0.2.0 — 2026-11-18
+
+Ver también las [notas](docs/release/v0.2.0.md); lo que sigue es el registro
+detallado que se escribió mientras era candidata.
 
 ### Presupuesto de evaluación de propuestas
 

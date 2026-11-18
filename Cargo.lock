@@ -1053,7 +1053,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "universo-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "universo-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "slotmap",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "universo-mcp"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "rmcp",
  "serde",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "universo-okf"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "fs4",
  "fs_at",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "universo-testkit"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "tempfile",

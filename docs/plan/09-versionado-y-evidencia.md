@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | `v0.2.1` publicada (2026-11-18) |
+| Estado | `v0.2.1` publicada (2026-11-18); `v0.3.0` preparada, sin tag ([notas](../release/v0.3.0.md)) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
