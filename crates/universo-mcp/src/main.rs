@@ -3,6 +3,16 @@ use universo_mcp::dominio::ServerConfig;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if matches!(args.as_slice(), [arg] if arg == "--version" || arg == "-V") {
+        // Sin `println!`: con stdout cerrado no debe entrar en pánico.
+        use std::io::Write;
+        let texto = format!("universo-mcp {}\n", env!("CARGO_PKG_VERSION"));
+        if std::io::stdout().write_all(texto.as_bytes()).is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
     if run().await.is_err() {
         eprintln!("mcp_server_failed");
         std::process::exit(1);

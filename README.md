@@ -10,6 +10,20 @@ El repositorio contiene solamente el motor, el fundamento matemático y datos
 ficticios. Las bases de conocimiento de sus usuarios viven fuera de este
 repositorio y se entregan al CLI mediante una ruta.
 
+## Instalación
+
+Desde un clon del repositorio, con Rust:
+
+```sh
+cargo install --locked --path crates/universo-cli
+cargo install --locked --path crates/universo-mcp
+universo --version
+```
+
+Eso instala `universo` (la CLI) y `universo-mcp` (el servidor MCP). Desde la
+próxima versión publicada, cada release trae también binarios para Linux,
+macOS y Windows con su `.sha256`. Ver [instalación](docs/instalacion.md).
+
 ## Estado
 
 Implementado:

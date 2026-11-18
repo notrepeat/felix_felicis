@@ -69,3 +69,18 @@ fn negocia_version_desconocida_y_eof_cierra_limpiamente() {
             .all(|line| serde_json::from_str::<Value>(&line).is_ok())
     );
 }
+
+#[test]
+fn version_imprime_nombre_y_version_sin_configuracion() {
+    for flag in ["--version", "-V"] {
+        let salida = std::process::Command::new(env!("CARGO_BIN_EXE_universo-mcp"))
+            .arg(flag)
+            .output()
+            .unwrap();
+        assert_eq!(salida.status.code(), Some(0));
+        assert_eq!(
+            String::from_utf8(salida.stdout).unwrap(),
+            format!("universo-mcp {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}

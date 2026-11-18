@@ -418,3 +418,15 @@ fn validate_json_de_error_es_parseable_versionado_y_estable() {
     assert_eq!(json["errors"][0]["line"], 4);
     assert!(!json["errors"][0]["message"].as_str().unwrap().is_empty());
 }
+
+#[test]
+fn version_imprime_nombre_y_version_del_paquete() {
+    for flag in ["--version", "-V"] {
+        let salida = universo(&[flag]);
+        assert_eq!(salida.status.code(), Some(0));
+        assert_eq!(
+            String::from_utf8(salida.stdout).unwrap(),
+            format!("universo {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}
