@@ -212,6 +212,7 @@ class Orquestador:
         presupuesto: int = PRESUPUESTO_POR_DEFECTO,
         confirmar: Optional[Callable[[dict], bool]] = None,
         reparar_errores_de_delta: bool = False,
+        testigo: bool = False,
     ):
         if presupuesto < 1:
             raise ValueError("el presupuesto de intentos debe ser al menos 1")
@@ -224,6 +225,9 @@ class Orquestador:
         # `remove_not_found`, `label_missing`...) vuelve al agente como un
         # rechazo más, consumiendo un intento. Nunca se convierte en admisión.
         self.reparar_errores_de_delta = reparar_errores_de_delta
+        # Con `testigo`, el rechazo incluye la primera asignación que incumple
+        # la regla (`propose --witness`): rutas del bundle, sólo uso local.
+        self.testigo = testigo
         # Los hashes del registro llevan una clave aleatoria por orquestador:
         # sirven para correlacionar intentos, no para adivinar el contenido
         # probando candidatos.
@@ -268,6 +272,7 @@ class Orquestador:
                 "decide",
                 "--rules",
                 "--emit-snapshot-token",
+                *(["--witness"] if self.testigo else []),
             ],
         )
         estado = salida.get("status")
@@ -433,6 +438,7 @@ class Orquestador:
                 retroalimentacion = {
                     "veredicto": salida["status"],
                     "codigos": codigos,
+                    "testigo": salida.get("witness") if self.testigo else None,
                     "intento": intento,
                     "intentos_restantes": self.presupuesto - intento,
                     "objetos": objetos,

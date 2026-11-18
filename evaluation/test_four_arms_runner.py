@@ -47,6 +47,10 @@ class PlanTests(unittest.TestCase):
         for arm in ["C_obligatorio", "D_revision"]:
             self.assertEqual(runner.prompt(case, arm), base)
         self.assertEqual(runner.prompt(case, "B_felix_opcional"), base.replace(runner.INSTRUCCION, runner.INSTRUCCION + runner.NOTA_MCP, 1))
+        self.assertIn(runner.NOTA_CONTEXTO, base)
+        ocultos = set(case["facts"]) - set(case["visible_facts"])
+        self.assertTrue(ocultos)
+        self.assertFalse(any(json.dumps(h, ensure_ascii=False) in base for h in ocultos))
         self.assertNotIn("required", base)
         self.assertNotIn("mutable_keys", base)
 
@@ -131,6 +135,7 @@ class BrazosTests(unittest.TestCase):
         self.assertFalse(record["first_score"]["success"])
         segundo = agente.llamadas[1]["prompt"]
         self.assertIn("Felix rechazó esa propuesta (revisores: Una decisión vigente necesita", segundo)
+        self.assertIn("la incumple la instancia d=n/d13", segundo)
         self.assertIn("Intentos restantes: 2", segundo)
 
     def test_c_identifica_la_regla_aunque_la_explicacion_agote_su_presupuesto(self):
@@ -143,6 +148,16 @@ class BrazosTests(unittest.TestCase):
         self.assertEqual(record["orquestador"]["resultado"], "publicado")
         self.assertTrue(record["repaired"])
         self.assertIn("Felix rechazó esa propuesta (fuente-confiable: Una fuente que apoya", agente.llamadas[1]["prompt"])
+
+    def test_c_con_testigo_puede_seguir_una_cascada_fuera_de_radio(self):
+        # La primera propuesta corta la cascada en d03 (lo visible); el testigo
+        # señala la arista d04→d03 y el agente guionizado la completa.
+        def politica(case_id, ronda, texto):
+            return literal(case_id) if ronda == 1 else REFERENCES[case_id]
+
+        record, agente = self.correr("cascada_d02", "C_obligatorio", politica)
+        self.assertEqual(record["orquestador"]["resultado"], "publicado")
+        self.assertIn("e=n/d04→n/d03#depende#0, a=n/d04, b=n/d03", agente.llamadas[1]["prompt"])
 
     def test_c_escalado_no_publica_nada_y_el_estado_queda_valido(self):
         record, _ = self.correr("promover_d13", "C_obligatorio", lambda c, r, t: literal(c))

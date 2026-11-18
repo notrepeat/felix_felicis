@@ -14,5 +14,5 @@ pub use conflictos::{
 };
 pub use propuesta::{
     ErrorPropuesta, EtapaErrorPropuesta, ProcedenciaInvariante, ResultadoPropuesta,
-    explicar_propuesta, proponer,
+    explicar_propuesta, proponer, testigo_propuesta,
 };

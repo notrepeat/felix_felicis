@@ -79,6 +79,12 @@ ronda.
 
 Cada fase se detiene y espera tu decisión antes de la siguiente.
 
+## Continuación
+
+Tras tres calibraciones con acierto total del baseline con información
+completa, se propone un estudio con **contexto parcial**:
+[propuesta 09b](09b-contexto-parcial.md).
+
 ## Decisiones tomadas
 
 Aprobadas por Romeo el 2026-11-18 tal como se recomendaron: sólo 9a por ahora,

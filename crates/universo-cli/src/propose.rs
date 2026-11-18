@@ -4,10 +4,10 @@ use serde_json::{Value, json};
 use std::{io::Write, path::PathBuf};
 use universo_core::{ModoExplicacion, PRESUPUESTO_EXPLICACION_POR_DEFECTO};
 use universo_okf::transaccion::simulacion::{
-    EstadoSimulacion, simular_archivo, simular_archivo_explicado,
+    EstadoSimulacion, simular_archivo, simular_archivo_explicado, testigo_archivo,
 };
 
-pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
+pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--witness] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
 pub(super) struct Solicitud {
     raiz: PathBuf,
     manifiesto: PathBuf,
@@ -19,6 +19,7 @@ pub(super) struct Solicitud {
     esperado: Option<String>,
     explicar: Option<ModoExplicacion>,
     con_reglas: bool,
+    con_testigo: bool,
     autor: Option<String>,
     motivo: Option<String>,
 }
@@ -35,6 +36,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     let mut esperado = None;
     let mut explicar = None;
     let mut con_reglas = false;
+    let mut con_testigo = false;
     let mut autor = None;
     let mut motivo = None;
     let mut i = 0;
@@ -45,6 +47,14 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
                 return Err(fail());
             }
             aplicar = true;
+            i += 1;
+            continue;
+        }
+        if arg == "--witness" {
+            if con_testigo {
+                return Err(fail());
+            }
+            con_testigo = true;
             i += 1;
             continue;
         }
@@ -114,7 +124,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
         return Err(fail());
     }
     if aplicar != esperado.is_some()
-        || aplicar && (emit_token || explicar.is_some())
+        || aplicar && (emit_token || explicar.is_some() || con_testigo)
         || !aplicar && (autor.is_some() || motivo.is_some())
     {
         return Err(fail());
@@ -130,6 +140,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
         esperado,
         explicar,
         con_reglas,
+        con_testigo,
         autor,
         motivo,
     })
@@ -219,11 +230,39 @@ pub(super) fn ejecutar(
         }
         Err(code) => ("error", Value::Null, json!([{"code":code}]), None),
     };
+    // Testigo localizado opt-in: sólo si se pidió y el candidato incumple una
+    // regla. Revela rutas del bundle; por eso nunca va por defecto.
+    let testigo = if solicitud.con_testigo && status == "reject" {
+        Some(testigo_archivo(
+            &solicitud.raiz,
+            &solicitud.manifiesto,
+            &solicitud.invariantes,
+            &solicitud.delta,
+        ))
+    } else {
+        None
+    };
+    let testigo_json = match &testigo {
+        None => Value::Null,
+        Some(Ok(None)) => Value::Null,
+        Some(Err(e)) => json!({"error": e.codigo()}),
+        Some(Ok(Some(t))) => json!({
+            "source_index": t.source_index,
+            "rule_id": t.rule_id,
+            "rule_message": t.rule_message,
+            "bindings": t.ligaduras.iter().map(|(variable, kind, value)| json!({
+                "variable": variable, "kind": kind, "value": value,
+            })).collect::<Vec<_>>(),
+        }),
+    };
     let payload = match solicitud.formato {
         Formato::Json => {
             let mut value = json!({"schema_version":1,"command":"propose","mode":"simulate","status":status,"summary":summary,"errors":errors});
             if let Some(token) = token {
                 value["snapshot_token"] = json!(token);
+            }
+            if solicitud.con_testigo {
+                value["witness"] = testigo_json.clone();
             }
             // Con --explain las dos claves están siempre presentes; en un error
             // técnico de la propuesta no hay invariantes que explicar.
@@ -253,6 +292,20 @@ pub(super) fn ejecutar(
             }
             if let Some(token) = token {
                 value.push_str(&format!("snapshot_token: {token}\n"));
+            }
+            if let Some(Ok(Some(t))) = &testigo {
+                let regla = t
+                    .rule_id
+                    .clone()
+                    .unwrap_or_else(|| format!("source {}", t.source_index));
+                let ligaduras: Vec<String> = t
+                    .ligaduras
+                    .iter()
+                    .map(|(v, _, x)| format!("{v}={x}"))
+                    .collect();
+                value.push_str(&format!("witness: {regla}: {}\n", ligaduras.join(" ")));
+            } else if let Some(Err(e)) = &testigo {
+                value.push_str(&format!("witness: {}\n", e.codigo()));
             }
             if solicitud.explicar.is_some() {
                 match (&explanations, explanation_error) {

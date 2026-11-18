@@ -224,6 +224,54 @@ pub fn explicar_propuesta(
     ))
 }
 
+/// Testigo localizado (`crate::testigo`) de la primera oración falsa del
+/// candidato del delta, con su `source_index`. `None` en los mismos casos que
+/// [`explicar_propuesta`] o si el candidato cumple todas las oraciones.
+/// **Revela rutas del bundle**: sólo para canales locales y opt-in.
+pub fn testigo_propuesta(
+    snapshot: &Estructura,
+    delta: &Delta,
+    invariantes: &[SentenciaFuente],
+) -> Option<
+    Result<(usize, Vec<crate::evaluador::LigaduraCanonica>), crate::evaluador::ErrorEvaluacion>,
+> {
+    let base = super::notas::base_con_notas(snapshot, delta).ok()?;
+    let snapshot: &Estructura = &base;
+    let candidato = construir_sobre(snapshot, delta).ok()?;
+    if detectar_sobre(snapshot, delta).ok()?.hay_conflictos() {
+        return None;
+    }
+    let expansion = expandir_sentencias_fuente(
+        invariantes,
+        candidato.estructura().manifiesto(),
+        candidato.estructura(),
+    )
+    .ok()?;
+    // Un solo presupuesto para toda la búsqueda: las oraciones verdaderas que
+    // preceden a la falsa también se recorren y cuentan.
+    let mut presupuesto =
+        crate::testigo::PresupuestoTestigo::nuevo(TESTIGO_MAX_UNIDADES, TESTIGO_MAX_INSTANCIAS);
+    for oracion in &expansion.oraciones {
+        match crate::testigo::testigo_de_oracion(
+            &oracion.formula,
+            candidato.estructura(),
+            &mut presupuesto,
+        ) {
+            Ok(None) => continue,
+            Ok(Some(ligaduras)) => return Some(Ok((oracion.source_index, ligaduras))),
+            Err(error) => return Some(Err(error)),
+        }
+    }
+    None
+}
+
+/// Unidades semánticas acumuladas que puede gastar la búsqueda de un testigo
+/// (diez veces el presupuesto de `proponer`: recorre instancia por instancia).
+const TESTIGO_MAX_UNIDADES: u64 = 10_000_000;
+
+/// Asignaciones que examina, como máximo, la búsqueda de un testigo.
+const TESTIGO_MAX_INSTANCIAS: u64 = 1_000_000;
+
 fn requiere_detector(error: &ErrorCandidato) -> bool {
     error.codigo() == "add_conflict"
         && matches!(

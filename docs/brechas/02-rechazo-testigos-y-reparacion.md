@@ -40,7 +40,7 @@ una reparación.
 
 | # | Brecha | Tamaño | Compuerta |
 |---|---|---|---|
-| T1 | **Hecho** (2026-11-17): `propose --explain decide|enumerate` en simulación, con el formato redactado de `check` v2; test `crates/universo-cli/tests/propose_explain.rs`. `propose --explain`: testigo concreto sobre el **candidato**, opt-in y solo local, manteniendo la redacción por defecto | M | No, pero debe respetar la política de privacidad |
+| T1 | **Hecho** (2026-11-17), y **«dónde» hecho** (2026-11-18): `propose --witness` da la primera asignación que incumple la regla, con rutas, opt-in y sólo local (no en el MCP). Antes: `propose --explain decide|enumerate` en simulación, con el formato redactado de `check` v2; test `crates/universo-cli/tests/propose_explain.rs`. `propose --explain`: testigo concreto sobre el **candidato**, opt-in y solo local, manteniendo la redacción por defecto | M | No, pero debe respetar la política de privacidad |
 | T2 | **Hecho en CLI** (2026-11-18): texto de `--explain` y JSON opt-in con `--rules` (`check` v3). MCP sin cambios. Nombre y mensaje de la regla en el rechazo (depende de R1 en [01](01-representacion-y-reglas.md)) | S | No |
 | T3 | `why` con contenido propio (p. ej. testigo y regla) o retirarlo | S | No |
 | T4 | Conflicto `Ext` como rechazo y no como error técnico `add_conflict` (`propuesta.rs:191-202`, reportado) | S | No |

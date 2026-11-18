@@ -4,8 +4,8 @@ use super::{captura::capturar_snapshot, snapshot::SnapshotToken};
 use crate::parsear_delta_json;
 use std::{fmt, path::Path};
 use universo_core::{
-    ErrorVeredicto, ModoExplicacion, ResultadoPropuesta, explicar_propuesta, proponer,
-    veredicto::ResultadoExplicacionesMedido,
+    ErrorVeredicto, ModoExplicacion, ResultadoPropuesta, ValorLigadura, explicar_propuesta,
+    proponer, testigo_propuesta, veredicto::ResultadoExplicacionesMedido,
 };
 
 /// Presupuesto del documento delta UTF-8 antes del parseo; no es una cota RSS.
@@ -207,6 +207,79 @@ fn leer_delta(delta: &Path) -> Result<String, ErrorSimulacion> {
     String::from_utf8(bytes).map_err(|_| ErrorSimulacion {
         codigo: "delta_invalid",
     })
+}
+
+/// Testigo localizado de la primera regla que el candidato del delta incumple.
+/// **Contiene rutas e identidades del bundle**: sólo para salida local opt-in.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TestigoSimulacion {
+    pub source_index: usize,
+    pub rule_id: Option<String>,
+    pub rule_message: Option<String>,
+    /// (variable, `node` | `edge`, ruta o identidad).
+    pub ligaduras: Vec<(String, &'static str, String)>,
+}
+
+impl fmt::Debug for TestigoSimulacion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TestigoSimulacion")
+            .field("source_index", &self.source_index)
+            .field("cantidad_ligaduras", &self.ligaduras.len())
+            .finish()
+    }
+}
+
+/// `None` si el delta se admite o no hay invariantes que localizar (conflicto
+/// funcional o error de candidato, que `simular_archivo` ya informa).
+pub fn testigo_archivo(
+    raiz: &Path,
+    manifiesto: &Path,
+    invariantes: &Path,
+    delta: &Path,
+) -> Result<Option<TestigoSimulacion>, ErrorSimulacion> {
+    let texto = leer_delta(delta)?;
+    if texto.len() > MAX_DELTA_BYTES {
+        return Err(ErrorSimulacion {
+            codigo: "delta_resource_limit",
+        });
+    }
+    let delta = parsear_delta_json(&texto).map_err(|_| ErrorSimulacion {
+        codigo: "delta_invalid",
+    })?;
+    let snapshot = capturar_snapshot(
+        raiz,
+        manifiesto,
+        invariantes,
+        VERSION_MOTOR_V1,
+        POLICY_ID_V1,
+    )
+    .map_err(|error| ErrorSimulacion {
+        codigo: error.codigo(),
+    })?;
+    let fuentes = snapshot.fuentes_invariantes();
+    match testigo_propuesta(snapshot.estructura(), &delta, fuentes) {
+        None => Ok(None),
+        Some(Err(universo_core::ErrorEvaluacion::PresupuestoAgotado { .. })) => {
+            Err(ErrorSimulacion {
+                codigo: "witness_budget_exceeded",
+            })
+        }
+        Some(Err(_)) => Err(ErrorSimulacion {
+            codigo: "witness_failed",
+        }),
+        Some(Ok((source_index, ligaduras))) => Ok(Some(TestigoSimulacion {
+            source_index,
+            rule_id: fuentes.get(source_index).and_then(|f| f.id.clone()),
+            rule_message: fuentes.get(source_index).and_then(|f| f.mensaje.clone()),
+            ligaduras: ligaduras
+                .into_iter()
+                .map(|l| match l.valor {
+                    ValorLigadura::Nodo(path) => (l.variable.to_string(), "node", path.to_string()),
+                    ValorLigadura::Arista(id) => (l.variable.to_string(), "edge", id.to_string()),
+                })
+                .collect(),
+        })),
+    }
 }
 
 /// Lee un delta regular acotado sin seguir su enlace final. En Unix abre

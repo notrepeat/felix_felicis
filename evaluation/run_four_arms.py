@@ -40,7 +40,9 @@ sys.path.insert(0, str(REPO / "tools"))
 import four_arms_scoring as scoring  # noqa: E402
 import orquestador as orq  # noqa: E402
 
-PROTOCOL = "felix-four-arms-v1"
+# v2: contexto parcial (propuesta 09b). La v1, con información completa, quedó
+# en las calibraciones archivadas de `evaluation/results/four-arms-v1-*`.
+PROTOCOL = "felix-four-arms-v2"
 ARMS = ["A_baseline", "B_felix_opcional", "C_obligatorio", "D_revision"]
 RONDAS = 3
 REPETICIONES = 3
@@ -72,6 +74,9 @@ INSTRUCCION = ("Resuelve la tarea sintética de edición de un grafo de conocimi
                "significa no cambiar nada.")
 NOTA_MCP = (f" Tienes herramientas de verificación de Felix (context, check, propose, why); puedes usarlas para "
             f"comprobar y reparar tu propuesta, con un máximo de {MCP_LLAMADAS} llamadas.")
+NOTA_CONTEXTO = ("Sólo ves una parte de la base de conocimiento: los hechos de los nodos que nombra el objetivo y de "
+                 "sus vecinos directos, y las aristas que tocan a los nodos nombrados. El resto de la base existe "
+                 "aunque no se muestre, y las reglas se aplican a toda la base.")
 REVISION_NEUTRAL = ("Revisa tu propuesta anterior contra las reglas y el objetivo. Devuelve el delta final; "
                     "si ya es correcto, devuélvelo sin cambios.")
 SYSTEM_PROMPT = ("Eres un agente que resuelve tareas sintéticas de edición de un grafo de conocimiento. "
@@ -112,7 +117,9 @@ def build_plan(model, seed=SEMILLA, repetitions=REPETICIONES):
         "cases": [c["id"] for c in tasks["cases"]], "runs": len(rows),
         "source_sha256": {name: file_sha256(name) for name in SOURCES},
         "agent_cli": "claude-code", "system_prompt": SYSTEM_PROMPT,
-        "instruction": INSTRUCCION, "mcp_note": NOTA_MCP, "neutral_review": REVISION_NEUTRAL,
+        "instruction": INSTRUCCION, "mcp_note": NOTA_MCP, "context_note": NOTA_CONTEXTO,
+        "neutral_review": REVISION_NEUTRAL, "context_rule": "radio 1 desde los nodos nombrados (visible_facts)",
+        "c_feedback": "regla fallida (id y mensaje) y testigo localizado (propose --witness)",
         "schema_sha256": digest(SCHEMA),
         "primary_endpoints": ["final_invalid_state (oráculo)", "final_success (oráculo)"],
         "secondary_endpoints": ["first_delta_success", "repaired", "rounds", "escalated", "elapsed_seconds",
@@ -123,8 +130,10 @@ def build_plan(model, seed=SEMILLA, repetitions=REPETICIONES):
 
 
 def prompt(case, arm, historia=()):
-    texto = INSTRUCCION + (NOTA_MCP if arm == "B_felix_opcional" else "")
-    texto += "\n" + json.dumps({k: case[k] for k in ["prompt", "facts", "rules", "invariants"]}, ensure_ascii=False)
+    texto = INSTRUCCION + (NOTA_MCP if arm == "B_felix_opcional" else "") + " " + NOTA_CONTEXTO
+    visible = {"prompt": case["prompt"], "facts": case["visible_facts"], "rules": case["rules"],
+               "invariants": case["invariants"]}
+    texto += "\n" + json.dumps(visible, ensure_ascii=False)
     for entrada in historia:
         texto += "\n" + entrada
     return texto
@@ -322,6 +331,10 @@ def _historia_delta(delta):
 def _historia_felix(retro):
     partes = [f"{o.get('rule_id')}: {o.get('rule_message')}" for o in retro.get("objetos") or []]
     partes += [f"error de formato del delta: {c}" for c in retro.get("codigos") or []]
+    testigo = retro.get("testigo") or {}
+    if testigo.get("bindings"):
+        ligaduras = ", ".join(f"{b['variable']}={b['value']}" for b in testigo["bindings"])
+        partes.append(f"la incumple la instancia {ligaduras}")
     return (f"Felix rechazó esa propuesta ({'; '.join(partes) or 'sin detalle'}). "
             f"Intentos restantes: {retro['intentos_restantes']}. Devuelve un delta corregido.")
 
@@ -372,7 +385,8 @@ def run_arm(case, arm, agente, binario, trabajo):
             rondas.append(respuesta)
             return respuesta["delta"] if respuesta["status"] == "completed" else None
 
-    resultado = orq.Orquestador(binario, repo, presupuesto=RONDAS, reparar_errores_de_delta=True).ejecutar(
+    resultado = orq.Orquestador(binario, repo, presupuesto=RONDAS, reparar_errores_de_delta=True,
+                                testigo=True).ejecutar(
         Adaptador(), f"tarea {case['id']}")
     final = rondas[-1]["delta"] if resultado["resultado"] == "publicado" else NULO
     return rondas, final, {"orquestador": resultado}
@@ -518,7 +532,7 @@ def main():
     if args.agente == "claude":
         # Un único destino por fase: no se puede correr el estudio en otro
         # directorio y quedarse con la mejor corrida.
-        fijo = RESULTS / f"four-arms-v1-{args.fase}"
+        fijo = RESULTS / f"four-arms-v2-{args.fase}"
         if args.output is not None and args.output.resolve() != fijo.resolve():
             raise SystemExit(f"con --agente claude el destino es {fijo}")
         args.output = fijo
@@ -539,7 +553,7 @@ def main():
     if args.agente == "claude" and args.fase == "estudio":
         # 9c corre con los mismos binarios y la misma versión de Claude Code que la
         # calibración 9b, si existe.
-        calibracion = RESULTS / "four-arms-v1-calibracion" / "run.json"
+        calibracion = RESULTS / "four-arms-v2-calibracion" / "run.json"
         if calibracion.exists():
             previo = json.loads(calibracion.read_text(encoding="utf-8"))
             claves = ["universo_sha256", "universo_mcp_sha256", "agent_cli_version"]

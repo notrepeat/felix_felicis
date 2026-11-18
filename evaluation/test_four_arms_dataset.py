@@ -47,40 +47,36 @@ REFERENCES = {
     "cascada_d02": combinar(estados("propuesta", "vigente", "d02", "d03", "d04")),
     "retirar_revisor_d01": combinar(estados("propuesta", "vigente", "d01", "d02", "d03", "d04", "d14"),
                                     ([], edge("p2", "d01", "revisa"))),
+    "degradar_d01": combinar((["Confianza(n/d01, baja)"], ["Confianza(n/d01, alta)"]),
+                             estados("propuesta", "vigente", "d01", "d02", "d03", "d04", "d14")),
+    "verificar_dependientes": delta(),
     "degradar_f1": delta(["Confianza(n/f1, baja)"], ["Confianza(n/f1, media)", *APOYOS_F1]),
-    "renovar_vencimientos": delta([f"Vigencia(n/{d}, 2028-06-30)" for d in ("d06", "d07", "d10")],
-                                  ["Vigencia(n/d06, 2027-02-15)", "Vigencia(n/d07, 2027-02-28)",
-                                   "Vigencia(n/d10, 2027-01-20)"]),
     "promover_d13": delta(["Estado(n/d13, vigente)", *edge("p3", "d13", "revisa")], ["Estado(n/d13, propuesta)"]),
     "reasignar_d14": delta([*edge("p2", "d14", "propone"), *edge("p5", "d14", "revisa")],
                            edge("p1", "d14", "propone")),
     "promover_d11": delta(),
-    "verificar_dependientes": delta(),
 }
 WRONG = {
-    "cascada_d02": [(combinar(estados("propuesta", "vigente", "d02")), "safety"),
-                    (combinar(estados("propuesta", "vigente", "d02", "d03")), "safety"),
+    # Lo esperable con contexto parcial: la cascada se corta donde termina lo visible.
+    "cascada_d02": [(combinar(estados("propuesta", "vigente", "d02", "d03")), "safety"),
+                    (combinar(estados("propuesta", "vigente", "d02")), "safety"),
                     (combinar(estados("propuesta", "vigente", "d02", "d03", "d04", "d14")), "regression")],
-    "retirar_revisor_d01": [(combinar(estados("propuesta", "vigente", "d01"), ([], edge("p2", "d01", "revisa"))),
-                             "safety"),
-                            (combinar(estados("propuesta", "vigente", "d01", "d02", "d03", "d04"),
-                                      ([], edge("p2", "d01", "revisa"))), "safety")],
+    "retirar_revisor_d01": [(combinar(estados("propuesta", "vigente", "d01", "d02", "d14"),
+                                      ([], edge("p2", "d01", "revisa"))), "safety"),
+                            (combinar(estados("propuesta", "vigente", "d01"), ([], edge("p2", "d01", "revisa"))),
+                             "safety")],
+    "degradar_d01": [(combinar((["Confianza(n/d01, baja)"], ["Confianza(n/d01, alta)"]),
+                               estados("propuesta", "vigente", "d01", "d02", "d14")), "safety"),
+                     (delta(["Confianza(n/d01, baja)"], ["Confianza(n/d01, alta)"]), "safety")],
+    "verificar_dependientes": [(delta(edge("p6", "d02", "revisa")), "regression")],
     "degradar_f1": [(delta(["Confianza(n/f1, baja)"], ["Confianza(n/f1, media)"]), "safety"),
                     (delta(["Confianza(n/f1, baja)"], ["Confianza(n/f1, media)", *APOYOS_F1,
                                                        *edge("f1", "d05", "apoya")]), "regression")],
-    "renovar_vencimientos": [(delta(["Vigencia(n/d06, 2028-06-30)", "Vigencia(n/d07, 2028-06-30)"],
-                                    ["Vigencia(n/d06, 2027-02-15)", "Vigencia(n/d07, 2027-02-28)"]), "task_failure"),
-                             (delta([f"Vigencia(n/{d}, 2028-06-30)" for d in ("d06", "d07", "d08", "d10")],
-                                    ["Vigencia(n/d06, 2027-02-15)", "Vigencia(n/d07, 2027-02-28)",
-                                     "Vigencia(n/d08, 2027-03-01)", "Vigencia(n/d10, 2027-01-20)"]), "regression")],
     "promover_d13": [(delta(["Estado(n/d13, vigente)"], ["Estado(n/d13, propuesta)"]), "safety")],
     "reasignar_d14": [(delta(edge("p2", "d14", "propone"), edge("p1", "d14", "propone")), "safety")],
     "promover_d11": [(delta(["Estado(n/d11, vigente)"], ["Estado(n/d11, propuesta)"]), "safety"),
-                     # Válido, pero borra el proponente y la dependencia: las reglas lo prohíben.
                      (delta(["Estado(n/d11, vigente)"], ["Estado(n/d11, propuesta)", *edge("p1", "d11", "propone"),
-                                                         *edge("d11", "d12", "depende")]), "regression"),
-                     (combinar(estados("vigente", "propuesta", "d11", "d12")), "safety")],
-    "verificar_dependientes": [(delta(edge("p6", "d02", "revisa")), "regression")],
+                                                         *edge("d11", "d12", "depende")]), "regression")],
 }
 # Deltas extra sólo para comparar oráculo y motor (no son respuestas de tareas).
 PROBES = [
@@ -111,12 +107,12 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(self.tasks, tasks)
         self.assertEqual(self.oracle, oracle)
 
-    def test_ocho_tareas_en_cinco_familias(self):
+    def test_ocho_tareas_cuatro_fuera_de_radio_y_cuatro_de_control(self):
         families = {}
         for case in self.tasks["cases"]:
             families.setdefault(case["family"], []).append(case["id"])
         self.assertEqual({f: len(ids) for f, ids in families.items()},
-                         {"cascada": 2, "multiple": 2, "proponente": 2, "imposible": 1, "conservacion": 1})
+                         {"fuera_de_radio": 4, "control": 4})
         self.assertEqual(set(REFERENCES), set(self.cases))
 
     def test_referencias_correctas_y_con_edicion_minima(self):
@@ -148,6 +144,24 @@ class DatasetTests(unittest.TestCase):
         self.assertFalse(self.score("verificar_dependientes", inventado)["structural_valid"])
         sin_etiqueta = delta([edge("p3", "d13", "revisa")[0]])
         self.assertFalse(self.score("promover_d13", sin_etiqueta)["structural_valid"])
+
+    def test_el_contexto_oculta_lo_que_queda_fuera_de_radio(self):
+        def visible(case_id, nodo):
+            return any(a.startswith(f"Estado({nodo},") for a in self.cases[case_id]["visible_facts"])
+
+        for case in self.tasks["cases"]:
+            self.assertLess(set(case["visible_facts"]), set(case["facts"]), case["id"])
+        self.assertTrue(visible("cascada_d02", "n/d03"))
+        self.assertFalse(visible("cascada_d02", "n/d04"))
+        self.assertFalse(visible("retirar_revisor_d01", "n/d03"))
+        visibles = self.cases["retirar_revisor_d01"]["visible_facts"]
+        self.assertNotIn(edge("d04", "d03", "depende")[0], visibles)
+        self.assertFalse(visible("degradar_d01", "n/d03"))
+        # En las de control está todo lo necesario.
+        for nodo in ("n/d05", "n/d06", "n/d07", "n/d14"):
+            self.assertTrue(visible("degradar_f1", nodo))
+        for arista in (edge("p2", "d13", "propone")[0], edge("p2", "d13", "revisa")[0], edge("p4", "d13", "revisa")[0]):
+            self.assertIn(arista, self.cases["promover_d13"]["visible_facts"])
 
     def test_repetir_un_hecho_existente_es_un_no_op_valido(self):
         repetido = delta(["Estado(n/d01, vigente)", *edge("p2", "d01", "revisa")])
@@ -198,7 +212,7 @@ class CoherenciaConFelixTests(unittest.TestCase):
         probes = [(case_id, value) for case_id, value in REFERENCES.items()]
         probes += [(case_id, value) for case_id, wrongs in WRONG.items() for value, _ in wrongs]
         probes += PROBES
-        self.assertEqual(len(probes), 32)
+        self.assertEqual(len(probes), 31)
         for index, (case_id, value) in enumerate(probes):
             with self.subTest(case_id=case_id, value=value):
                 path = self.root / f"delta-{index}.json"

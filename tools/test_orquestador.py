@@ -185,6 +185,19 @@ class OrquestadorTests(unittest.TestCase):
         objetos = agente.recibido[1][1]["objetos"]
         self.assertEqual([(o["rule_id"], o["kind"]) for o in objetos], [("vigente-es-criterio", "rule")])
 
+    def test_con_testigo_el_rechazo_dice_donde(self):
+        agente = Guionizado(INVALIDO, VALIDO)
+        resultado = self.orquestador(testigo=True).ejecutar(agente, "x")
+        self.assertEqual(resultado["resultado"], "publicado")
+        testigo = agente.recibido[1][1]["testigo"]
+        self.assertEqual(testigo["rule_id"], "vigente-es-criterio")
+        self.assertEqual(testigo["bindings"], [{"variable": "x", "kind": "node", "value": "notas/bienvenida"}])
+        # Sin la opción no viajan rutas.
+        self.repo = orq.crear_repositorio_demo(BINARIO, self.base / "kb-sin-testigo")
+        agente = Guionizado(INVALIDO, VALIDO)
+        self.orquestador().ejecutar(agente, "x")
+        self.assertIsNone(agente.recibido[1][1]["testigo"])
+
     def test_excepcion_del_agente_escala(self):
         class Roto:
             def proponer(self, vista, retroalimentacion):

@@ -1,9 +1,19 @@
-# Protocolo prerregistrado de cuatro brazos (`felix-four-arms-v1`)
+# Protocolo prerregistrado de cuatro brazos (`felix-four-arms-v2`, contexto parcial)
 
-Fijado el 2026-11-18, antes de cualquier corrida con un modelo real. Diseño y
-decisiones: [propuesta 09](../docs/propuestas/09-estudio-cuatro-brazos.md). El
-piloto 173 ([protocolo](paired_methodology.md)) queda intacto y sus resultados
-no se mezclan con estos.
+Fijado el 2026-11-18, antes de cualquier corrida del estudio. Diseño y
+decisiones: [propuesta 09](../docs/propuestas/09-estudio-cuatro-brazos.md) y
+[propuesta 09b](../docs/propuestas/09b-contexto-parcial.md). El piloto 173
+([protocolo](paired_methodology.md)) queda intacto y sus resultados no se
+mezclan con estos.
+
+**Versión 2 (contexto parcial).** La versión 1 daba a todos los brazos todos los
+hechos; sus dos calibraciones (tareas v1 y v2) dieron 16 de 16 aciertos del
+baseline (ver el registro de intentos). En la versión 2 cada brazo ve sólo los
+hechos de radio 1 alrededor de los nodos que nombra el objetivo
+(`visible_facts`, con una nota que lo dice), y en C el rechazo incluye un
+**testigo localizado** (`propose --witness`): la primera asignación que incumple
+la regla, con rutas del bundle. El oráculo sigue puntuando contra la base
+completa. Los resultados van a `evaluation/results/four-arms-v2-<fase>/`.
 
 ## Qué se congela
 
@@ -46,35 +56,29 @@ modelos de otro proveedor.
 
 ## Tareas
 
-[`four_arms/tasks.json`](four_arms/tasks.json), generadas por
-[`four_arms_dataset.py`](four_arms_dataset.py). Es la **versión 2**: la versión 1
-(9 nodos, seis reglas) se descartó después de que la calibración diera 16 de 16
-aciertos del baseline (ver el registro de intentos). Antes de cualquier corrida
-del estudio se diseñaron ocho tareas sobre un bundle de 24 nodos (14
-decisiones, 4 fuentes y 6 personas), 53 aristas (`revisa`, `propone`, `apoya` y
-`depende`) y 200 hechos, con siete reglas:
+[`four_arms/tasks.json`](four_arms/tasks.json), **versión 3**, generadas por
+[`four_arms_dataset.py`](four_arms_dataset.py) sobre el mismo bundle de la
+versión 2: 24 nodos (14 decisiones, 4 fuentes, 6 personas), 53 aristas
+(`revisa`, `propone`, `apoya`, `depende`), 200 hechos y siete reglas, entre ellas
+revisores mínimos con `al-menos 2` (el proponente no cuenta) y dependencias
+vigentes con cascadas de hasta cuatro pasos. Cada tarea declara los nodos que
+nombra (`context_nodes`) y los hechos que verá el agente (`visible_facts`): los
+de esos nodos y sus vecinos directos, más las aristas que los tocan.
 
-- revisores mínimos con `al-menos 2`, donde quien propone una decisión no cuenta
-  como su revisor;
-- confianza ordenada;
-- vigencia por fecha;
-- dependencias: una decisión vigente sólo depende de decisiones vigentes, lo que
-  produce cascadas de hasta cuatro pasos;
-- fuente confiable;
-- tipos de las cuatro aristas.
-
-| Familia | Tareas | Dificultad prevista |
+| Familia | Tareas | Qué queda fuera de la vista |
 |---|---|---|
-| cascada | `cascada_d02`, `retirar_revisor_d01` | el cambio arrastra a otras decisiones por la cadena `depende` (d04 → d03 → d02 → d01, y d14 → d01); hay que seguirla entera y no tocar d05, que ya es propuesta |
-| multiple | `degradar_f1`, `renovar_vencimientos` | recorrer muchos nodos: retirar sólo los apoyos a decisiones vigentes (no el de d05); renovar sólo las vigentes que vencen antes del 2027-03-01 (no d08, que vence ese día, ni d09, que es propuesta) |
-| proponente | `promover_d13`, `reasignar_d14` | el proponente que también revisa no cuenta: sin un revisor más, la decisión no cumple |
-| imposible | `promover_d11` | el proponente es revisor y la decisión depende de otra que no puede ser vigente; lo correcto es no cambiar nada |
-| conservacion | `verificar_dependientes` | ya se cumple, si se descuenta bien al proponente; lo correcto es no cambiar nada |
+| fuera_de_radio | `cascada_d02`, `retirar_revisor_d01`, `degradar_d01`, `verificar_dependientes` | la cascada sigue por decisiones que no se ven: `d04` en `cascada_d02` (se ve `d03`); `d03` en `retirar_revisor_d01` y `degradar_d01` (en la primera se ve `d04`, pero no su arista hacia `d03`); en `verificar_dependientes`, los revisores y proponentes de los dependientes |
+| control | `degradar_f1`, `promover_d13`, `reasignar_d14`, `promover_d11` | nada: todo lo necesario es visible |
 
-Todos los brazos reciben el mismo objetivo, los hechos, las reglas en lenguaje
-natural y las invariantes `.sx`. El brazo B recibe además una línea que anuncia
-las herramientas MCP. Nunca se entregan las claves del oráculo ni las respuestas
+Todos los brazos reciben el mismo objetivo, los mismos hechos visibles, la nota
+de contexto, las reglas en lenguaje natural y las invariantes `.sx`. El brazo B
+recibe además una línea que anuncia las herramientas MCP; `context` le permite
+ver más de la base. Nunca se entregan las claves del oráculo ni las respuestas
 de referencia.
+
+**Criterio de calibración (v2).** Se sigue con el estudio si el baseline falla al
+menos una tarea fuera de radio y acierta las de control. Si acierta todo, se
+revisa el diseño. Si falla las de control, las tareas están mal planteadas.
 
 ## Oráculo
 
@@ -99,7 +103,9 @@ una arista nueva tome el siguiente índice libre de su (origen, destino, clave).
 | C_obligatorio | hasta 3 | `admit` del orquestador | lo publicado, o ningún cambio si escala |
 | D_revision | hasta 3 | el agente repite su delta | la última respuesta |
 
-En C, un rechazo vuelve con id y mensaje de cada regla fallida. Un error de forma
+En C, un rechazo vuelve con el id y el mensaje de la regla fallida y con el
+testigo localizado: la instancia que la incumple, con rutas (por ejemplo
+`e=n/d04→n/d03#depende#0, a=n/d04, b=n/d03`). Un error de forma
 del delta vuelve con su código; sólo se devuelven los de una lista blanca
 (`CODIGOS_DE_DELTA` del orquestador), y cualquier otro código escala. En D cada
 ronda recibe la misma instrucción neutral, que no dice si la propuesta es válida.

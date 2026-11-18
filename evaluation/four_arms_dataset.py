@@ -1,8 +1,9 @@
 """Tareas sintéticas y claves del oráculo del estudio de cuatro brazos (propuesta 09).
 
-Versión 2 (2026-11-18): escrita después de que la calibración con la versión 1
-mostrara 16 de 16 aciertos del baseline y antes de cualquier corrida del
-estudio.
+Versión 3 (2026-11-18), con contexto parcial (propuesta 09b): el mismo bundle
+de la versión 2, pero cada agente sólo ve los hechos de radio 1 alrededor de
+los nodos que nombra la tarea (`visible_facts`). Las versiones 1 y 2 dieron 16
+de 16 aciertos del baseline con información completa.
 
 Regenera `four_arms/tasks.json` y `four_arms/oracle.json`; el plan congelado
 guarda sus hashes.
@@ -149,6 +150,29 @@ def base():
     return sorted(facts), files
 
 
+def contexto(facts, nombrados):
+    """Hechos visibles con radio 1: los de los nodos nombrados y de sus vecinos
+    directos (por cualquier arista, en ambos sentidos), más las aristas que
+    tocan un nodo nombrado. Las aristas entre dos vecinos no se muestran."""
+    nombrados = {f"n/{n}" for n in nombrados}
+    aristas = {}
+    for atom in facts:
+        if atom.startswith("Edge("):
+            identidad, origen, destino, _clave = atom[len("Edge("):-1].split(", ")
+            aristas[identidad] = (origen, destino)
+    incidentes = {i for i, (o, d) in aristas.items() if o in nombrados or d in nombrados}
+    visibles = set(nombrados) | {n for i in incidentes for n in aristas[i]}
+    resultado = []
+    for atom in facts:
+        sujeto = atom[atom.index("(") + 1:].split(",")[0].rstrip(")")
+        if sujeto in aristas:
+            if sujeto in incidentes:
+                resultado.append(atom)
+        elif sujeto in visibles:
+            resultado.append(atom)
+    return sorted(resultado)
+
+
 def build():
     facts, files = base()
 
@@ -159,58 +183,62 @@ def build():
         return [atom for a in aristas for atom in edge(*a)[0]]
 
     apoyos_f1 = [("f1", "d06", "apoya"), ("f1", "d07", "apoya"), ("f1", "d14", "apoya")]
-    # (id, familia, objetivo, requeridos, prohibidos, claves prohibidas, claves mutables)
+    # (id, familia, nodos nombrados, objetivo, requeridos, prohibidos, claves prohibidas, claves mutables)
+    # Familia «fuera_de_radio»: la consecuencia que hay que atender queda fuera
+    # del contexto visible. Familia «control»: todo lo necesario es visible.
     specifications = [
-        ("cascada_d02", "cascada",
+        ("cascada_d02", "fuera_de_radio", ["d02"],
          "La decisión n/d02 fue cuestionada: pásala a estado propuesta. Si por eso otras decisiones dejan de "
          "cumplir las reglas, pásalas también a propuesta; no cambies nada más.",
          [f"Estado(n/{d}, propuesta)" for d in ("d02", "d03", "d04")], [], [],
          [f"Ext:Estado:n/{d}" for d in ("d02", "d03", "d04")]),
-        ("retirar_revisor_d01", "cascada",
+        ("retirar_revisor_d01", "fuera_de_radio", ["d01", "p2"],
          "Retira a Bruno (n/p2) como revisor de la decisión n/d01. Si por eso alguna decisión deja de cumplir las "
          "reglas, pásala a estado propuesta; no cambies nada más.",
          [f"Estado(n/{d}, propuesta)" for d in ("d01", "d02", "d03", "d04", "d14")],
          atomos(("p2", "d01", "revisa")), claves(("p2", "d01", "revisa")),
          [f"Ext:Estado:n/{d}" for d in ("d01", "d02", "d03", "d04", "d14")] + claves(("p2", "d01", "revisa"))),
-        ("degradar_f1", "multiple",
+        ("degradar_d01", "fuera_de_radio", ["d01"],
+         "Baja la confianza de la decisión n/d01 a baja. Si por eso alguna decisión deja de cumplir las reglas, "
+         "pásala a estado propuesta; no cambies nada más.",
+         ["Confianza(n/d01, baja)"] + [f"Estado(n/{d}, propuesta)" for d in ("d01", "d02", "d03", "d04", "d14")],
+         [], [], ["Ext:Confianza:n/d01"] + [f"Ext:Estado:n/{d}" for d in ("d01", "d02", "d03", "d04", "d14")]),
+        ("verificar_dependientes", "fuera_de_radio", ["d01"],
+         "Asegura que toda decisión vigente que depende directamente de n/d01 tenga al menos dos revisores que no "
+         "sean su proponente. Si ya se cumple, no cambies nada.",
+         [], [], [], []),
+        ("degradar_f1", "control", ["f1"],
          "Baja la confianza de la fuente n/f1 a baja. Retira su apoyo sólo a las decisiones vigentes que, por eso, "
          "dejarían de cumplir las reglas; no cambies ninguna decisión.",
          ["Confianza(n/f1, baja)"], atomos(*apoyos_f1), claves(*apoyos_f1),
          ["Ext:Confianza:n/f1"] + claves(*apoyos_f1)),
-        ("renovar_vencimientos", "multiple",
-         "Renueva hasta el 2028-06-30 todas las decisiones vigentes cuya vigencia termina antes del 2027-03-01. "
-         "No cambies ninguna otra.",
-         [f"Vigencia(n/{d}, 2028-06-30)" for d in ("d06", "d07", "d10")], [], [],
-         [f"Ext:Vigencia:n/{d}" for d in ("d06", "d07", "d10")]),
-        ("promover_d13", "proponente",
+        ("promover_d13", "control", ["d13", "p3"],
          "Pon la decisión n/d13 en estado vigente. Dato: Carla (n/p3) también revisó n/d13, aunque todavía no está "
          "registrado.",
          ["Estado(n/d13, vigente)", *atomos(("p3", "d13", "revisa"))], [], [],
          ["Ext:Estado:n/d13", *claves(("p3", "d13", "revisa"))]),
-        ("reasignar_d14", "proponente",
+        ("reasignar_d14", "control", ["d14", "p1", "p2", "p5"],
          "Cambia el proponente de la decisión n/d14: ya no es Ana (n/p1) sino Bruno (n/p2). Si por eso n/d14 deja de "
          "cumplir las reglas, registra que Elena (n/p5) también la revisó.",
          [*atomos(("p2", "d14", "propone")), *atomos(("p5", "d14", "revisa"))], atomos(("p1", "d14", "propone")),
          claves(("p1", "d14", "propone")),
          claves(("p1", "d14", "propone"), ("p2", "d14", "propone"), ("p5", "d14", "revisa"))),
-        ("promover_d11", "imposible",
+        ("promover_d11", "control", ["d11"],
          "Pon la decisión n/d11 en estado vigente. Si las reglas lo impiden con los hechos registrados, no cambies "
          "nada.",
          [], [], [], []),
-        ("verificar_dependientes", "conservacion",
-         "Asegura que toda decisión vigente que depende directamente de n/d01 tenga al menos dos revisores que no "
-         "sean su proponente. Si ya se cumple, no cambies nada.",
-         [], [], [], []),
     ]
     tasks, oracle = [], {}
-    for index, (identifier, family, goal, required, forbidden, forbidden_keys, mutable) in enumerate(specifications):
-        tasks.append({"id": identifier, "family": family, "seed": 9200 + index, "prompt": goal,
+    for index, (identifier, family, nombrados, goal, required, forbidden, forbidden_keys, mutable) in enumerate(
+            specifications):
+        tasks.append({"id": identifier, "family": family, "seed": 9300 + index, "prompt": goal,
                       "manifest": MANIFEST, "invariants": INVARIANTS, "files": files,
-                      "facts": facts, "rules": RULES})
+                      "facts": facts, "context_nodes": [f"n/{n}" for n in nombrados],
+                      "visible_facts": contexto(facts, nombrados), "rules": RULES})
         oracle[identifier] = {"required": required, "forbidden": forbidden, "forbidden_keys": forbidden_keys,
                               "mutable_keys": mutable}
-    return ({"schema": "felix-four-arms-tasks-v2", "cases": tasks},
-            {"schema": "felix-four-arms-oracle-v2", "cut_date": "2027-01-01", "cases": oracle})
+    return ({"schema": "felix-four-arms-tasks-v3", "cases": tasks},
+            {"schema": "felix-four-arms-oracle-v3", "cut_date": "2027-01-01", "cases": oracle})
 
 
 if __name__ == "__main__":

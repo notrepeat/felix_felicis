@@ -1,5 +1,5 @@
 {
-  "schema": "felix-four-arms-oracle-v2",
+  "schema": "felix-four-arms-oracle-v3",
   "cut_date": "2027-01-01",
   "cases": {
     "cascada_d02": {
@@ -42,6 +42,32 @@
         "HasLab:n/p2→n/d01#revisa#0"
       ]
     },
+    "degradar_d01": {
+      "required": [
+        "Confianza(n/d01, baja)",
+        "Estado(n/d01, propuesta)",
+        "Estado(n/d02, propuesta)",
+        "Estado(n/d03, propuesta)",
+        "Estado(n/d04, propuesta)",
+        "Estado(n/d14, propuesta)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Confianza:n/d01",
+        "Ext:Estado:n/d01",
+        "Ext:Estado:n/d02",
+        "Ext:Estado:n/d03",
+        "Ext:Estado:n/d04",
+        "Ext:Estado:n/d14"
+      ]
+    },
+    "verificar_dependientes": {
+      "required": [],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": []
+    },
     "degradar_f1": {
       "required": [
         "Confianza(n/f1, baja)"
@@ -70,20 +96,6 @@
         "HasLab:n/f1→n/d07#apoya#0",
         "Edge:n/f1→n/d14#apoya#0",
         "HasLab:n/f1→n/d14#apoya#0"
-      ]
-    },
-    "renovar_vencimientos": {
-      "required": [
-        "Vigencia(n/d06, 2028-06-30)",
-        "Vigencia(n/d07, 2028-06-30)",
-        "Vigencia(n/d10, 2028-06-30)"
-      ],
-      "forbidden": [],
-      "forbidden_keys": [],
-      "mutable_keys": [
-        "Ext:Vigencia:n/d06",
-        "Ext:Vigencia:n/d07",
-        "Ext:Vigencia:n/d10"
       ]
     },
     "promover_d13": {
@@ -125,12 +137,6 @@
       ]
     },
     "promover_d11": {
-      "required": [],
-      "forbidden": [],
-      "forbidden_keys": [],
-      "mutable_keys": []
-    },
-    "verificar_dependientes": {
       "required": [],
       "forbidden": [],
       "forbidden_keys": [],

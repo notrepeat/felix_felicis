@@ -12,6 +12,7 @@ pub mod invariante;
 pub mod manifiesto;
 pub mod path;
 pub mod sexpr;
+pub mod testigo;
 pub mod tipos;
 pub mod transaccion;
 pub mod veredicto;
@@ -44,7 +45,7 @@ pub use transaccion::{
     Candidato, ClaseConflicto, ClaseOperacion, DiagnosticoConflicto, ErrorCandidato,
     ErrorPropuesta, EtapaErrorPropuesta, ProcedenciaInvariante, ResultadoConflictos,
     ResultadoPropuesta, construir_candidato, detectar_conflictos_funcionales, explicar_propuesta,
-    padre_legado, proponer,
+    padre_legado, proponer, testigo_propuesta,
 };
 pub use veredicto::{
     Contraejemplo, ErrorVeredicto, MAX_EXPLICACIONES_POR_DEFECTO, ModoExplicacion,

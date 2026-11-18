@@ -276,6 +276,23 @@ añade los mismos campos a sus objetos. Sin `--rules` el JSON v2 no cambia y sin
 `--explain` no aparecen. Escribe el mensaje sabiendo que se mostrará a quien
 ejecute `--explain`.
 
+### Dónde falla un rechazo
+
+La explicación de `--explain` está redactada: dice qué regla falló y con qué
+forma, pero no en qué nodos. `propose --witness` (sólo en simulación) añade el
+**testigo localizado** de la primera regla que incumple el candidato: la
+asignación de sus variables universales, con rutas e identidades de arista. En
+JSON va en `witness` (`source_index`, `rule_id`, `rule_message`, `bindings`) y en
+texto como `witness: <regla>: x=n/a`. La clave sólo aparece con `--witness`, y
+vale `null` si el delta se admite, si hay un conflicto funcional o un error
+técnico. Un testigo que agota su propio presupuesto (10 000 000 unidades
+acumuladas) da `{"error": "witness_budget_exceeded"}`. Para
+encontrarlo, Felix evalúa una por una las instancias de la regla, sin
+materializar evidencia, así que funciona aunque la explicación agote su
+presupuesto. Se calcula con una segunda lectura del delta y del bundle, así que
+si cambian entre el veredicto y el testigo, el testigo puede describir otro
+estado. **Revela datos del bundle**: úsalo sólo en local. El MCP no lo expone.
+
 `--emit-snapshot-token` añade explícitamente el token sensible del snapshot;
 por defecto no se incluye. El token identifica árbol raw, configuración y
 semántica del motor; no es una autorización de escritura. La captura por ruta
