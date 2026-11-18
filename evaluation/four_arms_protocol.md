@@ -156,6 +156,18 @@ como revisor y la tarea imposible. Junto con el piloto 173 (12 de 12 con GPT),
 es la tercera vez que un modelo actual resuelve todas las tareas cuando recibe
 todos los hechos y las reglas en el prompt.
 
+**Calibración v2 (contexto parcial).** El 2026-11-18, con `claude-sonnet-5-5`,
+tareas v3 y radio 1, en
+[`results/four-arms-v2-calibracion/`](results/four-arms-v2-calibracion/summary.json):
+**10 de 16 aciertos**, sin fallos técnicos. Las 8 corridas de control fueron
+correctas. De las 8 fuera de radio, fallaron las 6 de cascada (`cascada_d02`,
+`retirar_revisor_d01` y `degradar_d01`, en las dos repeticiones), y en todos
+los casos el agente cortó la cascada justo donde termina lo visible. Por
+ejemplo, en `cascada_d02` pasó `d02` y `d03` a propuesta pero no `d04`, que no
+ve. Las 6 dejaron un estado inválido. `verificar_dependientes`, cuya respuesta
+correcta es no cambiar nada, se acertó en las dos repeticiones. **Se cumple el
+criterio para seguir al estudio 9c.**
+
 ## Medidas
 
 - **Primarias**: sobre las filas sin fallo técnico, `final_invalid_state` (el
