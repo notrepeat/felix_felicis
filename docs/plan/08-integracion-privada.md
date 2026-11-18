@@ -56,6 +56,7 @@ cargo test --test private_bundle_integration
 |---|---|---|---|
 | 2026-11-18 | motor `88bd5fe` | Integración privada: `validate`, `check` con cinco reglas de la especificación de conducta y `propose` sobre copia temporal, en una biblioteca de 93 conceptos y 104 relaciones. Revisión de licencia: la integración invoca la CLI como proceso aparte, sin enlazar el motor. | `validate` y `check` aceptan la biblioteca; `propose` rechaza un `standing` inválido con la regla correcta y aplica y sella una promoción, con `guard` en `pass`. Hallazgos: el manifiesto histórico declaraba un directorio que ya no existe; una regla sobre una arista y dos nodos (~900 000 combinaciones) excede el presupuesto de evaluación; `check --explain` excede el suyo aun sin fallos. |
 | 2026-11-18 | `v0.2.0` (`e2ec274`) | La integración privada fija el tag y repite la suite. | Resultado `ok`: `check` admite, y `propose` admite, rechaza y admite en los tres casos sintéticos; el guardia privado→público da 0 coincidencias. |
+| 2026-11-18 | `v0.2.1` (`8a6dd25`) | La integración pasa al tag nuevo y suma cuatro reglas sobre aristas, escritas con guarda. | Resultado `ok`: `check` admite las nueve reglas; la forma sin guarda sigue excediendo el presupuesto y queda registrada como límite. |
 
 ## Siguiente fase
 
