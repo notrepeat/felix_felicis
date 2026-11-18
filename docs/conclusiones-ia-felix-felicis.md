@@ -247,17 +247,38 @@ reparación, el estado final y el lugar del error. Además compara cada veredict
 de Felix con el oracle. [Trayectorias](../evaluation/paired-report.md#trayectorias-por-ejecución-derivadas-después).
 
 La segunda parte es un proxy nuevo, `evaluation/mcp_proxy_v2.py`, con ledger
-`felix-mcp-ledger-v2`. Por cada `tools/call` registra `latency_ms` (tiempo
-monotónico entre reenviar la petición al servidor y leer su respuesta),
-`request_bytes`/`response_bytes` (bytes UTF-8 de la línea JSON-RPC intercambiada
-con el agente) y `forwarded`; las llamadas denegadas por presupuesto llevan
-`latency_ms: null` porque no llegan al servidor. No registra tokens por llamada:
-el cliente del agente sólo los informa por ejecución. `mcp_proxy.py` y el resto
-de fuentes del piloto 173 siguen intactos, y un test comprueba sus hashes contra
-`results/pilot-173/plan.json`. El proxy v2 todavía no está conectado a
-`run_paired.py`: hacerlo cambia el hash del runner y corresponde a la versión
-nueva del protocolo, que no se abre sin decisión explícita. Tampoco hay
-mediciones reales con él.
+`felix-mcp-ledger-v2`. Por cada `tools/call` registra:
+
+- `request_bytes`: bytes UTF-8 de la línea recibida del agente.
+- `response_bytes`: bytes UTF-8 de la línea **que recibe el agente** (la
+  reserialización, no la línea original del servidor).
+- `latency_ms`: tiempo monotónico desde que la petición quedó escrita y
+  vaciada en la entrada del servidor hasta que el proxy leyó la línea completa
+  de respuesta. Incluye el trabajo del servidor y el tránsito por el pipe;
+  excluye la entrega al agente, que ocurre en un hilo escritor separado, para
+  que un agente lento no infle la llamada siguiente. Es `null` cuando no hay
+  respuesta emparejada.
+- `forwarded` y, según el caso, `budget_denied`, `rejected: "duplicate_id"` (id
+  repetido en vuelo: el agente recibe un error JSON-RPC y no se reenvía),
+  `no_id` (llamada sin id: se reenvía, pero no se puede emparejar) y
+  `unanswered` (reenviada y nunca respondida: si el servidor muere, el agente
+  recibe un error JSON-RPC en vez de esperar indefinidamente).
+
+Solo se emparejan respuestas (objetos con `id` y sin `method`); notificaciones y
+peticiones del servidor pasan sin consumir llamadas pendientes, y las líneas que
+no son un objeto JSON se reenvían tal cual sin detener el puente. Una revisión
+independiente encontró que la primera versión medía mal bytes y latencia, perdía
+las llamadas en vuelo al cerrar y heredaba de v1 emparejamientos erróneos; cada
+defecto tiene ahora un test que fallaba antes de la corrección
+([brecha E1](brechas/07-evidencia-de-utilidad.md)). Las pruebas de
+`evaluation/` y de `tools/` corren en CI en Linux y Windows (E2).
+
+No registra tokens por llamada: el cliente del agente sólo los informa por
+ejecución. `mcp_proxy.py` y el resto de fuentes del piloto 173 siguen intactos,
+y un test comprueba sus hashes contra `results/pilot-173/plan.json`. El proxy v2
+todavía no está conectado a `run_paired.py`: hacerlo cambia el hash del runner y
+corresponde a la versión nueva del protocolo, que no se abre sin decisión
+explícita. Tampoco hay mediciones reales con él.
 
 No hace falta reescribir el motor para probar estas hipótesis. El trabajo de las
 fases 04 y 06 aporta componentes reutilizables; la fase 07 mostró qué afirmación

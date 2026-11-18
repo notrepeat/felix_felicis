@@ -1,2 +1,9 @@
 # Preserve byte-exact CLI stdout goldens across Windows and Unix checkouts.
 examples/software-architecture/expected/* text eol=lf
+# Pilot 173 records the SHA-256 of these files (evaluation/results/pilot-173/plan.json);
+# a CRLF checkout on Windows would break test_pilot_173_sources_untouched.
+evaluation/mcp_proxy.py text eol=lf
+evaluation/run_paired.py text eol=lf
+evaluation/scoring.py text eol=lf
+evaluation/tasks.json text eol=lf
+evaluation/oracle.json text eol=lf

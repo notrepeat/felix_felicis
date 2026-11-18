@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -10,7 +11,7 @@ import run_paired as runner
 
 class RunnerTests(unittest.TestCase):
     def test_schedule_balanced_and_reproducible(self):
-        cases = json.loads((runner.HERE / 'tasks.json').read_text())['cases']
+        cases = json.loads((runner.HERE / 'tasks.json').read_text(encoding='utf-8'))['cases']
         selected = runner.select_cases(cases, 173)
         self.assertEqual(len(selected), 6)
         rows = runner.schedule(selected, 173)
@@ -25,7 +26,7 @@ class RunnerTests(unittest.TestCase):
             self.assertNotEqual(rows[index][2], rows[index + 1][2])
 
     def test_same_prompt_and_no_oracle_materialized(self):
-        case = json.loads((runner.HERE / 'tasks.json').read_text())['cases'][0]
+        case = json.loads((runner.HERE / 'tasks.json').read_text(encoding='utf-8'))['cases'][0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runner.materialize(case, root)
@@ -42,6 +43,9 @@ class RunnerTests(unittest.TestCase):
             marker.write_text(json.dumps({'tools': ['check', 'context', 'propose', 'apply']}))
             self.assertFalse(runner.mcp_ready(logs))
 
+    # run_paired.py is frozen by pilot 173 and kills the process group with os.killpg,
+    # which exists only on POSIX; the paired runner is Linux-only (Docker sandbox).
+    @unittest.skipUnless(hasattr(os, 'killpg'), 'run_paired.bounded_capture needs os.killpg (POSIX only)')
     def test_output_flood_killed_reaped_and_bounded(self):
         child = subprocess.Popen([sys.executable, '-c', 'import os\nwhile True: os.write(1,b"x"*65536)'],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
@@ -51,6 +55,7 @@ class RunnerTests(unittest.TestCase):
         self.assertLessEqual(len(stdout), 4096)
         self.assertIsNotNone(child.poll())
 
+    @unittest.skipUnless(hasattr(os, 'killpg'), 'run_paired.bounded_capture needs os.killpg (POSIX only)')
     def test_timeout_includes_blocked_input_and_reaps(self):
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
