@@ -2,7 +2,7 @@
 
 El objetivo es que Felix sirva en local, para ti y para cualquier agente, como
 **fuente de criterio**: no un almacén de datos, sino de decisiones, principios
-y reglas que se verifican antes de aceptarse. El criterio vive en un
+y preferencias que se verifican antes de aceptarse. El criterio vive en un
 repositorio Git propio y privado, separado de este. Así se puede llevar a otro
 computador y compartir sólo con quien se invite.
 
@@ -18,22 +18,92 @@ sugerida, revisión AGM, recuperación avanzada), que sigue fuera de alcance.
 | Depende de | `v0.3.0` (búsqueda, historial con efecto, `diff`, instalación) |
 | Desbloquea | Uso diario real, con un repositorio de criterio propio que reemplaza a la instancia privada legacy |
 
-## Punto de partida: toda base empieza vacía
+## Cómo nace el criterio
 
-Quien instale Felix, tú incluido, empieza con una base sin criterio. Eso fija
-las prioridades:
+El criterio no se dicta en un formulario: aparece mientras se trabaja con un
+agente. La persona dice cómo quiere las cosas («me gusta que los componentes
+sean 100 % reutilizables», «antes de crear algo, valida que no exista; si
+existe, reutilízalo»). En algún momento lo valida: lo dice («quedó bien») o lo
+da a entender pasando a otro tema sin objetar.
 
-1. **Al principio, el trabajo es capturar.** Las primeras semanas casi todo el
-   uso será guardar criterio: «decidí X por Y», «prefiero A sobre B salvo
-   que…», «esto ya no vale, lo reemplaza aquello». Si capturar cuesta, la base
-   no crece y la herramienta nunca llega a ser útil.
-2. **Las reglas llegan después.** Con pocas notas no hay mucho que verificar.
-   Las invariantes aparecen a medida que el criterio se repite y se ve qué
-   debe cumplirse siempre. Cambiar reglas tiene que ser un paso normal y
-   registrado, no una edición a mano que rompe el historial.
-3. **El valor crece con el uso.** Consultar sirve cuando ya hay qué
-   encontrar. Hay que hacer visible ese crecimiento (cuántas notas, cuántas
-   reglas, qué quedó en borrador) para saber cuándo la base empieza a pagar.
+El trabajo de Felix es que esas afirmaciones no se pierdan, y que las que se
+sostienen en el tiempo ganen peso. Hay tres momentos:
+
+1. **Detectar y capturar.** Un agente reconoce una instrucción que expresa
+   criterio y la guarda como **candidata**. Guarda una paráfrasis concisa y
+   el contexto en que se dijo: proyecto, tarea, fecha, y si se validó de forma
+   explícita o implícita. Ese contexto es lo que la hace verdadera en un
+   ámbito, y sin él la frase pierde sentido.
+2. **Reforzar.** Cuando la misma premisa se aplica en otra conversación u otro
+   proyecto y se sostiene, el agente registra esa evidencia. Si la persona la
+   contradice, también queda registrado.
+3. **Promover.** Una candidata con evidencia suficiente pasa a un universo de
+   más calidad. Allí las reglas son más exigentes y la promoción la confirma
+   la persona.
+
+### Toda base empieza vacía
+
+Quien instale Felix, tú incluido, empieza sin criterio. Al principio casi todo
+el uso será capturar. Si capturar cuesta, la base no crece y la herramienta
+nunca llega a ser útil. Las reglas llegan después, cuando el criterio se
+repite y se ve qué debe cumplirse siempre. El valor crece con el uso, y hay
+que hacerlo visible para saber cuándo la base empieza a pagar.
+
+## Varios universos
+
+Un repositorio de criterio no tiene un solo universo. Tiene varios bundles,
+cada uno con su manifiesto y sus reglas, y la exigencia sube de uno a otro:
+
+| Universo | Qué entra | Quién escribe | Reglas (ejemplos) |
+|---|---|---|---|
+| `candidatos` | Toda afirmación detectada, con su contexto | Cualquier agente | Tiene paráfrasis, proyecto, fecha y tipo de validación |
+| `vigente` | Criterio probado | Sólo por promoción, confirmada por la persona | Confirmado en al menos dos proyectos; con contexto; sin `contradice` con otro vigente; lo reemplazado queda retirado |
+
+Son los dos de partida; puede haber más. «De mejor calidad» tiene así un
+sentido preciso: **reglas más estrictas que Felix verifica**, no una etiqueta.
+
+### Una escalera hasta los axiomas
+
+Los universos forman una escalera. Cada escalón exige más para entrar y
+cambia menos:
+
+```text
+candidatos → vigente → consolidado → axiomas
+```
+
+| Escalón | Para entrar (ejemplos) | Cómo cambia |
+|---|---|---|
+| `consolidado` | vigente por un tiempo mínimo, confirmado en más proyectos, sin objeciones abiertas | rara vez |
+| `axiomas` | consolidado, sin objeciones en todo su historial, y tu confirmación explícita y razonada | casi nunca; retirar un axioma es una decisión, no un refuerzo |
+
+Los axiomas son pocos: lo que ya no se discute y desde donde se razona lo
+demás.
+
+Un axioma que se puede escribir como regla tiene además un segundo papel:
+puede **bajar como invariante** a los universos inferiores con `reglas
+aplicar` (U5). Desde entonces, nada que lo contradiga entra en `vigente` ni en
+`consolidado`. Por ejemplo, «antes de crear algo, verifica si existe y
+reutilízalo» se queda en prosa, porque guía al agente. En cambio, «toda
+decisión vigente cita al menos una fuente» sí se puede verificar. Así el
+criterio más probado termina gobernando la entrada del nuevo.
+
+La escalera se configura en `felix.toml`: cuántos escalones, cómo se llaman y
+qué reglas tiene cada uno. Nada obliga a usar los cuatro; se empieza con dos
+(D7).
+
+La regla de promoción ya se puede escribir con el motor actual. Verificado
+sobre `v0.3.0`: `check` rechaza un criterio vigente confirmado en un solo
+proyecto y admite el que tiene dos.
+
+```text
+(regla :id "vigente-confirmado" :mensaje "Un criterio vigente está confirmado en al menos dos proyectos."
+  (forall ((x N))
+    (=> (Estado x vigente)
+        (al-menos 2 ((e E) (y N)) :guarda (Edge e x y confirmado_en) (Type y proyecto)))))
+```
+
+Lo que no se comparte con las mismas personas va en **otro repositorio**, no
+en otro universo: el acceso de Git es por repositorio.
 
 ## Qué existe ya
 
@@ -50,44 +120,44 @@ Verificado sobre `v0.3.0`:
     permanente, y los de una transacción a medias (`*.felix.journal`,
     `*.felix.journal.tmp`, `*.felix.backup`, `*.felix.stage.*`,
     `*.felix.admctx*`).
-- Todos los comandos piden `--manifiesto` y `--invariantes` con su ruta. El MCP
-  arranca con `--root`, `--manifiesto` y `--invariantes`.
-- Crear una nota hoy exige escribir un delta `felix-delta-v2` en JSON, o editar
-  una copia del bundle y usar `universo delta --desde`. Funciona, pero cuesta
-  demasiado para capturar a diario.
+- Todos los comandos piden `--manifiesto` y `--invariantes` con su ruta, y
+  trabajan sobre un solo bundle. El MCP arranca con `--root`, `--manifiesto` y
+  `--invariantes`.
+- Crear una nota exige escribir un delta `felix-delta-v2` en JSON, o editar
+  una copia del bundle y usar `universo delta --desde`.
 - El MCP consulta, simula y explica, pero no escribe. Publicar pasa por la CLI
   (`propose --apply`) o por el orquestador.
 - `seal` acepta el estado actual sin dejar entrada en el historial. Por eso,
   editar las reglas a mano y sellar deja un hueco que `diff` informa como
   `history_gap`.
 - Hay un hook de pre-commit (`examples/guardia/pre-commit`) que corre `guard`.
+- Con una nota en CRLF, `validate` sigue aceptando pero `guard` da `fail`
+  porque el sello ya no coincide, y un cuerpo con `\r` que entra por un delta
+  se rechaza (`note_invalid_body`).
+- La instancia privada de la fase 08 queda como **legacy** desde el
+  2026-11-18. No se migra ni sigue los tags nuevos, y nada de este plan
+  depende de ella.
 
 ## Arquitectura
 
 ```text
 felix_felicis (público, este repo)       mi-criterio (privado, tuyo)
-───────────────────────────────────      ─────────────────────────────
-motor, CLI `universo`, MCP               felix.toml        ← qué es y qué motor espera
-docs, ejemplos ficticios                 AGENTS.md         ← cómo lo usa un agente
+───────────────────────────────────      ──────────────────────────────────
+motor, CLI `universo`, MCP               felix.toml          ← universos, motor esperado
+docs, ejemplos ficticios                 AGENTS.md           ← cuándo consultar, capturar, reforzar
 releases con binarios                    README.md
-                                         manifest.toml     ← tipos, relaciones, atributos
-          instala ──────────────►        invariants.sx     ← reglas del criterio
-          `universo` y `universo-mcp`    bundle/…          ← las notas
-                                         .bundle.felix.log ← historial
-                                         .bundle.felix.seal
+                                         universos/
+          instala ──────────────►          candidatos/      ← manifest.toml, invariants.sx,
+          `universo` y `universo-mcp`                           bundle/, log y sello
+                                           vigente/         ← ídem, con reglas más estrictas
                                          .gitignore  .gitattributes
 ```
 
-- El motor no conoce dónde está ningún repositorio de criterio, como hoy con
-  la instancia privada (fase 08).
-- La instancia privada actual (biblioteca e integración de la fase 08) queda
-  como **legacy** desde el 2026-11-18. No se migra ni sigue los tags nuevos,
-  y nada de este plan depende de ella.
-- Un repositorio de criterio declara la versión de motor que espera. Así dos
-  computadores con versiones distintas de `universo` no lo interpretan
-  distinto sin avisar.
+- El motor no conoce dónde está ningún repositorio de criterio.
+- El repositorio declara la versión de motor que espera, para que dos
+  computadores con versiones distintas no lo interpreten distinto sin avisar.
 - Git da copia, respaldo, historial y control de acceso. Felix no hace `push`
-  ni `pull`: eso queda en manos del usuario o del agente que opera Git.
+  ni `pull`.
 
 ## Unidades de trabajo
 
@@ -100,283 +170,369 @@ anteriores.
 
 ```toml
 schema = "felix-criterio-v1"
-motor = ">=0.4, <0.5"          # versiones de universo compatibles
-bundle = "bundle"
-manifiesto = "manifest.toml"
-invariantes = "invariants.sx"
+motor = ">=0.4, <0.5"            # versiones de universo compatibles
+por_defecto = "candidatos"
+
+[universos.candidatos]
+dir = "universos/candidatos"     # contiene manifest.toml, invariants.sx y bundle/
+escritura_agentes = true
+
+[universos.vigente]
+dir = "universos/vigente"
+escritura_agentes = false
 ```
 
-**Descubrimiento.** Todos los comandos resuelven el repositorio en este orden:
+**Descubrimiento.** Todos los comandos resuelven el universo en este orden:
 
-1. las opciones explícitas actuales (`--manifiesto`, `--invariantes` y la
-   raíz), que siguen funcionando igual;
-2. `--criterio <dir>`;
-3. la variable `FELIX_CRITERIO`;
-4. el `felix.toml` más cercano, subiendo desde el directorio actual.
+1. las opciones explícitas actuales (raíz, `--manifiesto`, `--invariantes`),
+   que siguen funcionando igual;
+2. `--criterio <dir>` y `--universo <nombre>`;
+3. las variables `FELIX_CRITERIO` y `FELIX_UNIVERSO`;
+4. el `felix.toml` más cercano, subiendo desde el directorio actual, con su
+   universo `por_defecto`.
 
-Así basta `universo check` o `universo search cache` dentro del repositorio, o
-desde cualquier lugar con `FELIX_CRITERIO` definida.
+Así basta `universo search cache` dentro del repositorio, o
+`universo search cache --universo vigente`. `search` acepta además
+`--universo todos`, que busca en todos y marca de cuál viene cada resultado.
 
 **Versión.** Si la versión de `universo` no cumple `motor`, el comando falla
-con `engine_version_mismatch` y dice cuál pide. `--ignorar-version` lo
-salta, de forma explícita.
+con `engine_version_mismatch` y dice cuál pide. `--ignorar-version` lo salta,
+de forma explícita.
 
 **Aceptación.**
-- [ ] `universo check`, `search`, `log`, `show`, `diff`, `guard`, `propose` y
-      `status` funcionan sin rutas dentro de un repositorio con `felix.toml`.
+- [ ] `check`, `search`, `log`, `show`, `diff`, `guard`, `propose` y `status`
+      funcionan sin rutas dentro de un repositorio con `felix.toml`.
 - [ ] La precedencia está probada caso por caso.
 - [ ] Las rutas de `felix.toml` son relativas a él y no pueden salir del
-      repositorio (`..`, absolutas): error `criterio_path_invalid`.
-- [ ] El MCP acepta `--criterio <dir>` como alternativa a sus tres rutas.
+      repositorio: error `criterio_path_invalid`.
+- [ ] Un universo inexistente es error (`universe_not_found`) con la lista de
+      los que hay.
+- [ ] El MCP acepta `--criterio <dir>`. Sus herramientas reciben un argumento
+      opcional `universe`; sin él usan `por_defecto`. Es un cambio aditivo en
+      `felix-mcp-v1`.
 
 ### U2 — `universo init --git`: un repositorio de criterio listo
 
-**Qué.** `universo init <dir> --git` hace lo de hoy y además:
+**Qué.** `universo init <dir> --git` crea el repositorio con los dos
+universos de partida y además:
 
-- escribe `felix.toml`, `README.md` y `AGENTS.md` (ver U6);
+- escribe `felix.toml`, `README.md` y `AGENTS.md` (U6);
 - escribe un `.gitignore` con los transitorios listados arriba. Nunca ignora
   el historial ni el sello.
-- escribe un `.gitattributes` con `* text eol=lf`. Sin esto, Git en Windows
-  puede convertir a CRLF. Comprobado sobre `v0.3.0`: con una nota en CRLF,
-  `validate` sigue aceptando, pero `guard` da `fail` porque el sello ya no
-  coincide, y un cuerpo con `\r` que entra por un delta se rechaza
-  (`note_invalid_body`). Además declara `merge=union` para
-  `.bundle.felix.log` (ver U7).
-- hace `git init` y deja el hook de pre-commit de `guard` instalado, pero
+- escribe un `.gitattributes` con `* text eol=lf`, para que Git en Windows no
+  convierta a CRLF. Además declara `merge=union` para los logs (U7).
+- hace `git init` y deja el hook de pre-commit de `guard` instalado pero
   apagado. Se activa con una línea que el README indica.
 
-No hace el primer commit ni configura un remoto. Lo propongo así; es una
-decisión tuya (ver abajo).
+No hace el primer commit ni configura un remoto (D3).
 
 **Aceptación.**
 - [ ] `git status` tras `init --git` y un apply muestra sólo archivos que deben
       versionarse.
-- [ ] Un clon en otro directorio pasa `guard` sin cambios.
-- [ ] Un clon en Windows con `core.autocrlf=true` también pasa `guard`.
-      Pruebas en el job de Windows del CI.
+- [ ] Un clon en otro directorio pasa `guard` en todos los universos.
+- [ ] Un clon en Windows con `core.autocrlf=true` también pasa `guard`, en el
+      job de Windows del CI.
 
-### U3 — Capturar sin fricción
+### U3 — Capturar sin fricción, con contexto
 
-Es lo más importante para una base vacía. Son comandos que arman el delta,
-lo simulan y lo aplican en un solo paso, con CAS interno, autor y motivo:
+Son comandos que arman el delta, lo simulan y lo aplican en un solo paso, con
+CAS interno, autor y motivo. Por defecto escriben en `candidatos`:
 
 ```sh
-universo nota nueva "Prefiero SQLite para prototipos" --tipo criterio \
-    --cuerpo-desde nota.md --autor yo --motivo "decisión del proyecto X"
-universo nota editar notas/prefiero-sqlite      # abre $EDITOR y aplica el cambio
-universo relacion notas/benchmark apoya notas/prefiero-sqlite
-universo atributo notas/prefiero-sqlite estado vigente
+universo capturar "Los componentes deben ser 100 % reutilizables" \
+    --proyecto tienda-web --tarea "refactor del carrito" \
+    --validacion explicita --autor agente:claude-code
+universo nota editar notas/componentes-reutilizables    # abre $EDITOR y aplica
+universo relacion notas/a reemplaza notas/b
+universo atributo notas/a estado vigente
 ```
 
-- `nota nueva` crea la ruta a partir del título (minúsculas, sin tildes,
-  guiones) y la muestra, o la toma de `--ruta`.
-- `nota editar` copia la nota a un borrador temporal, abre el editor, y al
-  cerrar usa lo que ya hace `universo delta --desde` y aplica. Si el editor
-  se cierra sin cambios, no hay apply.
-- `relacion` y `atributo` construyen deltas `felix-delta-v1`. `atributo`
-  reemplaza el valor anterior si el atributo es de un solo valor.
-- Todos aceptan `--dry-run` (simular y mostrar el veredicto sin escribir) y
-  `--format json`.
-- Un rechazo muestra la regla que falla (id y mensaje) y, en terminal, el
-  testigo localizado, que es de uso local.
+- `capturar` crea una nota candidata. La ruta sale del texto (minúsculas,
+  sin tildes, guiones).
+  - El texto es una **paráfrasis concisa**, no un fragmento de la
+    conversación.
+  - El contexto queda como atributos: `proyecto`, `fecha`, `tarea` y
+    `validacion` (`explicita`, `implicita` o `pendiente`).
+  - Si ya existe una candidata parecida (con `search`), avisa y propone
+    reforzarla en vez de duplicarla (U12).
+- `nota editar`, `relacion` y `atributo` sirven para cualquier universo.
+  `nota editar` copia la nota a un borrador, abre el editor y, al cerrar, usa
+  lo que ya hace `universo delta --desde`. Si no hubo cambios, no hay apply.
+- Todos aceptan `--dry-run` y `--format json`. Un rechazo muestra la regla que
+  falla.
 
 **Aceptación.**
-- [ ] Una nota se crea con un comando, sin escribir JSON.
-- [ ] Cada comando deja una entrada de historial con su efecto.
-- [ ] Un rechazo no modifica nada (mismo criterio que `propose`).
-- [ ] La ruta generada es estable para el mismo título, y un choque con una
-      existente es error, no sobrescritura.
+- [ ] Capturar es un comando, sin escribir JSON.
+- [ ] Cada captura deja una entrada de historial con su efecto y su autor.
+- [ ] Un rechazo no modifica nada.
+- [ ] Una captura casi idéntica a una existente avisa y no duplica salvo con
+      `--forzar`.
 
-### U4 — Una plantilla de criterio útil desde el primer día
+### U4 — Plantillas de los universos de partida
 
-La plantilla de `init` es mínima. Propongo una opcional,
-`universo init --plantilla criterio`, pensada para guardar criterio (es una
-decisión tuya):
+Plantillas para `candidatos` y `vigente`, opcionales y modificables con U5
+(D2):
 
 | Elemento | Propuesta |
 |---|---|
-| Tipos | `principio`, `decision`, `preferencia`, `antipatron`, `fuente` |
-| Relaciones | `apoya` (fuente o nota → nota), `reemplaza` (nota nueva → anterior), `contradice` (para marcar tensiones a resolver), `aplica_a` (nota → ámbito) |
-| Atributos | `estado` (`borrador`, `vigente`, `retirado`), `confianza` (`baja` < `media` < `alta`, ordenado), `vigente_desde` (fecha), `ambito` (varios valores) |
-| Reglas iniciales | sólo un criterio no `fuente` puede estar `vigente`; lo que se `reemplaza` queda `retirado`; una nota `retirado` tiene quien la reemplace; no hay `contradice` entre dos notas `vigente` |
-
-La plantilla se puede cambiar después con U5. No se impone ninguna taxonomía:
-la mínima actual sigue siendo la de por defecto.
+| Tipos | `principio`, `decision`, `preferencia`, `antipatron`, `fuente`, `proyecto`, `evidencia` |
+| Relaciones | `apoya` (evidencia o fuente → criterio), `objeta` (evidencia → criterio), `confirmado_en` (criterio → proyecto), `reemplaza` (nuevo → anterior), `contradice`, `aplica_a` |
+| Atributos | `estado` (`candidato`, `vigente`, `retirado`), `validacion`, `confianza` (`baja` < `media` < `alta`), `fecha` y `vigente_desde` (fechas), `ambito` (varios valores) |
+| Reglas en `candidatos` | toda candidata tiene `proyecto`, `fecha` y `validacion` |
+| Reglas en `vigente` | confirmado en al menos dos proyectos (la regla de arriba); sin `contradice` entre dos vigentes; lo reemplazado queda retirado; un retirado tiene quien lo reemplace |
 
 **Aceptación.**
-- [ ] `init --plantilla criterio` pasa `check` y tiene una nota de ejemplo de
-      cada tipo, en `borrador`.
-- [ ] Cada regla inicial tiene un test que la hace fallar y otro que la
-      cumple.
+- [ ] Ambas plantillas pasan `check` con una nota de ejemplo de cada tipo.
+- [ ] Cada regla tiene un test que la hace fallar y otro que la cumple.
 
 ### U5 — Cambiar reglas y manifiesto sin romper el historial
 
 **Qué.** `universo reglas aplicar <nuevo.sx>` y `universo manifiesto aplicar
-<nuevo.toml>`:
+<nuevo.toml>`, por universo:
 
 1. toman el lock y comprueban el estado admitido (CAS);
-2. verifican el bundle actual con la configuración nueva. Si alguna nota
-   incumple una regla nueva, rechazan y dicen cuál;
+2. verifican el bundle con la configuración nueva. Si algo incumple una regla
+   nueva, rechazan y dicen qué;
 3. instalan el archivo nuevo;
 4. registran una entrada de historial de clase `config` con autor, motivo,
-   tokens `from` y `to`, y el efecto: el manifiesto puede cambiar qué átomos
-   salen de las mismas notas.
+   tokens `from` y `to`, y el efecto.
 
 Además, `seal` pasa a registrar una entrada de clase `seal` (cambio externo
-aceptado), con `from`, `to` y sin efecto.
-
-**Resultado.** La cadena de estados no se rompe. `diff` a través de una
-entrada `config` muestra «reglas cambiadas en la entrada n». A través de una
-`seal` responde `external_change` con la entrada, en vez de un
-`history_gap` sin explicación.
+aceptado), con `from` y `to`. Así la cadena no se rompe: `diff` a través de
+una entrada `config` marca «reglas cambiadas», y a través de una `seal`
+responde `external_change` con la entrada.
 
 **Aceptación.**
-- [ ] Endurecer una regla que el bundle ya incumple se rechaza sin escribir.
+- [ ] Endurecer una regla que el bundle incumple se rechaza sin escribir.
 - [ ] Tras `reglas aplicar`, `diff` sobre el rango funciona y lo marca.
 - [ ] `seal` de una edición externa deja la entrada `seal`, y `diff` la
       informa por su nombre.
-- [ ] Los lectores de `felix-log-v1` anteriores siguen leyendo el log, porque
-      la clase es un campo opcional.
+- [ ] Los lectores anteriores de `felix-log-v1` siguen leyendo el log.
 
 ### U6 — Que cualquier agente lo use
 
-**Qué.**
-
-- **`AGENTS.md` en el repositorio de criterio**, generado por `init`.
-  Explica cuándo consultar (antes de decidir, con `search` y `context`), cómo
-  proponer y qué no hacer: no editar archivos del bundle a mano, no sellar.
+- **`AGENTS.md`**, generado por `init`, explica:
+  - cuándo consultar (antes de decidir, con `search` y `context` en
+    `vigente` y luego en `candidatos`);
+  - cuándo capturar, reforzar u objetar (U13);
+  - qué no hacer: no promover, no editar archivos a mano, no sellar.
 - **`universo mcp-config --cliente claude-code|codex|json`** imprime la
   configuración lista para pegar, con rutas absolutas al clon local. Para
   Claude Code recomienda registrarlo a nivel de usuario (`claude mcp add
-  --scope user ...`), porque el criterio se consulta desde cualquier
-  proyecto, no sólo desde el suyo.
-- **Escritura de agentes.** Hoy el MCP no escribe, por decisión de diseño
-  (fase 06). Opciones:
-  - (a) El agente usa la CLI de U3, si tiene shell. No cambia nada del MCP.
-  - (b) Una herramienta `capture` en el MCP, desactivada por defecto. Sólo
-    existe si el servidor arranca con `--permitir-escritura`, y aplica con
-    CAS, autor `agente:<nombre>` y motivo obligatorio.
-  - (c) Sólo mediante el orquestador.
-
-  Recomiendo (a) más (b) apagada por defecto. Es una decisión tuya, porque
-  revierte una regla de la fase 06.
+  --scope user ...`), porque el criterio se consulta desde cualquier proyecto.
+- **Escritura por MCP: herramienta `capture`.** Escribe con CAS, autor
+  `agente:<nombre>` y motivo obligatorio. Sólo existe para universos con
+  `escritura_agentes = true`, es decir, `candidatos`. Nunca para `vigente`:
+  allí el MCP sigue sin escribir, como en la fase 06. Lo mismo vale para
+  `reforzar` y `objetar` (U12).
 
 **Aceptación.**
 - [ ] Con sólo `AGENTS.md` y la configuración MCP, un agente de prueba
-      encuentra una nota con `search`, propone una nueva, recibe un rechazo
-      explicado y lo corrige.
-- [ ] Con (b) apagada, `tools/list` no anuncia `capture`.
-- [ ] Con (b) encendida, cada escritura queda en el historial con autor
-      agente.
+      consulta, captura una candidata, la refuerza en otro proyecto y recibe un
+      rechazo explicado al intentar algo inválido.
+- [ ] `capture` sobre `vigente` no existe: `tools/list` no la anuncia para ese
+      universo y la llamada falla.
+- [ ] Cada escritura de agente queda en el historial con autor agente.
 
 ### U7 — Usarlo en varios computadores
 
-**Flujo recomendado.** `git pull --rebase` → `universo guard` → capturar o
-proponer → `git commit` → `git push`.
+**Flujo.** `git pull --rebase` → `universo guard` → trabajar → `git commit` →
+`git push`.
 
-- Con historial lineal, el log y el sello encajan solos y `diff` cubre todo.
-- Si dos computadores cambian el criterio a la vez, Git mezcla el bundle.
-  Con `merge=union`, el log conserva las líneas de ambos.
-  - El estado mezclado no lo produjo ningún apply: `guard` lo marca
-    distinto y la cadena tiene un salto.
-  - Se resuelve con `universo check` y luego `universo seal --motivo "merge"`,
-    que con U5 deja la entrada `seal`.
-  - `diff` informa el salto por su nombre.
-- El conflicto en `.bundle.felix.seal` se resuelve volviendo a sellar. No
-  tiene contenido que conservar.
+- Con historial lineal, los logs y los sellos encajan solos y `diff` cubre
+  todo.
+- Si dos computadores cambian el criterio a la vez, Git mezcla los bundles.
+  `merge=union` conserva las líneas de ambos logs.
+  - `guard` marca el estado mezclado como distinto.
+  - Se resuelve con `universo check` y `universo seal --motivo "merge"`, que
+    con U5 deja la entrada `seal`, y `diff` lo informa por su nombre.
+- El conflicto en un sello se resuelve volviendo a sellar.
 - Un hook `post-merge` opcional corre `guard` y avisa.
-
-**Aceptación.** Ver U9.
 
 ### U8 — Ver cómo crece la base
 
-**Qué.** `universo resumen`, en texto y JSON:
+`universo resumen`, en texto y JSON, para todos los universos:
 
-- notas por tipo y por estado, relaciones y reglas;
-- notas sin ninguna relación;
-- borradores con más de N días;
-- últimos cambios (de `log`).
+- notas por tipo y estado, relaciones y reglas;
+- candidatas con evidencia suficiente para promover;
+- candidatas objetadas;
+- notas sin relaciones;
+- últimos cambios.
 
-Son sólo conteos, sin juicios. Sirve para decidir qué capturar o qué regla
-escribir.
+Son conteos sin cuerpos: sirven para decidir qué revisar o promover.
 
 **Aceptación.**
-- [ ] Los conteos coinciden con `atomos` en un bundle de prueba.
-- [ ] La salida JSON no incluye cuerpos.
+- [ ] Los conteos coinciden con `atomos` en bundles de prueba.
+- [ ] «Listas para promover» coincide con lo que la regla de `vigente`
+      admitiría.
 
 ### U9 — Prueba de punta a punta entre dos clones
 
-**Qué.** Un test, en Rust o Python, con `git` disponible en el CI:
+Un test con `git` disponible en el CI:
 
-1. `init --git` en un directorio A y un remoto «bare» local.
-2. Capturar tres notas, una relación y un atributo en A. Commit y push.
-3. Clonar en B. `guard` da pass. `search`, `log`, `show` y `diff` dan lo
-   mismo que en A.
-4. Cambiar en B, hacer push, y pull en A. Sigue encadenado.
-5. Cambio concurrente en A y en B, y merge. `guard` lo detecta; `check` y
-   `seal` lo aceptan; `diff` informa `external_change` en esa entrada.
+1. `init --git` en A y un remoto «bare» local.
+2. En A: capturar tres candidatas, reforzar una en un segundo proyecto y
+   promoverla. Commit y push.
+3. Clonar en B. `guard` da pass en ambos universos; `search`, `log`, `show` y
+   `diff` dan lo mismo que en A.
+4. Cambiar en B, push, y pull en A. Sigue encadenado.
+5. Cambio concurrente en A y B, y merge. `guard` lo detecta; `check` y `seal`
+   lo aceptan; `diff` informa `external_change`.
 6. En Windows: clon con `core.autocrlf=true`, y `guard` da pass.
 
 ### U10 — Tu primer repositorio de criterio real
 
-Crear con `universo init --git` tu repositorio de criterio privado, vacío,
-como lo hará cualquier usuario, y usarlo a diario. Toma el lugar de la prueba
-de uso real que hacía la instancia legacy (fase 08). Los hallazgos de ese uso
-se reducen a casos ficticios antes de entrar al repositorio público, con la
-misma frontera de privacidad.
+Crear con `universo init --git` tu repositorio privado, vacío, como lo hará
+cualquier usuario, y usarlo a diario con tus agentes. Toma el lugar de la
+prueba de uso real que hacía la instancia legacy. Los hallazgos se reducen a
+casos ficticios antes de entrar al repositorio público.
 
-Si conviene traer algo de la biblioteca legacy (D6), se hace a mano o con un
-script de una sola vez, en privado, nota por nota y sólo lo que siga vigente.
+Si conviene traer algo de la biblioteca legacy (D6), se hace a mano, en
+privado, sólo con lo que siga vigente. Cuándo pasa a ser tu fuente de
+criterio en serio lo decides tú; hasta entonces no reemplaza lo que ya usas.
 
-Cuándo pasa a ser tu fuente de criterio en serio lo decides tú. Hasta
-entonces, Felix sigue en construcción y no reemplaza lo que ya usas.
+### U11 — Promover entre universos
+
+**Qué.** `universo promover <nota> --de <escalón> --a <siguiente> --autor <tú>`, para cualquier par de escalones (por ejemplo, de `candidatos` a `vigente`):
+
+1. arma, en el universo de destino, la nota con su texto, tipo, atributos y
+   las relaciones `confirmado_en` a sus proyectos (y las notas de proyecto que
+   falten);
+2. la propone allí: las reglas de `vigente` deciden. Si falla, rechaza con la
+   regla y no toca nada;
+3. si se admite, marca la candidata como `promovida` en el origen, con
+   referencia al destino.
+
+**Límite.** Son dos transacciones, una por universo, no una atómica. El orden
+(primero el destino) hace que un fallo intermedio deje, como mucho, una nota
+vigente con su candidata sin marcar. `universo resumen` la lista y repetir
+`promover` la completa sin duplicar.
+
+**Quién promueve.** En la CLI, Felix no distingue a una persona de un agente.
+La protección es por diseño: el MCP no promueve, `AGENTS.md` lo prohíbe, y
+las reglas de `vigente` exigen la evidencia. Que la promoción la confirmas tú
+es una convención, no algo que Felix pueda garantizar. Lo documentamos así.
+
+**Aceptación.**
+- [ ] Promover una candidata con evidencia en un solo proyecto se rechaza por
+      la regla, sin escribir en ningún universo.
+- [ ] Con dos proyectos se admite, y la candidata queda `promovida`.
+- [ ] Un fallo simulado entre las dos transacciones se completa al repetir.
+
+### U12 — Reforzar y objetar
+
+**Qué.**
+
+```sh
+universo reforzar notas/componentes-reutilizables --proyecto api-pagos \
+    --contexto "se aplicó al crear el módulo de cobros" --validacion implicita
+universo objetar  notas/componentes-reutilizables --proyecto prototipo-x \
+    --contexto "aquí se prefirió duplicar por rapidez de entrega"
+```
+
+- Cada uno crea una nota `evidencia` (paráfrasis, proyecto, fecha, tipo de
+  validación) con la relación `apoya` u `objeta` hacia el criterio, y la nota
+  de proyecto si no existe.
+- La evidencia se acumula y no se edita, de modo que el historial muestra
+  cómo maduró cada criterio.
+- Reforzar dos veces en el mismo proyecto no cuenta doble para la regla de
+  `vigente`, porque ésta cuenta proyectos, no evidencias.
+- Una objeción en un criterio ya vigente no lo retira sola: `resumen` lo
+  marca para que lo revises. Puede que el criterio tenga un ámbito más
+  estrecho del que parecía.
+
+**Aceptación.**
+- [ ] Dos refuerzos en el mismo proyecto dejan un solo `confirmado_en` a ese
+      proyecto.
+- [ ] Una objeción aparece en `resumen` y en `context` del criterio.
+
+### U13 — Detectar el criterio en la conversación
+
+Es la parte difícil: cuándo una frase es criterio y cuándo no.
+
+**Qué.**
+
+- **Guía para el agente.** Va en `AGENTS.md` y en una skill de Claude Code
+  instalable desde este repositorio. Define qué señales indican criterio:
+  - instrucciones generales sobre cómo hacer algo («quiero que…»,
+    «siempre…», «nunca…», «prefiero…»);
+  - validaciones explícitas («quedó bien», «así sí»);
+  - validaciones implícitas: pasar a otro tema sin objetar, tras una
+    instrucción así.
+
+  Define qué no es criterio: órdenes puntuales de la tarea («cambia este
+  color»), datos del proyecto, y frases ambiguas. Ante la duda, el agente
+  pregunta en una línea antes de capturar.
+- **Captura al cerrar.** Un paso opcional al final de una sesión que repasa lo
+  conversado, lista las candidatas y te las muestra para aceptar o descartar
+  antes de escribir. Convive con los mecanismos que ya usas (destilación de
+  conducta, aprendizaje de ECC) sin reemplazarlos.
+- **Medición.** Un corpus de conversaciones **ficticias**, con etiquetas
+  (criterio o no; validación explícita, implícita o ninguna). Sobre él se
+  mide qué tan bien detecta el agente: precisión (no capturar de más) y
+  cobertura (no perder criterio). Se corre con Claude. Los resultados se
+  publican aunque sean malos, como en la fase 07.
+
+**Aceptación.**
+- [ ] La guía y la skill existen y están probadas con el corpus.
+- [ ] La precisión medida es alta, por ejemplo ≥ 0,9, porque un falso
+      positivo ensucia la base. La cobertura se informa tal cual.
+- [ ] Ninguna captura al cierre se escribe sin tu confirmación.
 
 ## Decisiones que necesito de ti
 
 | # | Decisión | Opciones | Recomendación |
 |---|---|---|---|
-| D1 | Escritura de agentes por MCP (U6) | (a) sólo CLI; (b) `capture` apagada por defecto; (c) sólo orquestador | (a) + (b) apagada |
-| D2 | Plantilla de criterio (U4) | la propuesta, otra taxonomía, o sólo la mínima | la propuesta, como opción |
+| D1 | Escritura de agentes | (a) sólo CLI; (b) `capture` en el MCP; (c) sólo orquestador | **Resuelta por el diseño de universos, pendiente de tu OK:** los agentes escriben (CLI o MCP) sólo en universos con `escritura_agentes = true` (`candidatos`); `vigente` sólo por promoción |
+| D2 | Plantillas (U4) | la propuesta, otra taxonomía, o sólo la mínima | la propuesta, revisada contigo antes de implementarla |
 | D3 | `init --git` hace el primer commit | sí / no | no: el primer commit lo haces tú |
-| D4 | Felix ejecuta Git más allá de `init` | nunca / comandos de ayuda (`universo sync`) | nunca: Git queda en tus manos |
-| D5 | Gates de 09 | mantener `v0.4.0` = evaluación comparativa, o pasar esta fase a `v0.4.0` | esta fase como `v0.4.0` y la evaluación a `v0.5.0` |
-| D6 | Traer algo de la biblioteca legacy al repositorio nuevo (U10) | nada / a mano, lo que siga vigente / script de una sola vez | empezar vacío y traer a mano sólo lo vigente |
+| D4 | Felix ejecuta Git más allá de `init` | nunca / comandos de ayuda | nunca |
+| D5 | Gates de 09 | `v0.4.0` = evaluación comparativa, o esta fase | esta fase como `v0.4.0` y la evaluación a `v0.5.0` |
+| D6 | Traer algo de la biblioteca legacy (U10) | nada / a mano / script | empezar vacío y traer a mano sólo lo vigente |
+| D7 | Escalera de universos | dos (`candidatos`, `vigente`) / la escalera completa hasta `axiomas` / por dominio | empezar con dos; `consolidado` y `axiomas` se agregan cuando haya criterio que los merezca, con U5 y U11 (que ya sirven para cualquier par de escalones) |
+| D10 | Axiomas como invariantes | sólo prosa / bajar como regla los que se puedan formalizar | bajar como regla los formalizables, siempre con `reglas aplicar` y tu confirmación |
+| D8 | Umbral de promoción | dos proyectos / tres / otro criterio | dos proyectos distintos y tu confirmación |
+| D9 | Captura al cerrar la sesión (U13) | apagada / sugerir candidatas / capturar sin preguntar | sugerir y esperar tu confirmación |
 
 ## Orden propuesto
 
 | Paso | Unidades | Resultado |
 |---|---|---|
-| 1 | U1, U2 | Un repositorio de criterio que se crea con un comando y se usa sin rutas |
-| 2 | U3 | Capturar criterio es un comando por cosa |
-| 3 | U6 (sin `capture`), U9 pasos 1–4 | Un agente lo usa; dos clones coinciden |
-| 4 | U5, U7, U9 pasos 5–6 | Reglas que evolucionan y merges entre computadores, sin perder el historial |
-| 5 | U4, U8 | Plantilla útil y crecimiento visible |
-| 6 | U10 | Tu repositorio de criterio real, creado vacío y en uso diario |
+| 1 | U1, U2 | Un repositorio con universos que se crea con un comando y se usa sin rutas |
+| 2 | U3, U12 | Capturar, reforzar y objetar son un comando cada uno |
+| 3 | U11, U4 | Promover a `vigente` con reglas que lo exigen |
+| 4 | U6, U9 pasos 1–4 | Cualquier agente lo usa; dos clones coinciden |
+| 5 | U13 | El agente detecta criterio en la conversación, medido |
+| 6 | U5, U7, U9 pasos 5–6 | Reglas que evolucionan y merges entre computadores |
+| 7 | U8 | Crecimiento y candidatas listas para promover, visibles |
+| 8 | U10 | Tu repositorio de criterio real, creado vacío y en uso diario |
 
-Los pasos 1 a 3 bastan para empezar a usarlo en local con una base vacía.
+Con los pasos 1 a 4 ya puedes usarlo en local: tus agentes capturan
+candidatas, las refuerzan y tú promueves.
 
 ## Riesgos
 
-- **Finales de línea.** Mitigado con `.gitattributes` y con la prueba en
-  Windows de U9.
-- **El acceso de Git es todo o nada.** Quien entra al repositorio ve todo el
-  criterio y su historial, incluido lo borrado. Lo que no se pueda compartir
-  va en otro repositorio. No guardes secretos ni credenciales en el criterio.
+- **Falsos positivos.** El agente puede tomar como criterio algo dicho de
+  pasada. Mitigado: todo entra como candidata, `vigente` exige evidencia en
+  varios proyectos y tu confirmación, y U13 mide la precisión.
+- **Privacidad del contexto.** Se guarda una paráfrasis y la referencia al
+  proyecto, no fragmentos de conversación.
+- **El acceso de Git es todo o nada.** Lo que no se comparta con las mismas
+  personas va en otro repositorio. No guardes secretos ni credenciales.
 - **El historial es permanente.** Retirar una nota no la borra de Git.
+- **Finales de línea.** Mitigado con `.gitattributes` y la prueba en Windows.
 - **Versiones distintas del motor.** Mitigado con `motor` en `felix.toml`.
-- **Felix verifica reglas, no la verdad.** Un agente puede capturar criterio
-  coherente pero equivocado. El autor y el motivo en cada entrada permiten
-  revisarlo después.
-- **El MCP no protege un clon.** Un agente con acceso al repositorio lee todo,
-  sin pasar por el filtro de `include_values`.
+- **Felix verifica reglas, no la verdad.** Un criterio coherente puede estar
+  equivocado. La evidencia, el autor y el motivo permiten revisarlo después.
+- **El MCP no protege un clon.** Un agente con acceso al repositorio lo lee
+  todo.
 
 ## Fuera de alcance
 
-- Servicio alojado, servidor de sincronización o permisos más finos que los
-  del repositorio Git.
-- Cifrado en reposo (por ejemplo, git-crypt). Se puede evaluar después, pero
-  no lo implementa Felix.
+- Servicio alojado, sincronización propia o permisos más finos que Git.
+- Cifrado en reposo (por ejemplo, git-crypt): se puede evaluar después.
 - Búsqueda semántica, revisión AGM y reparación sugerida.
+- Promover sin confirmación humana.
 
 ## Verificación prevista
 
@@ -390,4 +546,4 @@ python tools/check_public_boundary.py
 
 | Fecha | Commit/PR | Evidencia | Resultado |
 |---|---|---|---|
-| 2026-11-18 | — | Plan propuesto | Pendiente de revisión |
+| 2026-11-18 | — | Plan propuesto; regla de promoción probada con `check` sobre `v0.3.0` (un proyecto: reject; dos: admit) | Pendiente de revisión |
