@@ -270,6 +270,23 @@ así que su rechazo se explica sólo con las instancias recorridas.
     (al-menos 2 ((r N)) (exists ((e E)) (Edge e r d reviews)))))
 ```
 
+### Reglas sobre aristas
+
+Una regla que cuantifica una arista y sus extremos recorre, en principio, todas
+las combinaciones: con 100 aristas y 100 notas son un millón de asignaciones, más
+de lo que admite el presupuesto. Si la guarda es la arista,
+
+```text
+(forall ((e E) (x N) (y N)) :guarda (Edge e x y superseded_by) (Type x Retirado))
+```
+
+o un `and` que empieza por ella, y la arista y sus extremos son todas las
+variables del cuantificador, el veredicto de `check` y `propose` recorre sólo las
+aristas de esa clave. Vale igual para `forall`, `exists` y `al-menos`. La misma
+regla escrita como `(=> (Edge e x y k) ...)` sin guarda no se beneficia. La
+explicación de `--explain` sigue recorriendo todas las combinaciones, porque
+muestra cada instancia en orden canónico.
+
 ### Nombrar reglas
 
 Una regla de nivel superior puede llevar un id y un mensaje humano opcionales:

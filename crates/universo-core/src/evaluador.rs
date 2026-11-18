@@ -1604,6 +1604,23 @@ fn evaluar_cuantificador(
         });
     }
 
+    // Restricción de rango por aristas: sólo cuando no se captura evidencia
+    // (veredicto de `check`/`propose`), porque la evidencia registra todas las
+    // instancias en orden canónico y la explicación depende de esa forma.
+    if !capturando && let Some(rango) = rango_por_arista(ligaduras, guarda) {
+        return evaluar_por_aristas(
+            &rango,
+            ligaduras,
+            guarda,
+            cuerpo,
+            tipo,
+            estructura,
+            entorno,
+            presupuesto,
+            evidencia,
+        );
+    }
+
     let mut dominio_nodos = Vec::new();
     for (id, _) in estructura.nodos() {
         presupuesto.consumir(1)?;
@@ -1745,6 +1762,188 @@ fn evaluar_cuantificador(
         restaurar(&mut entorno.aristas, &variable, anterior);
     }
     resultado
+}
+
+/// Guarda `(Edge e x y clave)` (o un `and` que empieza por ella) cuyas
+/// variables cubren todas las ligaduras del cuantificador: cada asignación con
+/// la guarda verdadera corresponde a exactamente una arista de esa clave.
+struct RangoPorArista<'a> {
+    arista: &'a Var,
+    origen: &'a TerminoNodo,
+    destino: &'a TerminoNodo,
+    sorte: &'a Sorte,
+}
+
+fn rango_por_arista<'a>(
+    ligaduras: &'a [(Var, SorteVar)],
+    guarda: Option<&'a Formula>,
+) -> Option<RangoPorArista<'a>> {
+    let atomo = match guarda? {
+        atomo @ Formula::Edge { .. } => atomo,
+        Formula::Y(partes) => partes.first()?,
+        _ => return None,
+    };
+    let Formula::Edge {
+        arista: TerminoArista::Var(arista),
+        origen,
+        destino,
+        sorte: TerminoSorte::Literal(sorte),
+    } = atomo
+    else {
+        return None;
+    };
+    let es_variable = |termino: &TerminoNodo, variable: &Var| matches!(termino, TerminoNodo::Var(v) if v == variable);
+    let cubre_todas = ligaduras
+        .iter()
+        .all(|(variable, sorte_var)| match sorte_var {
+            SorteVar::Arista => variable == arista,
+            SorteVar::Nodo => es_variable(origen, variable) || es_variable(destino, variable),
+        });
+    let liga_la_arista = ligaduras
+        .iter()
+        .any(|(variable, sorte_var)| variable == arista && *sorte_var == SorteVar::Arista);
+    (cubre_todas && liga_la_arista).then_some(RangoPorArista {
+        arista,
+        origen,
+        destino,
+        sorte,
+    })
+}
+
+/// La variable de nodo de `termino`, si la liga este mismo cuantificador.
+fn ligada_aqui<'t>(termino: &'t TerminoNodo, ligaduras: &[(Var, SorteVar)]) -> Option<&'t Var> {
+    match termino {
+        TerminoNodo::Var(v) => ligaduras
+            .iter()
+            .any(|(w, s)| w == v && *s == SorteVar::Nodo)
+            .then_some(v),
+        TerminoNodo::Constante(_) => None,
+    }
+}
+
+/// Recorre sólo las aristas de la clave de la guarda en vez del producto de
+/// dominios. El valor es el mismo: una asignación con la guarda falsa no cambia
+/// un `forall` (la instancia vale verdadero), ni un `exists` o un `al-menos`
+/// (no es testigo), y cada asignación con la guarda verdadera tiene su arista.
+/// La guarda completa y el cuerpo se evalúan en cada instancia, como siempre.
+#[allow(clippy::too_many_arguments)]
+fn evaluar_por_aristas(
+    rango: &RangoPorArista<'_>,
+    ligaduras: &[(Var, SorteVar)],
+    guarda: Option<&Formula>,
+    cuerpo: &Formula,
+    tipo: TipoCuantificador,
+    estructura: &Estructura,
+    entorno: &mut Entorno,
+    presupuesto: &mut Presupuesto,
+    evidencia: &mut ModoEvidencia,
+) -> Result<EvaluacionInterna, ErrorEvaluacion> {
+    let universal = tipo == TipoCuantificador::ParaTodo;
+    let minimo = match tipo {
+        TipoCuantificador::AlMenos { minimo } => Some(minimo),
+        _ => None,
+    };
+    let anteriores_nodos: Vec<(Var, Option<NodoId>)> = ligaduras
+        .iter()
+        .filter(|(_, sorte)| *sorte == SorteVar::Nodo)
+        .map(|(variable, _)| (variable.clone(), entorno.nodos.get(variable).copied()))
+        .collect();
+    let anterior_arista = entorno.aristas.get(rango.arista).copied();
+    let resultado = (|| {
+        // Candidatos: cada arista de la clave cuyos extremos encajan con los
+        // términos fijos, con la asignación de sus variables.
+        let mut candidatos: Vec<(AristaId, Vec<(&Var, NodoId)>)> = Vec::new();
+        for (id, arista) in estructura.aristas() {
+            presupuesto.consumir(1)?;
+            if arista.tipo != *rango.sorte {
+                continue;
+            }
+            let mut asignados: Vec<(&Var, NodoId)> = Vec::with_capacity(2);
+            let mut encaja = true;
+            for (termino, extremo) in [
+                (rango.origen, arista.origen),
+                (rango.destino, arista.destino),
+            ] {
+                match ligada_aqui(termino, ligaduras) {
+                    Some(variable) => match asignados.iter().find(|(v, _)| *v == variable) {
+                        Some((_, ya)) if *ya != extremo => encaja = false,
+                        Some(_) => {}
+                        None => asignados.push((variable, extremo)),
+                    },
+                    None => {
+                        if resolver_nodo(termino, estructura, entorno)? != extremo {
+                            encaja = false;
+                        }
+                    }
+                }
+            }
+            if encaja {
+                candidatos.push((id, asignados));
+            }
+        }
+        // Mismo orden que el odómetro del recorrido completo: lexicográfico por
+        // ligadura, con nodos por ruta y aristas por identidad. Así el corte de
+        // un `forall`, `exists` o `al-menos` llega en la misma instancia y el
+        // veredicto no necesita más presupuesto que el recorrido completo.
+        consumir_costo_ordenamiento(presupuesto, candidatos.len())?;
+        let clave = |(id, asignados): &(AristaId, Vec<(&Var, NodoId)>)| -> Vec<String> {
+            ligaduras
+                .iter()
+                .map(|(variable, sorte)| match sorte {
+                    SorteVar::Arista => identidad_arista(estructura, *id)
+                        .map(|i| i.to_string())
+                        .unwrap_or_default(),
+                    SorteVar::Nodo => asignados
+                        .iter()
+                        .find(|(v, _)| *v == variable)
+                        .and_then(|(_, n)| estructura.nodo(*n))
+                        .map(|n| n.path.to_string())
+                        .unwrap_or_default(),
+                })
+                .collect()
+        };
+        candidatos.sort_by_cached_key(clave);
+        let mut testigos: u32 = 0;
+        for (id, asignados) in &candidatos {
+            presupuesto.consumir(ligaduras.len() as u64)?;
+            entorno.aristas.insert(rango.arista.clone(), *id);
+            for (variable, nodo) in asignados {
+                entorno.nodos.insert((*variable).clone(), *nodo);
+            }
+            let valor = evaluar_instancia_cuantificada(
+                guarda,
+                cuerpo,
+                universal,
+                estructura,
+                entorno,
+                presupuesto,
+                evidencia,
+            )?
+            .valor;
+            if universal && !valor {
+                return Ok((false, false));
+            }
+            if !universal && valor {
+                testigos = testigos.saturating_add(1);
+                if minimo.is_none_or(|n| testigos >= n) {
+                    return Ok((true, false));
+                }
+            }
+        }
+        Ok((universal, true))
+    })();
+    for (variable, anterior) in anteriores_nodos {
+        restaurar(&mut entorno.nodos, &variable, anterior);
+    }
+    restaurar(&mut entorno.aristas, rango.arista, anterior_arista);
+    let (valor, agotada) = resultado?;
+    resultado_interno(valor, evidencia, |_| {
+        Ok(ReglaEvidencia::Cuantificador {
+            tipo,
+            instancias: Vec::new(),
+            busqueda_agotada: agotada,
+        })
+    })
 }
 
 struct EvaluacionInstancia {

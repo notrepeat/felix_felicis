@@ -88,6 +88,17 @@ fn el_evaluador_coincide_con_el_oraculo_en_estructuras_generadas() {
         "(al-menos 3 ((x N) (y N)) :guarda (Type x a) (tc Parent x y))",
         "(forall ((x N)) (al-menos 1 ((y N)) (= x y)))",
         "(forall ((e E) (x N) (y N)) (=> (Edge e x y rel) (HasLab e \"L\")))",
+        // Restricción de rango por aristas: guarda Edge con variables ligadas.
+        "(forall ((e E) (x N) (y N)) :guarda (Edge e x y rel) (Type x a))",
+        "(forall ((e E) (x N) (y N)) :guarda (Edge e x y rel) (HasLab e \"L\"))",
+        "(exists ((e E) (x N) (y N)) :guarda (Edge e x y rel) (Type y b))",
+        "(al-menos 2 ((e E) (x N) (y N)) :guarda (Edge e x y rel) (not (= x y)))",
+        "(forall ((e E) (x N)) :guarda (Edge e x x rel) (Type x a))",
+        "(exists ((e E) (x N)) :guarda (Edge e x x rel) (Type x b))",
+        "(forall ((x N)) (forall ((e E) (y N)) :guarda (Edge e x y rel) (not (= x y))))",
+        "(forall ((e E) (x N) (y N)) :guarda (and (Edge e x y rel) (Type x a)) (Type y b))",
+        "(forall ((e E) (x N) (y N)) :guarda (Edge e x y sub) (tc Parent x y))",
+        "(al-menos 1 ((e E) (y N)) :guarda (Edge e @n/v0 y rel) (Type y a))",
     ];
     proptest!(|(n in 1usize..6, semilla in any::<u64>())| {
         let estructura = mundo_generado(n, semilla);
