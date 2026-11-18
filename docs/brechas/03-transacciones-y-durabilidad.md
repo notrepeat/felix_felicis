@@ -18,8 +18,8 @@ root→backup (`BackupReady`) y stage→root (`Installed`) con identidad esperad
 `Committed`, limpieza de backup e intent de retiro.
 
 Ningún paso es solo de test: la cadena completa está cableada. En producción
-solo actúa el decisor v2; el runner v1 (`KeepValidated…`) no tiene llamador
-productivo (`journal/recovery.rs:21`, reportado).
+solo actúa el decisor v2; el runner v1 no tiene llamador productivo y, desde
+D7, sólo se compila en los tests (verificado).
 
 ## Lo que no se cumple
 
@@ -46,7 +46,7 @@ productivo (`journal/recovery.rs:21`, reportado).
 | D4 | **Hecho como aviso** (2026-11-17). `check` consciente de la transacción (toma lock o avisa si hay recovery pendiente) | S | No |
 | D5 | **Hecho** (2026-11-17, `universo guard`/`seal`, [guardia](../guardia.md)). Detección de cambios fuera de Felix: guardar el token del último estado admitido y avisar si el bundle difiere (ver [04](04-agentes-y-control-obligatorio.md)) | M | No |
 | D6 | Más cortes de proceso muerto vía caller público; prueba de caída de SO si se agrega D1 | M | No |
-| D7 | Retirar o marcar el runner v1 sin uso productivo | S | No |
+| D7 | **Hecho** (2026-11-18): el runner v1 (`observer`, `preflight`, `dispatcher` y `runner` de `journal/recovery`) sólo se compila en los tests; el producto usa sólo el decisor v2. Retirar o marcar el runner v1 sin uso productivo | S | No |
 | D8 | Apply en macOS | M | No (decisión de plataforma) |
 
 D1–D4 son la diferencia entre «transaccional ante caída del proceso» y «nunca a

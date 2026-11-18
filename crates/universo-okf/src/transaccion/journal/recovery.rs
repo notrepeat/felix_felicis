@@ -1,28 +1,41 @@
 //! Transiciones y decisión pura de recovery del protocolo journal v1.
+//!
+//! El runner v1 (`observer`, `preflight`, `dispatcher` y `runner`) no tiene
+//! llamador productivo: en producción actúa el decisor v2. Esos módulos sólo se
+//! compilan en los tests (brecha D7), donde siguen documentando y probando el
+//! protocolo v1.
 
 use super::{ArtifactFingerprint, JournalState};
 
+#[cfg(test)]
 #[path = "recovery/observer.rs"]
 mod observer;
+#[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use observer::{ErrorObservadorRecovery, observar_inventario_recovery};
 
+#[cfg(test)]
 #[path = "recovery/preflight.rs"]
 mod preflight;
+#[cfg(test)]
 pub(crate) use preflight::{
     ContextoPreflightRecovery, ErrorPreflightRecovery, FilaRecoverySoportada,
     ResultadoPreflightRecovery, clasificar_fila_recovery, preflight_recovery,
 };
 
+#[cfg(test)]
 #[path = "recovery/dispatcher.rs"]
 mod dispatcher;
+#[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use dispatcher::{
     ErrorRecoverySoportado, ResultadoRecoverySoportado, ejecutar_recovery_soportado,
 };
 
+#[cfg(test)]
 #[path = "recovery/runner.rs"]
 mod runner;
+#[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use runner::{
     ErrorFilaJournalOld, ErrorFilaJournalRestoreOld, ResultadoFilaJournalDiscardNewRestoreOld,
