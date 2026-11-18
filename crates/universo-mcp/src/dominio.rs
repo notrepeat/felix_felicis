@@ -148,7 +148,7 @@ pub fn ejecutar(nombre: &str, args: Value, config: &ServerConfig) -> Result<Valu
                     .map(|f| (f.id.clone(), f.mensaje.clone()))
                     .collect();
                 anotar_reglas(&mut objetos, &reglas);
-                (objetos, Value::Null)
+                acotar_explicacion(objetos)
             }
             Some(Err(error)) => (Value::Null, json!(error_explicacion_codigo(error))),
             None => (Value::Null, json!("explanation_not_applicable")),
@@ -198,6 +198,19 @@ pub fn ejecutar(nombre: &str, args: Value, config: &ServerConfig) -> Result<Valu
         salida["explanation_error"] = error;
     }
     Ok(salida)
+}
+
+/// Tope del JSON de la explicación de `why`, por debajo del límite de 2 MiB de
+/// la respuesta del MCP: una explicación mayor se omite con
+/// `explanation_too_large` y el rechazo y su procedencia siguen llegando.
+const MAX_EXPLICACION_BYTES: usize = 1_000_000;
+
+fn acotar_explicacion(objetos: Value) -> (Value, Value) {
+    if objetos.to_string().len() > MAX_EXPLICACION_BYTES {
+        (Value::Null, json!("explanation_too_large"))
+    } else {
+        (objetos, Value::Null)
+    }
 }
 
 fn extremos(atomo: &Atomo) -> Vec<&BundlePath> {
@@ -286,4 +299,20 @@ fn contexto(
         return Err(dominio("context_resource_limit"));
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests_explicacion {
+    use super::*;
+
+    #[test]
+    fn una_explicacion_demasiado_grande_se_omite_sin_perder_la_respuesta() {
+        let chica = json!({"objects": [{"rule_id": "r"}]});
+        assert_eq!(acotar_explicacion(chica.clone()), (chica, Value::Null));
+        let grande = json!({"objects": vec![json!({"x": "y".repeat(1000)}); 1100]});
+        assert_eq!(
+            acotar_explicacion(grande),
+            (Value::Null, json!("explanation_too_large"))
+        );
+    }
 }

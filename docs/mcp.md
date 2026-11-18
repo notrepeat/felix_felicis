@@ -28,7 +28,7 @@ textual compatible con clientes MCP. Los esquemas se anuncian en `tools/list`.
 | `context` | `node` relativo del grafo; `depth` opcional 0–2; `include_values` opcional, falso por defecto | Subgrafo inducido por vecindad no dirigida de relaciones `Edge` y `Parent`; conteos y procedencia de invariantes. |
 | `propose` | `delta` objeto `felix-delta-v1` o `felix-delta-v2` (crea notas) obligatorio | `admit` o `reject`, conteos, clases de conflicto y procedencia de invariantes falsas. Nunca publica. |
 | `check` | `delta` opcional | El mismo veredicto sobre el candidato, o sobre la base cuando falta el delta. |
-| `why` | `delta` opcional | Lo mismo que `propose`, más `explanations`: la explicación redactada de la primera regla fallida (id, mensaje y forma abstracta del contraejemplo), con el formato de `propose --explain decide --rules`. `explanation_error` es `explanation_not_applicable` si no fallan invariantes, o `explanation_budget_exceeded` si la explicación agota su presupuesto. No da rutas, etiquetas ni valores del bundle. |
+| `why` | `delta` opcional | Lo mismo que `propose`, más `explanations`: la explicación redactada de la primera regla fallida (id, mensaje y forma abstracta del contraejemplo), con el formato de `propose --explain decide --rules`. `explanation_error` es `explanation_not_applicable` si no fallan invariantes, `explanation_budget_exceeded` si la explicación agota su presupuesto, o `explanation_too_large` si su JSON pasa de 1 MB (el rechazo y la procedencia llegan igual). No da rutas, etiquetas ni valores del bundle. |
 
 Ejemplo de llamada:
 
