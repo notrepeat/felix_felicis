@@ -135,7 +135,7 @@ y no entra en ningún análisis.
 
 El mismo día, con el agente ya cambiado a Claude (`claude-sonnet-5-5`, Claude
 Code 2.1.327), la calibración se completó en
-[`results/four-arms-v1-calibracion/`](results/four-arms-v1-calibracion/summary.json):
+[`results/four-arms-v1-calibracion-tareas-v1/`](results/four-arms-v1-calibracion-tareas-v1/summary.json):
 **16 de 16 aciertos del baseline al primer delta**, sin fallos técnicos y sin
 estados inválidos, entre 3 y 7 s por corrida. Según este protocolo, las tareas
 no dejan margen y deben reescribirse, con el plan congelado de nuevo, antes de
