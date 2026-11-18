@@ -3,7 +3,7 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
-## 0.3.0 — preparada, sin tag
+## 0.3.0 — 2026-11-18
 
 Búsqueda léxica (`universo search` y `search` en el MCP, con opt-in),
 historial consultable (`show`, y `diff` compuesto con el efecto real de cada
