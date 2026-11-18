@@ -41,11 +41,13 @@ fn plantilla_se_admite_y_un_criterio_firme_sin_resolucion_se_rechaza_con_nombre(
     copiar(&ejemplo, tmp.path());
     let resolucion = tmp.path().join("bundle/notas/resolucion-cache.md");
     let texto = fs::read_to_string(&resolucion).unwrap();
-    fs::write(
-        &resolucion,
-        texto.replace("justifica: [\"[[cache-reproducible]]\"]\n", ""),
-    )
-    .unwrap();
+    // Por líneas: en Windows el checkout puede traer CRLF.
+    let sin_justificacion: String = texto
+        .split_inclusive('\n')
+        .filter(|linea| !linea.starts_with("justifica:"))
+        .collect();
+    assert_ne!(sin_justificacion, texto, "la línea justifica debe existir");
+    fs::write(&resolucion, sin_justificacion).unwrap();
     let (code, out) = check(tmp.path(), &["--explain", "decide"]);
     assert_eq!(code, 1, "{out}");
     assert!(
