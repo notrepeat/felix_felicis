@@ -140,6 +140,11 @@ impl DuenioTransaccionAnclado<'_> {
         renombrar(&parent, &fuente.archivo, &temporal, &canonico)
             .map_err(|_| ErrorPublicacionIntentV3)?;
         drop(fuente);
+        crate::transaccion::durabilidad::sincronizar_directorio(
+            &parent,
+            crate::transaccion::durabilidad::Punto::IntentPublicado,
+        )
+        .map_err(|_| ErrorPublicacionIntentV3)?;
         if !inicial.coincide(&self.capturar_publicacion_v3(true, false)?) {
             return Err(ErrorPublicacionIntentV3);
         }

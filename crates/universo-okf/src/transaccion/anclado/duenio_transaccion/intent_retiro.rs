@@ -643,11 +643,21 @@ fn confirmar_retiro(
     }
 }
 
+/// Retira el nombre y hace durable la entrada de directorio eliminada.
 pub(in crate::transaccion::anclado) fn retirar_nombre_plataforma(
     parent: &File,
     nombre: &OsStr,
     archivo: File,
 ) -> Result<(), ()> {
+    retirar_nombre_sin_sync(parent, nombre, archivo)?;
+    crate::transaccion::durabilidad::sincronizar_directorio(
+        parent,
+        crate::transaccion::durabilidad::Punto::NombreRetirado,
+    )
+    .map_err(|_| ())
+}
+
+fn retirar_nombre_sin_sync(parent: &File, nombre: &OsStr, archivo: File) -> Result<(), ()> {
     #[cfg(unix)]
     {
         use std::ffi::CString;

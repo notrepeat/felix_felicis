@@ -158,6 +158,28 @@ impl DirectorioAnclado {
         self.abrir_directorio_stage_con_probe(componente, &mut scope_filesystem)
     }
 
+    /// `fsync` del parent retenido (no-op documentado en Windows).
+    pub(in crate::transaccion) fn sincronizar_parent(
+        &self,
+        punto: crate::transaccion::durabilidad::Punto,
+    ) -> Result<(), ErrorDirectorioAnclado> {
+        crate::transaccion::durabilidad::sincronizar_directorio(&self.parent, punto)
+            .map_err(|_| ErrorDirectorioAnclado::Io)
+    }
+
+    /// `fsync` del directorio abierto (no-op documentado en Windows).
+    pub(in crate::transaccion) fn sincronizar(
+        &self,
+        punto: crate::transaccion::durabilidad::Punto,
+    ) -> Result<(), ErrorDirectorioAnclado> {
+        let raiz = self
+            .raiz
+            .as_ref()
+            .ok_or(ErrorDirectorioAnclado::RaizAusente)?;
+        crate::transaccion::durabilidad::sincronizar_directorio(raiz, punto)
+            .map_err(|_| ErrorDirectorioAnclado::Io)
+    }
+
     pub(in crate::transaccion) fn abrir_directorio_stage_con_probe<S>(
         &self,
         componente: &str,

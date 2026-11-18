@@ -20,7 +20,14 @@ impl ContextoAdmisionAnclado<'_> {
         &self,
         evidencia: &EvidenciaLecturaContexto,
     ) -> ResultadoEliminacionContextoAnclado {
-        self.eliminar_canonico_con(evidencia, eliminar_nombre_plataforma)
+        self.eliminar_canonico_con(evidencia, |parent, nombre, archivo| {
+            eliminar_nombre_plataforma(parent, nombre, archivo)?;
+            crate::transaccion::durabilidad::sincronizar_directorio(
+                parent,
+                crate::transaccion::durabilidad::Punto::ContextoRetirado,
+            )
+            .map_err(|_| ErrorContextoAdmisionAnclado::RemovalUnverified)
+        })
     }
 
     pub(super) fn eliminar_canonico_con<D>(

@@ -7,6 +7,8 @@ pub(crate) mod admision;
 pub(crate) mod anclado;
 #[allow(dead_code)]
 pub(crate) mod captura;
+pub(crate) mod durabilidad;
+pub mod estado;
 #[allow(dead_code)]
 pub(crate) mod inventario;
 #[allow(dead_code)]

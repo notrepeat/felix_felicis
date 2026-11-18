@@ -49,10 +49,31 @@ caller decide cuándo descartar esa evidencia.
 El guard permanece desde recovery hasta cleanup. Dos escritores con el mismo
 token no producen last-write-wins: uno aplica y el otro recibe `writer_lock_busy`
 o `stale`. El lock coordina escritores Felix cooperantes. No se promete snapshot
-atómico frente a mutaciones hostiles, visibilidad continua del root ni durabilidad
-ante pérdida de energía/caída del sistema. Windows identifica volumen y Linux
+atómico frente a mutaciones hostiles ni visibilidad continua del root. Windows identifica volumen y Linux
 usa la identidad de montaje donde el backend la ofrece; ninguna afirmación de
 esta página sustituye esas comprobaciones por comparaciones de rutas.
+
+## Durabilidad ante caída del sistema
+
+Desde 2026-11-17 el apply hace `fsync` en un orden fijo (`transaccion/durabilidad.rs`):
+cada archivo del stage y cada directorio del stage, del más profundo al stage,
+antes de publicar Journal Prepared; y el directorio padre después de cada cambio
+de nombres transaccional (Context, Journal y sus sucesores, Intent, root→backup,
+stage→root, borrado de backup, retiros y limpieza de stage). Así el backup sólo
+se borra después de que el sucesor Committed sea durable. Un fallo de `fsync`
+tras un rename ya hecho se informa como resultado no verificado y queda para
+recovery. En los pasos que confirman por observación (sucesor del Journal,
+Intent), el `fsync` se hace después de confirmar y su fallo deja el resultado
+como indeterminado: el apply no borra el backup y `recover` lo resuelve. Dos
+tests comprueban el orden y ese fallo inyectado; no hay prueba real de pérdida
+de energía. Residuo conocido: en los retiros finales (Journal, Context, Intent)
+el resultado del `unlink` y de su `fsync` no se usa, porque el protocolo confirma
+por observación y es reanudable por fases; un `fsync` fallido ahí no se informa.
+
+Límite en Windows: los archivos se vacían con `FlushFileBuffers`, pero las
+entradas de directorio no se sincronizan explícitamente (los handles de
+directorio no tienen derecho de escritura); se confía en el journal de
+metadatos de NTFS.
 
 ## Después de una interrupción
 
@@ -70,6 +91,33 @@ el token recibido puede resultar stale: simula de nuevo para decidir la próxima
 propuesta. Un temporal huérfano, stage ajeno, mezcla de versiones, enlace o
 identidad no verificable bloquea el flujo y conserva los artefactos. No se deduce
 permiso para eliminar un archivo a partir de su nombre.
+
+Si la preparación falla después de crear el stage (por ejemplo, `stale` porque
+el root cambió durante la preparación), apply lo retira en el mismo lock con la
+capability anclada que lo creó y devuelve el código original. Si no puede
+(owner invalidado o borrado no verificable), conserva la evidencia y devuelve
+`apply_stage_retained`. Un stage sin capability ni journal (proceso muerto antes
+del journal) nunca se borra automáticamente.
+
+## Diagnóstico y recover
+
+```text
+universo status <raiz> [--format text|json]
+universo recover <raiz> [--format text|json]
+```
+
+`status` no toma el lock ni escribe: lista los siblings reservados
+`.<raiz>.felix.*` y responde con conteos y presencia (root, journal, context,
+intent de retiro, backup, stages, otros reservados), sin nombres ni rutas. Sale
+con 0 si no hay nada pendiente y 1 si lo hay; `missing` indica que el root no
+existe y no hay rastro transaccional (ruta equivocada), y `recover` responde
+entonces `recover_root_absent` sin crear el lockfile. Con un stage sin journal añade
+`orphan_stage: true` y la instrucción para revisarlo y borrarlo a mano si no hay
+otro escritor activo. `recover` toma el lock y ejecuta el mismo recovery que
+precede a cada apply, sin aplicar nada; ante un estado no reconocido falla con
+`recovery_pending_unverified` y conserva todo. `check` no toma el lock: si
+detecta un estado pendiente, lo avisa por stderr sin cambiar stdout ni el código
+de salida.
 
 El delta tiene una cuota de 16 MiB antes de parsear. Las dos fuentes de
 configuración comparten 128 MiB lógicos, incluso cuando son la misma fuente;

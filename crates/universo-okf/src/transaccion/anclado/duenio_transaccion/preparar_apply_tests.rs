@@ -180,3 +180,68 @@ fn owner_sustituido_tras_stage_conserva_capability_y_canario() {
     // No cleanup bajo el owner invalidado. La evidencia queda retenida hasta
     // que el test descarte su directorio temporal completo.
 }
+
+#[cfg(unix)]
+#[test]
+fn limpieza_tras_owner_invalidado_retiene_stage_y_lo_declara() {
+    let _serial = crate::transaccion::lock::serializar_forks_y_reacquisiciones_test();
+    let (dir, location) = fixture();
+    let lock_path = location.lock().as_path().to_owned();
+    let mut lock = LockEscritura::adquirir_en(&location).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let snapshot = capturar_snapshot_soportado_anclado(
+        &owner.abrir_root_lectura().unwrap().unwrap(),
+        config(),
+    )
+    .unwrap();
+    let error = match owner.preparar_apply_con_hook(config(), snapshot.token(), &delta(), || {
+        fs::rename(&lock_path, lock_path.with_extension("old")).unwrap();
+        fs::write(&lock_path, b"replacement").unwrap();
+    }) {
+        Err(e) => e,
+        Ok(_) => panic!("accepted changed owner"),
+    };
+    let error = owner.limpiar_stage_de_preparacion_fallida(error);
+    assert_eq!(error.codigo(), "apply_stage_retained");
+    assert!(error.stage.is_some());
+    let stages = fs::read_dir(dir.path())
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".felix.stage.")
+        })
+        .count();
+    assert_eq!(stages, 1);
+}
+
+#[test]
+fn limpieza_tras_stale_retira_stage_y_conserva_codigo() {
+    let _serial = crate::transaccion::lock::serializar_forks_y_reacquisiciones_test();
+    let (dir, location) = fixture();
+    let mut lock = LockEscritura::adquirir_en(&location).unwrap();
+    let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock).unwrap();
+    let snapshot = capturar_snapshot_soportado_anclado(
+        &owner.abrir_root_lectura().unwrap().unwrap(),
+        config(),
+    )
+    .unwrap();
+    let error = match owner.preparar_apply_con_hook(config(), snapshot.token(), &delta(), || {
+        fs::write(location.ruta().join("payload.bin"), b"changed").unwrap()
+    }) {
+        Err(e) => e,
+        Ok(_) => panic!("accepted changed root"),
+    };
+    let error = owner.limpiar_stage_de_preparacion_fallida(error);
+    assert_eq!(error.codigo(), "stale");
+    assert!(error.stage.is_none());
+    assert!(fs::read_dir(dir.path()).unwrap().all(|e| {
+        !e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".felix.stage.")
+    }));
+    assert!(owner.recuperar_pendiente_v2().is_ok());
+}

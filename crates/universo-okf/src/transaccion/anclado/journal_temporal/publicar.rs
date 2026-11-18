@@ -2,6 +2,7 @@ use super::versionado::{
     ErrorLecturaJournalVersionada, EtapaLecturaJournalVersionada, EtapaProbeScopeJournalVersionada,
 };
 use super::*;
+use crate::transaccion::durabilidad::Punto;
 use crate::transaccion::journal::selector::{
     self, JournalPersistido, JournalPersistidoError, MAX_VERSIONED_JOURNAL_BYTES,
 };
@@ -29,6 +30,7 @@ impl JournalTemporalAnclado<'_> {
                 &capability.nombre_journal,
                 fuente,
             )
+            .and_then(|()| sincronizar_parent(&capability.parent, Punto::JournalPublicado))
         })
     }
 
@@ -48,6 +50,7 @@ impl JournalTemporalAnclado<'_> {
                     &capability.nombre_journal,
                     fuente,
                 )
+                .and_then(|()| sincronizar_parent(&capability.parent, Punto::JournalPublicado))
             },
         )
     }
@@ -382,7 +385,9 @@ impl JournalTemporalAnclado<'_> {
             }
             Err(_) => return EstadoLimpiezaPublicacion::Indeterminada,
         }
-        match quitar_temporal(&self.parent, &self.nombre, &archivo) {
+        match quitar_temporal(&self.parent, &self.nombre, &archivo)
+            .and_then(|()| sincronizar_parent(&self.parent, Punto::JournalTemporalRetirado))
+        {
             Ok(()) => EstadoLimpiezaPublicacion::Completa,
             Err(_) => EstadoLimpiezaPublicacion::Pendiente,
         }
@@ -784,6 +789,9 @@ pub(super) fn reemplazar_plataforma(
     publicar_plataforma_modo(parent, fuente, canonico, handle_fuente, true)
 }
 
+/// Reemplaza el journal canónico por el sucesor. El llamador ignora el
+/// resultado del syscall y confirma por observación; la durabilidad se hace
+/// después de confirmar (`sucesor_v2::publicar_sucesor_v2_con`).
 pub(super) fn reemplazar_sucesor_plataforma(
     parent: &File,
     fuente: &OsStr,
@@ -925,6 +933,11 @@ fn publicar_plataforma_modo(
 }
 
 #[cfg(unix)]
+pub(super) fn sincronizar_parent(parent: &File, punto: Punto) -> Result<(), ErrorJournalAnclado> {
+    crate::transaccion::durabilidad::sincronizar_directorio(parent, punto)
+        .map_err(|_| ErrorJournalAnclado::Io)
+}
+
 fn quitar_temporal(
     parent: &File,
     nombre: &OsStr,

@@ -63,6 +63,12 @@ where
     if !confirmar_publicacion(&_escrito, &nombre_canonico, &nombre_temporal) {
         return Err(ErrorPruebaReplayRootCoincidente);
     }
+    // El resultado del syscall se ignora: la durabilidad se exige tras confirmar.
+    crate::transaccion::durabilidad::sincronizar_directorio(
+        &parent,
+        crate::transaccion::durabilidad::Punto::IntentPublicado,
+    )
+    .map_err(|_| ErrorPruebaReplayRootCoincidente)?;
     drop(parent);
 
     Ok(IntentPublicado { _escrito })

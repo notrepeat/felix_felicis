@@ -179,6 +179,19 @@ impl JournalTemporalAnclado<'_> {
             }
             _ => EstadoPublicacionSucesorV2::Indeterminada,
         };
+        // Sólo un reemplazo confirmado se hace durable; si el fsync falla no se
+        // puede afirmar que el sucesor sobreviva a una caída del SO.
+        let estado = if estado == EstadoPublicacionSucesorV2::Confirmada
+            && publicar::sincronizar_parent(
+                &self.parent,
+                crate::transaccion::durabilidad::Punto::JournalSucesor,
+            )
+            .is_err()
+        {
+            EstadoPublicacionSucesorV2::Indeterminada
+        } else {
+            estado
+        };
         if self.validar_parent().is_err() {
             return Ok(EstadoPublicacionSucesorV2::Indeterminada);
         }

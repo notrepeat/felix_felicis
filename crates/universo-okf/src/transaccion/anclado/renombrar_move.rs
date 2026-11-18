@@ -136,6 +136,18 @@ impl<'lock> EspacioTransaccionalAnclado<'lock> {
             return Err(ErrorRenombrarAnclado::ResultadoNoVerificado);
         }
         fuente.nombre = destino.to_os_string();
+        // El rename ya ocurrió y se verificó; sin fsync del parent podría no
+        // sobrevivir a una caída del SO. Un fallo aquí se reporta como no
+        // verificado para que el runner reconcilie, igual que un error del OS.
+        if crate::transaccion::durabilidad::sincronizar_directorio(
+            &self.parent,
+            crate::transaccion::durabilidad::Punto::RenombrarDirectorio,
+        )
+        .is_err()
+        {
+            fuente.utilizable = false;
+            return Err(ErrorRenombrarAnclado::ResultadoNoVerificado);
+        }
         Ok(())
     }
 }

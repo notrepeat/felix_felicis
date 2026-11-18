@@ -29,7 +29,7 @@ el plan ordena fases; este análisis dice qué falta para que la promesa sea cie
 | A4 | «Testigo concreto: qué regla y dónde» | **Parcial.** Al rechazar un delta solo se entrega fuente/línea/columna de la regla e índice de instancia; la CLI imprime solo conteos. El «dónde» concreto está redactado por política de privacidad. | [02](02-rechazo-testigos-y-reparacion.md) |
 | A5 | «Propone corregirlo» | **Falso.** No existe generador de reparación; está excluido a propósito. | [02](02-rechazo-testigos-y-reparacion.md) |
 | A6 | «Aplica de forma transaccional con lock, concurrencia y recovery» | **Mayormente cierto en Linux y Windows**, con lock advisory entre escritores Felix, CAS y recovery v2 cableados. macOS y otros Unix fallan cerrado. | [03](03-transacciones-y-durabilidad.md) |
-| A7 | «Nunca queda a medio escribir» | **Parcial.** No hay fsync de los Markdown del stage ni de directorios: una caída del SO puede perder datos. Un stage huérfano bloquea los apply siguientes. | [03](03-transacciones-y-durabilidad.md) |
+| A7 | «Nunca queda a medio escribir» | **Mayormente cierto en Linux** (2026-11-17): fsync ordenado de stage y directorios, limpieza del stage tras preparación fallida, `status`/`recover`. Sin prueba real de caída del SO; en Windows no se sincronizan entradas de directorio. | [03](03-transacciones-y-durabilidad.md) |
 | A8 | «Ni se contradice sin que lo sepas» | **Parcial.** `check` detecta después una violación de reglas, pero nadie lo ejecuta automáticamente; un editor que guarda tras un commit pisa el cambio sin aviso. | [03](03-transacciones-y-durabilidad.md), [04](04-agentes-y-control-obligatorio.md) |
 | A9 | «Barrera entre "la IA propuso" y "lo que sé"» | **Parcial.** El MCP es de solo lectura y la CLI aplica bajo CAS, pero no hay orquestador obligatorio ni enforcement; el agente no tiene camino legítimo para publicar. | [04](04-agentes-y-control-obligatorio.md) |
 | A10 | «Biblioteca personal de criterio» (uso diario) | **No todavía.** Sin comando para agregar conocimiento (deltas JSON a mano), sin crear notas nuevas por delta, sin búsqueda, sin historial ni procedencia de cambios, sin instalación. | [05](05-procedencia-y-vision.md), [06](06-uso-diario-y-release.md) |
@@ -57,7 +57,7 @@ escrita del plan y por tanto **requiere decisión explícita de Romeo**.
 | Orden | Trabajo | Tamaño | Compuerta |
 |---|---|---|---|
 | 1 | ~~Corregir proxy v2 (bytes, latencia, llamadas en vuelo) y meter los tests Python en CI~~ **Hecho** 2026-11-17; falta confirmar el CI de Windows ([07](07-evidencia-de-utilidad.md)) | S | No |
-| 2 | Durabilidad: fsync de archivos del stage y de directorios padre; limpieza o diagnóstico del stage huérfano; `universo status`/`recover` | M | No |
+| 2 | ~~Durabilidad: fsync de archivos del stage y de directorios padre; limpieza o diagnóstico del stage huérfano; `universo status`/`recover`~~ **Hecho** 2026-11-17 (Windows: sin fsync de directorios; sin prueba de caída del SO) ([03](03-transacciones-y-durabilidad.md)) | M | No |
 | 3 | Guardia de escritura: hook pre-commit/CI que corre `validate`+`check` sobre el bundle, y detección de cambios fuera de Felix (comparar contra el último token admitido) | S–M | No |
 | 4 | Rechazo legible: id y mensaje por regla en `.sx`; `propose --explain` con testigo concreto opt-in y local | M | No (respetar la política de redacción por defecto) |
 | 5 | Crear/borrar nodos (notas) por delta, con transacción y replay | L | No, pero toca contratos de fase 04 |

@@ -19,6 +19,7 @@ use super::anclado::{
     IdentidadDirectorio, ScopeFilesystem,
 };
 use super::captura::{Snapshot, materializar_desde_entradas};
+use super::durabilidad::{self, Punto};
 use super::inventario::{
     LimitesInventario, inventariar_root_anclado, inventariar_root_con_lector_limitado,
     leer_archivo_regular_limitado,
@@ -392,6 +393,13 @@ impl StageAnclado {
         self,
         resultado: Result<(), ErrorLimpiezaAnclado>,
     ) -> Result<(), ErrorLimpiezaStage> {
+        // Un stage borrado que reaparece tras una caída del SO bloquearía los
+        // apply siguientes: el retiro se hace durable antes de devolver Ok.
+        let resultado = resultado.and_then(|()| {
+            self.directorio
+                .sincronizar_parent(Punto::StageEliminado)
+                .map_err(ErrorLimpiezaAnclado::Directorio)
+        });
         match resultado.map_err(mapear_error_limpieza_stage) {
             Ok(()) => Ok(()),
             Err(codigo) => Err(ErrorLimpiezaStage {
@@ -838,7 +846,33 @@ where
         archivo
             .write_all(bytes)
             .map_err(|_| CodigoEscrituraStage::Io)?;
+        durabilidad::sincronizar_archivo(&archivo, Punto::StageArchivo)
+            .map_err(|_| CodigoEscrituraStage::Io)?;
     }
+    // Directorios del más profundo al stage: cada entrada nueva queda durable
+    // antes de que el journal Prepared y el rename stage→root la publiquen.
+    let mut directorios = plan.directorios.iter().collect::<Vec<_>>();
+    directorios.sort_by(|a, b| {
+        b.matches('/')
+            .count()
+            .cmp(&a.matches('/').count())
+            .then_with(|| a.as_bytes().cmp(b.as_bytes()))
+    });
+    for ruta in directorios {
+        let mut actual = stage.directorio_clonado()?;
+        for componente in ruta.split('/') {
+            actual = actual
+                .abrir_directorio_stage_con_probe(componente, scope)
+                .map_err(mapear_error_directorio_stage)?;
+        }
+        actual
+            .sincronizar(Punto::StageDirectorio)
+            .map_err(mapear_error_directorio_stage)?;
+    }
+    stage
+        .directorio_clonado()?
+        .sincronizar(Punto::StageDirectorio)
+        .map_err(mapear_error_directorio_stage)?;
     Ok(())
 }
 

@@ -140,6 +140,14 @@ impl DuenioTransaccionAnclado<'_> {
             {
                 return Err(ErrorLimpiezaBackupV2::nuevo());
             }
+            let parent = self
+                .parent_revalidado()
+                .map_err(|_| ErrorLimpiezaBackupV2::nuevo())?;
+            crate::transaccion::durabilidad::sincronizar_directorio(
+                &parent,
+                crate::transaccion::durabilidad::Punto::BackupEliminado,
+            )
+            .map_err(|_| ErrorLimpiezaBackupV2::nuevo())?;
             Ok(())
         })();
         let result = if self.parent_revalidado().is_err() {

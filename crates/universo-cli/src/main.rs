@@ -1,5 +1,6 @@
 //! CLI del motor Universo de Conocimiento: lectura y aplicación transaccional.
 mod apply;
+mod estado;
 mod propose;
 
 use std::fs;
@@ -24,10 +25,10 @@ use universo_core::{ErrorEvaluacion, Manifiesto, PRESUPUESTO_EXPLICACION_POR_DEF
 use universo_okf::{ErrorBundle, ErrorManifiestoArchivo, Regla, cargar_bundle, cargar_manifiesto};
 
 /// Uso breve, mostrado por errores de argumentos en `stderr`.
-const USO: &str = "Uso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]  (alias de validate)\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate>] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--emit-snapshot-token | --apply --expect-snapshot <token>]\nUse --manifiesto=<ruta> y --invariantes=<ruta> si una ruta empieza con '-'.\n";
+const USO: &str = "Uso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]  (alias de validate)\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate>] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--emit-snapshot-token | --apply --expect-snapshot <token>]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\nUse --manifiesto=<ruta> y --invariantes=<ruta> si una ruta empieza con '-'.\n";
 
 /// Ayuda completa, mostrada en `stdout` con código de salida 0.
-const AYUDA: &str = "CLI de Felix Felicis\n\nUso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate>] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--emit-snapshot-token | --apply --expect-snapshot <token>]\n\nComandos:\n  atomos     Imprime los átomos del bundle en orden canónico.\n  validate   Valida el manifiesto, el formato OKF y la estructura del bundle.\n  verificar  Alias compatible de validate.\n  check      Evalúa el programa de invariantes sobre el bundle.\n  propose    Simula por defecto; --apply publica con snapshot esperado.\n\nOpciones:\n  --manifiesto <ruta> | --manifiesto=<ruta>  Manifiesto TOML requerido.\n  --invariantes <ruta> | --invariantes=<ruta> Programa de invariantes requerido por check.\n  --explain decide|enumerate                  Explicación redactada opt-in de check.\n  --format text|json                         Formato de validate/check/propose (por defecto: text).\n  -h, --help                                 Muestra esta ayuda y termina con código 0.\n\nSi la ruta de un archivo empieza con `-`, usa `--opcion=<ruta>`.\nSi la raíz posicional empieza con `-`, antepone `./` (por ejemplo, `./-bundle`).\nvalidate es una comprobación estructural; no evalúa invariantes.\ncheck informa admit/reject/error y no incluye datos concretos del bundle. La explicación es redactada; su pase opt-in usa un presupuesto de 1.000.000 unidades además del pase completo que determina el resumen.\n\nCódigos de salida:\n  0  Bundle válido, check/propose admit o ayuda mostrada.\n  1  Bundle inválido, check/propose reject/error o fallo de escritura.\n  2  Uso inválido.\n";
+const AYUDA: &str = "CLI de Felix Felicis\n\nUso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate>] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--emit-snapshot-token | --apply --expect-snapshot <token>]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n\nComandos:\n  atomos     Imprime los átomos del bundle en orden canónico.\n  validate   Valida el manifiesto, el formato OKF y la estructura del bundle.\n  verificar  Alias compatible de validate.\n  check      Evalúa el programa de invariantes sobre el bundle.\n  propose    Simula por defecto; --apply publica con snapshot esperado.\n  status     Informa, sin escribir, si hay una transacción pendiente (0 limpio, 1 pendiente).\n  recover    Toma el lock y completa o revierte una transacción interrumpida.\n\nOpciones:\n  --manifiesto <ruta> | --manifiesto=<ruta>  Manifiesto TOML requerido.\n  --invariantes <ruta> | --invariantes=<ruta> Programa de invariantes requerido por check.\n  --explain decide|enumerate                  Explicación redactada opt-in de check.\n  --format text|json                         Formato de validate/check/propose/status/recover (por defecto: text).\n  -h, --help                                 Muestra esta ayuda y termina con código 0.\n\nSi la ruta de un archivo empieza con `-`, usa `--opcion=<ruta>`.\nSi la raíz posicional empieza con `-`, antepone `./` (por ejemplo, `./-bundle`).\nvalidate es una comprobación estructural; no evalúa invariantes.\ncheck informa admit/reject/error y no incluye datos concretos del bundle. La explicación es redactada; su pase opt-in usa un presupuesto de 1.000.000 unidades además del pase completo que determina el resumen.\n\nCódigos de salida:\n  0  Bundle válido, check/propose admit o ayuda mostrada.\n  1  Bundle inválido, check/propose reject/error, status pendiente/missing, recover fallido o fallo de escritura.\n  2  Uso inválido.\n";
 
 /// Formato de salida de `validate`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +41,7 @@ enum Formato {
 enum Comando {
     Ayuda,
     Propose(propose::Solicitud),
+    Estado(estado::Solicitud),
     Atomos {
         raiz: PathBuf,
         manifiesto: PathBuf,
@@ -79,6 +81,12 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
     let (nombre_comando, resto) = args.split_first().ok_or_else(|| USO.to_string())?;
     if nombre_comando == "propose" {
         return propose::parsear(resto).map(Comando::Propose);
+    }
+    if nombre_comando == "status" {
+        return estado::parsear(estado::Accion::Status, resto).map(Comando::Estado);
+    }
+    if nombre_comando == "recover" {
+        return estado::parsear(estado::Accion::Recover, resto).map(Comando::Estado);
     }
     let tipo_comando = match nombre_comando.as_str() {
         "atomos" => 0,
@@ -1120,6 +1128,13 @@ fn ejecutar_check(
     salida: &mut impl Write,
     error: &mut impl Write,
 ) -> i32 {
+    // check no toma el lock: avisa por stderr si hay una transacción pendiente,
+    // sin cambiar stdout ni el código de salida.
+    if let Some(aviso) = estado::aviso_pendiente(raiz) {
+        if let Err(causa) = error.write_all(aviso.as_bytes()) {
+            reportar_fallo_escritura(error, "stderr", &causa);
+        }
+    }
     ejecutar_check_con_presupuesto_explicacion(
         SolicitudCheck {
             raiz,
@@ -1408,6 +1423,7 @@ pub(crate) fn ejecutar(args: Vec<String>, salida: &mut impl Write, error: &mut i
             }
         }
         Comando::Propose(solicitud) => propose::ejecutar(solicitud, salida, error),
+        Comando::Estado(solicitud) => estado::ejecutar(solicitud, salida, error),
         Comando::Atomos { raiz, manifiesto } => ejecutar_atomos(&raiz, &manifiesto, salida, error),
         Comando::Validate {
             raiz,

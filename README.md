@@ -19,7 +19,7 @@ Implementado:
 - AST y parser de invariantes FO bisortidos;
 - validación estática, expansión de esquemas y evaluador de referencia en la API de `universo-core`;
 - `check --explain decide|enumerate` opt-in, con explicaciones redactadas en texto o JSON v2; el resultado baseline conserva JSON v1;
-- CLI (`atomos`, `validate`, `check`, `propose`; `verificar` es alias compatible de `validate`);
+- CLI (`atomos`, `validate`, `check`, `propose`, `status`, `recover`; `verificar` es alias compatible de `validate`);
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
 - servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check` y `why`, sin escritura del bundle;
 - [Code Mode local opcional](tools/codemode-local/README.md) con SDK Cloudflare real y sandbox adicional Linux; [comparación reproducible](docs/codemode-comparacion.md), sin enviar bundles a la nube;

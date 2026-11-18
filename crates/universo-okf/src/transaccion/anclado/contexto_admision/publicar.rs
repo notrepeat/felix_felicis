@@ -96,6 +96,11 @@ impl<'lock> ContextoTemporalVerificado<'lock> {
         if !confirmar_publicacion(&_lease, &nombre_temporal, &datos) {
             return Err(ErrorContextoAdmisionAnclado::PublicationUnverified);
         }
+        crate::transaccion::durabilidad::sincronizar_directorio(
+            &_lease.parent,
+            crate::transaccion::durabilidad::Punto::ContextoPublicado,
+        )
+        .map_err(|_| ErrorContextoAdmisionAnclado::PublicationUnverified)?;
 
         Ok(ReciboContextoPublicado {
             _autoridad: Arc::clone(&_lease._autoridad),

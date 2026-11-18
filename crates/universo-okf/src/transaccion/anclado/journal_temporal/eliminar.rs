@@ -15,7 +15,14 @@ impl JournalTemporalAnclado<'_> {
             identidad_esperada,
             journal_esperado,
             &mut super::scope_filesystem,
-            eliminar_entrada_plataforma,
+            |parent, nombre, archivo| {
+                eliminar_entrada_plataforma(parent, nombre, archivo)?;
+                crate::transaccion::durabilidad::sincronizar_directorio(
+                    parent,
+                    crate::transaccion::durabilidad::Punto::JournalRetirado,
+                )
+                .map_err(|_| ErrorJournalAnclado::Io)
+            },
         )
     }
 

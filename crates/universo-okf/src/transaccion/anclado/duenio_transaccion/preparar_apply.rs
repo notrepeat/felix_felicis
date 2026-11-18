@@ -48,6 +48,49 @@ impl std::fmt::Debug for ErrorPreparacionApply {
     }
 }
 impl<'lock> DuenioTransaccionAnclado<'lock> {
+    /// Retira, bajo el mismo lock, el stage que dejó una preparación fallida.
+    /// Sin journal ese stage no se puede probar propio después, y bloquearía
+    /// todo apply siguiente (`exigir_stages_ausentes`). Solo limpia si el owner
+    /// sigue válido y con la capability anclada; `StageAnclado::limpiar`
+    /// revalida parent, handle e identidad. Si no puede, conserva la evidencia
+    /// y devuelve `apply_stage_retained`; el código original se pierde solo en
+    /// ese caso, porque el stage retenido es lo que el usuario debe atender.
+    pub(crate) fn limpiar_stage_de_preparacion_fallida(
+        &self,
+        mut error: ErrorPreparacionApply,
+    ) -> ErrorPreparacionApply {
+        let stage = match (error.stage.take(), error.escritura.take()) {
+            (Some(stage), escritura) => {
+                error.escritura = escritura;
+                Some(*stage)
+            }
+            (None, Some(escritura)) => match escritura.recuperar_stage_anclado() {
+                Ok(stage) => Some(stage),
+                Err(escritura) => {
+                    if escritura.sibling_huerfano_posible() {
+                        error.codigo = "apply_stage_retained";
+                    }
+                    error.escritura = Some(Box::new(escritura));
+                    None
+                }
+            },
+            (None, None) => None,
+        };
+        let Some(stage) = stage else {
+            return error;
+        };
+        if self.parent_revalidado().is_err() {
+            error.stage = Some(Box::new(stage));
+            error.codigo = "apply_stage_retained";
+            return error;
+        }
+        if let Err(fallo) = stage.limpiar() {
+            error.stage = Some(Box::new(fallo.recuperar_stage()));
+            error.codigo = "apply_stage_retained";
+        }
+        error
+    }
+
     pub(crate) fn preparar_apply<'owner>(
         &'owner mut self,
         config: ConfigRawCapturada,
@@ -56,7 +99,7 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
     ) -> Result<ResultadoPreparacionApply<'owner, 'lock>, ErrorPreparacionApply> {
         self.preparar_apply_con_hook(config, esperado, delta, || {})
     }
-    fn preparar_apply_con_hook<'owner>(
+    pub(crate) fn preparar_apply_con_hook<'owner>(
         &'owner mut self,
         config: ConfigRawCapturada,
         esperado: SnapshotToken,

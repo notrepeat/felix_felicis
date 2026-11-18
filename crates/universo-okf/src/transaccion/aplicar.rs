@@ -80,6 +80,18 @@ pub fn aplicar_archivo(
     delta_path: &Path,
     esperado: SnapshotToken,
 ) -> Result<ResultadoAplicacion, ErrorAplicacion> {
+    aplicar_archivo_con_hook(raiz, manifiesto, invariantes, delta_path, esperado, || {})
+}
+
+/// `despues_stage` corre justo después de crear el stage (solo para tests).
+fn aplicar_archivo_con_hook(
+    raiz: &Path,
+    manifiesto: &Path,
+    invariantes: &Path,
+    delta_path: &Path,
+    esperado: SnapshotToken,
+    despues_stage: impl FnOnce(),
+) -> Result<ResultadoAplicacion, ErrorAplicacion> {
     let ubicacion =
         UbicacionRaiz::nueva(raiz).map_err(|_| ErrorAplicacion::nuevo("apply_root_invalid"))?;
     let config = capturar_configuracion_para_apply(ubicacion.ruta(), manifiesto, invariantes)
@@ -108,11 +120,16 @@ pub fn aplicar_archivo(
     let config = owner
         .resolver_configuracion_apply(config)
         .map_err(|e| ErrorAplicacion::nuevo(e.codigo()))?;
-    let prepared = owner
-        .preparar_apply(config, esperado, &delta)
-        .map_err(|e| {
-            ErrorAplicacion::retenido(e.codigo(), EvidenciaAplicacion::Preparacion(Box::new(e)))
-        })?;
+    let prepared = match owner.preparar_apply_con_hook(config, esperado, &delta, despues_stage) {
+        Ok(prepared) => prepared,
+        Err(e) => {
+            let e = owner.limpiar_stage_de_preparacion_fallida(e);
+            return Err(ErrorAplicacion::retenido(
+                e.codigo(),
+                EvidenciaAplicacion::Preparacion(Box::new(e)),
+            ));
+        }
+    };
     let prepared = match prepared {
         ResultadoPreparacionApply::Preparada(prepared) => prepared,
         ResultadoPreparacionApply::Rechazada(result) => {
@@ -156,3 +173,7 @@ pub fn aplicar_archivo(
         invariantes_fallidas: 0,
     })
 }
+
+#[cfg(test)]
+#[path = "aplicar_tests.rs"]
+mod tests;
