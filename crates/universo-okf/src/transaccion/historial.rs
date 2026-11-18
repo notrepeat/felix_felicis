@@ -6,7 +6,19 @@
 //! "sealed":bool,"state":"<token hex>"|null,"delta":{..}|null}`. `delta` es el
 //! delta aplicado en forma canónica (`felix-delta-v1` o `v2`); se omite (`null`,
 //! con `"delta_omitted":true`) si su serialización supera 256 KiB, y las líneas
-//! anteriores a este campo simplemente no lo tienen. Contiene datos del bundle,
+//! anteriores a este campo simplemente no lo tienen. `effect`
+//! (`{"add":[..],"remove":[..],"bodies":[{"path","before","after"}]}`) es lo
+//! que el apply cambió de verdad: los
+//! átomos presentes después y no antes, y al revés. Difiere del delta cuando
+//! éste pide añadir algo ya presente (un no-op admitido); `universo diff` lo
+//! compone; `bodies` lleva la huella SHA-256 de cada cuerpo que cambió, antes y
+//! después. Se omite como el delta (`"effect_omitted":true`). `from` y `to`
+//! son los tokens del estado del que partió el apply y del que dejó (`to` es
+//! `null` si la recaptura no coincidió con lo verificado); `diff` los usa para
+//! exigir que el historial no tenga huecos. Límite: `to` exige que el árbol
+//! recapturado sea el verificado, pero no compara manifiesto e invariantes con
+//! los del CAS; una edición de esos archivos en la ventana entre el commit y la
+//! recaptura (el lock es advisory) quedaría dentro de la cadena. Contiene datos del bundle,
 //! como el propio archivo del bundle; `universo log` no lo muestra y
 //! `universo show` sí. El autor y el motivo los da quien
 //! aplica (opcionales, sin verificación de identidad). `state` es el token del
@@ -76,6 +88,148 @@ fn fecha_valida(fecha: &str) -> bool {
         })
 }
 
+/// Un cuerpo que un apply cambió de verdad: SHA-256 (hex) antes y después.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CambioCuerpo {
+    pub path: universo_core::BundlePath,
+    pub antes: String,
+    pub despues: String,
+}
+
+/// Lo que un apply cambió de verdad en el bundle.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Efecto {
+    /// Átomos presentes después del apply y no antes, en orden canónico.
+    pub agregar: Vec<universo_core::Atomo>,
+    /// Átomos presentes antes del apply y no después, en orden canónico.
+    pub retirar: Vec<universo_core::Atomo>,
+    /// Notas que existían antes y cuyo cuerpo cambió, ordenadas por path.
+    pub cuerpos: Vec<CambioCuerpo>,
+}
+
+fn huella_cuerpo(estructura: &universo_core::Estructura, id: universo_core::NodoId) -> String {
+    use sha2::{Digest, Sha256};
+    let cuerpo = estructura.anexo(id).map_or("", |a| a.cuerpo.as_str());
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut salida = String::with_capacity(64);
+    for byte in Sha256::digest(cuerpo.as_bytes()) {
+        salida.push(HEX[(byte >> 4) as usize] as char);
+        salida.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    salida
+}
+
+impl Efecto {
+    /// Diferencia entre dos estados: átomos (una pasada sobre los dos
+    /// vectores, que `atomos()` ya entrega en orden canónico) y cuerpos de
+    /// las notas presentes en ambos.
+    pub fn entre(antes: &universo_core::Estructura, despues: &universo_core::Estructura) -> Self {
+        use std::cmp::Ordering;
+        let (a, d) = (antes.atomos(), despues.atomos());
+        let (mut i, mut j) = (0, 0);
+        let mut efecto = Self::default();
+        loop {
+            match (a.get(i), d.get(j)) {
+                (None, None) => break,
+                (Some(x), Some(y)) => match x.cmp(y) {
+                    Ordering::Equal => (i, j) = (i + 1, j + 1),
+                    Ordering::Less => {
+                        efecto.retirar.push(x.clone());
+                        i += 1;
+                    }
+                    Ordering::Greater => {
+                        efecto.agregar.push(y.clone());
+                        j += 1;
+                    }
+                },
+                (Some(x), None) => {
+                    efecto.retirar.push(x.clone());
+                    i += 1;
+                }
+                (None, Some(y)) => {
+                    efecto.agregar.push(y.clone());
+                    j += 1;
+                }
+            }
+        }
+        for (id_antes, nodo) in antes.nodos() {
+            let Some(id_despues) = despues.por_path(&nodo.path) else {
+                continue;
+            };
+            let (h_antes, h_despues) = (
+                huella_cuerpo(antes, id_antes),
+                huella_cuerpo(despues, id_despues),
+            );
+            if h_antes != h_despues {
+                efecto.cuerpos.push(CambioCuerpo {
+                    path: nodo.path.clone(),
+                    antes: h_antes,
+                    despues: h_despues,
+                });
+            }
+        }
+        efecto.cuerpos.sort_by(|x, y| x.path.cmp(&y.path));
+        efecto
+    }
+
+    fn a_json(&self) -> Value {
+        let textos =
+            |a: &[universo_core::Atomo]| a.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let cuerpos: Vec<_> = self
+            .cuerpos
+            .iter()
+            .map(|c| json!({"path": c.path.to_string(), "before": c.antes, "after": c.despues}))
+            .collect();
+        json!({"add": textos(&self.agregar), "remove": textos(&self.retirar), "bodies": cuerpos})
+    }
+
+    fn desde_json(valor: &Value) -> Option<Self> {
+        let lista = |clave: &str| -> Option<Vec<universo_core::Atomo>> {
+            valor
+                .get(clave)?
+                .as_array()?
+                .iter()
+                .map(|a| universo_core::Atomo::parsear(a.as_str()?).ok())
+                .collect()
+        };
+        let huella = |v: &Value| {
+            v.as_str()
+                .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+                .map(str::to_string)
+        };
+        let cuerpos = valor
+            .get("bodies")?
+            .as_array()?
+            .iter()
+            .map(|c| {
+                Some(CambioCuerpo {
+                    path: universo_core::BundlePath::nuevo(c.get("path")?.as_str()?).ok()?,
+                    antes: huella(c.get("before")?)?,
+                    despues: huella(c.get("after")?)?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            agregar: lista("add")?,
+            retirar: lista("remove")?,
+            cuerpos,
+        })
+    }
+}
+
+/// Lo que un apply registra de su cambio, además de la procedencia.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Registro<'a> {
+    /// Delta aplicado en JSON canónico.
+    pub delta: Option<&'a str>,
+    /// Lo que cambió de verdad.
+    pub efecto: Option<&'a Efecto>,
+    /// Token del estado del que partió el apply (el del CAS).
+    pub desde: Option<SnapshotToken>,
+    /// Token del estado instalado, si la recaptura coincide con lo verificado.
+    pub hasta: Option<SnapshotToken>,
+}
+
 /// Entrada pública del historial (sin el token del estado).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EntradaHistorial {
@@ -87,6 +241,16 @@ pub struct EntradaHistorial {
     pub delta: Option<String>,
     /// El apply omitió el delta por tamaño (del delta o del historial).
     pub delta_omitido: bool,
+    /// Efecto real del apply, si la línea lo guarda y es válido.
+    pub efecto: Option<Efecto>,
+    /// El apply omitió el efecto por tamaño.
+    pub efecto_omitido: bool,
+    /// La línea trae un efecto que no se pudo leer.
+    pub efecto_invalido: bool,
+    /// Tokens (hex) del estado de partida y del instalado. Sensibles: sólo
+    /// sirven para comprobar que el historial no tiene huecos.
+    pub(crate) estado_desde: Option<String>,
+    pub(crate) estado_hasta: Option<String>,
 }
 
 /// Historial leído. `descartadas` cuenta líneas ilegibles o fuera de formato
@@ -156,7 +320,7 @@ pub(crate) fn anotar(
     procedencia: &Procedencia,
     estado: Option<SnapshotToken>,
     sellado: bool,
-    delta: Option<&str>,
+    registro: &Registro<'_>,
 ) -> io::Result<()> {
     let (ruta, parent) = ruta_historial(ubicacion).ok_or_else(|| io::Error::other("log"))?;
     // Nunca seguir un enlace ni escribir en algo que no sea un archivo regular
@@ -186,9 +350,22 @@ pub(crate) fn anotar(
         "sealed": sellado,
         "state": estado.map(SnapshotToken::to_hex),
     });
-    if let Some(delta) = delta {
-        let cabe = delta.len() <= MAX_DELTA_EN_HISTORIAL
-            && previo.unwrap_or(0) < HISTORIAL_SIN_DELTAS_DESDE;
+    let historial_holgado = previo.unwrap_or(0) < HISTORIAL_SIN_DELTAS_DESDE;
+    if registro.efecto.is_some() || registro.desde.is_some() {
+        linea["from"] = json!(registro.desde.map(SnapshotToken::to_hex));
+        linea["to"] = json!(registro.hasta.map(SnapshotToken::to_hex));
+    }
+    if let Some(efecto) = registro.efecto {
+        let valor = efecto.a_json();
+        if historial_holgado && valor.to_string().len() <= MAX_DELTA_EN_HISTORIAL {
+            linea["effect"] = valor;
+        } else {
+            linea["effect"] = Value::Null;
+            linea["effect_omitted"] = Value::Bool(true);
+        }
+    }
+    if let Some(delta) = registro.delta {
+        let cabe = delta.len() <= MAX_DELTA_EN_HISTORIAL && historial_holgado;
         match serde_json::from_str::<Value>(delta) {
             Ok(valor) if cabe => linea["delta"] = valor,
             _ => {
@@ -256,6 +433,13 @@ pub fn leer(raiz: &Path) -> Result<Historial, ErrorHistorial> {
     Ok(historial)
 }
 
+fn token_hex(valor: Option<&Value>) -> Option<String> {
+    valor?
+        .as_str()
+        .filter(|t| SnapshotToken::from_hex(t).is_ok())
+        .map(str::to_string)
+}
+
 fn parsear_linea(linea: &str) -> Option<EntradaHistorial> {
     let valor: Value = serde_json::from_str(linea).ok()?;
     if valor.get("schema")?.as_str()? != SCHEMA {
@@ -281,6 +465,16 @@ fn parsear_linea(linea: &str) -> Option<EntradaHistorial> {
             .get("delta_omitted")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        efecto: valor.get("effect").and_then(Efecto::desde_json),
+        efecto_invalido: valor
+            .get("effect")
+            .is_some_and(|e| !e.is_null() && Efecto::desde_json(e).is_none()),
+        estado_desde: token_hex(valor.get("from")),
+        estado_hasta: token_hex(valor.get("to")),
+        efecto_omitido: valor
+            .get("effect_omitted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     };
     // Lo leído se revalida: el archivo puede haberse editado a mano.
     (fecha_valida(&entrada.fecha)
@@ -303,10 +497,90 @@ mod tests {
     }
 
     #[test]
+    fn el_efecto_se_guarda_y_se_lee_y_se_omite_como_el_delta() {
+        let (_dir, root, ubicacion) = raiz();
+        let efecto = Efecto {
+            agregar: vec![universo_core::Atomo::parsear("Estado(n/a, vigente)").unwrap()],
+            retirar: vec![universo_core::Atomo::parsear("Estado(n/a, borrador)").unwrap()],
+            cuerpos: vec![CambioCuerpo {
+                path: universo_core::BundlePath::nuevo("n/a").unwrap(),
+                antes: "0".repeat(64),
+                despues: "f".repeat(64),
+            }],
+        };
+        anotar(
+            &ubicacion,
+            &Procedencia::default(),
+            None,
+            true,
+            &Registro {
+                efecto: Some(&efecto),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        anotar(
+            &ubicacion,
+            &Procedencia::default(),
+            None,
+            true,
+            &Registro::default(),
+        )
+        .unwrap();
+        let grande = Efecto {
+            agregar: (0..20_000)
+                .map(|i| {
+                    universo_core::Atomo::parsear(&format!("Estado(n/a{i}, vigente)")).unwrap()
+                })
+                .collect(),
+            retirar: vec![],
+            cuerpos: vec![],
+        };
+        anotar(
+            &ubicacion,
+            &Procedencia::default(),
+            None,
+            true,
+            &Registro {
+                efecto: Some(&grande),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let historial = leer(&root).unwrap();
+        assert_eq!(historial.entradas[0].efecto.as_ref(), Some(&efecto));
+        assert!(!historial.entradas[0].efecto_omitido);
+        assert_eq!(
+            (
+                historial.entradas[1].efecto.as_ref(),
+                historial.entradas[1].efecto_omitido
+            ),
+            (None, false)
+        );
+        assert_eq!(
+            (
+                historial.entradas[2].efecto.as_ref(),
+                historial.entradas[2].efecto_omitido
+            ),
+            (None, true)
+        );
+    }
+
+    #[test]
     fn un_historial_grande_deja_de_guardar_deltas_y_sigue_legible() {
         let (_dir, root, ubicacion) = raiz();
         let delta = r#"{"schema":"felix-delta-v1","add":[],"remove":[]}"#;
-        anotar(&ubicacion, &Procedencia::default(), None, true, Some(delta)).unwrap();
+        anotar(
+            &ubicacion,
+            &Procedencia::default(),
+            None,
+            true,
+            &Registro {
+                delta: Some(delta),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let (ruta, _) = ruta_historial(&ubicacion).unwrap();
         // Relleno con líneas descartables hasta pasar el umbral.
         let relleno = "x".repeat(1023) + "\n";
@@ -315,7 +589,17 @@ mod tests {
             archivo.write_all(relleno.as_bytes()).unwrap();
         }
         drop(archivo);
-        anotar(&ubicacion, &Procedencia::default(), None, true, Some(delta)).unwrap();
+        anotar(
+            &ubicacion,
+            &Procedencia::default(),
+            None,
+            true,
+            &Registro {
+                delta: Some(delta),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let historial = leer(&root).unwrap();
         assert_eq!(historial.entradas.len(), 2);
         assert!(historial.entradas[0].delta.is_some() && !historial.entradas[0].delta_omitido);
@@ -373,7 +657,7 @@ mod tests {
             autor: Some("José".into()),
             motivo: None,
         };
-        anotar(&ubicacion, &p, None, false, None).unwrap();
+        anotar(&ubicacion, &p, None, false, &Registro::default()).unwrap();
         let log = dir.path().join(".bundle.felix.log");
         // Escritura cortada a mitad de un carácter UTF-8.
         fs::OpenOptions::new()
@@ -385,7 +669,14 @@ mod tests {
         let historial = leer(&root).unwrap();
         assert_eq!((historial.entradas.len(), historial.descartadas), (1, 1));
         // El apply siguiente no se pega a la línea parcial.
-        anotar(&ubicacion, &Procedencia::default(), None, true, None).unwrap();
+        anotar(
+            &ubicacion,
+            &Procedencia::default(),
+            None,
+            true,
+            &Registro::default(),
+        )
+        .unwrap();
         let historial = leer(&root).unwrap();
         assert_eq!((historial.entradas.len(), historial.descartadas), (2, 1));
         assert_eq!(historial.entradas[0].autor.as_deref(), Some("José"));
@@ -418,11 +709,29 @@ mod tests {
         fs::write(&victima, b"intacto").unwrap();
         let log = dir.path().join(".bundle.felix.log");
         std::os::unix::fs::symlink(&victima, &log).unwrap();
-        assert!(anotar(&ubicacion, &Procedencia::default(), None, true, None).is_err());
+        assert!(
+            anotar(
+                &ubicacion,
+                &Procedencia::default(),
+                None,
+                true,
+                &Registro::default()
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(&victima).unwrap(), b"intacto");
         fs::remove_file(&log).unwrap();
         std::os::unix::fs::symlink(dir.path().join("colgante"), &log).unwrap();
-        assert!(anotar(&ubicacion, &Procedencia::default(), None, true, None).is_err());
+        assert!(
+            anotar(
+                &ubicacion,
+                &Procedencia::default(),
+                None,
+                true,
+                &Registro::default()
+            )
+            .is_err()
+        );
         assert!(!dir.path().join("colgante").exists());
     }
 }

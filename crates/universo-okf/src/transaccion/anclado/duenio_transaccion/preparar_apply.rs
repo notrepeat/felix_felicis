@@ -19,6 +19,8 @@ pub(crate) struct PreparacionApply<'owner, 'lock> {
     pub(super) contexto: ContextoAdmision,
     pub(super) stage: StageAnclado,
     pub(super) journal: JournalV2,
+    /// Lo que el apply cambia de verdad en los átomos, para el historial.
+    pub(super) efecto: crate::transaccion::historial::Efecto,
 }
 pub(crate) enum ResultadoPreparacionApply<'owner, 'lock> {
     Preparada(Box<PreparacionApply<'owner, 'lock>>),
@@ -51,6 +53,10 @@ impl PreparacionApply<'_, '_> {
     /// Digest del árbol raw del stage verificado: lo que el apply va a instalar.
     pub(crate) fn digest_nuevo(&self) -> crate::transaccion::journal::RawTreeDigest {
         self.journal.new_fingerprint().digest().clone()
+    }
+    /// Átomos que el apply añade y retira de verdad (sin los no-op del delta).
+    pub(crate) fn efecto(&self) -> &crate::transaccion::historial::Efecto {
+        &self.efecto
     }
 }
 
@@ -128,6 +134,10 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
             self.exigir_namespace_apply_vacio()?;
             return Ok(ResultadoPreparacionApply::Rechazada(propuesta));
         };
+        let efecto = crate::transaccion::historial::Efecto::entre(
+            snapshot.estructura(),
+            candidato.estructura(),
+        );
         let contexto = ContextoAdmision::capturar(&snapshot, delta)
             .map_err(|e| ErrorPreparacionApply::nuevo(e.codigo()))?;
         let overrides = crate::transaccion::replay::new_esperado::derivar_parent_overrides(
@@ -211,6 +221,7 @@ impl<'lock> DuenioTransaccionAnclado<'lock> {
                     contexto,
                     stage,
                     journal,
+                    efecto,
                 },
             ))),
             Err(mut error) => {

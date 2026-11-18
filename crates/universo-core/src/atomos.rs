@@ -237,6 +237,26 @@ impl Ord for Atomo {
 }
 
 impl Atomo {
+    /// Paths de nodo que menciona el átomo: su sujeto, o los extremos de una
+    /// arista o relación de padre.
+    pub fn paths(&self) -> Vec<&BundlePath> {
+        match self {
+            Atomo::Type { sujeto, .. } | Atomo::Ext { sujeto, .. } => vec![sujeto],
+            Atomo::Edge {
+                origen, destino, ..
+            } => vec![origen, destino],
+            Atomo::Parent { hijo, padre } => vec![hijo, padre],
+            Atomo::HasLab {
+                sujeto: Sujeto::Nodo(path),
+                ..
+            } => vec![path],
+            Atomo::HasLab {
+                sujeto: Sujeto::Arista(id),
+                ..
+            } => vec![&id.origen, &id.destino],
+        }
+    }
+
     /// Inversa exacta de `Display` (round-trip textual: spec §3.6).
     /// Estricto: cualquier forma que no calce exactamente con la
     /// gramática de un `Type`/`Edge`/`Parent`/`HasLab`/`Ext` se rechaza.

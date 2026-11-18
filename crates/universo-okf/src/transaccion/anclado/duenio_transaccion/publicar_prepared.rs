@@ -48,12 +48,14 @@ impl<'owner, 'lock> PreparacionApply<'owner, 'lock> {
         self: Box<Self>,
         hook: impl Fn(u8),
     ) -> Result<PreparacionPublicada<'owner, 'lock>, ErrorPublicacionPrepared<'owner, 'lock>> {
+        // El efecto ya lo tomó el apply para el historial; publicar no lo usa.
         let Self {
             owner,
             snapshot,
             contexto,
             stage,
             journal,
+            efecto: _,
         } = *self;
         let envelope = EnvelopeContextoAdmisionV2::ligar(contexto, &journal);
         let mut estado = EstadoPublicacionPrepared {

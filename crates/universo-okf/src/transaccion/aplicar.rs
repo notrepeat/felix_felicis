@@ -198,6 +198,7 @@ fn aplicar_archivo_con_hooks(
     // guardia informa como «difiere» (alarma conservadora, nunca falso OK).
     let _ = super::sello::borrar_sello(&ubicacion);
     let digest_nuevo = prepared.digest_nuevo();
+    let efecto = prepared.efecto().clone();
     let publicada = prepared.publicar_prepared().map_err(|e| {
         ErrorAplicacion::retenido(
             "prepared_publication_unverified",
@@ -221,15 +222,21 @@ fn aplicar_archivo_con_hooks(
     // ventana (el lock es advisory) no debe quedar aceptada. El commit ya es
     // durable: no sellar no deshace la aplicación; se informa en `sellado`.
     antes_de_sellar();
-    let sellado_con =
-        match super::sello::capturar_veredicto_con_digest(raiz, manifiesto, invariantes) {
-            Ok((token, 0, digest)) if digest == digest_nuevo => {
-                super::sello::escribir_sello(&ubicacion, token)
-                    .is_ok()
-                    .then_some(token)
-            }
-            _ => None,
-        };
+    let recaptura = super::sello::capturar_veredicto_con_digest(raiz, manifiesto, invariantes);
+    // Token del estado instalado, para encadenar el historial: sólo si el
+    // árbol recapturado es el verificado.
+    let instalado = match &recaptura {
+        Ok((token, _, digest)) if *digest == digest_nuevo => Some(*token),
+        _ => None,
+    };
+    let sellado_con = match recaptura {
+        Ok((token, 0, digest)) if digest == digest_nuevo => {
+            super::sello::escribir_sello(&ubicacion, token)
+                .is_ok()
+                .then_some(token)
+        }
+        _ => None,
+    };
     let sellado = sellado_con.is_some();
     // Historial informativo bajo el mismo lock; un fallo no deshace el commit.
     let registrado = super::historial::anotar(
@@ -237,9 +244,14 @@ fn aplicar_archivo_con_hooks(
         procedencia,
         sellado_con,
         sellado,
-        crate::delta::serializar_delta_json_canonico(&delta)
-            .ok()
-            .as_deref(),
+        &super::historial::Registro {
+            delta: crate::delta::serializar_delta_json_canonico(&delta)
+                .ok()
+                .as_deref(),
+            efecto: Some(&efecto),
+            desde: Some(esperado),
+            hasta: instalado,
+        },
     )
     .is_ok();
     Ok(ResultadoAplicacion {

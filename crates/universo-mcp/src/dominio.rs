@@ -2,8 +2,8 @@
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::PathBuf};
 use universo_core::{
-    Atomo, BundlePath, Delta, ModoExplicacion, PRESUPUESTO_EXPLICACION_POR_DEFECTO,
-    ResultadoPropuesta, Sujeto, explicar_propuesta,
+    BundlePath, Delta, ModoExplicacion, PRESUPUESTO_EXPLICACION_POR_DEFECTO, ResultadoPropuesta,
+    explicar_propuesta,
 };
 use universo_okf::explicacion_json::{
     anotar_reglas, error_explicacion_codigo, explicaciones_medidas_a_json,
@@ -297,24 +297,6 @@ fn busqueda(vista: &VistaSimulacion, consulta: &str, limite: usize) -> Value {
     json!({"schema":"felix-mcp-v1","tool":"search","status":"ok","summary":{"total":resultado.total,"returned":resultado.coincidencias.len()},"values_included":true,"matches":matches,"persisted":false})
 }
 
-fn extremos(atomo: &Atomo) -> Vec<&BundlePath> {
-    match atomo {
-        Atomo::Type { sujeto, .. } | Atomo::Ext { sujeto, .. } => vec![sujeto],
-        Atomo::Edge {
-            origen, destino, ..
-        } => vec![origen, destino],
-        Atomo::Parent { hijo, padre } => vec![hijo, padre],
-        Atomo::HasLab {
-            sujeto: Sujeto::Nodo(path),
-            ..
-        } => vec![path],
-        Atomo::HasLab {
-            sujeto: Sujeto::Arista(id),
-            ..
-        } => vec![&id.origen, &id.destino],
-    }
-}
-
 fn contexto(
     vista: &VistaSimulacion,
     path: BundlePath,
@@ -333,7 +315,7 @@ fn contexto(
     for _ in 0..depth {
         let mut next = nodes.clone();
         for atomo in &atomos {
-            let ends = extremos(atomo);
+            let ends = atomo.paths();
             if ends.iter().any(|path| nodes.contains(*path)) {
                 next.extend(ends.into_iter().cloned());
             }
@@ -346,7 +328,7 @@ fn contexto(
     // Induced neighborhood: edges crossing its boundary are not disclosed.
     let selected: Vec<_> = atomos
         .iter()
-        .filter(|atomo| extremos(atomo).iter().all(|path| nodes.contains(*path)))
+        .filter(|atomo| atomo.paths().iter().all(|path| nodes.contains(*path)))
         .collect();
     if selected.len() > 4096 || vista.invariantes().len() > 256 {
         return Err(dominio("context_resource_limit"));
