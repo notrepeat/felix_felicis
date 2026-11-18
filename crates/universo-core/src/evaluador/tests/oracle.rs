@@ -196,7 +196,13 @@ pub(super) fn oraculo(
         } => {
             let nodo = buscar_nodo_oraculo(sujeto, estructura, asignacion)?;
             let constante = valor_ext_oraculo(constante)?;
-            Ok(estructura.atributos(nodo).get(predicado) == Some(&constante))
+            Ok(
+                estructura.atributos(nodo).get(predicado) == Some(&constante)
+                    || estructura
+                        .valores_multivalor(nodo)
+                        .get(predicado)
+                        .is_some_and(|valores| valores.contains(&constante)),
+            )
         }
         Formula::Compara {
             op,

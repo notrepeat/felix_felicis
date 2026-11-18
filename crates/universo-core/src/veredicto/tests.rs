@@ -53,6 +53,7 @@ fn manifiesto_prueba() -> Manifiesto {
             clave: "nivel".into(),
             dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
             orden: Vec::new(),
+            multivalor: false,
         }],
         layout: Layout {
             directorios: vec!["n".into()],
@@ -504,6 +505,7 @@ fn estructura_con_canarios() -> Estructura {
             .into_iter()
             .collect(),
         orden: Vec::new(),
+        multivalor: false,
     });
     let mut estructura = Estructura::nueva(manifiesto).unwrap();
     estructura

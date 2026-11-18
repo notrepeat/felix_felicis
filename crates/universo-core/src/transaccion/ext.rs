@@ -23,6 +23,9 @@ pub(super) struct Cambio {
     vigente: Option<String>,
     retirar: Option<String>,
     agregar: Option<String>,
+    /// Predicado multivalor: valores a añadir y a retirar (sin restricción
+    /// funcional; cada retiro debe existir, cada alta presente es no-op).
+    multi: Option<(BTreeSet<String>, BTreeSet<String>)>,
 }
 
 /// Resuelve sujetos y valida todo el parche Ext contra el snapshot sin
@@ -71,15 +74,37 @@ pub(super) fn preparar(
 
     let mut cambios = Vec::with_capacity(solicitudes.len());
     for ((predicado, _), solicitud) in solicitudes {
+        let nodo = solicitud
+            .nodo
+            .ok_or(ErrorCandidato::SnapshotInconsistente)?;
+        let multivalor = snapshot
+            .manifiesto()
+            .predicado(&predicado)
+            .is_some_and(|declaracion| declaracion.multivalor);
+        if multivalor {
+            if solicitud
+                .retiros
+                .iter()
+                .any(|valor| !snapshot.tiene_valor(nodo, &predicado, valor))
+            {
+                fallos.retiro = true;
+            }
+            cambios.push(Cambio {
+                nodo,
+                predicado,
+                vigente: None,
+                retirar: None,
+                agregar: None,
+                multi: Some((solicitud.altas, solicitud.retiros)),
+            });
+            continue;
+        }
         if solicitud.altas.len() > 1 {
             fallos.alta = true;
         }
         if solicitud.retiros.len() > 1 {
             fallos.retiro = true;
         }
-        let nodo = solicitud
-            .nodo
-            .ok_or(ErrorCandidato::SnapshotInconsistente)?;
         let vigente = snapshot.atributos(nodo).get(&predicado).cloned();
         let retiro_coincide = solicitud_retiros_coincide(&solicitud, vigente.as_deref());
         let tiene_retiro_vigente = solicitud
@@ -106,6 +131,7 @@ pub(super) fn preparar(
             vigente,
             retirar,
             agregar,
+            multi: None,
         });
     }
 
@@ -124,6 +150,17 @@ pub(super) fn aplicar(
     cambios: &[Cambio],
 ) -> Result<(), ErrorCandidato> {
     for cambio in cambios {
+        if let Some((altas, retiros)) = &cambio.multi {
+            for valor in retiros {
+                candidato.quitar_valor(cambio.nodo, &cambio.predicado, valor);
+            }
+            for valor in altas {
+                candidato
+                    .asignar_atributo(cambio.nodo, &cambio.predicado, valor)
+                    .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
+            }
+            continue;
+        }
         if cambio.retirar.is_some() && cambio.agregar.as_ref() != cambio.vigente.as_ref() {
             candidato.quitar_atributo(cambio.nodo, &cambio.predicado);
         }

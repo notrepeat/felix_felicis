@@ -231,6 +231,10 @@ fn serializar_nodo_con_parent(
         if let Some(constante) = atributos.get(&decl.nombre) {
             fm.push_str(&format!("{}: {}\n", decl.clave, escalar_salida(constante)));
         }
+        if let Some(valores) = u.valores_multivalor(id).get(&decl.nombre) {
+            let lista: Vec<_> = valores.iter().map(|v| escalar_salida(v)).collect();
+            fm.push_str(&format!("{}: [{}]\n", decl.clave, lista.join(", ")));
+        }
     }
 
     // 4. Passthrough en orden original, crudo verbatim (salvo el `type`

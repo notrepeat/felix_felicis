@@ -95,6 +95,7 @@ fn candidato_ext_recarga_con_yaml_entrecomillado_y_passthrough_crudo() {
         clave: "modo".into(),
         dominio: BTreeSet::from(["-alto".to_string()]),
         orden: Vec::new(),
+        multivalor: false,
     });
     let archivo = (
         "n/root.md".to_string(),
@@ -162,4 +163,37 @@ fn toml_orden_true_conserva_el_orden_declarado_y_rechaza_duplicados() {
         ))
         .is_err()
     );
+}
+
+#[test]
+fn multivalor_se_carga_de_una_lista_y_vuelve_igual() {
+    let manifiesto = universo_okf::parsear_manifiesto(
+        "version = \"t/1\"\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n[[predicados]]\nnombre = \"Tema\"\nclave = \"temas\"\ndominio = [\"cache\", \"red\", \"seguridad\"]\nmultivalor = true\n",
+    )
+    .unwrap();
+    for texto in [
+        "---\ntype: a\ntitle: X\ntemas: [red, cache]\n---\n",
+        "---\ntype: a\ntitle: X\ntemas:\n  - red\n  - cache\n---\n",
+    ] {
+        let u =
+            universo_okf::parsear_bundle(&[("n/x.md".into(), texto.into())], manifiesto.clone())
+                .unwrap();
+        let id = u
+            .por_path(&universo_core::BundlePath::nuevo("n/x").unwrap())
+            .unwrap();
+        assert!(u.tiene_valor(id, "Tema", "red") && u.tiene_valor(id, "Tema", "cache"));
+        let escrito = universo_okf::serializar_nodo(&u, id);
+        assert!(escrito.contains("temas: [cache, red]\n"), "{escrito}");
+        let otra = universo_okf::parsear_bundle(&[("n/x.md".into(), escrito)], manifiesto.clone())
+            .unwrap();
+        assert_eq!(otra.atomos(), u.atomos());
+    }
+    let fuera = universo_okf::parsear_bundle(
+        &[(
+            "n/x.md".into(),
+            "---\ntype: a\ntitle: X\ntemas: [red, otro]\n---\n".into(),
+        )],
+        manifiesto,
+    );
+    assert!(fuera.is_err());
 }

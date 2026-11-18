@@ -202,6 +202,17 @@ valor para el predicado no satisface ninguna comparación; por eso
 sin `orden` es un error de autoría (`predicate_not_ordered`); `<`, `<=`, `>` y
 `>=` quedan reservados y no pueden ser nombres de predicado.
 
+### Atributos con varios valores
+
+`multivalor = true` en un predicado permite varios valores del dominio en la
+misma nota, escritos como lista (`temas: [cache, red]` o en bloque `- cache`).
+Cada valor es un átomo `Ext` propio: `(Tema x cache)` es verdadero si `cache`
+está entre los valores. Un delta añade o retira valores sin restricción
+funcional (retirar uno ausente es `remove_not_found`). El apply escribe la lista
+en orden canónico (lexicográfico) y sin repetidos; una lista vacía equivale a no
+tener valores y la clave desaparece al reescribir. Un predicado no puede ser a la
+vez `orden` y `multivalor`.
+
 ### Nombrar reglas
 
 Una regla de nivel superior puede llevar un id y un mensaje humano opcionales:

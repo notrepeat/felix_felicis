@@ -82,6 +82,10 @@ pub struct DeclPredicado {
     /// predicado no es ordenado. Si no está vacío es una permutación del
     /// dominio y habilita las comparaciones `<`, `<=`, `>`, `>=`.
     pub orden: Vec<String>,
+    /// `true`: un nodo puede tener varios valores del dominio a la vez (lista
+    /// en el frontmatter); cada valor es un átomo `Ext`. Incompatible con
+    /// `orden`.
+    pub multivalor: bool,
 }
 
 impl DeclPredicado {
@@ -150,6 +154,8 @@ pub enum ErrorManifiesto {
     PredicadoDuplicado(String),
     /// El `orden` de un predicado no es una permutación de su dominio.
     OrdenInvalido(String),
+    /// Un predicado declara a la vez `orden` y `multivalor`.
+    OrdenMultivalor(String),
     /// El dominio de un predicado está vacío.
     DominioVacio(String),
     /// Una clave de arista o de predicado coincide con `type`, `title` o
@@ -229,6 +235,12 @@ impl std::fmt::Display for ErrorManifiesto {
             }
             ErrorManifiesto::PredicadoDuplicado(n) => {
                 write!(f, "el predicado {n:?} está duplicado")
+            }
+            ErrorManifiesto::OrdenMultivalor(n) => {
+                write!(
+                    f,
+                    "el predicado {n:?} no puede ser a la vez ordenado y multivalor"
+                )
             }
             ErrorManifiesto::OrdenInvalido(n) => {
                 write!(
@@ -507,6 +519,9 @@ impl Manifiesto {
             {
                 errores.push(ErrorManifiesto::PredicadoReservado(p.nombre.clone()));
             }
+            if !p.orden.is_empty() && p.multivalor {
+                errores.push(ErrorManifiesto::OrdenMultivalor(p.nombre.clone()));
+            }
             if !p.orden.is_empty() {
                 let unicos: BTreeSet<&String> = p.orden.iter().collect();
                 if unicos.len() != p.orden.len()
@@ -755,6 +770,7 @@ pub(crate) mod tests {
                 clave: "nivel".into(),
                 dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
                 orden: Vec::new(),
+                multivalor: false,
             }],
             layout: Layout {
                 directorios: vec!["n".into()],
@@ -1250,6 +1266,7 @@ pub(crate) mod tests {
             clave: "otro".into(),
             dominio: ["alto, medio"].into_iter().map(String::from).collect(),
             orden: Vec::new(),
+            multivalor: false,
         });
         let errores = m.validar().unwrap_err();
         for esperado in [
@@ -1282,6 +1299,7 @@ pub(crate) mod tests {
             clave: "nivel2".into(),
             dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
             orden: Vec::new(),
+            multivalor: false,
         });
         assert!(
             m.validar()

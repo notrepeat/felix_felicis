@@ -1265,7 +1265,7 @@ fn evaluar_interno(
                     nombre_variable_nodo(sujeto),
                 ));
             }
-            let valor = estructura.atributos(id).get(predicado) == Some(&constante);
+            let valor = estructura.tiene_valor(id, predicado, &constante);
             resultado_interno(valor, modo, |_| {
                 Ok({
                     ReglaEvidencia::Atomo {

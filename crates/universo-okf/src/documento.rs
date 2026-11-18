@@ -166,6 +166,34 @@ impl EntradaCruda {
         escalar_desde_texto(&self.valor)
     }
 
+    /// Lista de escalares (flow `[a, "b"]` o bloque `- a`), para predicados
+    /// multivalor. Un escalar suelto es una lista de un elemento.
+    pub fn lista_escalares(&self) -> Vec<String> {
+        let lineas = self.lineas_bloque();
+        let continuaciones: &[&str] = if lineas.len() > 1 { &lineas[1..] } else { &[] };
+        let mut bloque = vec![self.valor.as_str()];
+        bloque.extend(continuaciones.iter().copied());
+        let texto = bloque.join("\n");
+        let texto = texto.trim();
+        let items: Vec<&str> = if let Some(resto) = texto.strip_prefix('[') {
+            let contenido = resto.rfind(']').map_or(resto, |fin| &resto[..fin]);
+            contenido.split(',').collect()
+        } else if bloque.iter().skip(1).any(|l| l.trim().starts_with('-')) || texto.starts_with('-')
+        {
+            bloque
+                .iter()
+                .filter_map(|linea| linea.trim().strip_prefix('-'))
+                .collect()
+        } else {
+            vec![texto]
+        };
+        items
+            .into_iter()
+            .map(|item| escalar_desde_texto(item.trim()))
+            .filter(|item| !item.is_empty())
+            .collect()
+    }
+
     /// Lista de wikilinks (flow `["[[a]]", …]` o bloque `- "[[a]]"`).
     /// Reproduce `parse_link_list` + `link_slug` de `tools/okf_model.py`:
     /// el bloque es `valor` (la clave ya recortada) más las líneas de

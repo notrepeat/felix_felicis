@@ -59,6 +59,8 @@ pub struct Estructura {
     indice: HashMap<BundlePath, NodoId>,
     indice_case: HashMap<String, NodoId>,
     atributos: SecondaryMap<NodoId, BTreeMap<String, String>>,
+    /// Valores de predicados `multivalor` (los funcionales van en `atributos`).
+    multivalores: SecondaryMap<NodoId, BTreeMap<String, BTreeSet<String>>>,
     anexos: SecondaryMap<NodoId, Anexo>,
     parent_frontmatter_explicito: HashSet<NodoId>,
 }
@@ -185,6 +187,7 @@ impl Estructura {
             indice: HashMap::new(),
             indice_case: HashMap::new(),
             atributos: SecondaryMap::new(),
+            multivalores: SecondaryMap::new(),
             anexos: SecondaryMap::new(),
             parent_frontmatter_explicito: HashSet::new(),
         })
@@ -207,6 +210,7 @@ impl Estructura {
             indice: self.indice.clone(),
             indice_case: self.indice_case.clone(),
             atributos: self.atributos.clone(),
+            multivalores: self.multivalores.clone(),
             anexos: self.anexos.clone(),
             parent_frontmatter_explicito: self.parent_frontmatter_explicito.clone(),
         }
@@ -535,11 +539,54 @@ impl Estructura {
                 constante.to_string(),
             ));
         }
+        if decl.multivalor {
+            if !self.multivalores.contains_key(nodo) {
+                self.multivalores.insert(nodo, BTreeMap::new());
+            }
+            self.multivalores[nodo]
+                .entry(predicado.to_string())
+                .or_default()
+                .insert(constante.to_string());
+            return Ok(());
+        }
         if !self.atributos.contains_key(nodo) {
             self.atributos.insert(nodo, BTreeMap::new());
         }
         self.atributos[nodo].insert(predicado.to_string(), constante.to_string());
         Ok(())
+    }
+
+    /// Quita un valor de un predicado multivalor (operación transaccional).
+    pub(crate) fn quitar_valor(&mut self, nodo: NodoId, predicado: &str, valor: &str) {
+        let vacio = self.multivalores.get_mut(nodo).is_some_and(|mapa| {
+            if let Some(valores) = mapa.get_mut(predicado) {
+                valores.remove(valor);
+                if valores.is_empty() {
+                    mapa.remove(predicado);
+                }
+            }
+            mapa.is_empty()
+        });
+        if vacio {
+            self.multivalores.remove(nodo);
+        }
+    }
+
+    /// Valores de predicados multivalor de un nodo (vacío si no tiene).
+    pub fn valores_multivalor(&self, nodo: NodoId) -> &BTreeMap<String, BTreeSet<String>> {
+        static VACIO: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        self.multivalores.get(nodo).unwrap_or(&VACIO)
+    }
+
+    /// `true` si el nodo tiene `valor` para `predicado` (funcional o multivalor).
+    pub fn tiene_valor(&self, nodo: NodoId, predicado: &str, valor: &str) -> bool {
+        self.atributos(nodo)
+            .get(predicado)
+            .is_some_and(|v| v == valor)
+            || self
+                .valores_multivalor(nodo)
+                .get(predicado)
+                .is_some_and(|valores| valores.contains(valor))
     }
 
     /// Quita un atributo ya validado por una operación transaccional.
@@ -819,6 +866,7 @@ impl Estructura {
         }
 
         self.atributos.remove(id);
+        self.multivalores.remove(id);
         self.anexos.remove(id);
         self.parent_frontmatter_explicito.remove(&id);
         self.salientes.remove(id);
@@ -980,6 +1028,18 @@ impl Estructura {
                     sujeto: sujeto.clone(),
                     constante: constante.clone(),
                 });
+            }
+        }
+        for (nodo, mapa) in self.multivalores.iter() {
+            let sujeto = self.nodos[nodo].path.clone();
+            for (predicado, valores) in mapa {
+                for constante in valores {
+                    atomos.push(Atomo::Ext {
+                        predicado: predicado.clone(),
+                        sujeto: sujeto.clone(),
+                        constante: constante.clone(),
+                    });
+                }
             }
         }
         atomos.sort();
@@ -1197,6 +1257,37 @@ impl Estructura {
                     Some(_) => errores.push(format!(
                         "el atributo {predicado:?} tiene la constante {constante:?} fuera de dominio"
                     )),
+                    None => errores.push(format!(
+                        "el atributo {predicado:?} no está declarado en el manifiesto"
+                    )),
+                }
+            }
+        }
+
+        // 7b. Valores multivalor: nodo vivo, predicado declarado multivalor,
+        //     conjunto no vacío y cada constante en dominio.
+        for (nodo, mapa) in self.multivalores.iter() {
+            if !self.nodos.contains_key(nodo) {
+                errores.push(format!(
+                    "multivalores[{nodo:?}] referencia un nodo inexistente"
+                ));
+                continue;
+            }
+            for (predicado, valores) in mapa {
+                match self.manifiesto.predicado(predicado) {
+                    Some(decl) if decl.multivalor => {
+                        if valores.is_empty() {
+                            errores.push(format!("el multivalor {predicado:?} está vacío"));
+                        }
+                        for constante in valores {
+                            if !decl.dominio.contains(constante) {
+                                errores.push(format!(
+                                    "el multivalor {predicado:?} tiene la constante {constante:?} fuera de dominio"
+                                ));
+                            }
+                        }
+                    }
+                    Some(_) => errores.push(format!("el predicado {predicado:?} no es multivalor")),
                     None => errores.push(format!(
                         "el atributo {predicado:?} no está declarado en el manifiesto"
                     )),

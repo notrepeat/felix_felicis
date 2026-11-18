@@ -16,6 +16,7 @@ fn manifiesto() -> Manifiesto {
             .map(String::from)
             .collect(),
         orden: vec!["baja".into(), "media".into(), "alta".into()],
+        multivalor: false,
     });
     m
 }
@@ -131,6 +132,7 @@ fn esquemas_y_errores_de_autoria_de_comparaciones() {
         clave: "mayor".into(),
         dominio: ["x"].into_iter().map(String::from).collect(),
         orden: Vec::new(),
+        multivalor: false,
     });
     assert!(
         m.validar().is_err(),

@@ -603,6 +603,13 @@ fn cargar_snapshot(
             cantidad = cantidad.saturating_add(1);
             bytes = bytes.saturating_add(cota_ext(predicado, &nodo.path, constante));
         }
+        for (predicado, valores) in estructura.valores_multivalor(id) {
+            for constante in valores {
+                consumir(presupuesto, 1)?;
+                cantidad = cantidad.saturating_add(1);
+                bytes = bytes.saturating_add(cota_ext(predicado, &nodo.path, constante));
+            }
+        }
     }
     for (_, arista) in estructura.aristas() {
         let (Some(origen), Some(destino)) = (

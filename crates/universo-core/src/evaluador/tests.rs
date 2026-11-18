@@ -56,6 +56,7 @@ fn manifiesto_prueba() -> Manifiesto {
             clave: "nivel".into(),
             dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
             orden: Vec::new(),
+            multivalor: false,
         }],
         layout: Layout {
             directorios: vec!["n".into()],

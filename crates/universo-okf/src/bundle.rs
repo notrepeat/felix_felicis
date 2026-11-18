@@ -588,20 +588,26 @@ pub(crate) fn parsear_bundle_desde_estructura(
                 indices_manifiesto.predicado_por_clave(estructura.manifiesto(), &entrada.clave)
             {
                 let nombre = decl.nombre.clone();
-                let constante = entrada.valor_escalar();
-                if let Err(err) = estructura.asignar_atributo(id, &nombre, &constante) {
-                    let regla = match &err {
-                        ErrorEstructura::ConstanteFueraDeDominio(..) => {
-                            Regla::ConstanteFueraDeDominio
-                        }
-                        _ => Regla::Estructura,
-                    };
-                    errores.push(error(
-                        Some(&path_str),
-                        Some(entrada.linea),
-                        regla,
-                        err.to_string(),
-                    ));
+                let constantes = if decl.multivalor {
+                    entrada.lista_escalares()
+                } else {
+                    vec![entrada.valor_escalar()]
+                };
+                for constante in constantes {
+                    if let Err(err) = estructura.asignar_atributo(id, &nombre, &constante) {
+                        let regla = match &err {
+                            ErrorEstructura::ConstanteFueraDeDominio(..) => {
+                                Regla::ConstanteFueraDeDominio
+                            }
+                            _ => Regla::Estructura,
+                        };
+                        errores.push(error(
+                            Some(&path_str),
+                            Some(entrada.linea),
+                            regla,
+                            err.to_string(),
+                        ));
+                    }
                 }
                 continue;
             }
@@ -1992,6 +1998,7 @@ mod tests {
                 clave: format!("campo-{indice:03}"),
                 dominio: ["si".into()].into_iter().collect(),
                 orden: Vec::new(),
+                multivalor: false,
             });
             manifiesto.aristas.push(DeclArista {
                 clave: format!("edge-{indice:03}"),

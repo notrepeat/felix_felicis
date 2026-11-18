@@ -63,6 +63,9 @@ struct PredicadoToml {
     /// `true`: el orden de `dominio` (de menor a mayor) habilita comparaciones.
     #[serde(default)]
     orden: bool,
+    /// `true`: el frontmatter admite una lista de valores del dominio.
+    #[serde(default)]
+    multivalor: bool,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +115,7 @@ impl From<ManifiestoToml> for Manifiesto {
                         Vec::new()
                     },
                     dominio: p.dominio.into_iter().collect(),
+                    multivalor: p.multivalor,
                 })
                 .collect(),
             layout: Layout {
