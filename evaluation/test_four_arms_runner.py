@@ -65,7 +65,7 @@ class FalloDelProveedorTests(unittest.TestCase):
         self.assertIsNone(runner.fallo_del_proveedor(normal))
 
     def test_interpretar_el_stream_de_claude(self):
-        delta = {"schema": "felix-delta-v1", "add": ["Estado(n/d1, vigente)"], "remove": []}
+        delta = {"schema": "felix-delta-v1", "add": ["Estado(n/d13, vigente)"], "remove": []}
         events = [{"type": "system", "subtype": "init"},
                   {"type": "assistant", "message": {"content": [
                       {"type": "tool_use", "name": "mcp__felix__check", "input": {}},
@@ -113,7 +113,7 @@ class BrazosTests(unittest.TestCase):
 
     def test_a_y_b_aceptan_la_respuesta_literal_aunque_sea_invalida(self):
         for arm in ["A_baseline", "B_felix_opcional"]:
-            record, agente = self.correr("promover_d1", arm, lambda c, r, t: literal(c))
+            record, agente = self.correr("promover_d13", arm, lambda c, r, t: literal(c))
             self.assertEqual(record["rounds"], 1)
             self.assertTrue(record["final_invalid"])
             self.assertFalse(record["score"]["success"])
@@ -123,7 +123,7 @@ class BrazosTests(unittest.TestCase):
         def politica(case_id, ronda, texto):
             return literal(case_id) if ronda == 1 else REFERENCES[case_id]
 
-        record, agente = self.correr("promover_d1", "C_obligatorio", politica)
+        record, agente = self.correr("promover_d13", "C_obligatorio", politica)
         self.assertEqual(record["orquestador"]["resultado"], "publicado")
         self.assertEqual(record["rounds"], 2)
         self.assertTrue(record["repaired"])
@@ -133,29 +133,40 @@ class BrazosTests(unittest.TestCase):
         self.assertIn("Felix rechazó esa propuesta (revisores: Una decisión vigente necesita", segundo)
         self.assertIn("Intentos restantes: 2", segundo)
 
+    def test_c_identifica_la_regla_aunque_la_explicacion_agote_su_presupuesto(self):
+        # En degradar_f1 la explicación redactada no cabe en su presupuesto: el
+        # orquestador simula regla por regla y el agente recibe igual el id.
+        def politica(case_id, ronda, texto):
+            return literal(case_id) if ronda == 1 else REFERENCES[case_id]
+
+        record, agente = self.correr("degradar_f1", "C_obligatorio", politica)
+        self.assertEqual(record["orquestador"]["resultado"], "publicado")
+        self.assertTrue(record["repaired"])
+        self.assertIn("Felix rechazó esa propuesta (fuente-confiable: Una fuente que apoya", agente.llamadas[1]["prompt"])
+
     def test_c_escalado_no_publica_nada_y_el_estado_queda_valido(self):
-        record, _ = self.correr("promover_d1", "C_obligatorio", lambda c, r, t: literal(c))
+        record, _ = self.correr("promover_d13", "C_obligatorio", lambda c, r, t: literal(c))
         self.assertEqual(record["orquestador"]["resultado"], "escalado")
         self.assertEqual(record["rounds"], 3)
         self.assertEqual(record["final_delta"], NULO)
         self.assertFalse(record["final_invalid"])
         self.assertFalse(record["score"]["goal_satisfied"])
         # En una tarea imposible, no cambiar nada es el éxito.
-        record, _ = self.correr("apoyo_fuente_debil", "C_obligatorio", lambda c, r, t: literal(c))
+        record, _ = self.correr("promover_d11", "C_obligatorio", lambda c, r, t: literal(c))
         self.assertTrue(record["score"]["success"])
 
     def test_c_devuelve_errores_de_formato_para_reparar(self):
-        conflicto = {"schema": "felix-delta-v1", "add": ["Estado(n/d1, vigente)"], "remove": []}
+        conflicto = {"schema": "felix-delta-v1", "add": ["Estado(n/d13, vigente)"], "remove": []}
 
         def politica(case_id, ronda, texto):
             return conflicto if ronda == 1 else REFERENCES[case_id]
 
-        record, agente = self.correr("promover_d1", "C_obligatorio", politica)
+        record, agente = self.correr("promover_d13", "C_obligatorio", politica)
         self.assertEqual(record["orquestador"]["resultado"], "publicado")
         self.assertIn("error de formato del delta: add_conflict", agente.llamadas[1]["prompt"])
 
     def test_d_da_una_revision_neutral_y_para_cuando_se_repite(self):
-        record, agente = self.correr("promover_d1", "D_revision", lambda c, r, t: literal(c))
+        record, agente = self.correr("promover_d13", "D_revision", lambda c, r, t: literal(c))
         self.assertEqual(record["rounds"], 2)
         self.assertTrue(record["final_invalid"])
         segundo = agente.llamadas[1]["prompt"]
@@ -166,7 +177,7 @@ class BrazosTests(unittest.TestCase):
         def mejora(case_id, ronda, texto):
             return literal(case_id) if ronda == 1 else REFERENCES[case_id]
 
-        record, _ = self.correr("promover_d1", "D_revision", mejora)
+        record, _ = self.correr("promover_d13", "D_revision", mejora)
         self.assertEqual(record["rounds"], 3)
         self.assertTrue(record["score"]["success"])
         self.assertTrue(record["repaired"])
@@ -179,11 +190,11 @@ class BrazosTests(unittest.TestCase):
                 return {**super().responder(case, texto, con_mcp, ronda), "status": "timeout"}
 
         for respuesta, agente_cls in [(None, runner.AgenteGuionizado), ("texto", runner.AgenteGuionizado),
-                                      (REFERENCES["apoyo_fuente_debil"], Caido)]:
+                                      (REFERENCES["promover_d11"], Caido)]:
             for arm in runner.ARMS:
                 with self.subTest(respuesta=respuesta, arm=arm):
                     agente = agente_cls(lambda c, r, t, respuesta=respuesta: respuesta)
-                    record = runner.execute(self.cases["apoyo_fuente_debil"], 1, arm, agente, BINARY)
+                    record = runner.execute(self.cases["promover_d11"], 1, arm, agente, BINARY)
                     self.assertTrue(record["technical_failure"])
                     self.assertIsNone(record["score"])
                     self.assertIsNone(record["final_invalid"])
@@ -194,15 +205,15 @@ class BrazosTests(unittest.TestCase):
             return literal(case_id) if ronda == 1 else None
 
         for arm in ["C_obligatorio", "D_revision"]:
-            record, _ = self.correr("promover_d1", arm, politica)
+            record, _ = self.correr("promover_d13", arm, politica)
             self.assertTrue(record["technical_failure"], arm)
             self.assertEqual(record["rounds"], 2)
 
     def test_c_y_d_acumulan_el_historial_igual(self):
-        deltas = {1: literal("promover_d1"), 2: WRONG["retirar_revisor"][0][0], 3: REFERENCES["promover_d1"]}
+        deltas = {1: literal("promover_d13"), 2: WRONG["retirar_revisor_d01"][0][0], 3: REFERENCES["promover_d13"]}
         prompts = {}
         for arm in ["C_obligatorio", "D_revision"]:
-            _, agente = self.correr("promover_d1", arm, lambda c, r, t: deltas[r])
+            _, agente = self.correr("promover_d13", arm, lambda c, r, t: deltas[r])
             prompts[arm] = agente.llamadas[2]["prompt"]
         for arm, texto in prompts.items():
             for ronda in (1, 2):
@@ -216,7 +227,7 @@ class BrazosTests(unittest.TestCase):
                 raise ValueError("fallo del agente")
 
         for arm in runner.ARMS:
-            record = runner.execute(self.cases["promover_d1"], 1, arm, Explota(None), BINARY)
+            record = runner.execute(self.cases["promover_d13"], 1, arm, Explota(None), BINARY)
             self.assertTrue(record["technical_failure"], arm)
             self.assertIsNone(record["score"])
 
@@ -227,25 +238,25 @@ class BrazosTests(unittest.TestCase):
 
         for arm in runner.ARMS:
             with self.assertRaises(runner.ErrorDeEntorno):
-                runner.execute(self.cases["promover_d1"], 1, arm, SinEntorno(None), BINARY)
+                runner.execute(self.cases["promover_d13"], 1, arm, SinEntorno(None), BINARY)
 
     def test_sensibilidad_cuenta_fallos_tecnicos_en_el_peor_caso(self):
-        filas = [runner.execute(self.cases["promover_d1"], 1, "A_baseline",
+        filas = [runner.execute(self.cases["promover_d13"], 1, "A_baseline",
                                 runner.AgenteGuionizado(lambda c, r, t: respuesta), BINARY)
-                 for respuesta in (REFERENCES["promover_d1"], literal("promover_d1"), None)]
+                 for respuesta in (REFERENCES["promover_d13"], literal("promover_d13"), None)]
         a = runner.summarize(filas)["arms"]["A_baseline"]
         self.assertEqual((a["scored_runs"], a["final_success"], a["final_invalid_state"]), (2, 1, 1))
         self.assertEqual((a["final_success_all_rows"], a["final_invalid_state_worst_case"]), (1, 2))
         self.assertEqual(a["technical_failure_causes"], {"sin_delta": 1})
 
     def test_una_excepcion_del_runner_queda_registrada_como_fila(self):
-        record = runner.execute(self.cases["promover_d1"], 1, "C_obligatorio",
+        record = runner.execute(self.cases["promover_d13"], 1, "C_obligatorio",
                                 runner.AgenteGuionizado(lambda c, r, t: REFERENCES[c]), Path("/no/existe/universo"))
         self.assertEqual((record["status"], record["technical_failure"], record["score"]), ("runner_error", True, None))
 
     def test_resumen_por_brazo(self):
         records = [self.correr(case_id, arm, lambda c, r, t: REFERENCES[c])[0]
-                   for case_id in ["promover_d1", "apoyo_de_persona"] for arm in runner.ARMS]
+                   for case_id in ["promover_d13", "verificar_dependientes"] for arm in runner.ARMS]
         resumen = runner.summarize(records)["arms"]
         for arm in runner.ARMS:
             self.assertEqual((resumen[arm]["runs"], resumen[arm]["technical_failures"], resumen[arm]["final_success"],

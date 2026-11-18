@@ -47,17 +47,29 @@ modelos de otro proveedor.
 ## Tareas
 
 [`four_arms/tasks.json`](four_arms/tasks.json), generadas por
-[`four_arms_dataset.py`](four_arms_dataset.py): ocho tareas sintéticas sobre un
-mismo bundle de nueve nodos (cuatro decisiones, dos fuentes y tres personas) con
-aristas `revisa` y `apoya`, un atributo ordenado (Confianza), una fecha
-(Vigencia) y seis reglas, una de ellas de cardinalidad (`al-menos 2`).
+[`four_arms_dataset.py`](four_arms_dataset.py). Es la **versión 2**: la versión 1
+(9 nodos, seis reglas) se descartó después de que la calibración diera 16 de 16
+aciertos del baseline (ver el registro de intentos). Antes de cualquier corrida
+del estudio se diseñaron ocho tareas sobre un bundle de 24 nodos (14
+decisiones, 4 fuentes y 6 personas), 53 aristas (`revisa`, `propone`, `apoya` y
+`depende`) y 200 hechos, con siete reglas:
 
-| Familia | Tareas | Trampa prevista |
+- revisores mínimos con `al-menos 2`, donde quien propone una decisión no cuenta
+  como su revisor;
+- confianza ordenada;
+- vigencia por fecha;
+- dependencias: una decisión vigente sólo depende de decisiones vigentes, lo que
+  produce cascadas de hasta cuatro pasos;
+- fuente confiable;
+- tipos de las cuatro aristas.
+
+| Familia | Tareas | Dificultad prevista |
 |---|---|---|
-| promover | `promover_d1`, `renovar_d2` | en `promover_d1`, cambiar sólo el estado deja una decisión vigente con un solo revisor; `renovar_d2` es de control (el objetivo da todos los datos; el error plausible es no retirar los valores viejos) |
-| cascada | `degradar_f1`, `retirar_revisor` | el cambio pedido viola una regla en otro nodo; el objetivo dice cómo resolverlo |
-| imposible | `apoyo_fuente_debil`, `apoyo_de_persona` | las reglas impiden lo pedido; lo correcto es no cambiar nada |
-| conservacion | `asegurar_revisores`, `extender_d4` | ya se cumple, o un reemplazo de valores sin efectos laterales |
+| cascada | `cascada_d02`, `retirar_revisor_d01` | el cambio arrastra a otras decisiones por la cadena `depende` (d04 → d03 → d02 → d01, y d14 → d01); hay que seguirla entera y no tocar d05, que ya es propuesta |
+| multiple | `degradar_f1`, `renovar_vencimientos` | recorrer muchos nodos: retirar sólo los apoyos a decisiones vigentes (no el de d05); renovar sólo las vigentes que vencen antes del 2027-03-01 (no d08, que vence ese día, ni d09, que es propuesta) |
+| proponente | `promover_d13`, `reasignar_d14` | el proponente que también revisa no cuenta: sin un revisor más, la decisión no cumple |
+| imposible | `promover_d11` | el proponente es revisor y la decisión depende de otra que no puede ser vigente; lo correcto es no cambiar nada |
+| conservacion | `verificar_dependientes` | ya se cumple, si se descuenta bien al proponente; lo correcto es no cambiar nada |
 
 Todos los brazos reciben el mismo objetivo, los hechos, las reglas en lenguaje
 natural y las invariantes `.sx`. El brazo B recibe además una línea que anuncia
@@ -74,7 +86,7 @@ primeras. `test_four_arms_dataset.py` comprueba referencias correctas con
 edición mínima, respuestas plausibles pero erróneas con su severidad, formatos no
 canónicos e identidades inventadas. Como preflight de las fixtures, y no como
 scoring, también comprueba que los hechos coinciden con el bundle que carga Felix
-y que oráculo y motor coinciden en la validez de 23 deltas de prueba. Igual que
+y que oráculo y motor coinciden en la validez de 30 deltas de prueba. Igual que
 el motor, el oráculo trata como no-op añadir un hecho que ya existe, y exige que
 una arista nueva tome el siguiente índice libre de su (origen, destino, clave).
 
@@ -173,6 +185,20 @@ python evaluation/run_four_arms.py --agente claude --fase calibracion
 ```
 
 ## Límites conocidos
+
+- **Presupuesto de Felix.** En un bundle de este tamaño, cada regla sobre una
+  arista y dos nodos recorre unas 30 000 combinaciones. `propose` reparte un
+  presupuesto semántico agregado de 1 000 000 unidades entre todas las reglas, y
+  `check` uno igual por regla. Con una regla de tipos por arista, `propose` no
+  podía admitir ningún cambio que `check` sí aceptaba, así que los tipos van en
+  una sola regla equivalente. La explicación redactada de un rechazo puede
+  agotar también su propio presupuesto. En ese caso el orquestador identifica las
+  regla fallida simulando el delta contra cada regla por separado
+  (`fallback: per_rule`). Como la explicación `decide` normal, devuelve sólo la
+  primera regla fallida en orden de fuente, con su id y su mensaje, para no
+  darle a C más diagnóstico en unas tareas que en otras. En el
+  brazo B, el `propose` del MCP devuelve el veredicto y la línea de la regla, sin
+  esa ayuda.
 
 - Un agente real puede ver en el prompt de C que Felix intervino. El brazo D lo
   controla sólo en parte: separa «tener otra oportunidad» de «recibir un

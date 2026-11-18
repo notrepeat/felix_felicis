@@ -13,7 +13,7 @@ DIRECTORY = Path(__file__).resolve().parent / "four_arms"
 NODE = r"n/[a-z][a-z0-9]*"
 SORTS = {"decision", "fuente", "persona", "Retirado", "Patrón"}
 DOMAINS = {"Estado": ["propuesta", "vigente"], "Confianza": ["baja", "media", "alta"]}
-EDGE_KEYS = {"revisa", "apoya"}
+EDGE_KEYS = {"revisa", "propone", "apoya", "depende"}
 EDGE_ID = rf"({NODE})→({NODE})#([a-z]+)#(\d+)"
 STRING = r'"(?:[^"\\]|\\["\\])*"'
 PATTERNS = [
@@ -116,7 +116,7 @@ def _structure(grouped, nodes):
 
 
 def _constraints(grouped, nodes, cut_date):
-    """Las seis reglas de negocio del dominio, escritas a mano."""
+    """Las reglas de negocio del dominio, escritas a mano a partir de su texto."""
     def value(predicate, node):
         values = grouped.get(f"Ext:{predicate}:{node}", [])
         return values[0] if values else None
@@ -127,15 +127,19 @@ def _constraints(grouped, nodes, cut_date):
     edges = [values[0] for key, values in grouped.items() if key.startswith("Edge:")]
     rank = {level: index for index, level in enumerate(DOMAINS["Confianza"])}
     for origin, target, key in edges:
-        expected = {"revisa": "persona", "apoya": "fuente"}[key]
+        expected = {"revisa": "persona", "propone": "persona", "apoya": "fuente", "depende": "decision"}[key]
         if sort(origin) != expected or sort(target) != "decision":
             return False
     for node in nodes:
         if value("Estado", node) != "vigente":
             continue
-        reviewers = {origin for origin, target, key in edges if key == "revisa" and target == node}
+        proposers = {origin for origin, target, key in edges if key == "propone" and target == node}
+        reviewers = {origin for origin, target, key in edges if key == "revisa" and target == node} - proposers
         if len(reviewers) < 2:
             return False
+        for origin, target, key in edges:
+            if key == "depende" and origin == node and value("Estado", target) != "vigente":
+                return False
         confidence = value("Confianza", node)
         if confidence is None or rank[confidence] < rank["media"]:
             return False
@@ -172,7 +176,7 @@ def evaluate(case, oracle, delta, cut_date):
         # uno que no está es un error.
         if not set(remove) <= before:
             raise ValueError("remove_missing")
-        _check_edge_indices(before, add)
+        _check_edge_indices(before - set(remove), add)
     except (ValueError, TypeError, json.JSONDecodeError):
         result["violations"].append("delta_atoms")
         return result

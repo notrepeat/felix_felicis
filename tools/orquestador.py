@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -110,6 +111,76 @@ CODIGOS_DE_DELTA = frozenset({
 
 def _es_error_de_delta(codigo: str) -> bool:
     return codigo in CODIGOS_DE_DELTA
+
+
+def formas_de_nivel_superior(texto: str) -> list[str]:
+    """Las S-expresiones de nivel superior de un programa `.sx`, con comentarios `;` y cadenas."""
+    formas, profundidad, inicio, i, en_cadena = [], 0, None, 0, False
+    while i < len(texto):
+        c = texto[i]
+        if en_cadena:
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                en_cadena = False
+        elif c == '"':
+            en_cadena = True
+        elif c == ";":
+            while i < len(texto) and texto[i] != "\n":
+                i += 1
+            continue
+        elif c == "(":
+            if profundidad == 0:
+                inicio = i
+            profundidad += 1
+        elif c == ")":
+            profundidad -= 1
+            if profundidad == 0 and inicio is not None:
+                formas.append(texto[inicio:i + 1])
+                inicio = None
+            if profundidad < 0:
+                raise ValueError("paréntesis desbalanceados")
+        i += 1
+    if profundidad != 0 or en_cadena:
+        raise ValueError("programa .sx incompleto")
+    return formas
+
+
+def _leer_cadena(texto: str, i: int) -> tuple[str, int]:
+    """Lee una cadena `"..."` que empieza en `i` (escapes `\\` y `\"`, como el lexer de Felix)."""
+    salida, i = [], i + 1
+    while i < len(texto):
+        c = texto[i]
+        if c == "\\" and i + 1 < len(texto) and texto[i + 1] in '"\\':
+            salida.append(texto[i + 1])
+            i += 2
+        elif c == '"':
+            return "".join(salida), i + 1
+        else:
+            salida.append(c)
+            i += 1
+    raise ValueError("cadena sin cerrar")
+
+
+def metadatos_de_regla(forma: str) -> tuple[Optional[str], Optional[str]]:
+    """`:id` y `:mensaje` de una forma `(regla ...)` en cualquier orden, o `(None, None)`."""
+    if not re.match(r"\(regla\s", forma):
+        return None, None
+    valores: dict[str, str] = {}
+    i = len("(regla")
+    while True:
+        while i < len(forma) and forma[i].isspace():
+            i += 1
+        clave = next((k for k in (":id", ":mensaje") if forma.startswith(k, i)), None)
+        if clave is None:
+            break
+        i += len(clave)
+        while i < len(forma) and forma[i].isspace():
+            i += 1
+        if i >= len(forma) or forma[i] != '"':
+            break
+        valores[clave], i = _leer_cadena(forma, i)
+    return valores.get(":id"), valores.get(":mensaje")
 
 
 def _argumentos_repo(repo: Repositorio) -> list[str]:
@@ -205,11 +276,47 @@ class Orquestador:
             return salida
         if estado == "reject" and codigo == 1 and isinstance(salida.get("explanations"), dict):
             return salida
+        if (estado == "reject" and codigo == 1 and isinstance(token, str)
+                and salida.get("explanation_error") == "explanation_budget_exceeded"):
+            # En bundles grandes la explicación redactada puede agotar su
+            # presupuesto. El veredicto ya es `reject`; para decirle al agente
+            # qué reglas fallan se simula el delta contra cada regla por
+            # separado, sin explicación.
+            salida["explanations"] = {"objects": self._reglas_fallidas(archivo_delta), "fallback": "per_rule"}
+            return salida
         if self.reparar_errores_de_delta and estado == "error" and codigo == 1:
             codigos = _codigos(salida)
             if codigos and all(_es_error_de_delta(c) for c in codigos):
                 return salida
         raise _Escalado("error_tecnico")
+
+    def _reglas_fallidas(self, archivo_delta: Path) -> list[dict]:
+        texto = self.repo.invariantes.read_text(encoding="utf-8")
+        fallidas = []
+        with tempfile.TemporaryDirectory(prefix="felix-orquestador-regla-") as nombre:
+            for indice, forma in enumerate(formas_de_nivel_superior(texto)):
+                archivo = Path(nombre) / f"regla-{indice}.sx"
+                archivo.write_text(forma + "\n", encoding="utf-8")
+                codigo, salida = _universo(
+                    self.binario,
+                    ["propose", str(self.repo.raiz), f"--manifiesto={self.repo.manifiesto}",
+                     f"--invariantes={archivo}", f"--delta={archivo_delta}"],
+                )
+                if salida.get("status") == "reject" and codigo == 1:
+                    rule_id, rule_message = metadatos_de_regla(forma)
+                    fallidas.append({"kind": "rule", "source_index": indice, "rule_id": rule_id,
+                                     "rule_message": rule_message})
+                    # Igual que la explicación `decide` del motor: sólo la
+                    # primera regla fallida en orden de fuente, para no dar
+                    # más diagnóstico que el camino normal.
+                    break
+                if salida.get("status") != "admit":
+                    raise _Escalado("error_tecnico")
+        if not fallidas:
+            # El conjunto rechaza pero ninguna regla sola lo hace: no debería
+            # pasar con reglas independientes; no se inventa un diagnóstico.
+            raise _Escalado("error_tecnico")
+        return fallidas
 
     def _aplicar(self, archivo_delta: Path, token: str, objetivo: str) -> dict:
         try:

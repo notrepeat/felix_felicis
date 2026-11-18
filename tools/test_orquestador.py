@@ -154,6 +154,37 @@ class OrquestadorTests(unittest.TestCase):
             self.assertFalse(orq._es_error_de_delta(tecnico), tecnico)
         self.assertTrue(orq._es_error_de_delta("label_missing"))
 
+    def test_formas_y_metadatos_de_reglas(self):
+        texto = '; comentario (no)\n(regla :id "a-1" :mensaje "Con \\"comillas\\" y (paréntesis)." (Type @n/x a))\n(Type @n/y a)\n'
+        formas = orq.formas_de_nivel_superior(texto)
+        self.assertEqual(len(formas), 2)
+        self.assertEqual(orq.metadatos_de_regla(formas[0]), ("a-1", 'Con "comillas" y (paréntesis).'))
+        self.assertEqual(orq.metadatos_de_regla(formas[1]), (None, None))
+        self.assertEqual(orq.metadatos_de_regla('(regla :mensaje "Con (p)\nlínea" :id "x1" (Type @n/x a))'),
+                         ("x1", "Con (p)\nlínea"))
+        self.assertEqual(orq.metadatos_de_regla('(regla-x :id "no" (Type @n/x a))'), (None, None))
+        with self.assertRaises(ValueError):
+            orq.formas_de_nivel_superior("(a (b)")
+
+    def test_explicacion_sin_presupuesto_se_reemplaza_por_simulacion_por_regla(self):
+        real = orq._universo
+
+        def sin_presupuesto(binario, argumentos):
+            codigo, salida = real(binario, argumentos)
+            if "--explain" in argumentos and salida.get("status") == "reject":
+                salida = {**salida, "explanations": None, "explanation_error": "explanation_budget_exceeded"}
+            return codigo, salida
+
+        agente = Guionizado(INVALIDO, VALIDO)
+        orq._universo = sin_presupuesto
+        try:
+            resultado = self.orquestador().ejecutar(agente, "x")
+        finally:
+            orq._universo = real
+        self.assertEqual(resultado["resultado"], "publicado")
+        objetos = agente.recibido[1][1]["objetos"]
+        self.assertEqual([(o["rule_id"], o["kind"]) for o in objetos], [("vigente-es-criterio", "rule")])
+
     def test_excepcion_del_agente_escala(self):
         class Roto:
             def proponer(self, vista, retroalimentacion):

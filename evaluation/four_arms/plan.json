@@ -15,25 +15,25 @@
   "timeout_seconds_per_round": 120,
   "mcp_tool_call_budget_b": 8,
   "cases": [
-    "promover_d1",
-    "renovar_d2",
+    "cascada_d02",
+    "retirar_revisor_d01",
     "degradar_f1",
-    "retirar_revisor",
-    "apoyo_fuente_debil",
-    "apoyo_de_persona",
-    "asegurar_revisores",
-    "extender_d4"
+    "renovar_vencimientos",
+    "promover_d13",
+    "reasignar_d14",
+    "promover_d11",
+    "verificar_dependientes"
   ],
   "runs": 96,
   "source_sha256": {
-    "evaluation/four_arms/tasks.json": "f2844c31f8fb55ebcf61041622ca1bcc26d6b761392d77cb1baf6d1b936fd402",
-    "evaluation/four_arms/oracle.json": "f61811dd0c0d221bbb7f3030b984720a6a4c90318d0375e9416acd48a15c9066",
-    "evaluation/four_arms_dataset.py": "28cd3578d2710bf29908b1d7da3c1188ce0209b1f61b8b354d33937beeb08f9d",
-    "evaluation/four_arms_scoring.py": "3d9978f538775c7eae46f8bfb66e77bbd98757daa8910fcdd11292b24f7bc0de",
+    "evaluation/four_arms/tasks.json": "36ba7719dd4e8f489c987b46e69359a43ecb6a2598630dc26d6be46eb251d853",
+    "evaluation/four_arms/oracle.json": "3c6b370792903be9971b374ac0590591416bf32d71c28cc9a6667db9f310afba",
+    "evaluation/four_arms_dataset.py": "0a9668dfa08cdb233fd97f7b4e842a8f62faa8eff783f9dc020f2d5fbdbd0c53",
+    "evaluation/four_arms_scoring.py": "b0f3fc87b7dfa2a11d3dea71954d993299e0f83c9cfef6d60994481986995e92",
     "evaluation/run_four_arms.py": "88d09b8fec2b0a97f44d2d181e658303739ccd32095e7d082c3c1f92e431670e",
     "evaluation/mcp_proxy_v2.py": "8483dae9882d5e4b81e8c96ca28d822055049bb9cdb44caf1eb3cdeaad0523e1",
     "evaluation/run_paired.py": "b0e40db1720ba714020c053ccc6054550ae66661ce4148b8ba2a32866175d92a",
-    "tools/orquestador.py": "edd77ccdcaf50b56d807efc5a3c4a0a215accce13d4d23b33da2965ccc0b83f6"
+    "tools/orquestador.py": "4c6791b34629e9263255e991115354726143296196f508860bbd155dad05c7d5"
   },
   "agent_cli": "claude-code",
   "system_prompt": "Eres un agente que resuelve tareas sintéticas de edición de un grafo de conocimiento. Entrega tu respuesta final como un único delta felix-delta-v1 con la herramienta de salida estructurada.",
@@ -56,44 +56,79 @@
   "stopping_rule": "correr todas las filas del plan y publicar todas; sin ampliar ni repetir corridas",
   "schedule": [
     {
-      "case": "renovar_d2",
+      "case": "retirar_revisor_d01",
       "repetition": 1,
       "arm": "D_revision"
     },
     {
-      "case": "renovar_d2",
+      "case": "retirar_revisor_d01",
       "repetition": 1,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "renovar_d2",
+      "case": "retirar_revisor_d01",
       "repetition": 1,
       "arm": "C_obligatorio"
     },
     {
-      "case": "renovar_d2",
+      "case": "retirar_revisor_d01",
       "repetition": 1,
       "arm": "A_baseline"
     },
     {
-      "case": "extender_d4",
+      "case": "reasignar_d14",
       "repetition": 1,
       "arm": "A_baseline"
     },
     {
-      "case": "extender_d4",
+      "case": "reasignar_d14",
       "repetition": 1,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "extender_d4",
+      "case": "reasignar_d14",
       "repetition": 1,
       "arm": "D_revision"
     },
     {
-      "case": "extender_d4",
+      "case": "reasignar_d14",
       "repetition": 1,
       "arm": "C_obligatorio"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
     },
     {
       "case": "degradar_f1",
@@ -101,259 +136,104 @@
       "arm": "A_baseline"
     },
     {
-      "case": "degradar_f1",
+      "case": "verificar_dependientes",
       "repetition": 1,
       "arm": "C_obligatorio"
     },
     {
-      "case": "degradar_f1",
+      "case": "verificar_dependientes",
       "repetition": 1,
       "arm": "D_revision"
     },
     {
-      "case": "degradar_f1",
+      "case": "verificar_dependientes",
       "repetition": 1,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "apoyo_fuente_debil",
-      "repetition": 1,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "apoyo_fuente_debil",
-      "repetition": 1,
-      "arm": "D_revision"
-    },
-    {
-      "case": "apoyo_fuente_debil",
-      "repetition": 1,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "apoyo_fuente_debil",
+      "case": "verificar_dependientes",
       "repetition": 1,
       "arm": "A_baseline"
     },
     {
-      "case": "retirar_revisor",
-      "repetition": 1,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "retirar_revisor",
-      "repetition": 1,
-      "arm": "D_revision"
-    },
-    {
-      "case": "retirar_revisor",
-      "repetition": 1,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "retirar_revisor",
+      "case": "renovar_vencimientos",
       "repetition": 1,
       "arm": "A_baseline"
     },
     {
-      "case": "promover_d1",
-      "repetition": 1,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "promover_d1",
+      "case": "renovar_vencimientos",
       "repetition": 1,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "promover_d1",
+      "case": "renovar_vencimientos",
       "repetition": 1,
       "arm": "D_revision"
     },
     {
-      "case": "promover_d1",
+      "case": "renovar_vencimientos",
       "repetition": 1,
       "arm": "C_obligatorio"
     },
     {
-      "case": "asegurar_revisores",
-      "repetition": 1,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 1,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 1,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 1,
-      "arm": "D_revision"
-    },
-    {
-      "case": "apoyo_de_persona",
+      "case": "promover_d11",
       "repetition": 1,
       "arm": "A_baseline"
     },
     {
-      "case": "apoyo_de_persona",
-      "repetition": 1,
-      "arm": "D_revision"
-    },
-    {
-      "case": "apoyo_de_persona",
-      "repetition": 1,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "apoyo_de_persona",
+      "case": "promover_d11",
       "repetition": 1,
       "arm": "C_obligatorio"
     },
     {
-      "case": "promover_d1",
+      "case": "promover_d11",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "promover_d11",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "renovar_vencimientos",
       "repetition": 2,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "promover_d1",
+      "case": "renovar_vencimientos",
       "repetition": 2,
       "arm": "A_baseline"
     },
     {
-      "case": "promover_d1",
+      "case": "renovar_vencimientos",
       "repetition": 2,
       "arm": "D_revision"
     },
     {
-      "case": "promover_d1",
+      "case": "renovar_vencimientos",
       "repetition": 2,
       "arm": "C_obligatorio"
-    },
-    {
-      "case": "apoyo_fuente_debil",
-      "repetition": 2,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "apoyo_fuente_debil",
-      "repetition": 2,
-      "arm": "D_revision"
-    },
-    {
-      "case": "apoyo_fuente_debil",
-      "repetition": 2,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "apoyo_fuente_debil",
-      "repetition": 2,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "extender_d4",
-      "repetition": 2,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "extender_d4",
-      "repetition": 2,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "extender_d4",
-      "repetition": 2,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "extender_d4",
-      "repetition": 2,
-      "arm": "D_revision"
-    },
-    {
-      "case": "apoyo_de_persona",
-      "repetition": 2,
-      "arm": "D_revision"
-    },
-    {
-      "case": "apoyo_de_persona",
-      "repetition": 2,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "apoyo_de_persona",
-      "repetition": 2,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "apoyo_de_persona",
-      "repetition": 2,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "renovar_d2",
-      "repetition": 2,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "renovar_d2",
-      "repetition": 2,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "renovar_d2",
-      "repetition": 2,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "renovar_d2",
-      "repetition": 2,
-      "arm": "D_revision"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 2,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 2,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 2,
-      "arm": "D_revision"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 2,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "retirar_revisor",
-      "repetition": 2,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "retirar_revisor",
-      "repetition": 2,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "retirar_revisor",
-      "repetition": 2,
-      "arm": "D_revision"
-    },
-    {
-      "case": "retirar_revisor",
-      "repetition": 2,
-      "arm": "B_felix_opcional"
     },
     {
       "case": "degradar_f1",
@@ -363,7 +243,7 @@
     {
       "case": "degradar_f1",
       "repetition": 2,
-      "arm": "A_baseline"
+      "arm": "D_revision"
     },
     {
       "case": "degradar_f1",
@@ -373,25 +253,195 @@
     {
       "case": "degradar_f1",
       "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "reasignar_d14",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "reasignar_d14",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "reasignar_d14",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "reasignar_d14",
+      "repetition": 2,
       "arm": "D_revision"
     },
     {
-      "case": "extender_d4",
+      "case": "cascada_d02",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "retirar_revisor_d01",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "retirar_revisor_d01",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "retirar_revisor_d01",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "retirar_revisor_d01",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "promover_d11",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d11",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "promover_d11",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "promover_d11",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "verificar_dependientes",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "verificar_dependientes",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "verificar_dependientes",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "verificar_dependientes",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "reasignar_d14",
       "repetition": 3,
       "arm": "D_revision"
     },
     {
-      "case": "extender_d4",
+      "case": "reasignar_d14",
       "repetition": 3,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "extender_d4",
+      "case": "reasignar_d14",
       "repetition": 3,
       "arm": "C_obligatorio"
     },
     {
-      "case": "extender_d4",
+      "case": "reasignar_d14",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d13",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "cascada_d02",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "degradar_f1",
       "repetition": 3,
       "arm": "A_baseline"
     },
@@ -403,135 +453,85 @@
     {
       "case": "degradar_f1",
       "repetition": 3,
-      "arm": "D_revision"
+      "arm": "C_obligatorio"
     },
     {
-      "case": "degradar_f1",
+      "case": "renovar_vencimientos",
       "repetition": 3,
       "arm": "A_baseline"
     },
     {
-      "case": "degradar_f1",
+      "case": "renovar_vencimientos",
       "repetition": 3,
       "arm": "C_obligatorio"
     },
     {
-      "case": "apoyo_de_persona",
+      "case": "renovar_vencimientos",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "renovar_vencimientos",
       "repetition": 3,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "apoyo_de_persona",
+      "case": "promover_d11",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "promover_d11",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "promover_d11",
       "repetition": 3,
       "arm": "C_obligatorio"
     },
     {
-      "case": "apoyo_de_persona",
+      "case": "promover_d11",
       "repetition": 3,
       "arm": "A_baseline"
     },
     {
-      "case": "apoyo_de_persona",
-      "repetition": 3,
-      "arm": "D_revision"
-    },
-    {
-      "case": "apoyo_fuente_debil",
-      "repetition": 3,
-      "arm": "D_revision"
-    },
-    {
-      "case": "apoyo_fuente_debil",
+      "case": "retirar_revisor_d01",
       "repetition": 3,
       "arm": "A_baseline"
     },
     {
-      "case": "apoyo_fuente_debil",
-      "repetition": 3,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "apoyo_fuente_debil",
-      "repetition": 3,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "promover_d1",
-      "repetition": 3,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "promover_d1",
-      "repetition": 3,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "promover_d1",
+      "case": "retirar_revisor_d01",
       "repetition": 3,
       "arm": "D_revision"
     },
     {
-      "case": "promover_d1",
-      "repetition": 3,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 3,
-      "arm": "B_felix_opcional"
-    },
-    {
-      "case": "asegurar_revisores",
-      "repetition": 3,
-      "arm": "D_revision"
-    },
-    {
-      "case": "asegurar_revisores",
+      "case": "retirar_revisor_d01",
       "repetition": 3,
       "arm": "C_obligatorio"
     },
     {
-      "case": "asegurar_revisores",
-      "repetition": 3,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "renovar_d2",
-      "repetition": 3,
-      "arm": "A_baseline"
-    },
-    {
-      "case": "renovar_d2",
-      "repetition": 3,
-      "arm": "D_revision"
-    },
-    {
-      "case": "renovar_d2",
-      "repetition": 3,
-      "arm": "C_obligatorio"
-    },
-    {
-      "case": "renovar_d2",
+      "case": "retirar_revisor_d01",
       "repetition": 3,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "retirar_revisor",
+      "case": "verificar_dependientes",
       "repetition": 3,
       "arm": "C_obligatorio"
     },
     {
-      "case": "retirar_revisor",
+      "case": "verificar_dependientes",
       "repetition": 3,
       "arm": "B_felix_opcional"
     },
     {
-      "case": "retirar_revisor",
+      "case": "verificar_dependientes",
       "repetition": 3,
       "arm": "D_revision"
     },
     {
-      "case": "retirar_revisor",
+      "case": "verificar_dependientes",
       "repetition": 3,
       "arm": "A_baseline"
     }
