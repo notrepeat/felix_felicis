@@ -139,7 +139,16 @@ Code 2.1.327), la calibración se completó en
 **16 de 16 aciertos del baseline al primer delta**, sin fallos técnicos y sin
 estados inválidos, entre 3 y 7 s por corrida. Según este protocolo, las tareas
 no dejan margen y deben reescribirse, con el plan congelado de nuevo, antes de
-9c. Las tareas actuales no se usan en el estudio.
+9c. Esas tareas (v1) no se usan en el estudio.
+
+Con las tareas v2 (24 nodos, cascadas y proponente excluido) la calibración se
+repitió el mismo día en
+[`results/four-arms-v1-calibracion/`](results/four-arms-v1-calibracion/summary.json):
+de nuevo **16 de 16 aciertos al primer delta**, sin fallos técnicos, entre 4 y 7 s
+por corrida, incluidas las cascadas de cuatro pasos, el proponente que no cuenta
+como revisor y la tarea imposible. Junto con el piloto 173 (12 de 12 con GPT),
+es la tercera vez que un modelo actual resuelve todas las tareas cuando recibe
+todos los hechos y las reglas en el prompt.
 
 ## Medidas
 
