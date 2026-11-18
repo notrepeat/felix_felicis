@@ -434,7 +434,9 @@ fn sustituir_metas(formula: &mut Formula, valores: &HashMap<Var, ValorMeta>) {
             sustituir_metas(antecedente, valores);
             sustituir_metas(consecuente, valores);
         }
-        Formula::ParaTodo { guarda, cuerpo, .. } | Formula::Existe { guarda, cuerpo, .. } => {
+        Formula::ParaTodo { guarda, cuerpo, .. }
+        | Formula::Existe { guarda, cuerpo, .. }
+        | Formula::AlMenos { guarda, cuerpo, .. } => {
             if let Some(guarda) = guarda {
                 sustituir_metas(guarda, valores);
             }

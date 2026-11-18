@@ -205,6 +205,15 @@ pub enum Formula {
         guarda: Option<Box<Formula>>,
         cuerpo: Box<Formula>,
     },
+    /// Cuantificador de cardinalidad `(al-menos n ((x N)) …)`: al menos
+    /// `minimo` asignaciones distintas de las ligaduras cumplen `g ∧ φ`.
+    /// Con `minimo = 1` equivale a `Existe`; el parser exige `minimo ≥ 1`.
+    AlMenos {
+        minimo: u32,
+        ligaduras: Vec<(Var, SorteVar)>,
+        guarda: Option<Box<Formula>>,
+        cuerpo: Box<Formula>,
+    },
 }
 
 /// Dominio finito sobre el que un esquema instancia su metavariable
@@ -404,6 +413,18 @@ impl std::fmt::Display for Formula {
                 guarda,
                 cuerpo,
             } => escribir_cuantificador(f, "exists", ligaduras, guarda.as_deref(), cuerpo),
+            Formula::AlMenos {
+                minimo,
+                ligaduras,
+                guarda,
+                cuerpo,
+            } => escribir_cuantificador(
+                f,
+                &format!("al-menos {minimo}"),
+                ligaduras,
+                guarda.as_deref(),
+                cuerpo,
+            ),
         }
     }
 }

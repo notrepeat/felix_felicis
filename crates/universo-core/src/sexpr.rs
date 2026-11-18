@@ -50,6 +50,9 @@ pub enum MotivoAutoria {
         posicion: usize,
     },
     TcSoloSobreParent(String),
+    /// `al-menos` exige un entero positivo en forma canónica (`2`, no
+    /// `0`, `02`, `-1` ni `1.5`).
+    CardinalidadInvalida(String),
     MetaFueraDeEsquema(String),
     MetaSinUso(String),
     DominioDeEsquemaDesconocido(String),
@@ -122,6 +125,10 @@ impl std::fmt::Display for MotivoAutoria {
             MotivoAutoria::ConstanteMalFormada { texto, motivo } => {
                 write!(f, "la constante {texto:?} no es válida: {motivo}")
             }
+            MotivoAutoria::CardinalidadInvalida(texto) => write!(
+                f,
+                "`al-menos` espera un entero positivo sin ceros a la izquierda, no {texto}"
+            ),
             MotivoAutoria::AnidamientoExcesivo { limite } => write!(
                 f,
                 "la S-expresión anida más de {limite} niveles; el parser no baja más"
@@ -822,6 +829,57 @@ fn cuantificador(
     })
 }
 
+/// `(al-menos n ((x N)) [:guarda g] φ)`: el número va antes de las
+/// ligaduras y el resto se lee exactamente como un `exists`.
+fn al_menos(
+    sexp: &Sexp,
+    argumentos: &[Sexp],
+    contexto: &mut Contexto,
+) -> Result<Formula, ErrorAutoria> {
+    // La aridad se comprueba aquí, contando `n`, para que el mensaje sea el
+    // mismo falte lo que falte; `cuantificador` ya no puede fallar por aridad.
+    let con_guarda = argumentos
+        .get(2)
+        .and_then(Sexp::simbolo)
+        .is_some_and(|s| s == CLAVE_GUARDA);
+    exigir_aridad(
+        sexp,
+        "al-menos",
+        if con_guarda { 5 } else { 3 },
+        argumentos.len(),
+    )?;
+    let primero = &argumentos[0];
+    let minimo = primero
+        .simbolo()
+        .and_then(|texto| {
+            texto
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n >= 1 && n.to_string() == texto)
+        })
+        .ok_or_else(|| {
+            let descrito = match primero.simbolo() {
+                Some(texto) => format!("{texto:?}"),
+                None => "una lista o una cadena".to_string(),
+            };
+            primero.error(MotivoAutoria::CardinalidadInvalida(descrito))
+        })?;
+    let Formula::Existe {
+        ligaduras,
+        guarda,
+        cuerpo,
+    } = cuantificador(sexp, "al-menos", &argumentos[1..], contexto)?
+    else {
+        unreachable!("`cuantificador` devuelve `Existe` para toda cabeza distinta de `forall`")
+    };
+    Ok(Formula::AlMenos {
+        minimo,
+        ligaduras,
+        guarda,
+        cuerpo,
+    })
+}
+
 /// `(Raiz x)` ≡ `(not (exists ((%pN N)) (Parent x %pN)))`: el azúcar del
 /// capítulo 01, cuyo cuantificador interno no cuenta para la condición de
 /// relativización guardada.
@@ -934,6 +992,7 @@ fn formula_interna(sexp: &Sexp, contexto: &mut Contexto) -> Result<Formula, Erro
     let argumentos = &elementos[1..];
     match cabeza {
         "forall" | "exists" => cuantificador(sexp, cabeza, argumentos, contexto),
+        "al-menos" => al_menos(sexp, argumentos, contexto),
         "and" | "or" => conjuncion_o_disyuncion(sexp, cabeza, argumentos, contexto),
         "not" => {
             exigir_aridad(sexp, "not", 1, argumentos.len())?;

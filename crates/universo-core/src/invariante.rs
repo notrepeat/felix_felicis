@@ -509,6 +509,12 @@ impl<'a> Validador<'a> {
                 ligaduras,
                 guarda,
                 cuerpo,
+            }
+            | Formula::AlMenos {
+                ligaduras,
+                guarda,
+                cuerpo,
+                ..
             } => self.cuantificador(ligaduras, guarda.as_deref(), cuerpo),
         }
         self.profundidad -= 1;

@@ -98,6 +98,11 @@ impl std::fmt::Debug for AsignacionCanonica {
 pub enum TipoCuantificador {
     ParaTodo,
     Existe,
+    /// `al-menos`: verdadero en cuanto `minimo` instancias cumplen guarda y
+    /// cuerpo; las instancias cuya guarda falla no cuentan.
+    AlMenos {
+        minimo: u32,
+    },
 }
 
 /// Una instancia efectiva de un cuantificador.
@@ -973,6 +978,12 @@ fn validar_formula(
             ligaduras,
             guarda,
             cuerpo,
+        }
+        | Formula::AlMenos {
+            ligaduras,
+            guarda,
+            cuerpo,
+            ..
         } => {
             if ligaduras.len() > MAX_LIGADURAS_POR_CUANTIFICADOR {
                 return Err(ErrorEvaluacion::DemasiadasLigaduras {
@@ -1109,7 +1120,7 @@ struct Entorno {
 }
 
 struct ModoCuantificador<'a> {
-    universal: bool,
+    tipo: TipoCuantificador,
     evidencia: &'a mut ModoEvidencia,
 }
 
@@ -1492,7 +1503,7 @@ fn evaluar_interno(
             entorno,
             presupuesto,
             ModoCuantificador {
-                universal: true,
+                tipo: TipoCuantificador::ParaTodo,
                 evidencia: modo,
             },
         ),
@@ -1508,7 +1519,24 @@ fn evaluar_interno(
             entorno,
             presupuesto,
             ModoCuantificador {
-                universal: false,
+                tipo: TipoCuantificador::Existe,
+                evidencia: modo,
+            },
+        ),
+        Formula::AlMenos {
+            minimo,
+            ligaduras,
+            guarda,
+            cuerpo,
+        } => evaluar_cuantificador(
+            ligaduras,
+            guarda.as_deref(),
+            cuerpo,
+            estructura,
+            entorno,
+            presupuesto,
+            ModoCuantificador {
+                tipo: TipoCuantificador::AlMenos { minimo: *minimo },
                 evidencia: modo,
             },
         ),
@@ -1524,11 +1552,28 @@ fn evaluar_cuantificador(
     presupuesto: &mut Presupuesto,
     modo: ModoCuantificador<'_>,
 ) -> Result<EvaluacionInterna, ErrorEvaluacion> {
-    let ModoCuantificador {
-        universal,
-        evidencia,
-    } = modo;
+    let ModoCuantificador { tipo, evidencia } = modo;
+    // `universal` es también el valor de una búsqueda agotada sin corte:
+    // verdadero solo para `ParaTodo`. `Existe` y `al-menos` (que no es
+    // universal) agotan en falso: si hubieran alcanzado su mínimo de testigos,
+    // ya habrían cortado.
+    let universal = tipo == TipoCuantificador::ParaTodo;
+    let minimo = match tipo {
+        TipoCuantificador::AlMenos { minimo } => Some(minimo),
+        _ => None,
+    };
     let capturando = evidencia.capturando();
+    if minimo == Some(0) {
+        // Solo un AST construido a mano llega aquí: el parser exige n ≥ 1.
+        presupuesto.consumir(1)?;
+        return resultado_interno(true, evidencia, |_| {
+            Ok(ReglaEvidencia::Cuantificador {
+                tipo,
+                instancias: Vec::new(),
+                busqueda_agotada: false,
+            })
+        });
+    }
     if ligaduras.is_empty() {
         presupuesto.consumir(1)?;
         let evaluacion = evaluar_instancia_cuantificada(
@@ -1540,7 +1585,9 @@ fn evaluar_cuantificador(
             presupuesto,
             evidencia,
         )?;
-        let valor = evaluacion.valor;
+        // Sin ligaduras hay una única asignación: `al-menos n` con n > 1 no
+        // puede cumplirse.
+        let valor = evaluacion.valor && minimo.is_none_or(|n| n <= 1);
         let mut instancias = Vec::new();
         if capturando {
             let instancia =
@@ -1550,7 +1597,7 @@ fn evaluar_cuantificador(
         }
         return resultado_interno(valor, evidencia, |_| {
             Ok(ReglaEvidencia::Cuantificador {
-                tipo: tipo_cuantificador(universal),
+                tipo,
                 instancias,
                 busqueda_agotada: true,
             })
@@ -1590,7 +1637,7 @@ fn evaluar_cuantificador(
     }) {
         return resultado_interno(universal, evidencia, |_| {
             Ok(ReglaEvidencia::Cuantificador {
-                tipo: tipo_cuantificador(universal),
+                tipo,
                 instancias: Vec::new(),
                 busqueda_agotada: true,
             })
@@ -1611,6 +1658,7 @@ fn evaluar_cuantificador(
     let resultado = (|| {
         let mut indices = vec![0; ligaduras.len()];
         let mut instancias = Vec::new();
+        let mut testigos: u32 = 0;
         loop {
             presupuesto.consumir(1)?;
             for (indice, (variable, sorte)) in ligaduras.iter().enumerate() {
@@ -1662,13 +1710,16 @@ fn evaluar_cuantificador(
                 });
             }
             if !universal && valor {
-                return resultado_interno(true, evidencia, |_| {
-                    Ok(ReglaEvidencia::Cuantificador {
-                        tipo: TipoCuantificador::Existe,
-                        instancias,
-                        busqueda_agotada: false,
-                    })
-                });
+                testigos = testigos.saturating_add(1);
+                if minimo.is_none_or(|n| testigos >= n) {
+                    return resultado_interno(true, evidencia, |_| {
+                        Ok(ReglaEvidencia::Cuantificador {
+                            tipo,
+                            instancias,
+                            busqueda_agotada: false,
+                        })
+                    });
+                }
             }
             if !avanzar_combinacion(
                 &mut indices,
@@ -1678,7 +1729,7 @@ fn evaluar_cuantificador(
             ) {
                 return resultado_interno(universal, evidencia, |_| {
                     Ok(ReglaEvidencia::Cuantificador {
-                        tipo: tipo_cuantificador(universal),
+                        tipo,
                         instancias,
                         busqueda_agotada: true,
                     })
@@ -1735,14 +1786,6 @@ fn evaluar_instancia_cuantificada(
         guarda: guarda_evaluada,
         cuerpo: Some(cuerpo_evaluado),
     })
-}
-
-fn tipo_cuantificador(universal: bool) -> TipoCuantificador {
-    if universal {
-        TipoCuantificador::ParaTodo
-    } else {
-        TipoCuantificador::Existe
-    }
 }
 
 fn instancia_con_evidencia(

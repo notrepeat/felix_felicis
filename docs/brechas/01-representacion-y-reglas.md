@@ -41,8 +41,8 @@ A2 es la parte más sólida del sistema.
 | # | Brecha | Tamaño | Compuerta |
 |---|---|---|---|
 | R1 | **Hecho** (2026-11-17): `(regla :id "..." :mensaje "..." <sentencia>)` en el nivel superior; tests en `sexpr.rs`. Id y mensaje por regla en `.sx` | S–M | No |
-| R2 | **Comparación de orden hecha** (2026-11-18, C1: `orden = true` y `(>= P x c)`); cardinalidad pendiente (C4). Cardinalidad y comparación de orden en `.sx`, con presupuesto | M–L | No (decisión de diseño) |
-| R3 | **En curso** (2026-11-18): orden de valores (C1), multivalor (C3) y fechas ISO comparables con literales (C2) hechos; cardinalidad (C4) pendiente; atributos de arista fuera de alcance. Representar criterio: fechas/vigencia, confianza, fuente, multivalor, atributos de arista | L | Decisión de diseño: cambia OKF y semántica |
+| R2 | **Hecho** (2026-11-18): comparación de orden (C1: `orden = true` y `(>= P x c)`) y cardinalidad (C4: `(al-menos n ((x N)) …)`, con corte al alcanzar `n`). Cardinalidad y comparación de orden en `.sx`, con presupuesto | M–L | No (decisión de diseño) |
+| R3 | **En curso** (2026-11-18): orden de valores (C1), multivalor (C3), fechas ISO comparables con literales (C2) y cardinalidad `al-menos` (C4) hechos; atributos de arista fuera de alcance. Representar criterio: fechas/vigencia, confianza, fuente, multivalor, atributos de arista | L | Decisión de diseño: cambia OKF y semántica |
 | R4 | Preorden ⪯ (prerrequisito de AGM) | L | **Sí**: AGM excluido por el plan |
 
 R1 es barato y mejora mucho la utilidad del rechazo. R3 es la condición para

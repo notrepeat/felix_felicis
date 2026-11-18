@@ -234,6 +234,24 @@ en orden canónico (lexicográfico) y sin repetidos; una lista vacía equivale a
 tener valores y la clave desaparece al reescribir. Un predicado no puede ser a la
 vez `orden` y `multivalor`.
 
+### Contar testigos
+
+`(al-menos n ((x N)) cuerpo)` exige que al menos `n` asignaciones distintas de
+las variables cumplan el cuerpo; admite `:guarda` igual que `exists`, y las
+asignaciones cuya guarda falla no cuentan. `n` es un entero positivo escrito sin
+ceros a la izquierda; `(al-menos 1 …)` equivale a `exists`. Con varias variables
+se cuentan tuplas: `((x N) (y N))` distingue `(a, b)` de `(b, a)`; para contar
+nodos y no aristas, liga la arista dentro de un `exists`, como en el ejemplo. La evaluación
+se detiene en cuanto encuentra `n` testigos. En `--explain` aparece como
+`rule: "at_least"` con el campo `minimum`; no produce `gap` ni `presence_core`,
+así que su rechazo se explica sólo con las instancias recorridas.
+
+```text
+(regla :id "revision-doble" :mensaje "Toda decisión necesita dos revisiones."
+  (forall ((d N)) :guarda (Type d decision)
+    (al-menos 2 ((r N)) (exists ((e E)) (Edge e r d reviews)))))
+```
+
 ### Nombrar reglas
 
 Una regla de nivel superior puede llevar un id y un mensaje humano opcionales:

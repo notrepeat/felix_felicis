@@ -333,8 +333,18 @@ fn verificar_arbol_con_oraculo(
             ligaduras,
             guarda,
             cuerpo,
+        }
+        | Formula::AlMenos {
+            ligaduras,
+            guarda,
+            cuerpo,
+            ..
         } => {
             let universal = matches!(formula, Formula::ParaTodo { .. });
+            let minimo = match formula {
+                Formula::AlMenos { minimo, .. } => Some(*minimo),
+                _ => None,
+            };
             let ReglaEvidencia::Cuantificador {
                 tipo,
                 instancias,
@@ -345,12 +355,13 @@ fn verificar_arbol_con_oraculo(
             };
             assert_eq!(
                 *tipo,
-                if universal {
-                    TipoCuantificador::ParaTodo
-                } else {
-                    TipoCuantificador::Existe
+                match (universal, minimo) {
+                    (true, _) => TipoCuantificador::ParaTodo,
+                    (false, None) => TipoCuantificador::Existe,
+                    (false, Some(minimo)) => TipoCuantificador::AlMenos { minimo },
                 }
             );
+            let mut testigos = 0;
 
             let combinaciones = combinaciones_canonicas(ligaduras, estructura);
             let mut valor_acumulado = universal;
@@ -401,10 +412,15 @@ fn verificar_arbol_con_oraculo(
                 } else {
                     valor_acumulado |= valor_instancia;
                 }
-                if (universal && !valor_instancia) || (!universal && valor_instancia) {
+                testigos += u32::from(!universal && valor_instancia);
+                let alcanzado = minimo.is_none_or(|n| testigos >= n);
+                if (universal && !valor_instancia) || (!universal && valor_instancia && alcanzado) {
                     corto_circuito = true;
                     break;
                 }
+            }
+            if minimo.is_some() {
+                valor_acumulado = corto_circuito;
             }
             assert_eq!(instancias.len(), cantidad_visitada);
             assert_eq!(*busqueda_agotada, !corto_circuito);
@@ -747,6 +763,32 @@ fn verificador_recursivo_confirma_forall_exists_y_restaura_scopes_hermanos() {
         &estructura,
         &AsignacionOraculo::default(),
     ));
+}
+
+#[test]
+fn verificador_recursivo_confirma_al_menos_con_y_sin_corte() {
+    let estructura = mundo().estructura;
+    for texto in [
+        "(al-menos 1 ((x N)) (Type x a))",
+        "(al-menos 2 ((x N) (y N)) (= x y))",
+        "(al-menos 99 ((x N)) (= x x))",
+        "(al-menos 2 ((x N)) :guarda (Type x a) (exists ((y N)) (Parent x y)))",
+        "(forall ((x N)) (al-menos 1 ((y N)) (= x y)))",
+        "(not (al-menos 3 ((e E)) (= e e)))",
+    ] {
+        let formula = oracion(texto);
+        let resultado = comprobar_resultado(&formula, &estructura);
+        assert_eq!(
+            verificar_arbol_con_oraculo(
+                &formula,
+                &resultado.evidencia,
+                &estructura,
+                &AsignacionOraculo::default(),
+            ),
+            resultado.valor,
+            "{texto}"
+        );
+    }
 }
 
 #[test]

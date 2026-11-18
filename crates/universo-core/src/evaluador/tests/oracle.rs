@@ -296,7 +296,76 @@ pub(super) fn oraculo(
             estructura,
             asignacion,
         ),
+        Formula::AlMenos {
+            minimo,
+            ligaduras,
+            guarda,
+            cuerpo,
+        } => Ok(contar_oraculo(
+            0,
+            ligaduras,
+            guarda.as_deref(),
+            cuerpo,
+            estructura,
+            asignacion,
+        )? >= u64::from(*minimo)),
     }
+}
+
+/// Cuenta, sin cortocircuito, las asignaciones que cumplen guarda y cuerpo.
+/// Es deliberadamente distinto del evaluador, que se detiene en el mínimo.
+fn contar_oraculo(
+    indice: usize,
+    ligaduras: &[(Var, SorteVar)],
+    guarda: Option<&Formula>,
+    cuerpo: &Formula,
+    estructura: &Estructura,
+    asignacion: &mut AsignacionOraculo,
+) -> Result<u64, ErrorEvaluacion> {
+    if indice == ligaduras.len() {
+        let aplica = match guarda {
+            Some(guarda) => oraculo(guarda, estructura, asignacion)?,
+            None => true,
+        };
+        return Ok(u64::from(
+            aplica && oraculo(cuerpo, estructura, asignacion)?,
+        ));
+    }
+    let (variable, sorte) = &ligaduras[indice];
+    let mut total = 0;
+    match sorte {
+        SorteVar::Nodo => {
+            for (id, _) in estructura.nodos() {
+                let previo = asignacion.nodos.insert(variable.clone(), id);
+                let resultado = contar_oraculo(
+                    indice + 1,
+                    ligaduras,
+                    guarda,
+                    cuerpo,
+                    estructura,
+                    asignacion,
+                );
+                restaurar_asignacion_oraculo(&mut asignacion.nodos, variable, previo);
+                total += resultado?;
+            }
+        }
+        SorteVar::Arista => {
+            for (id, _) in estructura.aristas() {
+                let previo = asignacion.aristas.insert(variable.clone(), id);
+                let resultado = contar_oraculo(
+                    indice + 1,
+                    ligaduras,
+                    guarda,
+                    cuerpo,
+                    estructura,
+                    asignacion,
+                );
+                restaurar_asignacion_oraculo(&mut asignacion.aristas, variable, previo);
+                total += resultado?;
+            }
+        }
+    }
+    Ok(total)
 }
 
 fn cuantificador_oraculo(

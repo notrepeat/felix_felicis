@@ -84,6 +84,9 @@ fn el_evaluador_coincide_con_el_oraculo_en_estructuras_generadas() {
         "(exists ((x N) (y N)) (tc Parent x y))",
         "(forall ((x N)) (=> (Type x a) (HasLab x \"L\")))",
         "(exists ((x N)) (Nivel x alto))",
+        "(al-menos 2 ((x N)) (Type x a))",
+        "(al-menos 3 ((x N) (y N)) :guarda (Type x a) (tc Parent x y))",
+        "(forall ((x N)) (al-menos 1 ((y N)) (= x y)))",
         "(forall ((e E) (x N) (y N)) (=> (Edge e x y rel) (HasLab e \"L\")))",
     ];
     proptest!(|(n in 1usize..6, semilla in any::<u64>())| {

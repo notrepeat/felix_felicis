@@ -168,8 +168,16 @@ fn assert_counterexample_tree(node: &Value) {
                 assert_counterexample_tree(&node["consequent"]);
             }
         }
-        "forall" | "exists" => {
-            assert_keys(node, &["rule", "value", "search_exhausted", "instances"]);
+        "forall" | "exists" | "at_least" => {
+            if node["rule"] == "at_least" {
+                assert_keys(
+                    node,
+                    &["rule", "value", "search_exhausted", "instances", "minimum"],
+                );
+                assert!(node["minimum"].as_u64().is_some_and(|n| n >= 1));
+            } else {
+                assert_keys(node, &["rule", "value", "search_exhausted", "instances"]);
+            }
             assert!(node["search_exhausted"].is_boolean());
             for instance in node["instances"].as_array().unwrap() {
                 assert_keys(instance, &["value", "guard", "body"]);
@@ -199,15 +207,17 @@ fn contiene_predicado(node: &Value, predicate: &str) -> bool {
                 || (!node["consequent"].is_null()
                     && contiene_predicado(&node["consequent"], predicate))
         }
-        Some("forall" | "exists") => node["instances"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|instance| {
-                [&instance["guard"], &instance["body"]]
-                    .into_iter()
-                    .any(|child| !child.is_null() && contiene_predicado(child, predicate))
-            }),
+        Some("forall" | "exists" | "at_least") => {
+            node["instances"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|instance| {
+                    [&instance["guard"], &instance["body"]]
+                        .into_iter()
+                        .any(|child| !child.is_null() && contiene_predicado(child, predicate))
+                })
+        }
         _ => false,
     }
 }
@@ -463,6 +473,36 @@ fn explicacion_admitida_no_crea_objetos() {
         assert_eq!(json["explanations"]["truncated"], false);
         assert_eq!(json["explanations"]["reason"], Value::Null);
     }
+}
+
+#[test]
+fn al_menos_rechazado_explica_instancias_sin_brecha_ni_core() {
+    let (root, manifest) = bundle_valido();
+    let invariants = archivo_invariantes(root.path(), "(al-menos 2 ((x N)) (Type x a))\n");
+    for mode in ["decide", "enumerate"] {
+        let output = check_explain(root.path(), &manifest, &invariants, mode);
+        let json = resultado_explicativo(&output, 1);
+        assert_eq!(json["status"], "reject");
+        let objects = json["explanations"]["objects"].as_array().unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_objeto_explicacion(&objects[0]);
+        let tree = &objects[0]["counterexample"];
+        assert_eq!(tree["rule"], "at_least");
+        assert_eq!(tree["minimum"], 2);
+        assert_eq!(tree["value"], false);
+        assert_eq!(tree["search_exhausted"], true);
+        assert_eq!(tree["instances"].as_array().unwrap().len(), 1);
+        // El fragmento de brecha y el core de presencia no cubren `al-menos`.
+        assert_eq!(objects[0]["gap"], Value::Null);
+        assert_eq!(objects[0]["presence_core"], Value::Null);
+    }
+    let admit = archivo_invariantes(root.path(), "(al-menos 1 ((x N)) (Type x a))\n");
+    assert_eq!(
+        invoke(&check_args(root.path(), &manifest, &admit))
+            .status
+            .code(),
+        Some(0)
+    );
 }
 
 #[test]

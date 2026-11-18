@@ -2,17 +2,17 @@
 
 ## Corpus etiquetado
 
-`formal_corpus.tsv` declara 49 casos sobre una fixture fija de tres nodos,
+`formal_corpus.tsv` declara 53 casos sobre una fixture fija de tres nodos,
 dos aristas paralelas, una cadena Parent y un atributo Nivel (ordenado
 `bajo < alto` desde 2026-11-18, para las comparaciones). Las etiquetas
 fueron escritas a partir de esos hechos, no obtenidas llamando al evaluador.
 `crates/universo-core/tests/support/formal_fixture.rs` define los hechos exactos.
 
-El test `formal_corpus.rs` compara cada resultado con su etiqueta: 25 admit,
-22 rechazos de invariantes y dos errores técnicos por constantes inexistentes.
-Un `match` exhaustivo recorre el AST y exige las 15 variantes Formula: Type,
+El test `formal_corpus.rs` compara cada resultado con su etiqueta: 28 admit,
+23 rechazos de invariantes y dos errores técnicos por constantes inexistentes.
+Un `match` exhaustivo recorre el AST y exige las 16 variantes Formula: Type,
 Edge, Parent, HasLab, Ext, Compara (comparación de orden), TcParent, ambas
-igualdades, No, Y, O, Implica, ParaTodo y Existe. Incluye variables nodo/arista, constantes, guardas, clausura
+igualdades, No, Y, O, Implica, ParaTodo, Existe y AlMenos (cardinalidad `al-menos`). Incluye variables nodo/arista, constantes, guardas, clausura
 estricta, azúcar Raiz y esquemas Lab/KV/KE/Dom.Nivel. Un test adicional verifica
 rechazo de las tres clases de conflicto funcional Type, HasLab y Parent.
 

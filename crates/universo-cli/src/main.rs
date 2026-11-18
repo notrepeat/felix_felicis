@@ -1020,6 +1020,7 @@ fn evidencia_a_json(evidencia: &EvidenciaEvaluacion) -> Value {
             let rule = match tipo {
                 TipoCuantificador::ParaTodo => "forall",
                 TipoCuantificador::Existe => "exists",
+                TipoCuantificador::AlMenos { .. } => "at_least",
             };
             let instancias = instancias
                 .iter()
@@ -1031,12 +1032,16 @@ fn evidencia_a_json(evidencia: &EvidenciaEvaluacion) -> Value {
                     })
                 })
                 .collect::<Vec<_>>();
-            json!({
+            let mut nodo = json!({
                 "rule": rule,
                 "value": valor,
                 "search_exhausted": busqueda_agotada,
                 "instances": instancias,
-            })
+            });
+            if let TipoCuantificador::AlMenos { minimo } = tipo {
+                nodo["minimum"] = json!(minimo);
+            }
+            nodo
         }
     }
 }
