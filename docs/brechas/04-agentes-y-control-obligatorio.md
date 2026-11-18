@@ -39,8 +39,8 @@ No hay enforcement de ningún tipo (verificado salvo donde se indica):
 |---|---|---|---|
 | G1 | **Hecho** (2026-11-17, `universo guard`/`seal`, [guardia](../guardia.md)). Guardia del bundle: hook pre-commit y job de CI que corren `validate` + `check` sobre el repositorio de conocimiento | S | No |
 | G2 | **Hecho** (2026-11-17, `universo guard`/`seal`, [guardia](../guardia.md)). Detección de escrituras fuera de Felix: comparar el bundle con el token del último estado admitido y exigir pasar por `propose` (ver D5 en [03](03-transacciones-y-durabilidad.md)) | M | No |
-| G3 | Camino legítimo para que un agente publique: `apply` autorizado por el orquestador o por confirmación humana, nunca por el modelo solo | M | Decisión de autoridad |
-| G4 | Orquestador obligatorio (prioridad 2 de las [conclusiones](../conclusiones-ia-felix-felicis.md#6-prioridades-y-decisión)) en harness aislado | M | **Sí**: no se inicia sin decisión |
+| G3 | **Prototipo** (2026-11-18): el ejecutor del orquestador publica tras `admit`, con `--confirmar` opcional para un sí humano. Camino legítimo para que un agente publique: `apply` autorizado por el orquestador o por confirmación humana, nunca por el modelo solo | M | Decidido 2026-11-18 para el prototipo |
+| G4 | **Prototipo hecho** (2026-11-18, [propuesta](../propuestas/08-orquestador-obligatorio.md), `tools/orquestador.py`; agentes guionizados, aislamiento por construcción, no por el SO). Orquestador obligatorio (prioridad 2 de las [conclusiones](../conclusiones-ia-felix-felicis.md#6-prioridades-y-decisión)) en harness aislado | M | Decidido 2026-11-18 |
 | G5 | `context` con selección de invariantes relevantes que preserve cobertura | M | No, pero medir antes (riesgo de ahorro aparente) |
 | G6 | `why` con explicación propia o retirarlo (ver T3 en [02](02-rechazo-testigos-y-reparacion.md)) | S | No |
 
