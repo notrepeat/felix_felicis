@@ -43,6 +43,8 @@ pub enum ConstructorAtomico {
     TcParent,
     IgualNodo,
     IgualArista,
+    /// Comparación de orden sobre un predicado de extensión.
+    CompararExt,
 }
 
 /// Identidad canónica de un valor que liga una variable en una instancia.
@@ -262,6 +264,8 @@ pub enum ErrorEvaluacion {
     SorteAristaNoDeclarada(Sorte),
     EtiquetaNoEnUso(Etiqueta),
     PredicadoNoDeclarado(String),
+    /// Comparación de orden sobre un predicado sin orden declarado.
+    PredicadoNoOrdenado(String),
     ConstanteFueraDeDominio {
         predicado: String,
         constante: String,
@@ -312,6 +316,7 @@ impl std::fmt::Debug for ErrorEvaluacion {
             Self::SorteAristaNoDeclarada(_) => f.write_str("SorteAristaNoDeclarada([redactada])"),
             Self::EtiquetaNoEnUso(_) => f.write_str("EtiquetaNoEnUso([redactada])"),
             Self::PredicadoNoDeclarado(_) => f.write_str("PredicadoNoDeclarado([redactado])"),
+            Self::PredicadoNoOrdenado(_) => f.write_str("PredicadoNoOrdenado([redactado])"),
             Self::ConstanteFueraDeDominio { .. } => {
                 f.write_str("ConstanteFueraDeDominio([redactada])")
             }
@@ -358,6 +363,9 @@ impl std::fmt::Display for ErrorEvaluacion {
             }
             Self::PredicadoNoDeclarado(_) => {
                 f.write_str("la fórmula refiere a un predicado no declarado")
+            }
+            Self::PredicadoNoOrdenado(_) => {
+                f.write_str("la fórmula compara un predicado sin orden declarado")
             }
             Self::ConstanteFueraDeDominio { .. } => {
                 f.write_str("la fórmula usa un valor fuera de un dominio cerrado")
@@ -894,6 +902,31 @@ fn validar_formula(
                 }
             }
         }
+        Formula::Compara {
+            predicado,
+            sujeto,
+            constante,
+            ..
+        } => {
+            validar_nodo(sujeto, estructura, alcance)?;
+            let declaracion = estructura
+                .manifiesto()
+                .predicado(predicado)
+                .ok_or_else(|| ErrorEvaluacion::PredicadoNoDeclarado(predicado.clone()))?;
+            if declaracion.orden.is_empty() {
+                return Err(ErrorEvaluacion::PredicadoNoOrdenado(predicado.clone()));
+            }
+            match constante {
+                TerminoConstExt::Literal(valor) if declaracion.dominio.contains(valor) => Ok(()),
+                TerminoConstExt::Literal(valor) => Err(ErrorEvaluacion::ConstanteFueraDeDominio {
+                    predicado: predicado.clone(),
+                    constante: valor.clone(),
+                }),
+                TerminoConstExt::Meta(variable) => {
+                    Err(ErrorEvaluacion::MetaNoInstanciada(variable.clone()))
+                }
+            }
+        }
         Formula::TcParent { desde, hasta } => {
             validar_nodo(desde, estructura, alcance)?;
             validar_nodo(hasta, estructura, alcance)
@@ -1239,6 +1272,44 @@ fn evaluar_interno(
                         constructor: ConstructorAtomico::Ext,
                         camino_tc: None,
                     }
+                })
+            })
+        }
+        Formula::Compara {
+            op,
+            predicado,
+            sujeto,
+            constante,
+        } => {
+            let id = resolver_nodo(sujeto, estructura, entorno)?;
+            let constante = resolver_const_ext(constante)?;
+            if estructura.nodo(id).is_none() {
+                return Err(ErrorEvaluacion::NodoLigadoInexistente(
+                    nombre_variable_nodo(sujeto),
+                ));
+            }
+            let declaracion = estructura
+                .manifiesto()
+                .predicado(predicado)
+                .ok_or_else(|| ErrorEvaluacion::PredicadoNoDeclarado(predicado.clone()))?;
+            if declaracion.orden.is_empty() {
+                return Err(ErrorEvaluacion::PredicadoNoOrdenado(predicado.clone()));
+            }
+            let cota = declaracion.rango(&constante).ok_or_else(|| {
+                ErrorEvaluacion::ConstanteFueraDeDominio {
+                    predicado: predicado.clone(),
+                    constante: constante.clone(),
+                }
+            })?;
+            let valor = estructura
+                .atributos(id)
+                .get(predicado)
+                .and_then(|actual| declaracion.rango(actual))
+                .is_some_and(|actual| op.compara(actual, cota));
+            resultado_interno(valor, modo, |_| {
+                Ok(ReglaEvidencia::Atomo {
+                    constructor: ConstructorAtomico::CompararExt,
+                    camino_tc: None,
                 })
             })
         }

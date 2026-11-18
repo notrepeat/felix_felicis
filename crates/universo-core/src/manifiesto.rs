@@ -78,7 +78,23 @@ pub struct DeclPredicado {
     pub clave: String,
     /// Dominio cerrado de constantes admitidas.
     pub dominio: BTreeSet<String>,
+    /// Orden total declarado del dominio (de menor a mayor), o vacío si el
+    /// predicado no es ordenado. Si no está vacío es una permutación del
+    /// dominio y habilita las comparaciones `<`, `<=`, `>`, `>=`.
+    pub orden: Vec<String>,
 }
+
+impl DeclPredicado {
+    /// Posición de `valor` en el orden declarado; `None` si el predicado no
+    /// es ordenado o el valor no está en el dominio.
+    pub fn rango(&self, valor: &str) -> Option<usize> {
+        self.orden.iter().position(|v| v == valor)
+    }
+}
+
+/// Cabezas de fórmula reservadas para comparaciones; ningún predicado de
+/// extensión puede llamarse así.
+pub const FORMAS_COMPARACION: [&str; 4] = ["<", "<=", ">", ">="];
 
 /// Layout de disco del bundle.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,6 +148,8 @@ pub enum ErrorManifiesto {
     PredicadoReservado(String),
     /// Un nombre de predicado aparece más de una vez.
     PredicadoDuplicado(String),
+    /// El `orden` de un predicado no es una permutación de su dominio.
+    OrdenInvalido(String),
     /// El dominio de un predicado está vacío.
     DominioVacio(String),
     /// Una clave de arista o de predicado coincide con `type`, `title` o
@@ -211,6 +229,12 @@ impl std::fmt::Display for ErrorManifiesto {
             }
             ErrorManifiesto::PredicadoDuplicado(n) => {
                 write!(f, "el predicado {n:?} está duplicado")
+            }
+            ErrorManifiesto::OrdenInvalido(n) => {
+                write!(
+                    f,
+                    "el orden del predicado {n:?} no es una permutación de su dominio"
+                )
             }
             ErrorManifiesto::DominioVacio(n) => {
                 write!(f, "el predicado {n:?} tiene el dominio vacío")
@@ -478,8 +502,19 @@ impl Manifiesto {
         let mut vistos_predicado: BTreeSet<&str> = BTreeSet::new();
         let mut reportados_predicado: BTreeSet<&str> = BTreeSet::new();
         for p in &self.predicados {
-            if PREDICADOS_BASE.contains(&p.nombre.as_str()) {
+            if PREDICADOS_BASE.contains(&p.nombre.as_str())
+                || FORMAS_COMPARACION.contains(&p.nombre.as_str())
+            {
                 errores.push(ErrorManifiesto::PredicadoReservado(p.nombre.clone()));
+            }
+            if !p.orden.is_empty() {
+                let unicos: BTreeSet<&String> = p.orden.iter().collect();
+                if unicos.len() != p.orden.len()
+                    || p.orden.len() != p.dominio.len()
+                    || p.orden.iter().any(|v| !p.dominio.contains(v))
+                {
+                    errores.push(ErrorManifiesto::OrdenInvalido(p.nombre.clone()));
+                }
             }
             if !vistos_predicado.insert(&p.nombre) && reportados_predicado.insert(&p.nombre) {
                 errores.push(ErrorManifiesto::PredicadoDuplicado(p.nombre.clone()));
@@ -719,6 +754,7 @@ pub(crate) mod tests {
                 nombre: "Nivel".into(),
                 clave: "nivel".into(),
                 dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
+                orden: Vec::new(),
             }],
             layout: Layout {
                 directorios: vec!["n".into()],
@@ -1213,6 +1249,7 @@ pub(crate) mod tests {
             nombre: "Ni(vel".into(),
             clave: "otro".into(),
             dominio: ["alto, medio"].into_iter().map(String::from).collect(),
+            orden: Vec::new(),
         });
         let errores = m.validar().unwrap_err();
         for esperado in [
@@ -1244,6 +1281,7 @@ pub(crate) mod tests {
             nombre: "Nivel".into(),
             clave: "nivel2".into(),
             dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
+            orden: Vec::new(),
         });
         assert!(
             m.validar()

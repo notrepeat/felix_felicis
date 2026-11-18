@@ -181,6 +181,27 @@ datos del bundle (es el delta). Errores por stderr con código estable y salida 
 stdout queda vacío. No comprueba que el root esté sellado: `--expect-snapshot`
 protege el apply.
 
+### Comparar valores ordenados
+
+Un predicado de extensión puede declarar que su dominio está ordenado, de menor
+a mayor según el orden en que se escribe:
+
+```toml
+[[predicados]]
+nombre = "Confianza"
+clave = "confianza"
+dominio = ["baja", "media", "alta"]
+orden = true
+```
+
+Las reglas pueden entonces comparar su valor con una constante del dominio:
+`(< P x c)`, `(<= P x c)`, `(> P x c)`, `(>= P x c)`, por ejemplo
+`(forall ((x N)) (=> (Standing x firm) (>= Confianza x media)))`. Una nota sin
+valor para el predicado no satisface ninguna comparación; por eso
+`(not (>= P x c))` es verdadero sin valor y no equivale a `(< P x c)`. Comparar un predicado
+sin `orden` es un error de autoría (`predicate_not_ordered`); `<`, `<=`, `>` y
+`>=` quedan reservados y no pueden ser nombres de predicado.
+
 ### Nombrar reglas
 
 Una regla de nivel superior puede llevar un id y un mensaje humano opcionales:

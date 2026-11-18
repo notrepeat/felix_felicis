@@ -417,7 +417,7 @@ fn sustituir_metas(formula: &mut Formula, valores: &HashMap<Var, ValorMeta>) {
                 }
             }
         }
-        Formula::Ext { constante, .. } => {
+        Formula::Ext { constante, .. } | Formula::Compara { constante, .. } => {
             if let TerminoConstExt::Meta(variable) = constante {
                 if let Some(ValorMeta::ConstanteExt(valor)) = valores.get(variable) {
                     *constante = TerminoConstExt::Literal(valor.clone());

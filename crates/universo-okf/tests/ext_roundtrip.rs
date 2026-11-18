@@ -94,6 +94,7 @@ fn candidato_ext_recarga_con_yaml_entrecomillado_y_passthrough_crudo() {
         nombre: "Modo".into(),
         clave: "modo".into(),
         dominio: BTreeSet::from(["-alto".to_string()]),
+        orden: Vec::new(),
     });
     let archivo = (
         "n/root.md".to_string(),
@@ -141,5 +142,24 @@ fn candidato_ext_recarga_con_yaml_entrecomillado_y_passthrough_crudo() {
     assert_eq!(
         recargado.nodo(recargado_id).unwrap().tipo,
         Sorte::nuevo("a")
+    );
+}
+
+#[test]
+fn toml_orden_true_conserva_el_orden_declarado_y_rechaza_duplicados() {
+    let base = "version = \"t/1\"\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n[[predicados]]\nnombre = \"Confianza\"\nclave = \"confianza\"\n";
+    let ordenado = universo_okf::parsear_manifiesto(&format!(
+        "{base}dominio = [\"baja\", \"media\", \"alta\"]\norden = true\n"
+    ))
+    .unwrap();
+    assert_eq!(ordenado.predicados[0].orden, vec!["baja", "media", "alta"]);
+    let sin = universo_okf::parsear_manifiesto(&format!("{base}dominio = [\"baja\", \"alta\"]\n"))
+        .unwrap();
+    assert!(sin.predicados[0].orden.is_empty());
+    assert!(
+        universo_okf::parsear_manifiesto(&format!(
+            "{base}dominio = [\"baja\", \"baja\"]\norden = true\n"
+        ))
+        .is_err()
     );
 }

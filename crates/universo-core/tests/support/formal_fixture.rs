@@ -3,7 +3,10 @@ pub fn path(value: &str) -> BundlePath {
     BundlePath::nuevo(value).unwrap()
 }
 pub fn fixture() -> Estructura {
-    let mut e = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
+    let mut manifiesto = universo_testkit::manifiesto_minimo();
+    // Nivel ordenado (bajo < alto) para cubrir las comparaciones de orden.
+    manifiesto.predicados[0].orden = vec!["bajo".into(), "alto".into()];
+    let mut e = Estructura::nueva(manifiesto).unwrap();
     let root = e
         .insertar_nodo(path("n/root"), Sorte::nuevo("a"), Etiqueta::nuevo("root"))
         .unwrap();

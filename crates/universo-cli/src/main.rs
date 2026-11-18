@@ -976,6 +976,7 @@ fn constructor_atomico_nombre(constructor: ConstructorAtomico) -> &'static str {
         ConstructorAtomico::TcParent => "tc_parent",
         ConstructorAtomico::IgualNodo => "equal_node",
         ConstructorAtomico::IgualArista => "equal_edge",
+        ConstructorAtomico::CompararExt => "extension_order",
     }
 }
 

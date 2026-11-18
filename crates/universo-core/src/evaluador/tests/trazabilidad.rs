@@ -118,6 +118,7 @@ fn constructor_atomico(formula: &Formula) -> ConstructorAtomico {
             ..
         } => ConstructorAtomico::HasLabArista,
         Formula::Ext { .. } => ConstructorAtomico::Ext,
+        Formula::Compara { .. } => ConstructorAtomico::CompararExt,
         Formula::TcParent { .. } => ConstructorAtomico::TcParent,
         Formula::IgualNodo(..) => ConstructorAtomico::IgualNodo,
         Formula::IgualArista(..) => ConstructorAtomico::IgualArista,
@@ -229,6 +230,7 @@ fn verificar_arbol_con_oraculo(
         | Formula::Parent { .. }
         | Formula::HasLab { .. }
         | Formula::Ext { .. }
+        | Formula::Compara { .. }
         | Formula::TcParent { .. }
         | Formula::IgualNodo(..)
         | Formula::IgualArista(..) => {

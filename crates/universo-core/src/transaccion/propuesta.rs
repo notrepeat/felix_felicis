@@ -269,6 +269,7 @@ fn error_evaluacion(error: ErrorEvaluacion) -> ErrorPropuesta {
         ErrorEvaluacion::SorteAristaNoDeclarada(_) => "edge_type_undeclared",
         ErrorEvaluacion::EtiquetaNoEnUso(_) => "label_unavailable",
         ErrorEvaluacion::PredicadoNoDeclarado(_) => "predicate_undeclared",
+        ErrorEvaluacion::PredicadoNoOrdenado(_) => "predicate_not_ordered",
         ErrorEvaluacion::ConstanteFueraDeDominio { .. } => "extension_value_out_of_domain",
         ErrorEvaluacion::MetaNoInstanciada(_) => "unbound_schema_meta",
         ErrorEvaluacion::NodoLigadoInexistente(_) => "bound_node_missing",

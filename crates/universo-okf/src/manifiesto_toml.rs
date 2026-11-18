@@ -60,6 +60,9 @@ struct PredicadoToml {
     nombre: String,
     clave: String,
     dominio: Vec<String>,
+    /// `true`: el orden de `dominio` (de menor a mayor) habilita comparaciones.
+    #[serde(default)]
+    orden: bool,
 }
 
 #[derive(Deserialize)]
@@ -103,6 +106,11 @@ impl From<ManifiestoToml> for Manifiesto {
                 .map(|p| DeclPredicado {
                     nombre: p.nombre,
                     clave: p.clave,
+                    orden: if p.orden {
+                        p.dominio.clone()
+                    } else {
+                        Vec::new()
+                    },
                     dominio: p.dominio.into_iter().collect(),
                 })
                 .collect(),

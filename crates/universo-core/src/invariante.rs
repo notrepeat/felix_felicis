@@ -46,6 +46,8 @@ pub enum CodigoValidacionInvariante {
     MetaDuplicada,
     AnidamientoExcesivo,
     LimiteLigadurasExcedido,
+    /// Comparación de orden sobre un predicado sin `orden` declarado.
+    PredicadoNoOrdenado,
 }
 
 impl CodigoValidacionInvariante {
@@ -73,6 +75,7 @@ impl CodigoValidacionInvariante {
             Self::MetaDuplicada => "schema_meta_redeclared",
             Self::AnidamientoExcesivo => "formula_nesting_exceeded",
             Self::LimiteLigadurasExcedido => "quantifier_binding_limit_exceeded",
+            Self::PredicadoNoOrdenado => "predicate_not_ordered",
         }
     }
 
@@ -108,6 +111,9 @@ impl CodigoValidacionInvariante {
             Self::AnidamientoExcesivo => "la fórmula excede el límite de anidamiento",
             Self::LimiteLigadurasExcedido => {
                 "el cuantificador excede el máximo de ligaduras permitido"
+            }
+            Self::PredicadoNoOrdenado => {
+                "comparación de orden sobre un predicado sin orden declarado"
             }
         }
     }
@@ -435,6 +441,25 @@ impl<'a> Validador<'a> {
                 self.con_ruta("sujeto", |v| v.termino_nodo(sujeto));
                 self.con_ruta("constante", |v| {
                     v.constante_ext(constante, predicado, declarado)
+                });
+            }
+            Formula::Compara {
+                predicado,
+                sujeto,
+                constante,
+                ..
+            } => {
+                let declaracion = self.manifiesto.predicado(predicado);
+                self.con_ruta("predicado", |v| match declaracion {
+                    None => v.error(CodigoValidacionInvariante::PredicadoNoDeclarado),
+                    Some(decl) if decl.orden.is_empty() => {
+                        v.error(CodigoValidacionInvariante::PredicadoNoOrdenado)
+                    }
+                    Some(_) => {}
+                });
+                self.con_ruta("sujeto", |v| v.termino_nodo(sujeto));
+                self.con_ruta("constante", |v| {
+                    v.constante_ext(constante, predicado, declaracion.is_some())
                 });
             }
             Formula::TcParent { desde, hasta } => {

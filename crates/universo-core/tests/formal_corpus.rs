@@ -9,6 +9,7 @@ fn cover(f: &Formula, seen: &mut BTreeSet<&'static str>) {
         Formula::Parent { .. } => "Parent",
         Formula::HasLab { .. } => "HasLab",
         Formula::Ext { .. } => "Ext",
+        Formula::Compara { .. } => "Compara",
         Formula::TcParent { .. } => "TcParent",
         Formula::IgualNodo(..) => "IgualNodo",
         Formula::IgualArista(..) => "IgualArista",
@@ -87,7 +88,7 @@ fn labelled_corpus_exact_verdicts_and_exhaustive_ast_coverage() {
         };
         assert_eq!(actual, expected, "labelled case {id}");
     }
-    assert_eq!(seen.len(), 14, "all Formula variants must be represented");
+    assert_eq!(seen.len(), 15, "all Formula variants must be represented");
     println!(
         "FORMAL_CORPUS cases={} admit={} reject={} technical_error={} false_admit=0 ast_variants={}",
         ids.len(),

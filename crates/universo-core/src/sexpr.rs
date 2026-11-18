@@ -10,8 +10,8 @@ use std::collections::BTreeSet;
 use crate::atomos::IdArista;
 use crate::formula::PREFIJO_GENERADO;
 use crate::formula::{
-    DominioEsquema, Formula, Sentencia, SorteVar, SujetoTermino, TerminoArista, TerminoConstExt,
-    TerminoEtiqueta, TerminoNodo, TerminoSorte, Var,
+    DominioEsquema, Formula, OpOrden, Sentencia, SorteVar, SujetoTermino, TerminoArista,
+    TerminoConstExt, TerminoEtiqueta, TerminoNodo, TerminoSorte, Var,
 };
 use crate::path::BundlePath;
 use crate::tipos::{Etiqueta, Sorte};
@@ -983,6 +983,23 @@ fn formula_interna(sexp: &Sexp, contexto: &mut Contexto) -> Result<Formula, Erro
             Ok(Formula::TcParent {
                 desde: termino_nodo(&argumentos[1], contexto, "tc", 2)?,
                 hasta: termino_nodo(&argumentos[2], contexto, "tc", 3)?,
+            })
+        }
+        cabeza if OpOrden::desde_simbolo(cabeza).is_some() => {
+            exigir_aridad(sexp, cabeza, 3, argumentos.len())?;
+            let predicado = argumentos[0]
+                .simbolo()
+                .ok_or_else(|| {
+                    argumentos[0].error(MotivoAutoria::TokenInesperado(
+                        "nombre de predicado".to_string(),
+                    ))
+                })?
+                .to_string();
+            Ok(Formula::Compara {
+                op: OpOrden::desde_simbolo(cabeza).expect("comprobado"),
+                predicado,
+                sujeto: termino_nodo(&argumentos[1], contexto, cabeza, 2)?,
+                constante: termino_const_ext(&argumentos[2], contexto)?,
             })
         }
         otro => {

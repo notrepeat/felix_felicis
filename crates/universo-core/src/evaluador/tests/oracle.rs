@@ -198,6 +198,41 @@ pub(super) fn oraculo(
             let constante = valor_ext_oraculo(constante)?;
             Ok(estructura.atributos(nodo).get(predicado) == Some(&constante))
         }
+        Formula::Compara {
+            op,
+            predicado,
+            sujeto,
+            constante,
+        } => {
+            // Oráculo independiente: posición en la lista `orden`.
+            let nodo = buscar_nodo_oraculo(sujeto, estructura, asignacion)?;
+            let constante = valor_ext_oraculo(constante)?;
+            let orden = estructura
+                .manifiesto()
+                .predicados
+                .iter()
+                .find(|p| p.nombre == *predicado)
+                .map(|p| p.orden.clone())
+                .unwrap_or_default();
+            let posicion = |v: &str| orden.iter().position(|o| o == v);
+            Ok(
+                match (
+                    estructura
+                        .atributos(nodo)
+                        .get(predicado)
+                        .and_then(|v| posicion(v)),
+                    posicion(&constante),
+                ) {
+                    (Some(actual), Some(cota)) => match op {
+                        crate::formula::OpOrden::Menor => actual < cota,
+                        crate::formula::OpOrden::MenorIgual => actual <= cota,
+                        crate::formula::OpOrden::Mayor => actual > cota,
+                        crate::formula::OpOrden::MayorIgual => actual >= cota,
+                    },
+                    _ => false,
+                },
+            )
+        }
         Formula::TcParent { desde, hasta } => {
             let desde = buscar_nodo_oraculo(desde, estructura, asignacion)?;
             let hasta = buscar_nodo_oraculo(hasta, estructura, asignacion)?;

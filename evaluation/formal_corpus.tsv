@@ -1,4 +1,4 @@
-# id\texpected\tformula; fixture: root:a label=root Nivel=alto; middle:b parent=root; leaf:a parent=middle; two rel edges root→middle labels=edge,other.
+# id\texpected\tformula; fixture: root:a label=root Nivel=alto (Nivel ordenado bajo<alto); middle:b parent=root; leaf:a parent=middle; two rel edges root→middle labels=edge,other.
 type_true	admit	(Type @n/root a)
 type_false	reject	(Type @n/root b)
 edge_true	admit	(Edge @n/root→n/middle#rel#0 @n/root @n/middle rel)
@@ -45,3 +45,6 @@ missing_node	error	(Type @n/missing a)
 missing_edge	error	(HasLab @n/root→n/middle#rel#99 "edge")
 root_sugar	admit	(Raiz @n/root)
 nonroot_sugar	reject	(Raiz @n/middle)
+compara_true	admit	(>= Nivel @n/root bajo)
+compara_false	reject	(< Nivel @n/root alto)
+compara_sin_valor	reject	(>= Nivel @n/middle bajo)

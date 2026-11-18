@@ -1991,6 +1991,7 @@ mod tests {
                 nombre: format!("atributo-{indice:03}"),
                 clave: format!("campo-{indice:03}"),
                 dominio: ["si".into()].into_iter().collect(),
+                orden: Vec::new(),
             });
             manifiesto.aristas.push(DeclArista {
                 clave: format!("edge-{indice:03}"),

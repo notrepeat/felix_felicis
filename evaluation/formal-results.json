@@ -1,10 +1,10 @@
 {
-  "cases": 46,
-  "admit": 24,
-  "reject": 20,
+  "cases": 49,
+  "admit": 25,
+  "reject": 22,
   "technical_error": 2,
   "false_admit": 0,
-  "ast_variants": 14,
+  "ast_variants": 15,
   "schema": "felix-formal-corpus-v1",
   "functional_conflict_cases": 3,
   "functional_conflict_classes": [
@@ -14,8 +14,8 @@
   ],
   "expected_labels": "hand-authored synthetic fixture; exact match, not learned from evaluator",
   "source_sha256": {
-    "evaluation/formal_corpus.tsv": "1eb0529d0aa7fb137b35c4fa911cc512801be32b808221acaa533161f8eef4e1",
-    "crates/universo-core/tests/formal_corpus.rs": "669bd1b33f8681e50fb17edf9c62f2c0df177bb133456077241441c901e25179",
-    "crates/universo-core/tests/support/formal_fixture.rs": "8986d65209ac47662d0802a29c3e427749482d314b51a42917a31b5abfced320"
+    "evaluation/formal_corpus.tsv": "5c18b213c64dd6096db7577f4cbdb1d11197bd9198fc1d7f6997ae13144d24e0",
+    "crates/universo-core/tests/formal_corpus.rs": "d72756d91f0003324ed0c97b4526070252a09c22ee9133073c4bea195ddba602",
+    "crates/universo-core/tests/support/formal_fixture.rs": "22a74596d2df18befb82211a58633a62bf2a27261abcb7dd37e267c45cfa0e6c"
   }
 }
