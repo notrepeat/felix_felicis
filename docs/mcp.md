@@ -29,6 +29,7 @@ textual compatible con clientes MCP. Los esquemas se anuncian en `tools/list`.
 | `propose` | `delta` objeto `felix-delta-v1` o `felix-delta-v2` (crea notas) obligatorio | `admit` o `reject`, conteos, clases de conflicto y procedencia de invariantes falsas. Nunca publica. |
 | `check` | `delta` opcional | El mismo veredicto sobre el candidato, o sobre la base cuando falta el delta. |
 | `why` | `delta` opcional | Lo mismo que `propose`, más `explanations`: la explicación redactada de la primera regla fallida (id, mensaje y forma abstracta del contraejemplo), con el formato de `propose --explain decide --rules`. `explanation_error` es `explanation_not_applicable` si no fallan invariantes, `explanation_budget_exceeded` si la explicación agota su presupuesto, o `explanation_too_large` si su JSON pasa de 1 MB (el rechazo y la procedencia llegan igual). No da rutas, etiquetas ni valores del bundle. |
+| `search` | `query` obligatorio (hasta 1024 caracteres, con al menos una palabra); `limit` opcional 1–100, 20 por defecto; `include_values:true` obligatorio | La búsqueda léxica de `universo search` limitada a título, tipo y atributos: notas donde cada término empieza alguna palabra, sin distinguir mayúsculas ni tildes. `summary` (`total`, `returned`) y `matches` con `path`, `type`, `title`, `fields` (unión de los campos donde aparecieron los términos) y `score`. No busca en el cuerpo ni en los campos extra del frontmatter. `search_resource_limit` si la respuesta pasa de 700 KB. |
 
 Ejemplo de llamada:
 
@@ -56,6 +57,14 @@ de los invariantes. No incluye cuerpos documentales, anexos, comentarios del
 programa, rutas absolutas ni tokens de snapshot. Los valores de etiquetas y
 atributos presentes en esos átomos sí son información del bundle: solicitar el
 opt-in autoriza esa divulgación al cliente conectado.
+
+`search` no tiene modo redactado: aun un conteo de coincidencias confirma que
+una palabra está en el bundle, y sondeando prefijos se reconstruiría su
+vocabulario. Por eso exige `include_values:true`, y con él revela lo mismo que
+`context` con opt-in: rutas, tipos, títulos y valores de atributos. No consulta
+el cuerpo ni los campos extra del frontmatter (el anexo), ni siquiera para
+contar, así que no sirve para sondearlos. La CLI (`universo search`) sí busca
+en ellos y muestra un fragmento del cuerpo, porque es de uso local.
 
 La selección de invariantes es conservadora: devuelve todas las sentencias y
 lo declara mediante `invariant_selection:"all_conservative"`. No afirma calcular

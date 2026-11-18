@@ -25,7 +25,7 @@ Implementado:
 - `universo init <dir>` crea un repositorio de conocimiento mínimo, válido y sellado (no es atómico: si falla a mitad, borra el directorio y repite); `propose --apply --author <a> --reason <r>` registra la procedencia y el delta aplicado; `universo log` lista los cambios y `universo show <raiz> <n>` muestra los hechos que agregó y retiró uno de ellos (su salida incluye datos del bundle);
 - [guardia](docs/guardia.md) que detecta cambios hechos fuera de Felix (sello del último estado admitido y hook de pre-commit);
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
-- servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check` y `why`, sin escritura del bundle; los rechazos traen id y mensaje de la regla;
+- servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check`, `why` y `search` (búsqueda léxica sobre título, tipo y atributos, con opt-in), sin escritura del bundle; los rechazos traen id y mensaje de la regla;
 - criterio en las reglas: valores ordenados, fechas, atributos con varios valores y el cuantificador `al-menos` (ver más abajo);
 - `propose --witness`: testigo localizado opt-in que dice en qué nodos o aristas falla un rechazo;
 - [orquestador obligatorio](docs/propuestas/08-orquestador-obligatorio.md) (`tools/orquestador.py`): el agente propone, Felix verifica siempre, el rechazo vuelve con su diagnóstico y sólo el ejecutor publica, con CAS;

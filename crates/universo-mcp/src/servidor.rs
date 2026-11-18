@@ -44,7 +44,7 @@ impl ServerHandler for Servidor {
     ) -> Result<CallToolResponse, ErrorData> {
         if !matches!(
             request.name.as_ref(),
-            "context" | "propose" | "check" | "why"
+            "context" | "propose" | "check" | "why" | "search"
         ) {
             return Err(ErrorData::invalid_params("unknown_tool", None));
         }

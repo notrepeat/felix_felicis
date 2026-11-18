@@ -8,7 +8,11 @@ use universo_core::{
 use universo_okf::explicacion_json::{
     anotar_reglas, error_explicacion_codigo, explicaciones_medidas_a_json,
 };
-use universo_okf::{parsear_delta_json, transaccion::simulacion::VistaSimulacion};
+use universo_okf::{
+    busqueda::{Alcance, buscar_en, tiene_terminos},
+    parsear_delta_json,
+    transaccion::simulacion::VistaSimulacion,
+};
 
 pub struct ServerConfig {
     pub root: PathBuf,
@@ -35,7 +39,7 @@ fn dominio(codigo: &'static str) -> DomainError {
 }
 
 pub fn herramientas() -> Vec<Value> {
-    ["context", "propose", "check", "why"].into_iter().map(|name| {
+    ["context", "propose", "check", "why", "search"].into_iter().map(|name| {
         let mut properties = json!({"schema":{"type":"string","const":"felix-mcp-v1"}});
         let mut required = vec!["schema"];
         let description = match name {
@@ -55,6 +59,16 @@ pub fn herramientas() -> Vec<Value> {
                 properties["delta"] = json!({"type":"object"});
                 "Evaluate the base state or a supplied candidate delta without writing."
             }
+            "search" => {
+                properties["query"] = json!({"type":"string","minLength":1,"maxLength":MAX_CONSULTA_CARACTERES});
+                properties["limit"] = json!({"type":"integer","minimum":1,"maximum":MAX_LIMITE_BUSQUEDA,"default":LIMITE_BUSQUEDA});
+                // Toda respuesta de search revela contenido del bundle (aun un
+                // conteo confirma palabras), así que el opt-in es obligatorio.
+                properties["include_values"] = json!({"type":"boolean","const":true});
+                required.push("query");
+                required.push("include_values");
+                "Lexical search over note titles, types and attributes (never bodies or other frontmatter fields): notes where every query term starts a word, ignoring case and accents. Returns path, type, title, matched fields and score, so it discloses bundle values and requires include_values:true. The query must contain at least one word."
+            }
             _ => {
                 properties["delta"] = json!({"type":"object"});
                 "Like propose, plus the redacted explanation of the first failing rule: its id and message and the abstract shape of the counterexample (rules, boolean values, counts). No paths, labels or values of the bundle are emitted."
@@ -72,12 +86,26 @@ pub fn ejecutar(nombre: &str, args: Value, config: &ServerConfig) -> Result<Valu
     let allowed: &[&str] = match nombre {
         "context" => &["schema", "node", "depth", "include_values"],
         "propose" | "check" | "why" => &["schema", "delta"],
+        "search" => &["schema", "query", "limit", "include_values"],
         _ => return Err(protocolo()),
     };
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err(protocolo());
     }
     // Validate tool arguments before touching configured files.
+    if nombre == "search" {
+        let (consulta, limite) = argumentos_busqueda(object)?;
+        let vista =
+            VistaSimulacion::capturar(&config.root, &config.manifiesto, &config.invariantes)
+                .map_err(|error| dominio(error.codigo()))?;
+        let salida = busqueda(&vista, consulta, limite);
+        // La respuesta del MCP lleva este JSON dos veces (texto escapado y
+        // `structuredContent`) bajo un tope de 2 MiB: 700 KB deja margen.
+        if salida.to_string().len() > MAX_BUSQUEDA_BYTES {
+            return Err(dominio("search_resource_limit"));
+        }
+        return Ok(salida);
+    }
     let context = if nombre == "context" {
         let node = object
             .get("node")
@@ -211,6 +239,62 @@ fn acotar_explicacion(objetos: Value) -> (Value, Value) {
     } else {
         (objetos, Value::Null)
     }
+}
+
+const LIMITE_BUSQUEDA: u64 = 20;
+const MAX_LIMITE_BUSQUEDA: u64 = 100;
+const MAX_CONSULTA_CARACTERES: usize = 1024;
+const MAX_BUSQUEDA_BYTES: usize = 700_000;
+
+/// Valida `query`, `limit` e `include_values` (que debe ser `true`).
+fn argumentos_busqueda(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(&str, usize), DomainError> {
+    if object.get("include_values") != Some(&Value::Bool(true)) {
+        return Err(protocolo());
+    }
+    let consulta = object
+        .get("query")
+        .and_then(Value::as_str)
+        .filter(|q| q.chars().count() <= MAX_CONSULTA_CARACTERES && tiene_terminos(q))
+        .ok_or_else(protocolo)?;
+    let limite = match object.get("limit") {
+        None => LIMITE_BUSQUEDA,
+        // JSON Schema acepta 5.0 como entero.
+        Some(value) => value
+            .as_u64()
+            .or_else(|| {
+                value
+                    .as_f64()
+                    .filter(|f| f.fract() == 0.0 && *f >= 0.0 && *f <= u64::MAX as f64)
+                    .map(|f| f as u64)
+            })
+            .filter(|n| (1..=MAX_LIMITE_BUSQUEDA).contains(n))
+            .ok_or_else(protocolo)?,
+    };
+    Ok((consulta, limite as usize))
+}
+
+/// `search`: la búsqueda léxica de `universo search`, limitada a título, tipo
+/// y atributos, los valores que `context` revela con opt-in. No consulta el
+/// cuerpo ni los campos extra del frontmatter: un conteo o un campo `body`
+/// bastarían para sondear su vocabulario.
+fn busqueda(vista: &VistaSimulacion, consulta: &str, limite: usize) -> Value {
+    let resultado = buscar_en(vista.estructura(), consulta, limite, Alcance::SinAnexo);
+    let matches: Vec<_> = resultado
+        .coincidencias
+        .iter()
+        .map(|c| {
+            json!({
+                "path": c.path.to_string(),
+                "type": c.tipo,
+                "title": c.titulo,
+                "fields": c.campos.iter().map(|campo| campo.nombre()).collect::<Vec<_>>(),
+                "score": c.puntaje,
+            })
+        })
+        .collect();
+    json!({"schema":"felix-mcp-v1","tool":"search","status":"ok","summary":{"total":resultado.total,"returned":resultado.coincidencias.len()},"values_included":true,"matches":matches,"persisted":false})
 }
 
 fn extremos(atomo: &Atomo) -> Vec<&BundlePath> {

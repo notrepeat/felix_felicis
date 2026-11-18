@@ -103,7 +103,7 @@ fn agent_context_reject_correct_readmit_restart_without_writes() {
     std::fs::write(&invariants, "; PRIVATE_COMMENT_CANARY\n(Type @n/item b)\n").unwrap();
     let mut client = Client::start(&root, &manifest, &invariants);
     let listed = client.request("tools/list", json!({}));
-    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 4);
+    assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 5);
     let redacted = client.tool("context", json!({"schema":"felix-mcp-v1","node":"n/item"}));
     for secret in [
         "PRIVATE_TITLE_CANARY",
@@ -298,4 +298,104 @@ fn why_explica_el_rechazo_y_propose_no() {
     assert_eq!(why["status"], "admit");
     assert_eq!(why["explanations"], Value::Null);
     assert_eq!(why["explanation_error"], "explanation_not_applicable");
+}
+
+#[test]
+fn search_exige_opt_in_y_no_busca_ni_devuelve_cuerpos_ni_anexos() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    std::fs::create_dir_all(root.join("n")).unwrap();
+    std::fs::write(
+        root.join("n/cache.md"),
+        "---\ntype: a\ntitle: Caché TITLECANARY\nextra: EXTRACANARY\n---\nUna caché BODYCANARY local.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("n/otra.md"),
+        "---\ntype: b\ntitle: Otra caché\n---\nTexto.\n",
+    )
+    .unwrap();
+    let manifest = temp.path().join("manifest.toml");
+    let invariants = temp.path().join("invariants.sx");
+    std::fs::write(&manifest, "version = \"mcp/1\"\n[nodos]\nsortes = [\"a\", \"b\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n").unwrap();
+    std::fs::write(&invariants, "").unwrap();
+    let mut client = Client::start(&root, &manifest, &invariants);
+    let buscar = |client: &mut Client, args: Value| client.tool("search", args);
+
+    // Sin opt-in no hay respuesta con contenido: ni siquiera un conteo.
+    let reply = buscar(
+        &mut client,
+        json!({"schema":"felix-mcp-v1","query":"cache"}),
+    );
+    assert_eq!(reply["isError"], true, "{reply}");
+    assert!(!reply.to_string().contains("\"total\""), "{reply}");
+
+    // Con opt-in: ruta, tipo, título, campos y puntaje sobre título, tipo y
+    // atributos. El cuerpo y los campos extra no se buscan ni se devuelven.
+    let values = buscar(
+        &mut client,
+        json!({"schema":"felix-mcp-v1","query":"CACHE","limit":1,"include_values":true}),
+    )["structuredContent"]
+        .clone();
+    assert_eq!(values["summary"], json!({"total":2,"returned":1}));
+    let m = &values["matches"][0];
+    assert_eq!(m["path"], "n/cache");
+    assert_eq!(m["type"], "a");
+    assert_eq!(m["title"], "Caché TITLECANARY");
+    assert_eq!(m["fields"], json!(["title"]));
+    for secreto in ["bodycanary", "extracanary"] {
+        let r = buscar(
+            &mut client,
+            json!({"schema":"felix-mcp-v1","query":secreto,"include_values":true}),
+        )["structuredContent"]
+            .clone();
+        assert_eq!(r["summary"]["total"], 0, "{secreto}: {r}");
+    }
+    // Un entero escrito como 5.0 es un entero válido en JSON Schema.
+    let r = buscar(
+        &mut client,
+        json!({"schema":"felix-mcp-v1","query":"otra","limit":5.0,"include_values":true}),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+
+    // Argumentos inválidos: error de herramienta, no de protocolo.
+    for args in [
+        json!({"schema":"felix-mcp-v1","include_values":true}),
+        json!({"schema":"felix-mcp-v1","query":"   ","include_values":true}),
+        json!({"schema":"felix-mcp-v1","query":"\u{301}","include_values":true}),
+        json!({"schema":"felix-mcp-v1","query":"x".repeat(1025),"include_values":true}),
+        json!({"schema":"felix-mcp-v1","query":"x","limit":0,"include_values":true}),
+        json!({"schema":"felix-mcp-v1","query":"x","limit":101,"include_values":true}),
+        json!({"schema":"felix-mcp-v1","query":"x","limit":"5","include_values":true}),
+        json!({"schema":"felix-mcp-v1","query":"x","include_values":"yes"}),
+        json!({"schema":"felix-mcp-v1","query":"x","include_values":false}),
+        json!({"schema":"felix-mcp-v1","query":"x","node":"n/cache","include_values":true}),
+    ] {
+        let reply = buscar(&mut client, args.clone());
+        assert_eq!(reply["isError"], true, "{args} {reply}");
+    }
+    // 1024 caracteres de dos bytes caben: el tope es en caracteres.
+    let r = buscar(
+        &mut client,
+        json!({"schema":"felix-mcp-v1","query":"é".repeat(1024),"include_values":true}),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+
+    // El esquema anunciado exige el opt-in.
+    let listed = client.request("tools/list", json!({}));
+    let search = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "search")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        search["inputSchema"]["required"],
+        json!(["schema", "query", "include_values"])
+    );
+    assert_eq!(
+        search["inputSchema"]["properties"]["include_values"]["const"],
+        true
+    );
 }

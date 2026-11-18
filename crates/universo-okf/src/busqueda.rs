@@ -145,9 +145,34 @@ fn fragmento(cuerpo: &str, termino: &str) -> Option<String> {
     None
 }
 
+/// ¿Queda algún término tras normalizar `consulta`?
+pub fn tiene_terminos(consulta: &str) -> bool {
+    !terminos(consulta).is_empty()
+}
+
 /// Busca en todas las notas de `estructura`. Una consulta sin términos no
 /// devuelve nada.
 pub fn buscar(estructura: &Estructura, consulta: &str, limite: usize) -> ResultadoBusqueda {
+    buscar_en(estructura, consulta, limite, Alcance::Todo)
+}
+
+/// Qué partes de cada nota se buscan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alcance {
+    /// Título, tipo, atributos, otros campos del frontmatter y cuerpo.
+    Todo,
+    /// Sólo título, tipo y atributos: ni el cuerpo ni los campos extra (el
+    /// anexo), que no se consultan ni dan fragmento.
+    SinAnexo,
+}
+
+/// Como [`buscar`], limitado a `alcance`.
+pub fn buscar_en(
+    estructura: &Estructura,
+    consulta: &str,
+    limite: usize,
+    alcance: Alcance,
+) -> ResultadoBusqueda {
     let terminos = terminos(consulta);
     if terminos.is_empty() {
         return ResultadoBusqueda {
@@ -166,7 +191,10 @@ pub fn buscar(estructura: &Estructura, consulta: &str, limite: usize) -> Resulta
             atributos.extend(valores.iter().cloned());
         }
         campos_texto.push((Campo::Atributo, normalizar(&atributos.join(" "))));
-        let anexo = estructura.anexo(id);
+        let anexo = match alcance {
+            Alcance::Todo => estructura.anexo(id),
+            Alcance::SinAnexo => None,
+        };
         if let Some(anexo) = anexo {
             // Sólo el valor de cada campo extra, no su clave.
             let crudo: Vec<&str> = anexo
@@ -311,6 +339,17 @@ mod tests {
             manifiesto,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn sin_anexo_no_busca_en_el_cuerpo_ni_en_campos_extra_ni_da_fragmento() {
+        let e = una_nota("description: Reduce latencia\n", "Cuerpo con objetivo.");
+        assert_eq!(buscar_en(&e, "objetivo", 10, Alcance::SinAnexo).total, 0);
+        assert_eq!(buscar_en(&e, "latencia", 10, Alcance::SinAnexo).total, 0);
+        let r = buscar_en(&e, "alfa", 10, Alcance::SinAnexo);
+        assert_eq!(r.total, 1);
+        assert_eq!(r.coincidencias[0].fragmento, None);
+        assert_eq!(buscar(&e, "objetivo", 10).total, 1);
     }
 
     #[test]

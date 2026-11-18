@@ -32,8 +32,8 @@ historial consultable más allá de git (reportado).
 No hay forma de preguntar «qué pienso sobre X» ni «qué reglas aplican a X»:
 `context` exige la ruta exacta de un nodo y devuelve vecindad y todos los
 invariantes. Desde 2026-11-18 hay búsqueda léxica en la CLI (`universo search`,
-P3), que también encuentra valores de atributos; no hay búsqueda semántica
-(P5) ni la hay en el MCP.
+P3) y en el MCP (`search`, sólo título, tipo y atributos, con opt-in), que
+también encuentran valores de atributos; no hay búsqueda semántica (P5).
 
 ## Brechas
 
@@ -41,7 +41,7 @@ P3), que también encuentra valores de atributos; no hay búsqueda semántica
 |---|---|---|---|
 | P1 | **Hecho** (2026-11-17): `propose --apply --author/--reason`, fecha UTC y sello en `.<raiz>.felix.log` bajo el lock; sin verificación de identidad. Procedencia mínima por cambio: autor (humano/agente), fecha, motivo y fuente, guardados junto al commit transaccional | M | No |
 | P2 | **Hecho** (2026-11-18): cada apply guarda en el historial el delta canónico que aplicó (campo `delta`, hasta 256 KiB) y `universo show <raiz> <n>` lo muestra; `log` sigue sin datos del bundle. Historial consultable (`universo log`, `universo show <cambio>`) | M | No |
-| P3 | **Hecho** (2026-11-18): `universo search <raiz> --manifiesto <m> <términos...>` devuelve las notas donde cada término empieza alguna palabra del título, tipo, atributos, valores de otros campos o cuerpo (sin distinguir mayúsculas ni tildes), ordenadas por un puntaje ponderado, con fragmento; texto o JSON; su salida incluye datos del bundle. Sólo palabras: sin embeddings, sin sinónimos, sin raíces. No está en el MCP. Original: Búsqueda léxica sobre etiquetas, atributos y cuerpos | M | No (pedida por el usuario el 2026-11-18 como búsqueda léxica; la semántica sigue en P5) |
+| P3 | **Hecho** (2026-11-18): `universo search <raiz> --manifiesto <m> <términos...>` devuelve las notas donde cada término empieza alguna palabra del título, tipo, atributos, valores de otros campos o cuerpo (sin distinguir mayúsculas ni tildes), ordenadas por un puntaje ponderado, con fragmento; texto o JSON; su salida incluye datos del bundle. Sólo palabras: sin embeddings, sin sinónimos, sin raíces. En el MCP, herramienta `search` con opt-in obligatorio (`include_values:true`), sólo sobre título, tipo y atributos: no busca en cuerpos ni campos extra. Original: Búsqueda léxica sobre etiquetas, atributos y cuerpos | M | No (pedida por el usuario el 2026-11-18 como búsqueda léxica; la semántica sigue en P5) |
 | P4 | **Hecho** (2026-11-17): [`examples/memoria-documental`](../../examples/memoria-documental) con ID1–ID4 como reglas con nombre; test `crates/universo-cli/tests/memoria_documental.rs`. Plantilla de memoria documental (cap. 07) como manifiesto + invariantes de ejemplo, sin tocar el motor | S–M | No |
 | P5 | Búsqueda semántica | L | Probablemente sí («recuperación avanzada») |
 | P6 | Preorden ⪯ y revisión AGM | L | **Sí** |
