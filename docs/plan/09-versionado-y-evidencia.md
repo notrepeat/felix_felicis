@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | pendiente |
+| Estado | `v0.2.0` publicada (2026-11-18) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
@@ -23,12 +23,10 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 Mientras la API sea `0.x`, los parches corrigen comportamiento compatible y
 los incrementos menores pueden cambiar contratos con migración documentada.
 
-## Migración prevista para 0.2.0 (propuesta, no publicada)
+## Migración a 0.2.0
 
-La siguiente versión menor es el destino recomendado para acumular estos
-cambios de contrato pre-1.0. El gate sigue pendiente: no se suben versiones de
-los cinco crates, no se crea un tag y no se presenta `0.2.0` como release hasta
-que termine la matriz completa de release.
+Cambios de contrato pre-1.0 publicados en `0.2.0`; los añadidos después de esta
+tabla están en las [notas de versión](../release/v0.2.0.md#cambios-incompatibles).
 
 | Cambio | Acción del consumidor |
 |--------|-----------------------|
@@ -45,14 +43,14 @@ input lógico y no una garantía de RSS exacto o tiempo máximo.
 
 ## Checklist de release
 
-- [ ] Todas las fases exigidas por el gate figuran como `completo`.
-- [ ] Los registros de evidencia enlazan commits o artefactos verificables.
-- [ ] `cargo test`, formato, Clippy y guard de privacidad pasan en CI.
-- [ ] La demo pública se ejecuta desde un clon limpio.
-- [ ] Las notas separan capacidades, límites y cambios incompatibles.
-- [ ] Las versiones de todos los crates coinciden con la release.
-- [ ] El tag anotado apunta al commit exacto validado por CI.
-- [ ] La release enlaza resultados, benchmarks y documentación relevante.
+- [x] Las capacidades del gate `v0.2.0` (evaluador, testigos, transacciones, demo CLI) están implementadas y probadas; la fase 08 corrió contra la instancia privada.
+- [x] Los registros de evidencia enlazan commits o artefactos verificables.
+- [x] `cargo test`, formato, Clippy y guard de privacidad pasan en CI.
+- [x] La demo pública se ejecuta en el CI desde un checkout limpio (`check_public_cli_demo.py`, `run_software_architecture_demo.py`).
+- [x] Las notas separan capacidades, límites y cambios incompatibles.
+- [x] Las versiones de todos los crates coinciden con la release.
+- [x] El tag anotado apunta al commit exacto validado por CI.
+- [x] La release enlaza resultados, benchmarks y documentación relevante.
 
 ## Política de progreso
 
@@ -75,7 +73,7 @@ git tag --list --sort=-version:refname
 | Fecha | Tag | Commit | CI | Resultado |
 |---|---|---|---|---|
 | 2026-09-21 | `v0.1.0` | `7c4b81b` | verde | Base pública: modelo, OKF, AST y parser; sin check semántico. |
-| 2026-11-18 | `v0.2.0` (borrador, sin tag) | — | — | [Notas en borrador](../release/v0.2.0-borrador.md). Gate pendiente de la fase 08. |
+| 2026-11-18 | `v0.2.0` | ver el tag | verde (Linux y Windows) | [Notas](../release/v0.2.0.md): evaluador, criterio en las reglas, testigos localizados, transacciones, MCP, orquestador y estudio de cuatro brazos; fase 08 corrida contra la instancia privada. |
 
 ## Decisión posterior
 
