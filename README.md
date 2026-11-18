@@ -202,6 +202,27 @@ valor para el predicado no satisface ninguna comparación; por eso
 sin `orden` es un error de autoría (`predicate_not_ordered`); `<`, `<=`, `>` y
 `>=` quedan reservados y no pueden ser nombres de predicado.
 
+### Fechas
+
+`tipo = "fecha"` declara un predicado de dominio abierto cuyos valores son fechas
+ISO `AAAA-MM-DD` válidas (sin `dominio`):
+
+```toml
+[[predicados]]
+nombre = "Vigencia"
+clave = "vigente_hasta"
+tipo = "fecha"
+```
+
+Se compara cronológicamente con las mismas formas de orden:
+`(forall ((x N)) (=> (Type x criterio) (>= Vigencia x 2027-01-01)))`. No hay
+«hoy»: se compara con una fecha constante escrita en la regla, para que el
+veredicto sea determinista y reproducible en el recovery (comparar dos fechas
+del bundle entre sí no está soportado). El año `0000` se acepta como fecha
+proléptica. Una fecha no puede ser
+`multivalor` ni declarar `dominio`/`orden`, y un esquema no puede enumerarla
+(`Dom.Vigencia` es `schema_domain_mismatch`).
+
 ### Atributos con varios valores
 
 `multivalor = true` en un predicado permite varios valores del dominio en la

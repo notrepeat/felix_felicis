@@ -888,7 +888,7 @@ fn validar_formula(
                 .ok_or_else(|| ErrorEvaluacion::PredicadoNoDeclarado(predicado.clone()))?;
             match constante {
                 TerminoConstExt::Literal(valor) => {
-                    if declaracion.dominio.contains(valor) {
+                    if declaracion.admite(valor) {
                         Ok(())
                     } else {
                         Err(ErrorEvaluacion::ConstanteFueraDeDominio {
@@ -913,11 +913,11 @@ fn validar_formula(
                 .manifiesto()
                 .predicado(predicado)
                 .ok_or_else(|| ErrorEvaluacion::PredicadoNoDeclarado(predicado.clone()))?;
-            if declaracion.orden.is_empty() {
+            if !declaracion.es_comparable() {
                 return Err(ErrorEvaluacion::PredicadoNoOrdenado(predicado.clone()));
             }
             match constante {
-                TerminoConstExt::Literal(valor) if declaracion.dominio.contains(valor) => Ok(()),
+                TerminoConstExt::Literal(valor) if declaracion.admite(valor) => Ok(()),
                 TerminoConstExt::Literal(valor) => Err(ErrorEvaluacion::ConstanteFueraDeDominio {
                     predicado: predicado.clone(),
                     constante: valor.clone(),
@@ -1292,20 +1292,20 @@ fn evaluar_interno(
                 .manifiesto()
                 .predicado(predicado)
                 .ok_or_else(|| ErrorEvaluacion::PredicadoNoDeclarado(predicado.clone()))?;
-            if declaracion.orden.is_empty() {
+            if !declaracion.es_comparable() {
                 return Err(ErrorEvaluacion::PredicadoNoOrdenado(predicado.clone()));
             }
-            let cota = declaracion.rango(&constante).ok_or_else(|| {
-                ErrorEvaluacion::ConstanteFueraDeDominio {
+            if !declaracion.admite(&constante) {
+                return Err(ErrorEvaluacion::ConstanteFueraDeDominio {
                     predicado: predicado.clone(),
                     constante: constante.clone(),
-                }
-            })?;
+                });
+            }
             let valor = estructura
                 .atributos(id)
                 .get(predicado)
-                .and_then(|actual| declaracion.rango(actual))
-                .is_some_and(|actual| op.compara(actual, cota));
+                .and_then(|actual| declaracion.comparar(actual, &constante))
+                .is_some_and(|orden| op.compara(orden, std::cmp::Ordering::Equal));
             resultado_interno(valor, modo, |_| {
                 Ok(ReglaEvidencia::Atomo {
                     constructor: ConstructorAtomico::CompararExt,

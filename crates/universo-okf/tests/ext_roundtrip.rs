@@ -96,6 +96,7 @@ fn candidato_ext_recarga_con_yaml_entrecomillado_y_passthrough_crudo() {
         dominio: BTreeSet::from(["-alto".to_string()]),
         orden: Vec::new(),
         multivalor: false,
+        fecha: false,
     });
     let archivo = (
         "n/root.md".to_string(),
@@ -196,4 +197,66 @@ fn multivalor_se_carga_de_una_lista_y_vuelve_igual() {
         manifiesto,
     );
     assert!(fuera.is_err());
+}
+
+#[test]
+fn toml_tipo_fecha_carga_fechas_y_rechaza_invalidas() {
+    let manifiesto = universo_okf::parsear_manifiesto(
+        "version = \"t/1\"\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n[[predicados]]\nnombre = \"Vigencia\"\nclave = \"vigente_hasta\"\ntipo = \"fecha\"\n",
+    )
+    .unwrap();
+    assert!(manifiesto.predicados[0].fecha);
+    let ok = universo_okf::parsear_bundle(
+        &[(
+            "n/x.md".into(),
+            "---\ntype: a\ntitle: X\nvigente_hasta: 2027-06-30\n---\n".into(),
+        )],
+        manifiesto.clone(),
+    )
+    .unwrap();
+    let id = ok
+        .por_path(&universo_core::BundlePath::nuevo("n/x").unwrap())
+        .unwrap();
+    assert!(ok.tiene_valor(id, "Vigencia", "2027-06-30"));
+    assert!(universo_okf::serializar_nodo(&ok, id).contains("vigente_hasta: 2027-06-30\n"));
+    let malo = universo_okf::parsear_bundle(
+        &[(
+            "n/x.md".into(),
+            "---\ntype: a\ntitle: X\nvigente_hasta: 2027-02-30\n---\n".into(),
+        )],
+        manifiesto,
+    );
+    assert!(malo.is_err());
+    assert!(universo_okf::parsear_manifiesto(
+        "version = \"t/1\"\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n[[predicados]]\nnombre = \"V\"\nclave = \"v\"\ntipo = \"hora\"\n"
+    )
+    .is_err());
+}
+
+#[test]
+fn toml_fecha_rechaza_dominio_orden_y_multivalor_y_acepta_comillas() {
+    let base = "version = \"t/1\"\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n[[predicados]]\nnombre = \"Vigencia\"\nclave = \"vigente_hasta\"\ntipo = \"fecha\"\n";
+    for extra in [
+        "dominio = [\"2027-01-01\"]\n",
+        "orden = true\n",
+        "multivalor = true\n",
+    ] {
+        assert!(
+            universo_okf::parsear_manifiesto(&format!("{base}{extra}")).is_err(),
+            "{extra}"
+        );
+    }
+    let manifiesto = universo_okf::parsear_manifiesto(base).unwrap();
+    let u = universo_okf::parsear_bundle(
+        &[(
+            "n/x.md".into(),
+            "---\ntype: a\ntitle: X\nvigente_hasta: \"2027-06-30\"\n---\n".into(),
+        )],
+        manifiesto,
+    )
+    .unwrap();
+    let id = u
+        .por_path(&universo_core::BundlePath::nuevo("n/x").unwrap())
+        .unwrap();
+    assert!(u.tiene_valor(id, "Vigencia", "2027-06-30"));
 }

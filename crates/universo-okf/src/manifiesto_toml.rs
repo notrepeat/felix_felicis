@@ -59,6 +59,8 @@ struct AristaToml {
 struct PredicadoToml {
     nombre: String,
     clave: String,
+    /// Obligatorio salvo para `tipo = "fecha"` (dominio abierto).
+    #[serde(default)]
     dominio: Vec<String>,
     /// `true`: el orden de `dominio` (de menor a mayor) habilita comparaciones.
     #[serde(default)]
@@ -66,6 +68,17 @@ struct PredicadoToml {
     /// `true`: el frontmatter admite una lista de valores del dominio.
     #[serde(default)]
     multivalor: bool,
+    /// `"fecha"`: valores ISO `AAAA-MM-DD` con dominio abierto.
+    #[serde(default)]
+    tipo: TipoValorToml,
+}
+
+#[derive(Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum TipoValorToml {
+    #[default]
+    Constante,
+    Fecha,
 }
 
 #[derive(Deserialize)]
@@ -109,13 +122,18 @@ impl From<ManifiestoToml> for Manifiesto {
                 .map(|p| DeclPredicado {
                     nombre: p.nombre,
                     clave: p.clave,
-                    orden: if p.orden {
-                        p.dominio.clone()
-                    } else {
-                        Vec::new()
+                    // Una fecha ya es comparable: `orden = true` con
+                    // `tipo = "fecha"` deja un orden no vacío para que
+                    // `validar` lo rechace (`FechaInvalida`) en vez de
+                    // ignorarlo en silencio.
+                    orden: match (p.orden, &p.tipo) {
+                        (true, TipoValorToml::Fecha) => vec![String::from("orden")],
+                        (true, _) => p.dominio.clone(),
+                        (false, _) => Vec::new(),
                     },
                     dominio: p.dominio.into_iter().collect(),
                     multivalor: p.multivalor,
+                    fecha: p.tipo == TipoValorToml::Fecha,
                 })
                 .collect(),
             layout: Layout {

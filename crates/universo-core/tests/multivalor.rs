@@ -17,6 +17,7 @@ fn manifiesto() -> Manifiesto {
             .collect(),
         orden: Vec::new(),
         multivalor: true,
+        fecha: false,
     });
     m
 }

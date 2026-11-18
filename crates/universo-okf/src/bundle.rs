@@ -1999,6 +1999,7 @@ mod tests {
                 dominio: ["si".into()].into_iter().collect(),
                 orden: Vec::new(),
                 multivalor: false,
+                fecha: false,
             });
             manifiesto.aristas.push(DeclArista {
                 clave: format!("edge-{indice:03}"),

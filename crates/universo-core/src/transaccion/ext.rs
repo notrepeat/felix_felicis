@@ -50,7 +50,7 @@ pub(super) fn preparar(
             let declarado = snapshot
                 .manifiesto()
                 .predicado(predicado)
-                .is_some_and(|declaracion| declaracion.dominio.contains(constante));
+                .is_some_and(|declaracion| declaracion.admite(constante));
             if !declarado {
                 marcar_fallo(&mut fallos, lado);
                 continue;

@@ -533,7 +533,7 @@ impl Estructura {
             .manifiesto
             .predicado(predicado)
             .ok_or_else(|| ErrorEstructura::PredicadoDesconocido(predicado.to_string()))?;
-        if !decl.dominio.contains(constante) {
+        if !decl.admite(constante) {
             return Err(ErrorEstructura::ConstanteFueraDeDominio(
                 predicado.to_string(),
                 constante.to_string(),
@@ -1253,7 +1253,7 @@ impl Estructura {
             }
             for (predicado, constante) in mapa {
                 match self.manifiesto.predicado(predicado) {
-                    Some(decl) if decl.dominio.contains(constante) => {}
+                    Some(decl) if decl.admite(constante) => {}
                     Some(_) => errores.push(format!(
                         "el atributo {predicado:?} tiene la constante {constante:?} fuera de dominio"
                     )),
@@ -1280,7 +1280,7 @@ impl Estructura {
                             errores.push(format!("el multivalor {predicado:?} está vacío"));
                         }
                         for constante in valores {
-                            if !decl.dominio.contains(constante) {
+                            if !decl.admite(constante) {
                                 errores.push(format!(
                                     "el multivalor {predicado:?} tiene la constante {constante:?} fuera de dominio"
                                 ));

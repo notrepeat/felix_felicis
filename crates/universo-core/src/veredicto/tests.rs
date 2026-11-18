@@ -54,6 +54,7 @@ fn manifiesto_prueba() -> Manifiesto {
             dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
             orden: Vec::new(),
             multivalor: false,
+            fecha: false,
         }],
         layout: Layout {
             directorios: vec!["n".into()],
@@ -506,6 +507,7 @@ fn estructura_con_canarios() -> Estructura {
             .collect(),
         orden: Vec::new(),
         multivalor: false,
+        fecha: false,
     });
     let mut estructura = Estructura::nueva(manifiesto).unwrap();
     estructura

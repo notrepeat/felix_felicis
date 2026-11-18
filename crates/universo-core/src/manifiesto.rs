@@ -86,9 +86,61 @@ pub struct DeclPredicado {
     /// en el frontmatter); cada valor es un átomo `Ext`. Incompatible con
     /// `orden`.
     pub multivalor: bool,
+    /// `true`: valores fecha ISO `AAAA-MM-DD` (dominio abierto, `dominio`
+    /// vacío), comparables cronológicamente con `<`, `<=`, `>`, `>=`.
+    pub fecha: bool,
+}
+
+/// `AAAA-MM-DD` con mes y día válidos (años bisiestos incluidos).
+pub fn es_fecha_iso(valor: &str) -> bool {
+    let b = valor.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    let digitos = |r: std::ops::Range<usize>| -> Option<u32> {
+        valor
+            .get(r)
+            .filter(|t| t.bytes().all(|c| c.is_ascii_digit()))?
+            .parse()
+            .ok()
+    };
+    let (Some(anio), Some(mes), Some(dia)) = (digitos(0..4), digitos(5..7), digitos(8..10)) else {
+        return false;
+    };
+    let bisiesto = anio % 4 == 0 && (anio % 100 != 0 || anio % 400 == 0);
+    let dias = match mes {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if bisiesto => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=dias).contains(&dia)
 }
 
 impl DeclPredicado {
+    /// Si `valor` es admisible: fecha ISO válida o constante del dominio.
+    pub fn admite(&self, valor: &str) -> bool {
+        if self.fecha {
+            es_fecha_iso(valor)
+        } else {
+            self.dominio.contains(valor)
+        }
+    }
+
+    /// Si admite comparaciones de orden (`orden` declarado o fecha).
+    pub fn es_comparable(&self) -> bool {
+        self.fecha || !self.orden.is_empty()
+    }
+
+    /// Compara dos valores admisibles según el orden del predicado.
+    pub fn comparar(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
+        if self.fecha {
+            (es_fecha_iso(a) && es_fecha_iso(b)).then(|| a.cmp(b))
+        } else {
+            Some(self.rango(a)?.cmp(&self.rango(b)?))
+        }
+    }
     /// Posición de `valor` en el orden declarado; `None` si el predicado no
     /// es ordenado o el valor no está en el dominio.
     pub fn rango(&self, valor: &str) -> Option<usize> {
@@ -156,6 +208,8 @@ pub enum ErrorManifiesto {
     OrdenInvalido(String),
     /// Un predicado declara a la vez `orden` y `multivalor`.
     OrdenMultivalor(String),
+    /// Un predicado fecha declara dominio, orden o multivalor.
+    FechaInvalida(String),
     /// El dominio de un predicado está vacío.
     DominioVacio(String),
     /// Una clave de arista o de predicado coincide con `type`, `title` o
@@ -235,6 +289,12 @@ impl std::fmt::Display for ErrorManifiesto {
             }
             ErrorManifiesto::PredicadoDuplicado(n) => {
                 write!(f, "el predicado {n:?} está duplicado")
+            }
+            ErrorManifiesto::FechaInvalida(n) => {
+                write!(
+                    f,
+                    "el predicado fecha {n:?} no admite dominio, orden ni multivalor"
+                )
             }
             ErrorManifiesto::OrdenMultivalor(n) => {
                 write!(
@@ -534,7 +594,11 @@ impl Manifiesto {
             if !vistos_predicado.insert(&p.nombre) && reportados_predicado.insert(&p.nombre) {
                 errores.push(ErrorManifiesto::PredicadoDuplicado(p.nombre.clone()));
             }
-            if p.dominio.is_empty() {
+            if p.fecha {
+                if !p.dominio.is_empty() || !p.orden.is_empty() || p.multivalor {
+                    errores.push(ErrorManifiesto::FechaInvalida(p.nombre.clone()));
+                }
+            } else if p.dominio.is_empty() {
                 errores.push(ErrorManifiesto::DominioVacio(p.nombre.clone()));
             }
         }
@@ -771,6 +835,7 @@ pub(crate) mod tests {
                 dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
                 orden: Vec::new(),
                 multivalor: false,
+                fecha: false,
             }],
             layout: Layout {
                 directorios: vec!["n".into()],
@@ -1267,6 +1332,7 @@ pub(crate) mod tests {
             dominio: ["alto, medio"].into_iter().map(String::from).collect(),
             orden: Vec::new(),
             multivalor: false,
+            fecha: false,
         });
         let errores = m.validar().unwrap_err();
         for esperado in [
@@ -1300,6 +1366,7 @@ pub(crate) mod tests {
             dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
             orden: Vec::new(),
             multivalor: false,
+            fecha: false,
         });
         assert!(
             m.validar()

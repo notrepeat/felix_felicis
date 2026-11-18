@@ -349,8 +349,13 @@ impl<'a> Validador<'a> {
             self.con_ruta(&format!("ligaduras[{indice}]"), |v| {
                 v.validar_identificador(meta, false);
                 if let DominioEsquema::DominioPredicado(nombre) = dominio {
-                    if v.manifiesto.predicado(nombre).is_none() {
-                        v.error(CodigoValidacionInvariante::MetaDominioDesconocido);
+                    match v.manifiesto.predicado(nombre) {
+                        None => v.error(CodigoValidacionInvariante::MetaDominioDesconocido),
+                        // Un dominio abierto (fecha) no se puede enumerar.
+                        Some(decl) if decl.fecha => {
+                            v.error(CodigoValidacionInvariante::MetaDominioIncompatible)
+                        }
+                        Some(_) => {}
                     }
                 }
             });
@@ -452,7 +457,7 @@ impl<'a> Validador<'a> {
                 let declaracion = self.manifiesto.predicado(predicado);
                 self.con_ruta("predicado", |v| match declaracion {
                     None => v.error(CodigoValidacionInvariante::PredicadoNoDeclarado),
-                    Some(decl) if decl.orden.is_empty() => {
+                    Some(decl) if !decl.es_comparable() => {
                         v.error(CodigoValidacionInvariante::PredicadoNoOrdenado)
                     }
                     Some(_) => {}
@@ -639,7 +644,7 @@ impl<'a> Validador<'a> {
                     && !self
                         .manifiesto
                         .predicado(predicado)
-                        .is_some_and(|decl| decl.dominio.contains(valor))
+                        .is_some_and(|decl| decl.admite(valor))
                 {
                     self.error(CodigoValidacionInvariante::ConstanteExtFueraDeDominio);
                 }
