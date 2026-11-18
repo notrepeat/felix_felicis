@@ -247,6 +247,8 @@ fn expandir_entradas(
                     sentencia: entrada.sentencia.clone(),
                     linea,
                     columna,
+                    id: None,
+                    mensaje: None,
                 },
                 manifiesto,
                 estructura,

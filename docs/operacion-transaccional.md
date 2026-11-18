@@ -99,6 +99,21 @@ capability anclada que lo creó y devuelve el código original. Si no puede
 `apply_stage_retained`. Un stage sin capability ni journal (proceso muerto antes
 del journal) nunca se borra automáticamente.
 
+## Sello e historial
+
+Tras `Committed`, bajo el mismo lock, apply escribe el sello del estado admitido
+(ver [guardia](guardia.md)) y añade una línea a `.<raiz>.felix.log` con fecha
+UTC, autor y motivo (opcionales, `--author`/`--reason`, una línea, sin
+verificación de identidad, sin caracteres de control ni invisibles o bidi) y si
+quedó sellado. `universo log` la muestra sin el token del estado; las líneas
+ilegibles o fuera de formato (escritura interrumpida, edición manual) se
+descartan, se cuentan en `discarded_lines` y no se imprimen. El historial nunca
+se escribe a través de un enlace ni en algo que no sea un archivo regular, y una
+línea parcial previa se cierra antes de añadir la siguiente. Es informativo: no
+participa en el recovery y un fallo al escribirlo no deshace el apply
+(`"logged": false`; la línea puede haber quedado a medias). Tras un apply quedan,
+por tanto, tres siblings persistentes: lockfile, sello e historial.
+
 ## Diagnóstico y recover
 
 ```text

@@ -44,7 +44,7 @@ productivo (`journal/recovery.rs:21`, reportado).
 | D2 | **Hecho** (2026-11-17). Limpieza segura del stage retenido o diagnóstico claro que lo explique | S–M | No |
 | D3 | **Hecho** (2026-11-17). `universo status` (estado transaccional, stage/backup/journal) y `universo recover` | M | No |
 | D4 | **Hecho como aviso** (2026-11-17). `check` consciente de la transacción (toma lock o avisa si hay recovery pendiente) | S | No |
-| D5 | Detección de cambios fuera de Felix: guardar el token del último estado admitido y avisar si el bundle difiere (ver [04](04-agentes-y-control-obligatorio.md)) | M | No |
+| D5 | **Hecho** (2026-11-17, `universo guard`/`seal`, [guardia](../guardia.md)). Detección de cambios fuera de Felix: guardar el token del último estado admitido y avisar si el bundle difiere (ver [04](04-agentes-y-control-obligatorio.md)) | M | No |
 | D6 | Más cortes de proceso muerto vía caller público; prueba de caída de SO si se agrega D1 | M | No |
 | D7 | Retirar o marcar el runner v1 sin uso productivo | S | No |
 | D8 | Apply en macOS | M | No (decisión de plataforma) |

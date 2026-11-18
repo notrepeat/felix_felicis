@@ -1,0 +1,34 @@
+; Completitud documental del capítulo 07 como invariantes con nombre.
+
+(regla :id "ID1" :mensaje "Todo criterio firme tiene una resolución que lo justifica."
+  (forall ((v N))
+    (=> (Standing v firm)
+        (exists ((r N) (e E))
+          (and (Type r Resolución) (Edge e r v justifica))))))
+
+(regla :id "ID2" :mensaje "Todo registro de supersesión une desplazante y desplazado y tiene fecha."
+  (forall ((r N))
+    (=> (Type r RegistroSupersesión)
+        (and (exists ((e1 E) (y N)) (Edge e1 y r supersede))
+             (exists ((e2 E) (x N)) (Edge e2 r x supersede))
+             (or (Ts r 2026-01-15) (Ts r 2026-06-01))))))
+
+(regla :id "ID3a" :mensaje "Toda arista supersede toca un registro de supersesión."
+  (forall ((e E) (x N) (y N))
+    :guarda (Edge e x y supersede)
+    (or (Type x RegistroSupersesión) (Type y RegistroSupersesión))))
+
+(regla :id "ID3b" :mensaje "Sólo los registros de supersesión llevan fecha."
+  (forall ((r N))
+    (=> (or (Ts r 2026-01-15) (Ts r 2026-06-01)) (Type r RegistroSupersesión))))
+
+(regla :id "ID4" :mensaje "Un nodo retirado sólo participa en aristas supersede."
+  (and
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y justifica)
+      (and (not (Type x Retirado)) (not (Type y Retirado))))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y responde)
+      (and (not (Type x Retirado)) (not (Type y Retirado))))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y motiva)
+      (and (not (Type x Retirado)) (not (Type y Retirado))))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y implica)
+      (and (not (Type x Retirado)) (not (Type y Retirado))))))

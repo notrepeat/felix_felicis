@@ -7,6 +7,7 @@ use super::{
         publicar_prepared::EvidenciaPublicacionPrepared,
     },
     captura::configuracion_apply::capturar_configuracion_para_apply,
+    historial::Procedencia,
     lock::LockEscritura,
     raiz::UbicacionRaiz,
     snapshot::SnapshotToken,
@@ -24,6 +25,12 @@ pub struct ResultadoAplicacion {
     pub estado: EstadoAplicacion,
     pub conflictos: usize,
     pub invariantes_fallidas: usize,
+    /// `Aplicada`: se escribió el sello del estado admitido (ver `sello`).
+    /// `false` si no se pudo, o si el root cambió fuera de Felix entre la
+    /// instalación y el sellado. En un rechazo el sello no se toca.
+    pub sellado: bool,
+    /// `Aplicada`: se añadió la entrada al historial de procedencia.
+    pub registrado: bool,
 }
 #[allow(dead_code)] // Campos retenidos deliberadamente; nunca serializados.
 enum EvidenciaAplicacion {
@@ -80,17 +87,52 @@ pub fn aplicar_archivo(
     delta_path: &Path,
     esperado: SnapshotToken,
 ) -> Result<ResultadoAplicacion, ErrorAplicacion> {
-    aplicar_archivo_con_hook(raiz, manifiesto, invariantes, delta_path, esperado, || {})
+    aplicar_archivo_con_procedencia(
+        raiz,
+        manifiesto,
+        invariantes,
+        delta_path,
+        esperado,
+        &Procedencia::default(),
+    )
 }
 
-/// `despues_stage` corre justo después de crear el stage (solo para tests).
-fn aplicar_archivo_con_hook(
+/// Como [`aplicar_archivo`], y registra autor y motivo en el historial.
+pub fn aplicar_archivo_con_procedencia(
     raiz: &Path,
     manifiesto: &Path,
     invariantes: &Path,
     delta_path: &Path,
     esperado: SnapshotToken,
+    procedencia: &Procedencia,
+) -> Result<ResultadoAplicacion, ErrorAplicacion> {
+    procedencia
+        .validar()
+        .map_err(|e| ErrorAplicacion::nuevo(e.codigo()))?;
+    aplicar_archivo_con_hooks(
+        raiz,
+        manifiesto,
+        invariantes,
+        delta_path,
+        esperado,
+        procedencia,
+        || {},
+        || {},
+    )
+}
+
+/// `despues_stage` corre justo después de crear el stage y `antes_de_sellar`
+/// tras `Committed`, antes de recapturar el estado (solo para tests).
+#[allow(clippy::too_many_arguments)] // Privada: los dos hooks finales sólo los usan los tests.
+fn aplicar_archivo_con_hooks(
+    raiz: &Path,
+    manifiesto: &Path,
+    invariantes: &Path,
+    delta_path: &Path,
+    esperado: SnapshotToken,
+    procedencia: &Procedencia,
     despues_stage: impl FnOnce(),
+    antes_de_sellar: impl FnOnce(),
 ) -> Result<ResultadoAplicacion, ErrorAplicacion> {
     let ubicacion =
         UbicacionRaiz::nueva(raiz).map_err(|_| ErrorAplicacion::nuevo("apply_root_invalid"))?;
@@ -146,9 +188,16 @@ fn aplicar_archivo_con_hook(
                 estado: EstadoAplicacion::Rechazada,
                 conflictos,
                 invariantes_fallidas,
+                sellado: false,
+                registrado: false,
             });
         }
     };
+    // Desde aquí el root puede cambiar: el sello anterior deja de describirlo.
+    // Mejor esfuerzo: si no se puede retirar, queda un sello viejo, que la
+    // guardia informa como «difiere» (alarma conservadora, nunca falso OK).
+    let _ = super::sello::borrar_sello(&ubicacion);
+    let digest_nuevo = prepared.digest_nuevo();
     let publicada = prepared.publicar_prepared().map_err(|e| {
         ErrorAplicacion::retenido(
             "prepared_publication_unverified",
@@ -167,10 +216,30 @@ fn aplicar_archivo_con_hook(
             EvidenciaAplicacion::Finalizacion(Box::new(e.into_evidencia_sin_owner())),
         )
     })?;
+    // Sella el estado admitido bajo el mismo lock, sólo si el árbol recapturado
+    // es exactamente el que se verificó e instaló: una edición ajena en esa
+    // ventana (el lock es advisory) no debe quedar aceptada. El commit ya es
+    // durable: no sellar no deshace la aplicación; se informa en `sellado`.
+    antes_de_sellar();
+    let sellado_con =
+        match super::sello::capturar_veredicto_con_digest(raiz, manifiesto, invariantes) {
+            Ok((token, 0, digest)) if digest == digest_nuevo => {
+                super::sello::escribir_sello(&ubicacion, token)
+                    .is_ok()
+                    .then_some(token)
+            }
+            _ => None,
+        };
+    let sellado = sellado_con.is_some();
+    // Historial informativo bajo el mismo lock; un fallo no deshace el commit.
+    let registrado =
+        super::historial::anotar(&ubicacion, procedencia, sellado_con, sellado).is_ok();
     Ok(ResultadoAplicacion {
         estado: EstadoAplicacion::Aplicada,
         conflictos: 0,
         invariantes_fallidas: 0,
+        sellado,
+        registrado,
     })
 }
 

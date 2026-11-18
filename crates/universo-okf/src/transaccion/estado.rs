@@ -105,7 +105,10 @@ pub fn inspeccionar(raiz: &Path) -> Result<EstadoTransaccional, ErrorEstado> {
         let sufijo = String::from_utf8_lossy(sufijo);
         let nombre = nombre_os.to_string_lossy().into_owned();
         match sufijo.as_ref() {
-            "lock" => {}
+            // El sello no es estado transaccional pendiente (ver `sello`).
+            // Un temporal del sello a medio escribir tampoco: lo reemplaza el
+            // siguiente `seal` o apply, y no participa en la transacción.
+            "lock" | "seal" | "seal.tmp" | "log" => {}
             "journal" => estado.journal = true,
             "admctx" => estado.contexto = true,
             "admctx-retire" => estado.intent_retiro = true,

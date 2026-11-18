@@ -9,6 +9,7 @@ pub(crate) mod anclado;
 pub(crate) mod captura;
 pub(crate) mod durabilidad;
 pub mod estado;
+pub mod historial;
 #[allow(dead_code)]
 pub(crate) mod inventario;
 #[allow(dead_code)]
@@ -19,6 +20,7 @@ pub(crate) mod raiz;
 pub mod recuperacion;
 #[allow(dead_code)]
 pub(crate) mod replay;
+pub mod sello;
 pub mod simulacion;
 pub mod snapshot;
 pub(crate) mod stage;

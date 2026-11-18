@@ -274,7 +274,8 @@ fn apply_admit_redacta_canarios_y_token_y_retira_siblings() {
     let f = fixture();
     fs::write(f.root.join("payload.bin"), b"PRIVATE_AUXILIARY").unwrap();
     let token = token_apply(&f, "admit", 0);
-    apply_json(&f, &token, "admit", 0);
+    let value = apply_json(&f, &token, "admit", 0);
+    assert_eq!(value["sealed"], true);
     let node = fs::read_to_string(f.root.join("n/PRIVATE_NODE.md")).unwrap();
     assert!(node.contains("type: b"));
     assert!(node.contains("PRIVATE_BODY"));
@@ -289,7 +290,17 @@ fn apply_admit_redacta_canarios_y_token_y_retira_siblings() {
             name.starts_with(".PRIVATE_ROOT.felix.").then_some(name)
         })
         .collect::<Vec<_>>();
-    assert_eq!(transaction_files, vec![".PRIVATE_ROOT.felix.lock"]);
+    let mut transaction_files = transaction_files;
+    transaction_files.sort();
+    // Lockfile reutilizable, historial y sello del último estado admitido.
+    assert_eq!(
+        transaction_files,
+        vec![
+            ".PRIVATE_ROOT.felix.lock",
+            ".PRIVATE_ROOT.felix.log",
+            ".PRIVATE_ROOT.felix.seal"
+        ]
+    );
 }
 #[test]
 fn apply_reject_y_stale_preservan_root_y_redactan_texto_json() {

@@ -104,14 +104,23 @@ fn caller_aplica_preserva_auxiliares_y_rechaza_stale_sin_nueva_publicacion() {
             .unwrap()
             .contains("type: b")
     );
-    let residual: Vec<_> = fs::read_dir(f.dir.path())
+    let mut residual: Vec<_> = fs::read_dir(f.dir.path())
         .unwrap()
         .filter_map(|e| {
-            let name = e.unwrap().file_name();
-            name.to_string_lossy().contains(".felix.").then_some(name)
+            let name = e.unwrap().file_name().to_string_lossy().into_owned();
+            name.contains(".felix.").then_some(name)
         })
         .collect();
-    assert_eq!(residual.len(), 1); // Sólo el lockfile reutilizable.
+    residual.sort();
+    // Lockfile reutilizable, historial y sello del último estado admitido.
+    assert_eq!(
+        residual,
+        vec![
+            ".bundle.felix.lock",
+            ".bundle.felix.log",
+            ".bundle.felix.seal"
+        ]
+    );
 }
 #[test]
 fn caller_reject_conserva_bytes_y_nombres_del_bundle() {

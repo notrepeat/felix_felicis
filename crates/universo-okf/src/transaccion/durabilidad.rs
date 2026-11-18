@@ -34,6 +34,8 @@ pub(crate) enum Punto {
     NombreRetirado,
     BackupEliminado,
     StageEliminado,
+    Sello,
+    Historial,
 }
 
 pub(crate) fn sincronizar_archivo(archivo: &File, punto: Punto) -> io::Result<()> {

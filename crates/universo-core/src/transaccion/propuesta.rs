@@ -188,6 +188,40 @@ fn proponer_con_presupuesto_evaluacion(
     }
 }
 
+/// Explica, de forma redactada y sobre el **candidato** del delta, qué
+/// instancias de invariantes son falsas. Usa el mismo explicador y presupuesto
+/// que `check --explain`. Devuelve `None` si no se puede construir el
+/// candidato, si hay conflictos funcionales o si la expansión falla: en esos
+/// casos `proponer` ya informa el motivo y no hay invariantes que explicar.
+pub fn explicar_propuesta(
+    snapshot: &Estructura,
+    delta: &Delta,
+    invariantes: &[SentenciaFuente],
+    modo: crate::veredicto::ModoExplicacion,
+    limite: u64,
+) -> Option<Result<crate::veredicto::ResultadoExplicacionesMedido, crate::veredicto::ErrorVeredicto>>
+{
+    let candidato = construir_candidato(snapshot, delta).ok()?;
+    if detectar_conflictos_funcionales(snapshot, delta)
+        .ok()?
+        .hay_conflictos()
+    {
+        return None;
+    }
+    let expansion = expandir_sentencias_fuente(
+        invariantes,
+        candidato.estructura().manifiesto(),
+        candidato.estructura(),
+    )
+    .ok()?;
+    Some(crate::veredicto::explicar_con_presupuesto_y_consumos(
+        &expansion,
+        candidato.estructura(),
+        modo,
+        limite,
+    ))
+}
+
 fn requiere_detector(error: &ErrorCandidato) -> bool {
     error.codigo() == "add_conflict"
         && matches!(

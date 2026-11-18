@@ -64,12 +64,17 @@ pub enum MotivoAutoria {
     ColisionConMetavariable(String),
     TextoVacio,
     TextoSobrante,
+    /// Metadato inválido en `(regla :id "..." :mensaje "..." <sentencia>)`.
+    MetadatoDeRegla(String),
 }
 
 impl std::fmt::Display for MotivoAutoria {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MotivoAutoria::ParentesisSinCerrar => write!(f, "falta cerrar un paréntesis"),
+            MotivoAutoria::MetadatoDeRegla(detalle) => {
+                write!(f, "metadato de regla inválido: {detalle}")
+            }
             MotivoAutoria::ParentesisSobrante => write!(f, "hay un paréntesis de cierre de más"),
             MotivoAutoria::CadenaSinCerrar => write!(f, "falta cerrar una cadena entre comillas"),
             MotivoAutoria::EscapeInvalido => write!(f, "escape inválido dentro de la cadena"),
@@ -160,6 +165,10 @@ pub struct SentenciaFuente {
     pub sentencia: Sentencia,
     pub linea: usize,
     pub columna: usize,
+    /// Identificador opcional declarado con `(regla :id "..." ...)`.
+    pub id: Option<String>,
+    /// Mensaje humano opcional declarado con `(regla :mensaje "..." ...)`.
+    pub mensaje: Option<String>,
 }
 
 /// Un token con su posición en el texto, en base 1.
@@ -1086,13 +1095,117 @@ pub fn parsear_programa(texto: &str) -> Result<Vec<SentenciaFuente>, ErrorAutori
         .iter()
         .map(|raiz| {
             let (linea, columna) = raiz.posicion();
+            let (sentencia, id, mensaje) = regla_desde(raiz)?;
             Ok(SentenciaFuente {
-                sentencia: sentencia_desde(raiz)?,
+                sentencia,
                 linea,
                 columna,
+                id,
+                mensaje,
             })
         })
         .collect()
+}
+
+/// Forma de nivel superior que nombra una sentencia:
+/// `(regla [:id "<id>"] [:mensaje "<texto>"] <sentencia>)`, con al menos un
+/// metadato. Se reconoce sólo en el nivel superior y sólo si el segundo
+/// elemento es una palabra clave `:...`; así un predicado de extensión llamado
+/// `regla` (cuyo primer argumento es una variable o una constante `@`) se sigue
+/// parseando igual que antes, en cualquier nivel.
+const MAX_ID_REGLA: usize = 64;
+const MAX_MENSAJE_REGLA: usize = 280;
+
+type SentenciaConMetadatos = (Sentencia, Option<String>, Option<String>);
+
+/// Controles, separadores de línea/párrafo y caracteres de formato invisibles
+/// o de dirección (bidi), que permitirían que un texto del usuario se muestre
+/// distinto de lo que es o rompa la línea de la salida. Compartido con el
+/// historial de procedencia.
+pub fn caracter_no_imprimible(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
+fn regla_desde(raiz: &Sexp) -> Result<SentenciaConMetadatos, ErrorAutoria> {
+    let Sexp::Lista { elementos, .. } = raiz else {
+        return Ok((sentencia_desde(raiz)?, None, None));
+    };
+    let es_regla = elementos.first().and_then(Sexp::simbolo) == Some("regla")
+        && elementos
+            .get(1)
+            .and_then(Sexp::simbolo)
+            .is_some_and(|s| s.starts_with(':'));
+    if !es_regla {
+        return Ok((sentencia_desde(raiz)?, None, None));
+    }
+    let invalido = |detalle: &str| raiz.error(MotivoAutoria::MetadatoDeRegla(detalle.to_string()));
+    let argumentos = &elementos[1..];
+    if argumentos.len() < 3 || argumentos.len() % 2 == 0 {
+        return Err(invalido(
+            "se espera (regla :clave \"valor\" ... <sentencia>)",
+        ));
+    }
+    let (pares, cuerpo) = argumentos.split_at(argumentos.len() - 1);
+    let (mut id, mut mensaje) = (None, None);
+    for par in pares.chunks_exact(2) {
+        let valor = match &par[1] {
+            Sexp::Hoja(Tok {
+                clase: Clase::Cadena(texto),
+                ..
+            }) => texto.clone(),
+            otro => {
+                return Err(otro.error(MotivoAutoria::MetadatoDeRegla(
+                    "el valor debe ser una cadena".to_string(),
+                )));
+            }
+        };
+        let destino = match par[0].simbolo() {
+            Some(":id") => {
+                if valor.is_empty()
+                    || valor.chars().count() > MAX_ID_REGLA
+                    || !valor
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                {
+                    return Err(par[1].error(MotivoAutoria::MetadatoDeRegla(format!(
+                        ":id admite 1 a {MAX_ID_REGLA} caracteres ASCII alfanuméricos, '-', '_' o '.'"
+                    ))));
+                }
+                &mut id
+            }
+            Some(":mensaje") => {
+                if valor.trim().is_empty()
+                    || valor.chars().count() > MAX_MENSAJE_REGLA
+                    || valor.chars().any(caracter_no_imprimible)
+                {
+                    return Err(par[1].error(MotivoAutoria::MetadatoDeRegla(format!(
+                        ":mensaje admite 1 a {MAX_MENSAJE_REGLA} caracteres en una línea"
+                    ))));
+                }
+                &mut mensaje
+            }
+            _ => {
+                return Err(par[0].error(MotivoAutoria::MetadatoDeRegla(
+                    "clave desconocida; se admiten :id y :mensaje".to_string(),
+                )));
+            }
+        };
+        if destino.replace(valor).is_some() {
+            return Err(par[0].error(MotivoAutoria::MetadatoDeRegla("clave repetida".to_string())));
+        }
+    }
+    Ok((sentencia_desde(&cuerpo[0])?, id, mensaje))
 }
 
 #[cfg(test)]
@@ -1140,6 +1253,76 @@ mod tests {
         assert_eq!((programa[1].linea, programa[1].columna), (4, 1));
         assert_eq!(programa[0].sentencia, parsear("(Type @a rule)").unwrap());
         assert_eq!(programa[1].sentencia, parsear("(HasLab @a \"x\")").unwrap());
+    }
+
+    #[test]
+    fn regla_con_id_y_mensaje_conserva_sentencia_y_posicion() {
+        let texto = "; c\n(regla :id \"capas-1\" :mensaje \"El dominio no depende de adaptadores.\"\n  (Type @a rule))\n(Type @b rule)\n";
+        let programa = parsear_programa(texto).unwrap();
+        assert_eq!(programa.len(), 2);
+        assert_eq!(programa[0].sentencia, parsear("(Type @a rule)").unwrap());
+        assert_eq!((programa[0].linea, programa[0].columna), (2, 1));
+        assert_eq!(programa[0].id.as_deref(), Some("capas-1"));
+        assert_eq!(
+            programa[0].mensaje.as_deref(),
+            Some("El dominio no depende de adaptadores.")
+        );
+        assert_eq!(
+            (programa[1].id.clone(), programa[1].mensaje.clone()),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn regla_admite_solo_id_o_solo_mensaje_y_esquemas() {
+        let solo_id = parsear_programa("(regla :id \"r.1_a\" (Type @a rule))").unwrap();
+        assert_eq!(solo_id[0].id.as_deref(), Some("r.1_a"));
+        assert_eq!(solo_id[0].mensaje, None);
+        let esquema = "(regla :mensaje \"m\" (esquema ((l Lab)) (forall ((x N)) (HasLab x l))))";
+        let programa = parsear_programa(esquema).unwrap();
+        assert!(matches!(programa[0].sentencia, Sentencia::Esquema { .. }));
+        assert_eq!(programa[0].mensaje.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn un_predicado_de_extension_llamado_regla_se_parsea_igual_que_antes() {
+        let programa =
+            parsear_programa("(regla @n/x alto)\n(forall ((x N)) (regla x bajo))").unwrap();
+        assert_eq!(programa[0].sentencia, parsear("(regla @n/x alto)").unwrap());
+        assert_eq!(
+            (programa[0].id.clone(), programa[0].mensaje.clone()),
+            (None, None)
+        );
+        assert_eq!(programa.len(), 2);
+    }
+
+    #[test]
+    fn regla_mal_formada_es_error_de_autoria() {
+        for texto in [
+            "(regla (Type @a rule))",
+            "(regla :id \"x\")",
+            "(regla :id \"x\" :id \"y\" (Type @a rule))",
+            "(regla :id \"con espacio\" (Type @a rule))",
+            "(regla :id \"\" (Type @a rule))",
+            "(regla :mensaje \"\" (Type @a rule))",
+            "(regla :mensaje \"dos\nlíneas\" (Type @a rule))",
+            "(regla :id x (Type @a rule))",
+            "(regla :otro \"x\" (Type @a rule))",
+            "(regla :id \"x\" (Type @a rule) (Type @b rule))",
+            "(regla :id \"x\" (regla :id \"y\" (Type @a rule)))",
+            "(and (regla :id \"x\" (Type @a rule)) (Type @b rule))",
+            "(regla :mensaje \"invisible\u{202E}\" (Type @a rule))",
+            "(regla :mensaje \"sep\u{2028}arado\" (Type @a rule))",
+        ] {
+            assert!(parsear_programa(texto).is_err(), "{texto}");
+        }
+        // Los errores de la forma regla son de metadato, no de otra cosa.
+        let error = parsear_programa("(regla :id \"x\" :id \"y\" (Type @a rule))").unwrap_err();
+        assert!(matches!(error.motivo, MotivoAutoria::MetadatoDeRegla(_)));
+        let largo = format!("(regla :id \"{}\" (Type @a rule))", "a".repeat(65));
+        assert!(parsear_programa(&largo).is_err());
+        let largo = format!("(regla :mensaje \"{}\" (Type @a rule))", "a".repeat(281));
+        assert!(parsear_programa(&largo).is_err());
     }
 
     #[test]

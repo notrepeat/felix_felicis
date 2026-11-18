@@ -2,9 +2,12 @@
 use super::{Formato, escribir_salida};
 use serde_json::{Value, json};
 use std::{io::Write, path::PathBuf};
-use universo_okf::transaccion::simulacion::{EstadoSimulacion, simular_archivo};
+use universo_core::{ModoExplicacion, PRESUPUESTO_EXPLICACION_POR_DEFECTO};
+use universo_okf::transaccion::simulacion::{
+    EstadoSimulacion, simular_archivo, simular_archivo_explicado,
+};
 
-pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--emit-snapshot-token | --apply --expect-snapshot <token>]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
+pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
 pub(super) struct Solicitud {
     raiz: PathBuf,
     manifiesto: PathBuf,
@@ -14,6 +17,9 @@ pub(super) struct Solicitud {
     emit_token: bool,
     aplicar: bool,
     esperado: Option<String>,
+    explicar: Option<ModoExplicacion>,
+    autor: Option<String>,
+    motivo: Option<String>,
 }
 
 pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
@@ -26,6 +32,9 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     let mut emit_token = false;
     let mut aplicar = false;
     let mut esperado = None;
+    let mut explicar = None;
+    let mut autor = None;
+    let mut motivo = None;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -69,6 +78,15 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
             "--invariantes" if invariantes.is_none() => invariantes = Some(PathBuf::from(value)),
             "--delta" if delta.is_none() => delta = Some(PathBuf::from(value)),
             "--expect-snapshot" if esperado.is_none() => esperado = Some(value.to_owned()),
+            "--author" if autor.is_none() => autor = Some(value.to_owned()),
+            "--reason" if motivo.is_none() => motivo = Some(value.to_owned()),
+            "--explain" if explicar.is_none() => {
+                explicar = Some(match value {
+                    "decide" => ModoExplicacion::Decidir,
+                    "enumerate" => ModoExplicacion::enumerar_por_defecto(),
+                    _ => return Err(fail()),
+                })
+            }
             "--format" if formato.is_none() => {
                 formato = Some(match value {
                     "text" => Formato::Texto,
@@ -80,7 +98,12 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
         }
         i += consumed;
     }
-    if aplicar != esperado.is_some() || aplicar && emit_token {
+    // --explain sólo simula: un rechazo de apply se explica simulando el mismo delta.
+    // --author/--reason describen un cambio publicado: sólo con --apply.
+    if aplicar != esperado.is_some()
+        || aplicar && (emit_token || explicar.is_some())
+        || !aplicar && (autor.is_some() || motivo.is_some())
+    {
         return Err(fail());
     }
     Ok(Solicitud {
@@ -92,6 +115,9 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
         emit_token,
         aplicar,
         esperado,
+        explicar,
+        autor,
+        motivo,
     })
 }
 
@@ -109,18 +135,57 @@ pub(super) fn ejecutar(
                 delta: solicitud.delta,
                 formato: solicitud.formato,
                 esperado: solicitud.esperado.unwrap(),
+                autor: solicitud.autor,
+                motivo: solicitud.motivo,
             },
             salida,
             error,
         );
     }
-    let result = simular_archivo(
-        &solicitud.raiz,
-        &solicitud.manifiesto,
-        &solicitud.invariantes,
-        &solicitud.delta,
-    )
+    let mut explicacion = None;
+    let result = match solicitud.explicar {
+        None => simular_archivo(
+            &solicitud.raiz,
+            &solicitud.manifiesto,
+            &solicitud.invariantes,
+            &solicitud.delta,
+        ),
+        Some(modo) => simular_archivo_explicado(
+            &solicitud.raiz,
+            &solicitud.manifiesto,
+            &solicitud.invariantes,
+            &solicitud.delta,
+            modo,
+            PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+        )
+        .map(|(resultado, explicado)| {
+            explicacion = Some((modo, explicado));
+            resultado
+        }),
+    }
     .map_err(|e| e.codigo());
+    // JSON con el mismo formato redactado que `check --explain` (v2), o un
+    // código si no hay nada que explicar o se agotó el presupuesto.
+    let (explanations, explanation_error, reglas) = match explicacion {
+        None => (None, None, Vec::new()),
+        Some((modo, explicado)) => match explicado.medido {
+            Some(Ok(medido)) => (
+                Some(super::explicaciones_medidas_a_json(
+                    &medido,
+                    modo,
+                    PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+                )),
+                None,
+                explicado.reglas,
+            ),
+            Some(Err(e)) => (
+                None,
+                Some(super::error_explicacion_codigo(e)),
+                explicado.reglas,
+            ),
+            None => (None, Some("explanation_not_applicable"), explicado.reglas),
+        },
+    };
     let (status, summary, errors, token) = match result {
         Ok(result) => {
             let status = if result.estado == EstadoSimulacion::Admitida {
@@ -146,6 +211,16 @@ pub(super) fn ejecutar(
             if let Some(token) = token {
                 value["snapshot_token"] = json!(token);
             }
+            // Con --explain las dos claves están siempre presentes; en un error
+            // técnico de la propuesta no hay invariantes que explicar.
+            if solicitud.explicar.is_some() {
+                value["explanations"] = explanations.clone().unwrap_or(Value::Null);
+                value["explanation_error"] = match (status, explanation_error) {
+                    ("error", _) => json!("explanation_not_applicable"),
+                    (_, Some(code)) => json!(code),
+                    (_, None) => Value::Null,
+                };
+            }
             format!("{value}\n")
         }
         Formato::Texto => {
@@ -160,6 +235,17 @@ pub(super) fn ejecutar(
             }
             if let Some(token) = token {
                 value.push_str(&format!("snapshot_token: {token}\n"));
+            }
+            if solicitud.explicar.is_some() {
+                match (&explanations, explanation_error) {
+                    (Some(explanations), _) if status != "error" => {
+                        value.push_str(&super::explicaciones_a_texto(explanations, &reglas));
+                    }
+                    (_, Some(code)) if status != "error" => {
+                        value.push_str(&format!("EXPLANATIONS unavailable: {code}\n"));
+                    }
+                    _ => value.push_str("EXPLANATIONS unavailable: explanation_not_applicable\n"),
+                }
             }
             value
         }

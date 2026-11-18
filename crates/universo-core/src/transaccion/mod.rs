@@ -11,5 +11,6 @@ pub use conflictos::{
     ClaseConflicto, DiagnosticoConflicto, ResultadoConflictos, detectar_conflictos_funcionales,
 };
 pub use propuesta::{
-    ErrorPropuesta, EtapaErrorPropuesta, ProcedenciaInvariante, ResultadoPropuesta, proponer,
+    ErrorPropuesta, EtapaErrorPropuesta, ProcedenciaInvariante, ResultadoPropuesta,
+    explicar_propuesta, proponer,
 };

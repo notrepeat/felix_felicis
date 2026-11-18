@@ -29,11 +29,11 @@ CLI `universo` (`crates/universo-cli/src/main.rs:27`, verificado): `atomos`,
 |---|---|---|---|---|
 | U1 | Crear y borrar notas (nodos) por delta, con transacción y replay | ver arriba | L | Toca contratos de fase 04 |
 | U2 | Generar el delta desde una edición: «edito la nota, `universo propose` calcula el delta contra el último estado admitido» | sin comando | M | Diseño de UX |
-| U3 | `universo init` y plantillas de manifiesto | sin comando (reportado) | S | No |
-| U4 | Búsqueda, `log`, `diff` | sin comando (reportado); ver [05](05-procedencia-y-vision.md) | M | Diseño |
+| U3 | **Hecho** (2026-11-17): `universo init <dir>` con manifiesto, invariantes con `(regla ...)` y una nota, sellado. `universo init` y plantillas de manifiesto | sin comando (reportado) | S | No |
+| U4 | **Parcial** (2026-11-17): `log` hecho; búsqueda pendiente de confirmar (P3) y `diff` pendiente. Búsqueda, `log`, `diff` | sin comando (reportado); ver [05](05-procedencia-y-vision.md) | M | Diseño |
 | U5 | Mensajes de `check`/`propose` útiles para depurar sin romper la redacción por defecto | `main.rs:769-853` (reportado) | S | Privacidad vs. utilidad |
 | U6 | Instalación: `publish = false` en `Cargo.toml:9` (verificado), sin binarios ni workflow de release | sin workflow (reportado) | S–M | Canal de distribución y licencia |
-| U7 | ~~CI corre solo un test Python de `tools/` y ningún test de `evaluation/`~~ Corregido 2026-11-17: CI corre `tools/test_*.py` y `evaluation/test_*.py` en Linux y Windows (Windows sin ejecución confirmada todavía). Sigue abierto: `cargo test` sin `--locked` | — | S | No |
+| U7 | ~~CI corre solo un test Python de `tools/` y ningún test de `evaluation/`~~ Corregido 2026-11-17: CI corre `tools/test_*.py` y `evaluation/test_*.py` en Linux y Windows (Windows sin ejecución confirmada todavía). `cargo test` y `clippy` con `--locked` desde 2026-11-17 | — | S | No |
 
 ## Fases 08 y 09
 

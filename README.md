@@ -19,7 +19,9 @@ Implementado:
 - AST y parser de invariantes FO bisortidos;
 - validación estática, expansión de esquemas y evaluador de referencia en la API de `universo-core`;
 - `check --explain decide|enumerate` opt-in, con explicaciones redactadas en texto o JSON v2; el resultado baseline conserva JSON v1;
-- CLI (`atomos`, `validate`, `check`, `propose`, `status`, `recover`; `verificar` es alias compatible de `validate`);
+- CLI (`atomos`, `validate`, `check`, `propose`, `status`, `recover`, `guard`, `seal`, `init`, `log`; `verificar` es alias compatible de `validate`);
+- `universo init <dir>` crea un repositorio de conocimiento mínimo, válido y sellado (no es atómico: si falla a mitad, borra el directorio y repite); `propose --apply --author <a> --reason <r>` registra la procedencia y `universo log` la muestra;
+- [guardia](docs/guardia.md) que detecta cambios hechos fuera de Felix (sello del último estado admitido y hook de pre-commit);
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
 - servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check` y `why`, sin escritura del bundle;
 - [Code Mode local opcional](tools/codemode-local/README.md) con SDK Cloudflare real y sandbox adicional Linux; [comparación reproducible](docs/codemode-comparacion.md), sin enviar bundles a la nube;
@@ -122,6 +124,35 @@ El resultado tiene `command: "propose"`, `mode: "simulate"`, `status`
 error redactados. Devuelve 0 para admit, 1 para reject/error y 2 para uso
 inválido. En JSON escribe un objeto por stdout y deja stderr vacío; un error
 de uso solo escribe la ayuda por stderr. El texto también omite datos privados.
+
+`--explain decide|enumerate` (sólo simulación, no con `--apply`) explica el
+rechazo sobre el **candidato** del delta con el mismo pase redactado de
+`check --explain`: el JSON añade siempre `explanations` (la estructura de
+`check` v2, o `null`) y `explanation_error` (`null`, `explanation_not_applicable`
+si la propuesta falló técnicamente o tiene conflictos funcionales, o
+`explanation_budget_exceeded`/`explanation_evaluation_invalid`). En texto, la
+ausencia se informa como `EXPLANATIONS unavailable: <código>`. Para explicar un
+apply rechazado, simula el mismo delta.
+
+### Nombrar reglas
+
+Una regla de nivel superior puede llevar un id y un mensaje humano opcionales:
+
+```text
+(regla :id "capas-1" :mensaje "El dominio no depende de adaptadores."
+  (forall ((x N) (y N)) (=> (Edge x y depends) ...)))
+```
+
+`:id` admite 1 a 64 caracteres ASCII alfanuméricos, `-`, `_` o `.`; `:mensaje`,
+1 a 280 caracteres en una línea, sin caracteres de control ni de formato
+invisibles o bidireccionales. Ambos son opcionales pero al menos uno es
+obligatorio. La forma se reconoce sólo en el nivel superior y cuando el segundo
+elemento es `:id` o `:mensaje`, así que un predicado de extensión llamado `regla`
+sigue funcionando igual. Se muestran sólo en
+el **texto** opt-in de `check --explain` y `propose --explain`, como una línea
+`rule: id=... message=...` bajo cada objeto. El JSON v2 no cambia (su conjunto
+de claves es cerrado) y sin `--explain` no aparecen. Escribe el mensaje sabiendo
+que se mostrará a quien ejecute `--explain`.
 
 `--emit-snapshot-token` añade explícitamente el token sensible del snapshot;
 por defecto no se incluye. El token identifica árbol raw, configuración y

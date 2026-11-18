@@ -36,7 +36,7 @@ def main():
             assert not applied.stderr and token.encode() not in applied.stdout
             assert "type: b" in node.read_text(encoding="utf-8")
             assert (root / "payload.bin").read_bytes() == b"auxiliary bytes\x00\xff"
-            assert sorted(p.name for p in parent.glob(".bundle.felix.*")) == [".bundle.felix.lock"]
+            assert sorted(p.name for p in parent.glob(".bundle.felix.*")) == [".bundle.felix.lock", ".bundle.felix.log", ".bundle.felix.seal"]
             print(json.dumps({"example": "transactional-apply", "status": "admit", "root_updated": True, "auxiliary_preserved": True, "transaction_siblings_removed": True}))
     except (OSError, ValueError, KeyError, AssertionError, subprocess.SubprocessError):
         print("demo_apply_failed", file=sys.stderr)

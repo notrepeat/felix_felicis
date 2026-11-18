@@ -47,6 +47,13 @@ impl std::fmt::Debug for ErrorPreparacionApply {
         f.write_str(self.codigo)
     }
 }
+impl PreparacionApply<'_, '_> {
+    /// Digest del árbol raw del stage verificado: lo que el apply va a instalar.
+    pub(crate) fn digest_nuevo(&self) -> crate::transaccion::journal::RawTreeDigest {
+        self.journal.new_fingerprint().digest().clone()
+    }
+}
+
 impl<'lock> DuenioTransaccionAnclado<'lock> {
     /// Retira, bajo el mismo lock, el stage que dejó una preparación fallida.
     /// Sin journal ese stage no se puede probar propio después, y bloquearía

@@ -43,7 +43,8 @@ pub use tipos::{Etiqueta, Sorte};
 pub use transaccion::{
     Candidato, ClaseConflicto, ClaseOperacion, DiagnosticoConflicto, ErrorCandidato,
     ErrorPropuesta, EtapaErrorPropuesta, ProcedenciaInvariante, ResultadoConflictos,
-    ResultadoPropuesta, construir_candidato, detectar_conflictos_funcionales, proponer,
+    ResultadoPropuesta, construir_candidato, detectar_conflictos_funcionales, explicar_propuesta,
+    proponer,
 };
 pub use veredicto::{
     Contraejemplo, ErrorVeredicto, MAX_EXPLICACIONES_POR_DEFECTO, ModoExplicacion,

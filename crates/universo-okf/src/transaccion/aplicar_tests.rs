@@ -61,13 +61,15 @@ fn stage_siblings(f: &Fixture) -> Vec<String> {
 fn fallo_de_preparacion_tras_crear_stage_lo_limpia_y_no_bloquea_el_siguiente_apply() {
     let _serial = crate::transaccion::lock::serializar_forks_y_reacquisiciones_test();
     let f = fixture();
-    let error = aplicar_archivo_con_hook(
+    let error = aplicar_archivo_con_hooks(
         &f.root,
         &f.manifest,
         &f.invariants,
         &f.delta,
         token(&f),
+        &crate::transaccion::historial::Procedencia::default(),
         || fs::write(f.root.join("payload.bin"), b"changed").unwrap(),
+        || {},
     )
     .unwrap_err();
     assert_eq!(error.codigo(), "stale");
@@ -164,4 +166,108 @@ fn fsync_fallido_del_sucesor_no_borra_backup_y_recover_completa() {
         nodo.contains("type: a") || nodo.contains("type: b"),
         "{nodo}"
     );
+}
+
+#[test]
+fn apply_exitoso_sella_el_estado_y_un_rechazo_conserva_el_sello() {
+    use crate::transaccion::sello::{EstadoSello, evaluar_guardia};
+    let _serial = crate::transaccion::lock::serializar_forks_y_reacquisiciones_test();
+    let f = fixture();
+    let viejo = token(&f);
+    let result = aplicar_archivo(&f.root, &f.manifest, &f.invariants, &f.delta, viejo).unwrap();
+    assert!(result.sellado);
+    let guardia = evaluar_guardia(&f.root, &f.manifest, &f.invariants).unwrap();
+    assert!(guardia.aprobada(), "{guardia:?}");
+    // Un apply stale no publica ni toca el sello; la edición manual se detecta.
+    fs::write(f.root.join("payload.bin"), b"x").unwrap();
+    assert_eq!(
+        aplicar_archivo(&f.root, &f.manifest, &f.invariants, &f.delta, viejo)
+            .unwrap_err()
+            .codigo(),
+        "stale"
+    );
+    let guardia = evaluar_guardia(&f.root, &f.manifest, &f.invariants).unwrap();
+    assert_eq!(guardia.sello, EstadoSello::Difiere);
+}
+
+#[test]
+fn edicion_ajena_entre_instalar_y_sellar_no_queda_sellada() {
+    use crate::transaccion::sello::{EstadoSello, evaluar_guardia};
+    let _serial = crate::transaccion::lock::serializar_forks_y_reacquisiciones_test();
+    let f = fixture();
+    let result = aplicar_archivo_con_hooks(
+        &f.root,
+        &f.manifest,
+        &f.invariants,
+        &f.delta,
+        token(&f),
+        &crate::transaccion::historial::Procedencia::default(),
+        || {},
+        || fs::write(f.root.join("payload.bin"), b"ajeno").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result.estado, EstadoAplicacion::Aplicada);
+    assert!(!result.sellado);
+    let guardia = evaluar_guardia(&f.root, &f.manifest, &f.invariants).unwrap();
+    assert_eq!(guardia.sello, EstadoSello::Ausente);
+}
+
+#[test]
+fn apply_registra_procedencia_y_un_rechazo_no() {
+    use crate::transaccion::historial::{Procedencia, leer};
+    let _serial = crate::transaccion::lock::serializar_forks_y_reacquisiciones_test();
+    let f = fixture();
+    let procedencia = Procedencia {
+        autor: Some("Romeo".into()),
+        motivo: Some("Cambia el tipo a b".into()),
+    };
+    let viejo = token(&f);
+    let result = aplicar_archivo_con_procedencia(
+        &f.root,
+        &f.manifest,
+        &f.invariants,
+        &f.delta,
+        viejo,
+        &procedencia,
+    )
+    .unwrap();
+    assert!(result.registrado);
+    let entradas = leer(&f.root).unwrap().entradas;
+    assert_eq!(entradas.len(), 1);
+    assert_eq!(entradas[0].autor.as_deref(), Some("Romeo"));
+    assert_eq!(entradas[0].motivo.as_deref(), Some("Cambia el tipo a b"));
+    assert!(entradas[0].sellado);
+    // Un apply stale no publica y no deja entrada.
+    assert!(aplicar_archivo(&f.root, &f.manifest, &f.invariants, &f.delta, viejo).is_err());
+    assert_eq!(leer(&f.root).unwrap().entradas.len(), 1);
+    // Procedencia inválida se rechaza antes de tocar nada.
+    let mala = Procedencia {
+        autor: Some("dos\nlíneas".into()),
+        motivo: None,
+    };
+    assert_eq!(
+        aplicar_archivo_con_procedencia(
+            &f.root,
+            &f.manifest,
+            &f.invariants,
+            &f.delta,
+            viejo,
+            &mala
+        )
+        .unwrap_err()
+        .codigo(),
+        "provenance_invalid"
+    );
+}
+
+#[test]
+fn apply_rechazado_por_invariantes_no_registra_ni_sella() {
+    use crate::transaccion::historial::leer;
+    let _serial = crate::transaccion::lock::serializar_forks_y_reacquisiciones_test();
+    let f = fixture();
+    fs::write(&f.invariants, "(Type @n/node a)\n").unwrap();
+    let result = aplicar_archivo(&f.root, &f.manifest, &f.invariants, &f.delta, token(&f)).unwrap();
+    assert_eq!(result.estado, EstadoAplicacion::Rechazada);
+    assert!(!result.registrado && !result.sellado);
+    assert_eq!(leer(&f.root).unwrap(), Default::default());
 }

@@ -254,6 +254,10 @@ impl ArtifactFingerprint {
     pub(crate) fn identity(&self) -> &DirectoryIdentity {
         &self.identity
     }
+
+    pub(crate) fn digest(&self) -> &RawTreeDigest {
+        &self.digest
+    }
 }
 
 impl ArtifactFingerprint {
