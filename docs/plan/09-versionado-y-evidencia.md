@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | `v0.2.0` publicada (2026-11-18) |
+| Estado | `v0.2.1` publicada (2026-11-18) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
@@ -74,6 +74,7 @@ git tag --list --sort=-version:refname
 |---|---|---|---|---|
 | 2026-09-21 | `v0.1.0` | `7c4b81b` | verde | Base pública: modelo, OKF, AST y parser; sin check semántico. |
 | 2026-11-18 | `v0.2.0` | ver el tag | verde (Linux y Windows) | [Notas](../release/v0.2.0.md): evaluador, criterio en las reglas, testigos localizados, transacciones, MCP, orquestador y estudio de cuatro brazos; fase 08 corrida contra la instancia privada. |
+| 2026-11-18 | `v0.2.1` | ver el tag | verde (Linux y Windows) | [Notas](../release/v0.2.1.md): restricción de rango por aristas en el veredicto; compatible. |
 
 ## Decisión posterior
 
