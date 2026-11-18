@@ -16,7 +16,7 @@ sugerida, revisión AGM, recuperación avanzada), que sigue fuera de alcance.
 |---|---|
 | Estado | propuesto (2026-11-18), pendiente de revisión |
 | Depende de | `v0.3.0` (búsqueda, historial con efecto, `diff`, instalación) |
-| Desbloquea | Uso diario real; migración opcional de la biblioteca privada |
+| Desbloquea | Uso diario real, con un repositorio de criterio propio que reemplaza a la instancia privada legacy |
 
 ## Punto de partida: toda base empieza vacía
 
@@ -80,6 +80,9 @@ releases con binarios                    README.md
 
 - El motor no conoce dónde está ningún repositorio de criterio, como hoy con
   la instancia privada (fase 08).
+- La instancia privada actual (biblioteca e integración de la fase 08) queda
+  como **legacy** desde el 2026-11-18. No se migra ni sigue los tags nuevos,
+  y nada de este plan depende de ella.
 - Un repositorio de criterio declara la versión de motor que espera. Así dos
   computadores con versiones distintas de `universo` no lo interpretan
   distinto sin avisar.
@@ -314,15 +317,19 @@ escribir.
    `seal` lo aceptan; `diff` informa `external_change` en esa entrada.
 6. En Windows: clon con `core.autocrlf=true`, y `guard` da pass.
 
-### U10 — Migrar tu biblioteca privada (opcional)
+### U10 — Tu primer repositorio de criterio real
 
-Convertir la biblioteca de la fase 08 en un repositorio de criterio, sólo en
-el repositorio privado, con su propio `felix.toml`. Es la primera prueba
-real del flujo.
+Crear con `universo init --git` tu repositorio de criterio privado, vacío,
+como lo hará cualquier usuario, y usarlo a diario. Toma el lugar de la prueba
+de uso real que hacía la instancia legacy (fase 08). Los hallazgos de ese uso
+se reducen a casos ficticios antes de entrar al repositorio público, con la
+misma frontera de privacidad.
 
-Cuándo hacerlo, y si pasa a ser tu fuente de criterio en serio, lo decides
-tú. Hasta entonces, Felix sigue en construcción y no reemplaza lo que ya
-usas.
+Si conviene traer algo de la biblioteca legacy (D6), se hace a mano o con un
+script de una sola vez, en privado, nota por nota y sólo lo que siga vigente.
+
+Cuándo pasa a ser tu fuente de criterio en serio lo decides tú. Hasta
+entonces, Felix sigue en construcción y no reemplaza lo que ya usas.
 
 ## Decisiones que necesito de ti
 
@@ -333,7 +340,7 @@ usas.
 | D3 | `init --git` hace el primer commit | sí / no | no: el primer commit lo haces tú |
 | D4 | Felix ejecuta Git más allá de `init` | nunca / comandos de ayuda (`universo sync`) | nunca: Git queda en tus manos |
 | D5 | Gates de 09 | mantener `v0.4.0` = evaluación comparativa, o pasar esta fase a `v0.4.0` | esta fase como `v0.4.0` y la evaluación a `v0.5.0` |
-| D6 | Migrar la biblioteca privada (U10) | ahora, después de U9, o no | después de U9 |
+| D6 | Traer algo de la biblioteca legacy al repositorio nuevo (U10) | nada / a mano, lo que siga vigente / script de una sola vez | empezar vacío y traer a mano sólo lo vigente |
 
 ## Orden propuesto
 
@@ -344,7 +351,7 @@ usas.
 | 3 | U6 (sin `capture`), U9 pasos 1–4 | Un agente lo usa; dos clones coinciden |
 | 4 | U5, U7, U9 pasos 5–6 | Reglas que evolucionan y merges entre computadores, sin perder el historial |
 | 5 | U4, U8 | Plantilla útil y crecimiento visible |
-| 6 | U10 | Tu biblioteca real como repositorio de criterio, si lo decides |
+| 6 | U10 | Tu repositorio de criterio real, creado vacío y en uso diario |
 
 Los pasos 1 a 3 bastan para empezar a usarlo en local con una base vacía.
 

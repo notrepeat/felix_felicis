@@ -7,7 +7,7 @@ público, conservando una frontera física y verificable entre producto y datos.
 
 | Campo | Valor |
 |---|---|
-| Estado | completo (2026-11-18): la integración privada consume el tag `v0.2.0` |
+| Estado | completo (2026-11-18); **legacy** desde el 2026-11-18: la instancia privada queda fijada en `v0.2.1` y no sigue los tags nuevos. La prueba de uso real pasa al repositorio de criterio de la [fase 10](10-criterio-distribuible.md) (U10). |
 | Depende de | 04 |
 | Desbloquea | 09 |
 
