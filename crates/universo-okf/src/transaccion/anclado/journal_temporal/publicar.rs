@@ -932,12 +932,13 @@ fn publicar_plataforma_modo(
     }
 }
 
-#[cfg(unix)]
+/// `fsync` del parent retenido (no-op documentado en Windows).
 pub(super) fn sincronizar_parent(parent: &File, punto: Punto) -> Result<(), ErrorJournalAnclado> {
     crate::transaccion::durabilidad::sincronizar_directorio(parent, punto)
         .map_err(|_| ErrorJournalAnclado::Io)
 }
 
+#[cfg(unix)]
 fn quitar_temporal(
     parent: &File,
     nombre: &OsStr,
