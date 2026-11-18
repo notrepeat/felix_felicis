@@ -10,7 +10,7 @@ Afirmaciones: A3 («cualquier cambio tiene que pasar por el verificador») y A9
 |---|---|---|
 | MCP con cuatro herramientas `context`, `propose`, `check`, `why`, todas `readOnlyHint` | Implementado y probado | `crates/universo-mcp/src/dominio.rs:32,57` (verificado) |
 | `context`: vecindad inducida de profundidad ≤2 desde un nodo conocido, ≤256 nodos, devuelve **todos** los invariantes | Implementado | `dominio.rs:178-212` (reportado) |
-| `why` usa los mismos argumentos y camino que `propose` | Implementado | `dominio.rs:68` (verificado) |
+| `why` usa los mismos argumentos que `propose` y añade la explicación redactada (2026-11-18) | Implementado y probado | `crates/universo-mcp/tests/loop_mcp.rs` |
 | Test que comprueba que no existe `apply` por MCP y que el bundle queda intacto | Probado | `crates/universo-mcp/tests/loop_mcp.rs:176-196` (reportado) |
 | Apply autorizado solo por CLI, con CAS | Implementado y probado | ver [03](03-transacciones-y-durabilidad.md) |
 | Harness determinista de fase 06 (agente scriptado sin LLM) y Code Mode local opcional | Implementado (demo) | `tools/demo_mcp.py`, `tools/codemode-local/` (reportado) |
@@ -42,7 +42,7 @@ No hay enforcement de ningún tipo (verificado salvo donde se indica):
 | G3 | **Prototipo** (2026-11-18): el ejecutor del orquestador publica tras `admit`, con `--confirmar` opcional para un sí humano. Camino legítimo para que un agente publique: `apply` autorizado por el orquestador o por confirmación humana, nunca por el modelo solo | M | Decidido 2026-11-18 para el prototipo |
 | G4 | **Prototipo hecho** (2026-11-18, [propuesta](../propuestas/08-orquestador-obligatorio.md), `tools/orquestador.py`; agentes guionizados, aislamiento por construcción, no por el SO). Orquestador obligatorio (prioridad 2 de las [conclusiones](../conclusiones-ia-felix-felicis.md#6-prioridades-y-decisión)) en harness aislado | M | Decidido 2026-11-18 |
 | G5 | `context` con selección de invariantes relevantes que preserve cobertura | M | No, pero medir antes (riesgo de ahorro aparente) |
-| G6 | `why` con explicación propia o retirarlo (ver T3 en [02](02-rechazo-testigos-y-reparacion.md)) | S | No |
+| G6 | **Hecho** (2026-11-18, ver T3 en [02](02-rechazo-testigos-y-reparacion.md)): `why` explica el rechazo de forma redactada. `why` con explicación propia o retirarlo | S | No |
 
 G1 y G2 hacen que A3 pase de «falso» a «detectado»; solo G3 + G4 la hacen
 «obligatorio» para agentes. Para una persona que edita a mano, lo realista es

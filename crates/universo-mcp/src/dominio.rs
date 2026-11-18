@@ -1,7 +1,13 @@
 //! Adaptador de consulta: no adquiere autoridad de publicación del bundle.
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::PathBuf};
-use universo_core::{Atomo, BundlePath, Delta, ResultadoPropuesta, Sujeto};
+use universo_core::{
+    Atomo, BundlePath, Delta, ModoExplicacion, PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+    ResultadoPropuesta, Sujeto, explicar_propuesta,
+};
+use universo_okf::explicacion_json::{
+    anotar_reglas, error_explicacion_codigo, explicaciones_medidas_a_json,
+};
 use universo_okf::{parsear_delta_json, transaccion::simulacion::VistaSimulacion};
 
 pub struct ServerConfig {
@@ -51,7 +57,7 @@ pub fn herramientas() -> Vec<Value> {
             }
             _ => {
                 properties["delta"] = json!({"type":"object"});
-                "Explain available rejection provenance or functional conflict classes. No private values are emitted."
+                "Like propose, plus the redacted explanation of the first failing rule: its id and message and the abstract shape of the counterexample (rules, boolean values, counts). No paths, labels or values of the bundle are emitted."
             }
         };
         json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}})
@@ -113,9 +119,41 @@ pub fn ejecutar(nombre: &str, args: Value, config: &ServerConfig) -> Result<Valu
     if let Some((path, depth, values)) = context {
         return contexto(&vista, path, depth, values);
     }
+    let delta = delta.unwrap();
     let resultado = vista
-        .proponer(&delta.unwrap())
+        .proponer(&delta)
         .map_err(|error| dominio(error.codigo()))?;
+    // `why`: la misma explicación redactada que `propose --explain decide
+    // --rules` de la CLI. Sólo hay qué explicar si fallan invariantes.
+    let explicacion = (nombre == "why").then(|| {
+        if !matches!(resultado, ResultadoPropuesta::RechazadaInvariantes(_)) {
+            return (Value::Null, json!("explanation_not_applicable"));
+        }
+        match explicar_propuesta(
+            vista.estructura(),
+            &delta,
+            vista.invariantes(),
+            ModoExplicacion::Decidir,
+            PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+        ) {
+            Some(Ok(medido)) => {
+                let mut objetos = explicaciones_medidas_a_json(
+                    &medido,
+                    ModoExplicacion::Decidir,
+                    PRESUPUESTO_EXPLICACION_POR_DEFECTO,
+                );
+                let reglas: Vec<_> = vista
+                    .invariantes()
+                    .iter()
+                    .map(|f| (f.id.clone(), f.mensaje.clone()))
+                    .collect();
+                anotar_reglas(&mut objetos, &reglas);
+                (objetos, Value::Null)
+            }
+            Some(Err(error)) => (Value::Null, json!(error_explicacion_codigo(error))),
+            None => (Value::Null, json!("explanation_not_applicable")),
+        }
+    });
     let (status, conflicts, failed, diagnostics, provenance) = match resultado {
         ResultadoPropuesta::Admitida(_) => ("admit", 0, 0, vec![], vec![]),
         ResultadoPropuesta::RechazadaConflictos(conflictos) => {
@@ -154,9 +192,12 @@ pub fn ejecutar(nombre: &str, args: Value, config: &ServerConfig) -> Result<Valu
             ("reject", 0, fuentes.len(), vec![], provenance)
         }
     };
-    Ok(
-        json!({"schema":"felix-mcp-v1","tool":nombre,"status":status,"summary":{"conflicts":conflicts,"failed_invariants":failed},"diagnostics":diagnostics,"provenance":provenance,"persisted":false}),
-    )
+    let mut salida = json!({"schema":"felix-mcp-v1","tool":nombre,"status":status,"summary":{"conflicts":conflicts,"failed_invariants":failed},"diagnostics":diagnostics,"provenance":provenance,"persisted":false});
+    if let Some((explanations, error)) = explicacion {
+        salida["explanations"] = explanations;
+        salida["explanation_error"] = error;
+    }
+    Ok(salida)
 }
 
 fn extremos(atomo: &Atomo) -> Vec<&BundlePath> {

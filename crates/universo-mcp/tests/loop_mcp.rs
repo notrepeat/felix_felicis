@@ -248,3 +248,54 @@ fn el_rechazo_y_el_contexto_traen_id_y_mensaje_de_regla() {
     assert_eq!(context["invariants"][1]["rule_id"], "tipo-b");
     assert_eq!(context["invariants"][1]["rule_message"], "El nodo es b.");
 }
+
+#[test]
+fn why_explica_el_rechazo_y_propose_no() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    std::fs::create_dir_all(root.join("n")).unwrap();
+    std::fs::write(
+        root.join("n/item.md"),
+        "---\ntype: a\ntitle: PRIVATE_TITLE_CANARY\n---\n",
+    )
+    .unwrap();
+    let manifest = temp.path().join("manifest.toml");
+    let invariants = temp.path().join("invariants.sx");
+    std::fs::write(&manifest,"version = \"mcp/1\"\n[nodos]\nsortes = [\"a\", \"b\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n").unwrap();
+    std::fs::write(
+        &invariants,
+        "(regla :id \"todos-a\" :mensaje \"Todo nodo es a.\" (forall ((x N)) (Type x a)))\n",
+    )
+    .unwrap();
+    let mut client = Client::start(&root, &manifest, &invariants);
+    let delta =
+        json!({"schema":"felix-delta-v1","add":["Type(n/item, b)"],"remove":["Type(n/item, a)"]});
+    let propose =
+        client.tool("propose", json!({"schema":"felix-mcp-v1","delta":delta}))["structuredContent"]
+            .clone();
+    assert!(propose.get("explanations").is_none());
+    let why =
+        client.tool("why", json!({"schema":"felix-mcp-v1","delta":delta}))["structuredContent"]
+            .clone();
+    assert_eq!(why["status"], "reject");
+    assert_eq!(why["tool"], "why");
+    assert_eq!(why["explanation_error"], Value::Null);
+    let objetos = why["explanations"]["objects"].as_array().unwrap();
+    assert_eq!(objetos.len(), 1);
+    assert_eq!(objetos[0]["rule_id"], "todos-a");
+    assert_eq!(objetos[0]["rule_message"], "Todo nodo es a.");
+    assert_eq!(objetos[0]["counterexample"]["rule"], "forall");
+    // Redactado: ni rutas ni etiquetas del bundle.
+    let texto = why.to_string();
+    assert!(
+        !texto.contains("n/item") && !texto.contains("PRIVATE_TITLE_CANARY"),
+        "{texto}"
+    );
+    // Un delta admitido no tiene nada que explicar.
+    let ok = json!({"schema":"felix-delta-v1","add":[],"remove":[]});
+    let why = client.tool("why", json!({"schema":"felix-mcp-v1","delta":ok}))["structuredContent"]
+        .clone();
+    assert_eq!(why["status"], "admit");
+    assert_eq!(why["explanations"], Value::Null);
+    assert_eq!(why["explanation_error"], "explanation_not_applicable");
+}
