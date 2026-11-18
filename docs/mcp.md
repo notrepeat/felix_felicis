@@ -38,7 +38,12 @@ Ejemplo de llamada:
 
 Un rechazo de dominio es un resultado normal de herramienta (`isError` falso).
 Sus `diagnostics` contienen clase y cantidad, y `provenance` identifica sentencia,
-línea, columna e instancia cuando procede. Un error técnico o argumentos
+línea, columna e instancia cuando procede, más `rule_id` y `rule_message` de la
+regla (`null` si no los declara con `(regla :id ... :mensaje ...)`). Las
+invariantes de `context` llevan los mismos dos campos. Los escribe el autor de
+las reglas, no son datos del bundle; escríbelos sabiendo que los verá el agente.
+El MCP no da el testigo localizado (`propose --witness` de la CLI), porque ese
+testigo revela rutas. Un error técnico o argumentos
 inválidos de una herramienta conocida producen `isError` verdadero con código
 redactado. Los errores de envoltura JSON-RPC, método o herramienta desconocida se
 distinguen mediante el error de protocolo. Ninguno equivale a un rechazo lógico.

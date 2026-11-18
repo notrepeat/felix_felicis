@@ -133,7 +133,24 @@ pub fn ejecutar(nombre: &str, args: Value, config: &ServerConfig) -> Result<Valu
             )
         }
         ResultadoPropuesta::RechazadaInvariantes(fuentes) => {
-            let provenance = fuentes.iter().map(|p| json!({"source_index":p.source_index,"line":p.linea,"column":p.columna,"instance_index":p.instance_index})).collect();
+            // Id y mensaje de la regla (`(regla :id ... :mensaje ...)`), `null`
+            // si no los declara: los escribe el autor de las reglas, no son
+            // datos del bundle, y son lo que permite actuar sobre el rechazo.
+            let reglas = vista.invariantes();
+            let provenance = fuentes
+                .iter()
+                .map(|p| {
+                    let fuente = reglas.get(p.source_index);
+                    json!({
+                        "source_index": p.source_index,
+                        "line": p.linea,
+                        "column": p.columna,
+                        "instance_index": p.instance_index,
+                        "rule_id": fuente.and_then(|f| f.id.clone()),
+                        "rule_message": fuente.and_then(|f| f.mensaje.clone()),
+                    })
+                })
+                .collect();
             ("reject", 0, fuentes.len(), vec![], provenance)
         }
     };
@@ -201,8 +218,13 @@ fn contexto(
         .iter()
         .enumerate()
         .map(|(index, source)| {
-            let mut item =
-                json!({"source_index":index,"line":source.linea,"column":source.columna});
+            let mut item = json!({
+                "source_index": index,
+                "line": source.linea,
+                "column": source.columna,
+                "rule_id": source.id,
+                "rule_message": source.mensaje,
+            });
             if values {
                 item["formula"] = json!(source.sentencia.to_string());
             }

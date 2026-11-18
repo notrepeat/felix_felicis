@@ -220,3 +220,31 @@ fn propose_acepta_delta_v2_que_crea_notas_sin_escribir() {
     assert_eq!(reject["structuredContent"]["status"], "reject", "{reject}");
     assert!(!root.join("n/nueva.md").exists());
 }
+
+#[test]
+fn el_rechazo_y_el_contexto_traen_id_y_mensaje_de_regla() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    std::fs::create_dir_all(root.join("n")).unwrap();
+    std::fs::write(root.join("n/item.md"), "---\ntype: a\ntitle: X\n---\n").unwrap();
+    let manifest = temp.path().join("manifest.toml");
+    let invariants = temp.path().join("invariants.sx");
+    std::fs::write(&manifest,"version = \"mcp/1\"\n[nodos]\nsortes = [\"a\", \"b\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n").unwrap();
+    std::fs::write(
+        &invariants,
+        "(Type @n/item a)\n(regla :id \"tipo-b\" :mensaje \"El nodo es b.\" (Type @n/item b))\n",
+    )
+    .unwrap();
+    let mut client = Client::start(&root, &manifest, &invariants);
+    let checked =
+        client.tool("check", json!({"schema":"felix-mcp-v1"}))["structuredContent"].clone();
+    assert_eq!(checked["status"], "reject");
+    assert_eq!(
+        checked["provenance"],
+        json!([{"source_index":1,"line":2,"column":1,"instance_index":null,"rule_id":"tipo-b","rule_message":"El nodo es b."}])
+    );
+    let context = client.tool("context", json!({"schema":"felix-mcp-v1","node":"n/item"}))["structuredContent"].clone();
+    assert_eq!(context["invariants"][0]["rule_id"], Value::Null);
+    assert_eq!(context["invariants"][1]["rule_id"], "tipo-b");
+    assert_eq!(context["invariants"][1]["rule_message"], "El nodo es b.");
+}
