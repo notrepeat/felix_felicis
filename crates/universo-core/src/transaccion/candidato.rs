@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::{
-    AristaId, Atomo, BundlePath, Delta, Estructura, Etiqueta, IdArista, LadoDelta, Sorte, Sujeto,
-};
+use crate::{AristaId, Atomo, BundlePath, Delta, Estructura, Etiqueta, IdArista, Sorte, Sujeto};
 
 use super::{aristas, ext, nodos, tipos};
 
@@ -35,10 +33,6 @@ impl std::fmt::Display for ClaseOperacion {
 /// Rechazo técnico redactado al construir un candidato.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ErrorCandidato {
-    UnsupportedOperation {
-        lado: LadoDelta,
-        clase: ClaseOperacion,
-    },
     RemoveNotFound {
         clase: ClaseOperacion,
     },
@@ -55,9 +49,6 @@ pub enum ErrorCandidato {
 impl std::fmt::Display for ErrorCandidato {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedOperation { lado, clase } => {
-                write!(f, "unsupported_operation: {lado} {clase}")
-            }
             Self::RemoveNotFound { clase } => write!(f, "remove_not_found: {clase}"),
             Self::AddConflict { clase } => write!(f, "add_conflict: {clase}"),
             Self::InvalidOperation { clase, codigo } => write!(f, "{codigo}: {clase}"),
@@ -72,7 +63,6 @@ impl ErrorCandidato {
     /// Código estable del error sin valores del delta o del snapshot.
     pub const fn codigo(&self) -> &'static str {
         match self {
-            Self::UnsupportedOperation { .. } => "unsupported_operation",
             Self::RemoveNotFound { .. } => "remove_not_found",
             Self::AddConflict { .. } => "add_conflict",
             Self::InvalidOperation { codigo, .. } => codigo,
@@ -83,8 +73,7 @@ impl ErrorCandidato {
     /// Clase de operación asociada, cuando el error se refiere a una sola.
     pub const fn clase(&self) -> Option<ClaseOperacion> {
         match self {
-            Self::UnsupportedOperation { clase, .. }
-            | Self::RemoveNotFound { clase }
+            Self::RemoveNotFound { clase }
             | Self::AddConflict { clase }
             | Self::InvalidOperation { clase, .. } => Some(*clase),
             Self::SnapshotInconsistente => None,

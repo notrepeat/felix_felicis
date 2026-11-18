@@ -35,11 +35,20 @@ class PlanTests(unittest.TestCase):
         primeros = Counter(rows[i][2] for i in range(0, 96, 4))
         self.assertEqual(set(primeros), set(runner.ARMS))
 
-    def test_el_plan_congelado_coincide_con_las_fuentes_actuales(self):
+    def test_el_plan_congelado_es_el_del_estudio_corrido(self):
+        # El estudio 9c está cerrado: el plan del repositorio es exactamente el
+        # que registró la corrida. Las fuentes pueden evolucionar después; en
+        # ese caso el runner se niega a correr (plan_changed) hasta que haya un
+        # plan, y un estudio, nuevos.
         congelado = json.loads(runner.PLAN.read_text(encoding="utf-8"))
-        self.assertEqual(congelado, runner.build_plan(congelado["configured_model_alias"]))
+        corrida = json.loads((runner.RESULTS / "four-arms-v2-estudio" / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(runner.digest(congelado), corrida["plan_sha256"])
         self.assertEqual(congelado["runs"], 96)
         self.assertLessEqual(congelado["runs"], runner.MAX_CORRIDAS)
+        filas = [json.loads(l) for l in (runner.RESULTS / "four-arms-v2-estudio" / "results.jsonl")
+                 .read_text(encoding="utf-8").splitlines()]
+        self.assertEqual({f["plan_sha256"] for f in filas}, {corrida["plan_sha256"]})
+        self.assertEqual(len(filas), 96)
 
     def test_todos_los_brazos_reciben_la_misma_informacion_inicial(self):
         case = self.tasks["cases"][0]
@@ -178,7 +187,7 @@ class BrazosTests(unittest.TestCase):
 
         record, agente = self.correr("promover_d13", "C_obligatorio", politica)
         self.assertEqual(record["orquestador"]["resultado"], "publicado")
-        self.assertIn("error de formato del delta: add_conflict", agente.llamadas[1]["prompt"])
+        self.assertIn("conflicto funcional en 1 clave(s)", agente.llamadas[1]["prompt"])
 
     def test_d_da_una_revision_neutral_y_para_cuando_se_repite(self):
         record, agente = self.correr("promover_d13", "D_revision", lambda c, r, t: literal(c))
@@ -288,12 +297,27 @@ if __name__ == "__main__":
 class EjecucionTests(unittest.TestCase):
     """El CLI del runner con el agente guionizado, en un temporal."""
 
+    @classmethod
+    def setUpClass(cls):
+        # Un plan generado con las fuentes actuales: el del repositorio es el del
+        # estudio cerrado y ya no coincide con ellas.
+        import tempfile
+
+        cls._plan_dir = tempfile.TemporaryDirectory()
+        cls.plan = Path(cls._plan_dir.name) / "plan.json"
+        cls.plan.write_text(json.dumps(runner.build_plan(runner.MODELO), ensure_ascii=False), encoding="utf-8")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._plan_dir.cleanup()
+
     def correr(self, *argumentos):
         import subprocess
         import sys
 
         return subprocess.run([sys.executable, str(runner.HERE / "run_four_arms.py"), "--agente", "guionizado",
-                               f"--binary={BINARY}", *argumentos], capture_output=True, text=True, timeout=600)
+                               f"--binary={BINARY}", f"--plan={self.plan}", *argumentos],
+                              capture_output=True, text=True, timeout=600)
 
     def test_calibracion_y_estudio_no_se_mezclan_y_resume_es_explicito(self):
         import tempfile
@@ -309,7 +333,7 @@ class EjecucionTests(unittest.TestCase):
             mezcla = self.correr("--fase", "estudio", "--resume", f"--output={salida}")
             self.assertIn("run_manifest_changed_refusing_to_resume", mezcla.stderr)
             manifiesto = json.loads((salida / "run.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifiesto["plan_sha256"], runner.digest(json.loads(runner.PLAN.read_text(encoding="utf-8"))))
+            self.assertEqual(manifiesto["plan_sha256"], runner.digest(json.loads(self.plan.read_text(encoding="utf-8"))))
             self.assertEqual(len(manifiesto["universo_sha256"]), 64)
 
     def test_claude_no_acepta_otro_destino(self):
@@ -319,6 +343,7 @@ class EjecucionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             salida = subprocess.run([sys.executable, str(runner.HERE / "run_four_arms.py"), "--agente", "claude",
-                                     f"--output={Path(tmp) / 'otro'}"], capture_output=True, text=True, timeout=120)
+                                     f"--plan={self.plan}", f"--output={Path(tmp) / 'otro'}"],
+                                    capture_output=True, text=True, timeout=120)
             self.assertIn("con --agente claude el destino es", salida.stderr)
             self.assertFalse((Path(tmp) / "otro").exists())

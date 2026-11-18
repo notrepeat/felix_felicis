@@ -3,7 +3,12 @@
 //! Cada apply admitido añade, bajo el lock de escritor y después de sellar,
 //! una línea JSON a `.<raiz>.felix.log`:
 //! `{"schema":"felix-log-v1","time":"<UTC RFC 3339>","author":..,"reason":..,
-//! "sealed":bool,"state":"<token hex>"|null}`. El autor y el motivo los da quien
+//! "sealed":bool,"state":"<token hex>"|null,"delta":{..}|null}`. `delta` es el
+//! delta aplicado en forma canónica (`felix-delta-v1` o `v2`); se omite (`null`,
+//! con `"delta_omitted":true`) si su serialización supera 256 KiB, y las líneas
+//! anteriores a este campo simplemente no lo tienen. Contiene datos del bundle,
+//! como el propio archivo del bundle; `universo log` no lo muestra y
+//! `universo show` sí. El autor y el motivo los da quien
 //! aplica (opcionales, sin verificación de identidad). `state` es el token del
 //! estado sellado; es sensible y no se muestra al listar. El historial es
 //! informativo: no participa en el recovery y un fallo al escribirlo no deshace
@@ -24,6 +29,12 @@ const SCHEMA: &str = "felix-log-v1";
 const MAX_AUTOR: usize = 128;
 const MAX_MOTIVO: usize = 500;
 const MAX_HISTORIAL_BYTES: u64 = 16 * 1024 * 1024;
+/// Tamaño máximo del delta guardado en una línea del historial.
+const MAX_DELTA_EN_HISTORIAL: usize = 256 * 1024;
+/// A partir de este tamaño del historial ya no se guardan deltas, para que las
+/// entradas de procedencia (unos cientos de bytes) sigan cabiendo bajo
+/// `MAX_HISTORIAL_BYTES` y `log` no deje de poder leerse.
+const HISTORIAL_SIN_DELTAS_DESDE: u64 = MAX_HISTORIAL_BYTES / 2;
 
 /// Procedencia declarada por quien aplica un cambio.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -72,6 +83,10 @@ pub struct EntradaHistorial {
     pub autor: Option<String>,
     pub motivo: Option<String>,
     pub sellado: bool,
+    /// Delta aplicado en JSON canónico, si la línea lo guarda y es válido.
+    pub delta: Option<String>,
+    /// El apply omitió el delta por tamaño (del delta o del historial).
+    pub delta_omitido: bool,
 }
 
 /// Historial leído. `descartadas` cuenta líneas ilegibles o fuera de formato
@@ -141,6 +156,7 @@ pub(crate) fn anotar(
     procedencia: &Procedencia,
     estado: Option<SnapshotToken>,
     sellado: bool,
+    delta: Option<&str>,
 ) -> io::Result<()> {
     let (ruta, parent) = ruta_historial(ubicacion).ok_or_else(|| io::Error::other("log"))?;
     // Nunca seguir un enlace ni escribir en algo que no sea un archivo regular
@@ -162,7 +178,7 @@ pub(crate) fn anotar(
     if !archivo.metadata()?.file_type().is_file() {
         return Err(io::Error::other("log_not_regular"));
     }
-    let linea = json!({
+    let mut linea = json!({
         "schema": SCHEMA,
         "time": fecha_utc(SystemTime::now()),
         "author": procedencia.autor,
@@ -170,6 +186,17 @@ pub(crate) fn anotar(
         "sealed": sellado,
         "state": estado.map(SnapshotToken::to_hex),
     });
+    if let Some(delta) = delta {
+        let cabe = delta.len() <= MAX_DELTA_EN_HISTORIAL
+            && previo.unwrap_or(0) < HISTORIAL_SIN_DELTAS_DESDE;
+        match serde_json::from_str::<Value>(delta) {
+            Ok(valor) if cabe => linea["delta"] = valor,
+            _ => {
+                linea["delta"] = Value::Null;
+                linea["delta_omitted"] = Value::Bool(true);
+            }
+        }
+    }
     // Si una escritura anterior quedó a medias, se cierra con un salto para que
     // la línea nueva no se pegue a la parcial.
     let mut texto = format!("{linea}\n");
@@ -244,6 +271,16 @@ fn parsear_linea(linea: &str) -> Option<EntradaHistorial> {
         autor: texto("author")?,
         motivo: texto("reason")?,
         sellado: valor.get("sealed")?.as_bool()?,
+        // Un delta ilegible no invalida la entrada: sólo no se puede mostrar.
+        delta: valor
+            .get("delta")
+            .filter(|d| d.is_object())
+            .map(Value::to_string)
+            .filter(|d| crate::parsear_delta_json(d).is_ok()),
+        delta_omitido: valor
+            .get("delta_omitted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     };
     // Lo leído se revalida: el archivo puede haberse editado a mano.
     (fecha_valida(&entrada.fecha)
@@ -263,6 +300,26 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
         (dir, root, ubicacion)
+    }
+
+    #[test]
+    fn un_historial_grande_deja_de_guardar_deltas_y_sigue_legible() {
+        let (_dir, root, ubicacion) = raiz();
+        let delta = r#"{"schema":"felix-delta-v1","add":[],"remove":[]}"#;
+        anotar(&ubicacion, &Procedencia::default(), None, true, Some(delta)).unwrap();
+        let (ruta, _) = ruta_historial(&ubicacion).unwrap();
+        // Relleno con líneas descartables hasta pasar el umbral.
+        let relleno = "x".repeat(1023) + "\n";
+        let mut archivo = fs::OpenOptions::new().append(true).open(&ruta).unwrap();
+        for _ in 0..(HISTORIAL_SIN_DELTAS_DESDE / 1024 + 1) {
+            archivo.write_all(relleno.as_bytes()).unwrap();
+        }
+        drop(archivo);
+        anotar(&ubicacion, &Procedencia::default(), None, true, Some(delta)).unwrap();
+        let historial = leer(&root).unwrap();
+        assert_eq!(historial.entradas.len(), 2);
+        assert!(historial.entradas[0].delta.is_some() && !historial.entradas[0].delta_omitido);
+        assert!(historial.entradas[1].delta.is_none() && historial.entradas[1].delta_omitido);
     }
 
     #[test]
@@ -316,7 +373,7 @@ mod tests {
             autor: Some("José".into()),
             motivo: None,
         };
-        anotar(&ubicacion, &p, None, false).unwrap();
+        anotar(&ubicacion, &p, None, false, None).unwrap();
         let log = dir.path().join(".bundle.felix.log");
         // Escritura cortada a mitad de un carácter UTF-8.
         fs::OpenOptions::new()
@@ -328,7 +385,7 @@ mod tests {
         let historial = leer(&root).unwrap();
         assert_eq!((historial.entradas.len(), historial.descartadas), (1, 1));
         // El apply siguiente no se pega a la línea parcial.
-        anotar(&ubicacion, &Procedencia::default(), None, true).unwrap();
+        anotar(&ubicacion, &Procedencia::default(), None, true, None).unwrap();
         let historial = leer(&root).unwrap();
         assert_eq!((historial.entradas.len(), historial.descartadas), (2, 1));
         assert_eq!(historial.entradas[0].autor.as_deref(), Some("José"));
@@ -361,11 +418,11 @@ mod tests {
         fs::write(&victima, b"intacto").unwrap();
         let log = dir.path().join(".bundle.felix.log");
         std::os::unix::fs::symlink(&victima, &log).unwrap();
-        assert!(anotar(&ubicacion, &Procedencia::default(), None, true).is_err());
+        assert!(anotar(&ubicacion, &Procedencia::default(), None, true, None).is_err());
         assert_eq!(fs::read(&victima).unwrap(), b"intacto");
         fs::remove_file(&log).unwrap();
         std::os::unix::fs::symlink(dir.path().join("colgante"), &log).unwrap();
-        assert!(anotar(&ubicacion, &Procedencia::default(), None, true).is_err());
+        assert!(anotar(&ubicacion, &Procedencia::default(), None, true, None).is_err());
         assert!(!dir.path().join("colgante").exists());
     }
 }

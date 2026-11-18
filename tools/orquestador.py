@@ -102,7 +102,7 @@ def _codigos(salida: dict) -> list[str]:
 # blanca: cualquier otro código (lock, stage, presupuesto del motor, replay,
 # snapshot...) es técnico y escala, nunca se devuelve como reparable.
 CODIGOS_DE_DELTA = frozenset({
-    "add_conflict", "remove_not_found", "unsupported_operation", "delta_invalid",
+    "add_conflict", "remove_not_found", "delta_invalid",
     "label_missing", "label_orphan", "label_contains_line_break", "label_replacement_required",
     "subject_not_found", "child_reference_not_found", "parent_reference_not_found",
     "parent_cycle", "self_parent", "unknown_node_sort", "unknown_predicate_domain",
@@ -281,6 +281,13 @@ class Orquestador:
             return salida
         if estado == "reject" and codigo == 1 and isinstance(salida.get("explanations"), dict):
             return salida
+        conflictos = (salida.get("summary") or {}).get("conflicts")
+        if estado == "reject" and codigo == 1 and isinstance(token, str) and isinstance(conflictos, int) and conflictos > 0:
+            # Rechazo por conflicto funcional (dos tipos, títulos, padres o
+            # valores de un atributo de un solo valor para el mismo nodo): no
+            # hay invariante que explicar, pero es un rechazo, no un error.
+            salida["explanations"] = {"objects": [], "conflicts": conflictos}
+            return salida
         if (estado == "reject" and codigo == 1 and isinstance(token, str)
                 and salida.get("explanation_error") == "explanation_budget_exceeded"):
             # En bundles grandes la explicación redactada puede agotar su
@@ -438,6 +445,7 @@ class Orquestador:
                 retroalimentacion = {
                     "veredicto": salida["status"],
                     "codigos": codigos,
+                    "conflictos": (salida.get("explanations") or {}).get("conflicts", 0) if salida["status"] == "reject" else 0,
                     "testigo": salida.get("witness") if self.testigo else None,
                     "intento": intento,
                     "intentos_restantes": self.presupuesto - intento,

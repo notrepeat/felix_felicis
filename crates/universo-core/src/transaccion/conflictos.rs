@@ -11,6 +11,9 @@ pub enum ClaseConflicto {
     Type,
     HasLab,
     Parent,
+    /// Un atributo de un solo valor (predicado no `multivalor`) con más de un
+    /// valor final.
+    Ext,
 }
 
 impl std::fmt::Display for ClaseConflicto {
@@ -19,6 +22,7 @@ impl std::fmt::Display for ClaseConflicto {
             Self::Type => "Type",
             Self::HasLab => "HasLab",
             Self::Parent => "Parent",
+            Self::Ext => "Ext",
         };
         f.write_str(nombre)
     }
@@ -122,19 +126,31 @@ pub(super) fn detectar_sobre(
     let mut tipos = HashMap::<BundlePath, HashSet<Sorte>>::new();
     let mut etiquetas = HashMap::<Sujeto, HashSet<Etiqueta>>::new();
     let mut padres = HashMap::<BundlePath, HashSet<BundlePath>>::new();
+    let mut atributos = HashMap::<(BundlePath, String), HashSet<String>>::new();
+    let multivalor: HashSet<&str> = snapshot
+        .manifiesto()
+        .predicados
+        .iter()
+        .filter(|p| p.multivalor)
+        .map(|p| p.nombre.as_str())
+        .collect();
+    let es_funcional = |atomo: &Atomo| {
+        es_hecho_funcional_de_nodo(atomo)
+            || matches!(atomo, Atomo::Ext { predicado, .. } if !multivalor.contains(predicado.as_str()))
+    };
 
     let candidato = construir_topologia_aristas(snapshot, delta)?;
     let topologia_final = candidato.estructura();
     let finales = snapshot
         .atomos()
         .into_iter()
-        .filter(es_hecho_funcional_de_nodo)
+        .filter(es_funcional)
         .filter(|atomo| delta.retirar().binary_search(atomo).is_err())
         .chain(
             delta
                 .agregar()
                 .iter()
-                .filter(|atomo| es_hecho_funcional_de_nodo(atomo))
+                .filter(|atomo| es_funcional(atomo))
                 .cloned(),
         );
 
@@ -184,7 +200,15 @@ pub(super) fn detectar_sobre(
                 etiquetas.entry(sujeto).or_default().insert(etiqueta)
             }
             Atomo::Parent { hijo, padre } => padres.entry(hijo).or_default().insert(padre),
-            Atomo::Edge { .. } | Atomo::Ext { .. } => false,
+            Atomo::Ext {
+                predicado,
+                sujeto,
+                constante,
+            } => atributos
+                .entry((sujeto, predicado))
+                .or_default()
+                .insert(constante),
+            Atomo::Edge { .. } => false,
         };
     }
 
@@ -192,6 +216,7 @@ pub(super) fn detectar_sobre(
     agregar_diagnostico(&mut diagnosticos, ClaseConflicto::Type, &tipos);
     agregar_diagnostico(&mut diagnosticos, ClaseConflicto::HasLab, &etiquetas);
     agregar_diagnostico(&mut diagnosticos, ClaseConflicto::Parent, &padres);
+    agregar_diagnostico(&mut diagnosticos, ClaseConflicto::Ext, &atributos);
     Ok(ResultadoConflictos { diagnosticos })
 }
 

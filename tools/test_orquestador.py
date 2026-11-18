@@ -139,15 +139,25 @@ class OrquestadorTests(unittest.TestCase):
                 self.assertEqual(self.bytes_bundle(), antes)
 
     def test_error_de_forma_del_delta_se_devuelve_para_reparar_si_se_pide(self):
-        # Reemplazar un valor funcional sin retirar el anterior es `add_conflict`.
-        conflicto = {"schema": "felix-delta-v1", "add": ["Estado(notas/bienvenida, vigente)"], "remove": []}
-        sin_opcion = self.orquestador().ejecutar(Guionizado(conflicto, VALIDO), "x")
+        # Retirar algo que no existe es `remove_not_found`, un error de forma.
+        mal_formado = {"schema": "felix-delta-v1", "add": [], "remove": ["Estado(notas/bienvenida, vigente)"]}
+        sin_opcion = self.orquestador().ejecutar(Guionizado(mal_formado, VALIDO), "x")
         self.assertEqual((sin_opcion["resultado"], sin_opcion["motivo"]), ("escalado", "error_tecnico"))
-        agente = Guionizado(conflicto, VALIDO)
+        self.repo = orq.crear_repositorio_demo(BINARIO, self.base / "kb-con-opcion")
+        agente = Guionizado(mal_formado, VALIDO)
         con_opcion = self.orquestador(reparar_errores_de_delta=True).ejecutar(agente, "x")
         self.assertEqual((con_opcion["resultado"], con_opcion["intentos"]), ("publicado", 2))
         retro = agente.recibido[1][1]
-        self.assertEqual((retro["veredicto"], retro["codigos"], retro["objetos"]), ("error", ["add_conflict"], []))
+        self.assertEqual((retro["veredicto"], retro["codigos"], retro["objetos"]), ("error", ["remove_not_found"], []))
+
+    def test_un_conflicto_funcional_es_un_rechazo_reparable(self):
+        # Reemplazar un valor de un solo valor sin retirar el anterior.
+        conflicto = {"schema": "felix-delta-v1", "add": ["Estado(notas/bienvenida, vigente)"], "remove": []}
+        agente = Guionizado(conflicto, VALIDO)
+        resultado = self.orquestador().ejecutar(agente, "x")
+        self.assertEqual((resultado["resultado"], resultado["intentos"]), ("publicado", 2))
+        retro = agente.recibido[1][1]
+        self.assertEqual((retro["veredicto"], retro["conflictos"], retro["objetos"]), ("reject", 1, []))
         # Un error del entorno nunca se devuelve como reparable.
         for tecnico in ("snapshot_bundle_invalid", "prepared_installation_unverified", "writer_lock_busy",
                         "stage_io", "stale", "instance_budget_exhausted", "replay_mismatch", "algo_nuevo"):

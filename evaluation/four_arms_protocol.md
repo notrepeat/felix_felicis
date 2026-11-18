@@ -171,6 +171,13 @@ criterio para seguir al estudio 9c.**
 **Estudio 9c.** Corrido el mismo día, con las 96 filas del plan y sin fallos
 técnicos. Resultados e interpretación en el [informe](four_arms_report.md).
 
+**Estudio cerrado.** `four_arms/plan.json` es el plan de esa corrida, y un test
+comprueba que su hash es el que registró `run.json`. Después, las fuentes
+siguieron evolucionando (por ejemplo, T4: el orquestador trata los conflictos de
+atributo como rechazos), así que el plan ya no coincide con ellas y el runner se
+niega a correr (`plan_changed_refusing_to_run`). Repetir el estudio exige un plan
+y una corrida nuevos.
+
 ## Medidas
 
 - **Primarias**: sobre las filas sin fallo técnico, `final_invalid_state` (el

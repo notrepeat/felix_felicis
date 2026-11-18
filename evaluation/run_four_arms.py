@@ -331,6 +331,9 @@ def _historia_delta(delta):
 def _historia_felix(retro):
     partes = [f"{o.get('rule_id')}: {o.get('rule_message')}" for o in retro.get("objetos") or []]
     partes += [f"error de formato del delta: {c}" for c in retro.get("codigos") or []]
+    if retro.get("conflictos"):
+        partes.append(f"conflicto funcional en {retro['conflictos']} clave(s): un mismo nodo quedaría con dos "
+                      "valores de algo que admite uno; retira el valor anterior")
     testigo = retro.get("testigo") or {}
     if testigo.get("bindings"):
         ligaduras = ", ".join(f"{b['variable']}={b['value']}" for b in testigo["bindings"])
@@ -516,6 +519,8 @@ def main():
     parser.add_argument("--fase", choices=["calibracion", "estudio"], default="estudio")
     parser.add_argument("--plan-only", action="store_true", help="escribe el plan y termina")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--plan", type=Path, default=PLAN,
+                        help="plan congelado contra el que se corre (por defecto, el del estudio)")
     args = parser.parse_args()
 
     plan = build_plan(args.model)
@@ -527,7 +532,7 @@ def main():
         return 0
     # El plan congelado en el repositorio es el contrato: cualquier cambio de
     # fuentes, tareas o calendario obliga a regenerarlo y revisarlo antes.
-    if json.loads(PLAN.read_text(encoding="utf-8")) != plan:
+    if json.loads(args.plan.read_text(encoding="utf-8")) != plan:
         raise SystemExit("plan_changed_refusing_to_run")
     if args.agente == "claude":
         # Un único destino por fase: no se puede correr el estudio en otro

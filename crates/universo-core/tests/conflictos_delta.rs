@@ -423,7 +423,7 @@ fn altas_identicas_son_no_op_y_etiquetas_iguales_en_sujetos_distintos_se_permite
 }
 
 #[test]
-fn diagnosticos_son_deterministas_y_ext_o_retiros_ausentes_no_son_conflictos() {
+fn diagnosticos_son_deterministas_ext_funcional_cuenta_y_retiros_ausentes_no() {
     let mut snapshot = Estructura::nueva(universo_testkit::manifiesto_minimo()).unwrap();
     nodo(&mut snapshot, "n/a", "a", "label");
     nodo(&mut snapshot, "n/b", "a", "label");
@@ -456,7 +456,9 @@ fn diagnosticos_son_deterministas_y_ext_o_retiros_ausentes_no_son_conflictos() {
     assert_eq!(resultado_a, resultado_b);
     assert_eq!(format!("{resultado_a:?}"), format!("{resultado_b:?}"));
     assert_eq!(cantidad(&resultado_a, ClaseConflicto::Type), 2);
-    assert_eq!(resultado_a.diagnosticos().len(), 1);
+    // T4: dos valores finales de un atributo de un solo valor son un conflicto.
+    assert_eq!(cantidad(&resultado_a, ClaseConflicto::Ext), 1);
+    assert_eq!(resultado_a.diagnosticos().len(), 2);
 
     let retiro_ausente = Delta::nuevo(
         [],

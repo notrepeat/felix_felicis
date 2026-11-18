@@ -232,8 +232,16 @@ fn aplicar_archivo_con_hooks(
         };
     let sellado = sellado_con.is_some();
     // Historial informativo bajo el mismo lock; un fallo no deshace el commit.
-    let registrado =
-        super::historial::anotar(&ubicacion, procedencia, sellado_con, sellado).is_ok();
+    let registrado = super::historial::anotar(
+        &ubicacion,
+        procedencia,
+        sellado_con,
+        sellado,
+        crate::delta::serializar_delta_json_canonico(&delta)
+            .ok()
+            .as_deref(),
+    )
+    .is_ok();
     Ok(ResultadoAplicacion {
         estado: EstadoAplicacion::Aplicada,
         conflictos: 0,

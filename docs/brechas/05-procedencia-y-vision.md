@@ -38,7 +38,7 @@ invariantes; no hay búsqueda léxica, por atributo ni semántica (reportado).
 | # | Brecha | Tamaño | Compuerta |
 |---|---|---|---|
 | P1 | **Hecho** (2026-11-17): `propose --apply --author/--reason`, fecha UTC y sello en `.<raiz>.felix.log` bajo el lock; sin verificación de identidad. Procedencia mínima por cambio: autor (humano/agente), fecha, motivo y fuente, guardados junto al commit transaccional | M | No |
-| P2 | **Parcial** (2026-11-17): `universo log` sí; `show <cambio>` no (el historial no guarda el delta). Historial consultable (`universo log`, `universo show <cambio>`) | M | No |
+| P2 | **Hecho** (2026-11-18): cada apply guarda en el historial el delta canónico que aplicó (campo `delta`, hasta 256 KiB) y `universo show <raiz> <n>` lo muestra; `log` sigue sin datos del bundle. Historial consultable (`universo log`, `universo show <cambio>`) | M | No |
 | P3 | Búsqueda léxica sobre etiquetas, atributos y cuerpos | M | No (ambigua respecto de «recuperación avanzada»: confirmar) |
 | P4 | **Hecho** (2026-11-17): [`examples/memoria-documental`](../../examples/memoria-documental) con ID1–ID4 como reglas con nombre; test `crates/universo-cli/tests/memoria_documental.rs`. Plantilla de memoria documental (cap. 07) como manifiesto + invariantes de ejemplo, sin tocar el motor | S–M | No |
 | P5 | Búsqueda semántica | L | Probablemente sí («recuperación avanzada») |

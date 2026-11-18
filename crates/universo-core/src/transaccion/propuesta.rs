@@ -281,6 +281,7 @@ fn requiere_detector(error: &ErrorCandidato) -> bool {
                     | ClaseOperacion::Parent
                     | ClaseOperacion::Edge
                     | ClaseOperacion::Type
+                    | ClaseOperacion::Ext
             )
         )
 }
