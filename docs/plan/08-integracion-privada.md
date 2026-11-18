@@ -7,7 +7,7 @@ público, conservando una frontera física y verificable entre producto y datos.
 
 | Campo | Valor |
 |---|---|
-| Estado | pendiente |
+| Estado | en curso: integración corrida el 2026-11-18; falta fijar un tag público |
 | Depende de | 04 |
 | Desbloquea | 09 |
 
@@ -30,12 +30,12 @@ privado solo porque el bundle y sus fixtures no se publican.
 
 ## Criterios de aceptación
 
-- [ ] El motor público no conoce la ubicación del repositorio privado.
-- [ ] La integración privada puede actualizar de una versión etiquetada a otra.
-- [ ] Los fallos reales se reducen a fixtures sintéticos antes de publicarse.
-- [ ] El escáner de privacidad sigue verde después de cada reproducción.
-- [ ] Ningún log de CI público contiene contenido del bundle privado.
-- [ ] Las métricas agregadas no permiten reconstruir conceptos personales.
+- [x] El motor público no conoce la ubicación del repositorio privado.
+- [ ] La integración privada puede actualizar de una versión etiquetada a otra. Hoy fija un commit exacto, con el procedimiento de actualización escrito; falta un tag público.
+- [x] Los fallos reales se reducen a fixtures sintéticos antes de publicarse (procedimiento escrito en la integración privada; aún no hubo fallo que publicar).
+- [x] El escáner de privacidad sigue verde después de cada reproducción. Hay además un guardia privado→público que busca slugs y títulos de la biblioteca en los archivos versionados de este repositorio: 0 coincidencias.
+- [x] Ningún log de CI público contiene contenido del bundle privado (el CI público no monta la biblioteca).
+- [x] Las métricas agregadas no permiten reconstruir conceptos personales: el informe privado sólo tiene conteos, veredictos, ids de regla, códigos y tiempos.
 
 ## Fuera de alcance
 
@@ -54,7 +54,7 @@ cargo test --test private_bundle_integration
 
 | Fecha | Commit/PR | Evidencia | Resultado |
 |---|---|---|---|
-| — | — | — | — |
+| 2026-11-18 | motor `88bd5fe` | Integración privada: `validate`, `check` con cinco reglas de la especificación de conducta y `propose` sobre copia temporal, en una biblioteca de 93 conceptos y 104 relaciones. Revisión de licencia: la integración invoca la CLI como proceso aparte, sin enlazar el motor. | `validate` y `check` aceptan la biblioteca; `propose` rechaza un `standing` inválido con la regla correcta y aplica y sella una promoción, con `guard` en `pass`. Hallazgos: el manifiesto histórico declaraba un directorio que ya no existe; una regla sobre una arista y dos nodos (~900 000 combinaciones) excede el presupuesto de evaluación; `check --explain` excede el suyo aun sin fallos. |
 
 ## Siguiente fase
 
