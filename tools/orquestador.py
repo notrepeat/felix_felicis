@@ -93,6 +93,25 @@ def _universo(binario: Path, argumentos: list[str]) -> tuple[int, dict]:
     return proceso.returncode, salida
 
 
+def _codigos(salida: dict) -> list[str]:
+    return sorted({e["code"] for e in salida.get("errors") or [] if isinstance(e, dict) and isinstance(e.get("code"), str)})
+
+
+# Errores de forma del propio delta, que el agente puede corregir. Es una lista
+# blanca: cualquier otro código (lock, stage, presupuesto del motor, replay,
+# snapshot...) es técnico y escala, nunca se devuelve como reparable.
+CODIGOS_DE_DELTA = frozenset({
+    "add_conflict", "remove_not_found", "unsupported_operation", "delta_invalid",
+    "label_missing", "label_orphan", "label_contains_line_break", "label_replacement_required",
+    "subject_not_found", "child_reference_not_found", "parent_reference_not_found",
+    "parent_cycle", "self_parent", "unknown_node_sort", "unknown_predicate_domain",
+})
+
+
+def _es_error_de_delta(codigo: str) -> bool:
+    return codigo in CODIGOS_DE_DELTA
+
+
 def _argumentos_repo(repo: Repositorio) -> list[str]:
     return [str(repo.raiz), f"--manifiesto={repo.manifiesto}", f"--invariantes={repo.invariantes}"]
 
@@ -121,6 +140,7 @@ class Orquestador:
         registro: Optional[Path] = None,
         presupuesto: int = PRESUPUESTO_POR_DEFECTO,
         confirmar: Optional[Callable[[dict], bool]] = None,
+        reparar_errores_de_delta: bool = False,
     ):
         if presupuesto < 1:
             raise ValueError("el presupuesto de intentos debe ser al menos 1")
@@ -129,6 +149,10 @@ class Orquestador:
         self.registro = registro
         self.presupuesto = presupuesto
         self.confirmar = confirmar
+        # Con la opción activa, un error de forma del delta (`add_conflict`,
+        # `remove_not_found`, `label_missing`...) vuelve al agente como un
+        # rechazo más, consumiendo un intento. Nunca se convierte en admisión.
+        self.reparar_errores_de_delta = reparar_errores_de_delta
         # Los hashes del registro llevan una clave aleatoria por orquestador:
         # sirven para correlacionar intentos, no para adivinar el contenido
         # probando candidatos.
@@ -181,6 +205,10 @@ class Orquestador:
             return salida
         if estado == "reject" and codigo == 1 and isinstance(salida.get("explanations"), dict):
             return salida
+        if self.reparar_errores_de_delta and estado == "error" and codigo == 1:
+            codigos = _codigos(salida)
+            if codigos and all(_es_error_de_delta(c) for c in codigos):
+                return salida
         raise _Escalado("error_tecnico")
 
     def _aplicar(self, archivo_delta: Path, token: str, objetivo: str) -> dict:
@@ -280,6 +308,7 @@ class Orquestador:
                     self._anotar(episodio, "veredicto", intento=intento, delta_hmac=huella, veredicto="error")
                     raise
                 objetos = salida["explanations"]["objects"] if salida["status"] == "reject" else []
+                codigos = _codigos(salida) if salida["status"] == "error" else []
                 self._anotar(
                     episodio,
                     "veredicto",
@@ -287,6 +316,7 @@ class Orquestador:
                     delta_hmac=huella,
                     veredicto=salida["status"],
                     reglas=[o.get("rule_id") for o in objetos],
+                    codigos=codigos,
                     invariantes_fallidas=(salida.get("summary") or {}).get("failed_invariants"),
                 )
                 if salida["status"] == "admit":
@@ -294,7 +324,8 @@ class Orquestador:
                         episodio, buzon, intento, texto_delta, salida["snapshot_token"], objetivo
                     )
                 retroalimentacion = {
-                    "veredicto": "reject",
+                    "veredicto": salida["status"],
+                    "codigos": codigos,
                     "intento": intento,
                     "intentos_restantes": self.presupuesto - intento,
                     "objetos": objetos,

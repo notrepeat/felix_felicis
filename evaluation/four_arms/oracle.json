@@ -1,0 +1,104 @@
+{
+  "schema": "felix-four-arms-oracle-v1",
+  "cut_date": "2027-01-01",
+  "cases": {
+    "promover_d1": {
+      "required": [
+        "Estado(n/d1, vigente)",
+        "Edge(n/p3→n/d1#revisa#0, n/p3, n/d1, revisa)",
+        "HasLab(n/p3→n/d1#revisa#0, \"\")"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Estado:n/d1",
+        "Edge:n/p3→n/d1#revisa#0",
+        "HasLab:n/p3→n/d1#revisa#0"
+      ]
+    },
+    "renovar_d2": {
+      "required": [
+        "Vigencia(n/d2, 2028-03-31)",
+        "Estado(n/d2, vigente)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Vigencia:n/d2",
+        "Ext:Estado:n/d2"
+      ]
+    },
+    "degradar_f1": {
+      "required": [
+        "Confianza(n/f1, baja)"
+      ],
+      "forbidden": [
+        "Edge(n/f1→n/d3#apoya#0, n/f1, n/d3, apoya)",
+        "HasLab(n/f1→n/d3#apoya#0, \"\")"
+      ],
+      "forbidden_keys": [
+        "Edge:n/f1→n/d3#apoya#0",
+        "HasLab:n/f1→n/d3#apoya#0"
+      ],
+      "mutable_keys": [
+        "Ext:Confianza:n/f1",
+        "Edge:n/f1→n/d3#apoya#0",
+        "HasLab:n/f1→n/d3#apoya#0"
+      ]
+    },
+    "retirar_revisor": {
+      "required": [
+        "Estado(n/d4, propuesta)"
+      ],
+      "forbidden": [
+        "Edge(n/p2→n/d4#revisa#0, n/p2, n/d4, revisa)",
+        "HasLab(n/p2→n/d4#revisa#0, \"\")"
+      ],
+      "forbidden_keys": [
+        "Edge:n/p2→n/d4#revisa#0",
+        "HasLab:n/p2→n/d4#revisa#0"
+      ],
+      "mutable_keys": [
+        "Ext:Estado:n/d4",
+        "Edge:n/p2→n/d4#revisa#0",
+        "HasLab:n/p2→n/d4#revisa#0"
+      ]
+    },
+    "apoyo_fuente_debil": {
+      "required": [],
+      "forbidden": [],
+      "forbidden_keys": [
+        "Edge:n/f2→n/d3#apoya#0",
+        "HasLab:n/f2→n/d3#apoya#0"
+      ],
+      "mutable_keys": []
+    },
+    "apoyo_de_persona": {
+      "required": [],
+      "forbidden": [],
+      "forbidden_keys": [
+        "Edge:n/p1→n/d4#apoya#0",
+        "HasLab:n/p1→n/d4#apoya#0"
+      ],
+      "mutable_keys": []
+    },
+    "asegurar_revisores": {
+      "required": [],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": []
+    },
+    "extender_d4": {
+      "required": [
+        "Vigencia(n/d4, 2027-08-01)",
+        "Confianza(n/d4, alta)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Vigencia:n/d4",
+        "Ext:Confianza:n/d4"
+      ]
+    }
+  }
+}

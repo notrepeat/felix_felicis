@@ -64,7 +64,7 @@ escrita del plan y por tanto **requiere decisión explícita de Romeo**.
 | 6 | **Parcial** 2026-11-17: hechos `universo init` e historial con procedencia mínima (`log`). Pendiente de decisión: generar el delta desde una nota editada (diseño de UX) y búsqueda léxica (¿«recuperación avanzada»?). Original: Ergonomía: `universo init`, generar el delta desde una nota editada, búsqueda léxica, historial con procedencia mínima (quién/cuándo/por qué) | M–L | No |
 | 7 | Representación de criterio: fechas/vigencia, confianza, fuente, multivalor | L | Decisión de diseño (cambia OKF y semántica) |
 | 8 | **Prototipo hecho** 2026-11-18 ([propuesta](../propuestas/08-orquestador-obligatorio.md), `tools/orquestador.py`): verificación obligatoria, reparación con presupuesto, publicación sólo por el ejecutor con CAS, detección de escrituras externas; agentes guionizados, sin LLM. Original: Prototipo de orquestador obligatorio (prioridad 2 de las conclusiones) | M | Decidido 2026-11-18 |
-| 9 | Estudio prerregistrado de cuatro brazos (prioridad 3) | M | **Sí** |
+| 9 | **9a hecha** 2026-11-18 ([propuesta](../propuestas/09-estudio-cuatro-brazos.md), [protocolo](../../evaluation/four_arms_protocol.md)): tareas, oráculo, runner y plan congelado; ensayo sin LLM. 9b (calibración) y 9c (estudio) pendientes de decisión. Original: Estudio prerregistrado de cuatro brazos (prioridad 3) | M | **Sí** |
 | 10 | Reparación sugerida (delta mínimo) | L | **Sí**: roza revisión AGM, excluida hasta probar valor |
 | 11 | Fase 08 (licencia AGPL) y 09 (tag `v0.2.0`) | S–M | **Sí** |
 | — | AGM con preorden, recuperación por patrones, DPO/SqPO | L | **Sí**, excluidas por el plan |

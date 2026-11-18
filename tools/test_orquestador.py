@@ -138,6 +138,22 @@ class OrquestadorTests(unittest.TestCase):
                 self.assertEqual((resultado["resultado"], resultado["motivo"]), ("escalado", "error_tecnico"))
                 self.assertEqual(self.bytes_bundle(), antes)
 
+    def test_error_de_forma_del_delta_se_devuelve_para_reparar_si_se_pide(self):
+        # Reemplazar un valor funcional sin retirar el anterior es `add_conflict`.
+        conflicto = {"schema": "felix-delta-v1", "add": ["Estado(notas/bienvenida, vigente)"], "remove": []}
+        sin_opcion = self.orquestador().ejecutar(Guionizado(conflicto, VALIDO), "x")
+        self.assertEqual((sin_opcion["resultado"], sin_opcion["motivo"]), ("escalado", "error_tecnico"))
+        agente = Guionizado(conflicto, VALIDO)
+        con_opcion = self.orquestador(reparar_errores_de_delta=True).ejecutar(agente, "x")
+        self.assertEqual((con_opcion["resultado"], con_opcion["intentos"]), ("publicado", 2))
+        retro = agente.recibido[1][1]
+        self.assertEqual((retro["veredicto"], retro["codigos"], retro["objetos"]), ("error", ["add_conflict"], []))
+        # Un error del entorno nunca se devuelve como reparable.
+        for tecnico in ("snapshot_bundle_invalid", "prepared_installation_unverified", "writer_lock_busy",
+                        "stage_io", "stale", "instance_budget_exhausted", "replay_mismatch", "algo_nuevo"):
+            self.assertFalse(orq._es_error_de_delta(tecnico), tecnico)
+        self.assertTrue(orq._es_error_de_delta("label_missing"))
+
     def test_excepcion_del_agente_escala(self):
         class Roto:
             def proponer(self, vista, retroalimentacion):
@@ -185,7 +201,7 @@ class OrquestadorTests(unittest.TestCase):
         self.assertTrue(all(e["episodio"] == eventos[0]["episodio"] for e in eventos))
         permitidas = {
             "inicio": {"episodio", "evento", "objetivo_hmac", "presupuesto"},
-            "veredicto": {"episodio", "evento", "intento", "delta_hmac", "veredicto", "reglas", "invariantes_fallidas"},
+            "veredicto": {"episodio", "evento", "intento", "delta_hmac", "veredicto", "reglas", "codigos", "invariantes_fallidas"},
             "publicacion": {"episodio", "evento", "sellado"},
             "fin": {"episodio", "evento", "resultado", "motivo", "intentos", "alertas"},
         }

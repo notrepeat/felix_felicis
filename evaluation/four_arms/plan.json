@@ -1,0 +1,537 @@
+{
+  "schema": "felix-four-arms-v1",
+  "configured_model_alias": "gpt-6-astra",
+  "provider_model_snapshot": null,
+  "sampling_seed": null,
+  "schedule_seed": 914,
+  "repetitions": 3,
+  "arms": [
+    "A_baseline",
+    "B_felix_opcional",
+    "C_obligatorio",
+    "D_revision"
+  ],
+  "rounds_c_d": 3,
+  "timeout_seconds_per_round": 120,
+  "mcp_tool_call_budget_b": 8,
+  "cases": [
+    "promover_d1",
+    "renovar_d2",
+    "degradar_f1",
+    "retirar_revisor",
+    "apoyo_fuente_debil",
+    "apoyo_de_persona",
+    "asegurar_revisores",
+    "extender_d4"
+  ],
+  "runs": 96,
+  "source_sha256": {
+    "evaluation/four_arms/tasks.json": "f2844c31f8fb55ebcf61041622ca1bcc26d6b761392d77cb1baf6d1b936fd402",
+    "evaluation/four_arms/oracle.json": "f61811dd0c0d221bbb7f3030b984720a6a4c90318d0375e9416acd48a15c9066",
+    "evaluation/four_arms_dataset.py": "28cd3578d2710bf29908b1d7da3c1188ce0209b1f61b8b354d33937beeb08f9d",
+    "evaluation/four_arms_scoring.py": "3d9978f538775c7eae46f8bfb66e77bbd98757daa8910fcdd11292b24f7bc0de",
+    "evaluation/run_four_arms.py": "a953929cbb5ea5b6470538e994ad274e5dbe23a424f40cc0526036a55399511a",
+    "evaluation/mcp_proxy_v2.py": "8483dae9882d5e4b81e8c96ca28d822055049bb9cdb44caf1eb3cdeaad0523e1",
+    "evaluation/run_paired.py": "b0e40db1720ba714020c053ccc6054550ae66661ce4148b8ba2a32866175d92a",
+    "tools/orquestador.py": "edd77ccdcaf50b56d807efc5a3c4a0a215accce13d4d23b33da2965ccc0b83f6"
+  },
+  "instruction": "Resuelve la tarea sintética de edición de un grafo de conocimiento. Devuelve sólo el delta JSON felix-delta-v1 pedido. Usa sólo los hechos y reglas dados. No inspecciones archivos, no uses la red ni ejecutes comandos. Minimiza los cambios ajenos al objetivo. Un delta vacío (add y remove vacíos) significa no cambiar nada.",
+  "mcp_note": " Tienes herramientas de verificación de Felix (context, check, propose, why); puedes usarlas para comprobar y reparar tu propuesta, con un máximo de 8 llamadas.",
+  "neutral_review": "Revisa tu propuesta anterior contra las reglas y el objetivo. Devuelve el delta final; si ya es correcto, devuélvelo sin cambios.",
+  "schema_sha256": "186df79ed77bfebcfb3719d8bd327a2930f23fd1c22748bfd4d09a10c3a78346",
+  "primary_endpoints": [
+    "final_invalid_state (oráculo)",
+    "final_success (oráculo)"
+  ],
+  "secondary_endpoints": [
+    "first_delta_success",
+    "repaired",
+    "rounds",
+    "escalated",
+    "elapsed_seconds",
+    "provider_usage"
+  ],
+  "stopping_rule": "correr todas las filas del plan y publicar todas; sin ampliar ni repetir corridas",
+  "schedule": [
+    {
+      "case": "renovar_d2",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 1,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 1,
+      "arm": "D_revision"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 1,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 1,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 2,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 2,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 2,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 2,
+      "arm": "D_revision"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "extender_d4",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "degradar_f1",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "apoyo_de_persona",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "apoyo_fuente_debil",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "promover_d1",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "asegurar_revisores",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 3,
+      "arm": "A_baseline"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "renovar_d2",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 3,
+      "arm": "C_obligatorio"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 3,
+      "arm": "B_felix_opcional"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 3,
+      "arm": "D_revision"
+    },
+    {
+      "case": "retirar_revisor",
+      "repetition": 3,
+      "arm": "A_baseline"
+    }
+  ]
+}
