@@ -304,7 +304,12 @@ pub fn serializar_candidato(
 
     let padres_snapshot = padres_por_path(snapshot);
     let padres_candidato = padres_por_path(estructura);
-    if padres_snapshot.keys().ne(padres_candidato.keys()) {
+    // Notas nuevas (delta v2): el candidato puede tener más nodos, nunca menos.
+    // Se escriben sin override de padre (inferencia legada).
+    if padres_snapshot
+        .keys()
+        .any(|hijo| !padres_candidato.contains_key(hijo))
+    {
         return Err(ErrorSerializarCandidato::SnapshotIncompatible);
     }
 

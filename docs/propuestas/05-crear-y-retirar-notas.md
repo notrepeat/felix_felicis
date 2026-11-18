@@ -1,7 +1,10 @@
 # Propuesta: crear y retirar notas por delta (paso 5)
 
-Estado: **propuesta, pendiente de decisión de Romeo.** No hay código. Fecha:
-2026-11-17. Origen: paso 5 de la [hoja de ruta](../brechas/00-maestro.md) y U1
+Estado: **aprobada (opción C con sintaxis B) e implementada** el 2026-11-18,
+fases 1 a 4. Desviación respecto del plan: no se creó `VERSION_MOTOR_V2`; el
+contexto guarda v1 si el delta no crea notas (bytes idénticos a los previos) y
+v2 si las crea, y un motor anterior falla cerrado ante v2, así que la etiqueta
+de semántica no cambia. Fecha original: 2026-11-17. Origen: paso 5 de la [hoja de ruta](../brechas/00-maestro.md) y U1
 en [06](../brechas/06-uso-diario-y-release.md).
 
 ## Problema

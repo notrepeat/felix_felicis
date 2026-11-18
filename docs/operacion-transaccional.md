@@ -99,6 +99,17 @@ capability anclada que lo creó y devuelve el código original. Si no puede
 `apply_stage_retained`. Un stage sin capability ni journal (proceso muerto antes
 del journal) nunca se borra automáticamente.
 
+## Notas nuevas (`felix-delta-v2`)
+
+Un delta v2 puede crear notas. El núcleo las inserta en una base antes de
+resolver el resto del delta; el stage escribe su Markdown (frontmatter `type` y
+`title`, cuerpo opcional) y la recarga del stage debe reproducir exactamente el
+candidato. El contexto de admisión guarda el delta en forma canónica: v1 si no
+crea notas (idéntico al formato anterior) y v2 si las crea, de modo que el
+recovery reproduce el mismo candidato; un motor anterior a v2 falla cerrado al
+leer un contexto v2. Un test corta el apply de una nota en cada paso de la
+instalación y comprueba que `recover` deja el estado viejo o el nuevo completo.
+
 ## Sello e historial
 
 Tras `Committed`, bajo el mismo lock, apply escribe el sello del estado admitido

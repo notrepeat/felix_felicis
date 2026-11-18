@@ -163,3 +163,29 @@ fn un_delta_sin_notas_se_comporta_igual_que_antes() {
     assert_eq!(candidato.estructura().atomos(), snapshot.atomos());
     let _ = Sujeto::Nodo(p("n/existente"));
 }
+
+#[test]
+fn cambiar_el_padre_de_una_nota_nueva_en_el_mismo_delta_se_rechaza() {
+    let mut snapshot = base();
+    let index = snapshot
+        .insertar_nodo(p("n/index"), Sorte::nuevo("a"), Etiqueta::nuevo("Índice"))
+        .unwrap();
+    let _ = index;
+    let delta = Delta::nuevo(
+        [Atomo::Parent {
+            hijo: p("n/nueva"),
+            padre: p("n/existente"),
+        }],
+        [Atomo::Parent {
+            hijo: p("n/nueva"),
+            padre: p("n/index"),
+        }],
+    )
+    .unwrap()
+    .con_notas([nota("n/nueva", "a", "Nueva")])
+    .unwrap();
+    let error = construir_candidato(&snapshot, &delta).unwrap_err();
+    assert_eq!(codigo(error), "note_parent_not_legacy");
+    let fuentes = parsear_programa("").unwrap();
+    assert!(proponer(&snapshot, &delta, &fuentes).is_err());
+}

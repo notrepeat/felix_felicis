@@ -1003,8 +1003,10 @@ fn parent_explicito_esperado(
     candidato
         .nodos()
         .map(|(id, nodo)| {
-            let cambio_parent =
-                padres_originales.get(&nodo.path) != padres_candidatos.get(&nodo.path);
+            // Una nota nueva no "cambia" de padre: se escribe con el legado.
+            let cambio_parent = padres_originales
+                .get(&nodo.path)
+                .is_some_and(|anterior| Some(anterior) != padres_candidatos.get(&nodo.path));
             (
                 nodo.path.clone(),
                 candidato.parent_frontmatter_explicito(id) || cambio_parent,

@@ -207,6 +207,7 @@ pub(super) fn construir_sobre(
             clase: ClaseOperacion::Parent,
         });
     }
+    super::notas::verificar_padres_legados(&estructura, delta)?;
     Ok(Candidato { estructura })
 }
 

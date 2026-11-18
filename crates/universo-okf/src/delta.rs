@@ -170,6 +170,17 @@ pub fn parsear_delta_json_v2(texto: &str) -> Result<Delta, ErrorDeltaJson> {
         })
 }
 
+/// Forma canónica para guardar un delta (contexto de admisión, journal): v1
+/// si no crea notas, byte a byte igual que antes de existir v2, y v2 si las
+/// crea. Un motor anterior a v2 falla cerrado al leer un v2.
+pub fn serializar_delta_json_canonico(delta: &Delta) -> Result<String, ErrorDeltaJson> {
+    if delta.crear().is_empty() {
+        serializar_delta_json_v1(delta)
+    } else {
+        serializar_delta_json_v2(delta)
+    }
+}
+
 /// Serializa en JSON v2 compacto y determinista (notas por path, átomos en
 /// orden canónico, `body` omitido si está vacío).
 pub fn serializar_delta_json_v2(delta: &Delta) -> Result<String, ErrorDeltaJson> {

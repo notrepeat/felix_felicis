@@ -58,6 +58,39 @@ fn validar(snapshot: &Estructura, nota: &NotaNueva) -> Result<(), ErrorCandidato
     Ok(())
 }
 
+/// Las notas nuevas se escriben sin clave de padre: en el candidato final su
+/// padre debe ser el legado, o la recarga desde disco no lo reproduciría.
+pub(crate) fn verificar_padres_legados(
+    candidato: &Estructura,
+    delta: &Delta,
+) -> Result<(), ErrorCandidato> {
+    for nota in delta.crear() {
+        let id = candidato
+            .por_path(&nota.path)
+            .ok_or(ErrorCandidato::SnapshotInconsistente)?;
+        if candidato.padre(id) != padre_legado(candidato, &nota.path) {
+            return Err(error("note_parent_not_legacy"));
+        }
+    }
+    Ok(())
+}
+
+/// Padre que el cargador OKF infiere para una nota sin clave de padre
+/// explícita: `dir/index` si existe en `estructura` y `dir` no está en
+/// `sin_iota`. Nunca se aplica a un `index` (su padre sería el del directorio
+/// superior; las notas nuevas no pueden ser `index`).
+pub fn padre_legado(estructura: &Estructura, path: &crate::BundlePath) -> Option<crate::NodoId> {
+    if path.stem() == "index" {
+        return None;
+    }
+    let dir = path.directorio()?;
+    if bajo_alguno(dir, &estructura.manifiesto().layout.sin_iota) {
+        return None;
+    }
+    let candidato = crate::BundlePath::nuevo(&format!("{dir}/index")).ok()?;
+    estructura.por_path(&candidato)
+}
+
 /// Base sobre la que se resuelve el delta: el snapshot prestado si no crea
 /// notas, o una copia propia con las notas nuevas insertadas.
 pub(crate) enum Base<'a> {
@@ -106,21 +139,10 @@ pub(crate) fn base_con_notas<'a>(
         .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
         creadas.push((id, nota));
     }
-    // Padre legado, como el cargador: `dir/index` si existe y `dir` no está en
-    // `sin_iota`. Las notas nuevas nunca son `index`, así que sólo pueden
-    // colgar de un índice existente.
-    let sin_iota = base.manifiesto().layout.sin_iota.clone();
+    // Las notas nuevas nunca son `index`, así que sólo pueden colgar de un
+    // índice existente en el snapshot.
     for (id, nota) in creadas {
-        let Some(dir) = nota.path.directorio() else {
-            continue;
-        };
-        if bajo_alguno(dir, &sin_iota) {
-            continue;
-        }
-        let Ok(candidato) = crate::BundlePath::nuevo(&format!("{dir}/index")) else {
-            continue;
-        };
-        if let Some(padre) = snapshot.por_path(&candidato) {
+        if let Some(padre) = padre_legado(snapshot, &nota.path) {
             base.asignar_padre(id, padre)
                 .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
         }

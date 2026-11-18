@@ -26,7 +26,7 @@ textual compatible con clientes MCP. Los esquemas se anuncian en `tools/list`.
 | Herramienta | Argumentos adicionales | Resultado |
 |---|---|---|
 | `context` | `node` relativo del grafo; `depth` opcional 0–2; `include_values` opcional, falso por defecto | Subgrafo inducido por vecindad no dirigida de relaciones `Edge` y `Parent`; conteos y procedencia de invariantes. |
-| `propose` | `delta` objeto `felix-delta-v1` obligatorio | `admit` o `reject`, conteos, clases de conflicto y procedencia de invariantes falsas. Nunca publica. |
+| `propose` | `delta` objeto `felix-delta-v1` o `felix-delta-v2` (crea notas) obligatorio | `admit` o `reject`, conteos, clases de conflicto y procedencia de invariantes falsas. Nunca publica. |
 | `check` | `delta` opcional | El mismo veredicto sobre el candidato, o sobre la base cuando falta el delta. |
 | `why` | `delta` opcional | Clases funcionales y procedencia disponibles para ese candidato/base; no inventa un testigo ni repite valores privados. |
 

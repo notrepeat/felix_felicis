@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::delta::{parsear_delta_json_v1, serializar_delta_json_v1};
+use crate::delta::{parsear_delta_json, serializar_delta_json_canonico};
 use crate::transaccion::captura::{ConfigRawCapturada, materializar_snapshot_desde_entradas};
 use crate::transaccion::snapshot::{EntradaSnapshot, TipoEntradaSnapshot};
 
@@ -38,10 +38,10 @@ pub(crate) fn decodificar(bytes: &[u8]) -> Result<ContextoAdmision, ErrorCodecAd
     )
     .map_err(|_| ErrorCodecAdmision::ContextoInvalido)?;
 
-    let delta = parsear_delta_json_v1(wire.delta_json_v1)
-        .map_err(|_| ErrorCodecAdmision::ContextoInvalido)?;
+    let delta =
+        parsear_delta_json(wire.delta_json_v1).map_err(|_| ErrorCodecAdmision::ContextoInvalido)?;
     let delta_canonico =
-        serializar_delta_json_v1(&delta).map_err(|_| ErrorCodecAdmision::ContextoInvalido)?;
+        serializar_delta_json_canonico(&delta).map_err(|_| ErrorCodecAdmision::ContextoInvalido)?;
     if delta_canonico != wire.delta_json_v1 {
         return Err(ErrorCodecAdmision::ContextoInvalido);
     }

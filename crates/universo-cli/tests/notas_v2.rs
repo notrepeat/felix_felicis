@@ -1,5 +1,4 @@
-//! `propose` con `felix-delta-v2`: simula la creación de notas; el apply la
-//! rechaza hasta que el recovery sepa reproducirla.
+//! `propose` con `felix-delta-v2`: simula y aplica la creación de notas.
 use serde_json::Value;
 use std::{fs, path::PathBuf, process::Command};
 
@@ -91,12 +90,29 @@ fn crear_una_nota_existente_es_error_tecnico() {
 }
 
 #[test]
-fn el_apply_con_notas_se_rechaza_sin_tocar_el_bundle() {
+fn el_apply_crea_la_nota_sellada_y_valida() {
     let f = fixture("(Type @n/existente a)\n", CREAR_B);
     let (_, value) = propose(&f, &["--emit-snapshot-token"]);
     let token = value["snapshot_token"].as_str().unwrap().to_string();
     let (code, value) = propose(&f, &["--apply", "--expect-snapshot", &token]);
-    assert_eq!(code, 1);
-    assert_eq!(value["errors"][0]["code"], "apply_notes_unsupported");
-    assert!(!f.root.join("n/nueva.md").exists());
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["status"], "admit");
+    assert_eq!(value["sealed"], true);
+    let texto = fs::read_to_string(f.root.join("n/nueva.md")).unwrap();
+    assert!(
+        texto.contains("type: b") && texto.contains("title: Nueva"),
+        "{texto}"
+    );
+    assert!(texto.ends_with("Texto.\n"), "{texto}");
+    let validar = Command::new(env!("CARGO_BIN_EXE_universo"))
+        .arg("validate")
+        .arg(&f.root)
+        .arg("--manifiesto")
+        .arg(&f.manifest)
+        .output()
+        .unwrap();
+    assert!(validar.status.success(), "{validar:?}");
+    // Repetir el mismo delta: la nota ya existe.
+    let (_, value) = propose(&f, &[]);
+    assert_eq!(value["errors"][0]["code"], "note_exists");
 }

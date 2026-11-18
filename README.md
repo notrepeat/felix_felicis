@@ -113,7 +113,8 @@ una explicación porque ese comando no solicita `--explain`.
 
 ## Simular una propuesta
 
-`propose` evalúa un delta JSON v1 sin escribir en el bundle ni crear un lock.
+`propose` evalúa un delta JSON (`felix-delta-v1`, o `felix-delta-v2` para crear
+notas) sin escribir en el bundle ni crear un lock.
 
 ```text
 universo propose <raiz> --manifiesto <m.toml> --invariantes <i.sx> --delta <d.json> --format json
@@ -133,6 +134,25 @@ si la propuesta falló técnicamente o tiene conflictos funcionales, o
 `explanation_budget_exceeded`/`explanation_evaluation_invalid`). En texto, la
 ausencia se informa como `EXPLANATIONS unavailable: <código>`. Para explicar un
 apply rechazado, simula el mismo delta.
+
+### Crear notas
+
+`felix-delta-v2` añade `create` a `add`/`remove`:
+
+```json
+{"schema":"felix-delta-v2",
+ "create":[{"path":"notas/cache","type":"criterio","title":"Cachear sólo lo reproducible","body":"Texto.\n"}],
+ "add":["Estado(notas/cache, borrador)"],"remove":[]}
+```
+
+Cada nota tiene `path` (sin `.md`, dentro de un directorio del layout), `type`,
+`title` y `body` opcional (anexo opaco, fuera de la garantía formal). El resto
+del delta puede referirse a la nota nueva. Las invariantes se evalúan sobre el
+candidato con la nota creada, y `propose --apply` la publica con el mismo
+protocolo transaccional (journal, recovery, sello e historial). No se pueden
+crear `index` ni notas con sorte reservada (`Retirado`, `Patrón`), ni borrar
+notas: retirar es retipar a `Retirado`. Una nota nueva queda bajo su padre
+legado (`dir/index` si existe); cambiar su padre en el mismo delta no se admite.
 
 ### Nombrar reglas
 

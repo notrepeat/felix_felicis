@@ -149,11 +149,6 @@ fn aplicar_archivo_con_hooks(
     let text = std::str::from_utf8(&bytes).map_err(|_| ErrorAplicacion::nuevo("delta_invalid"))?;
     let delta =
         crate::parsear_delta_json(text).map_err(|_| ErrorAplicacion::nuevo("delta_invalid"))?;
-    // Crear notas exige guardar el delta v2 en el journal y reproducirlo en el
-    // recovery; hasta entonces el apply lo rechaza antes de tomar el lock.
-    if !delta.crear().is_empty() {
-        return Err(ErrorAplicacion::nuevo("apply_notes_unsupported"));
-    }
     let mut lock =
         LockEscritura::adquirir_en(&ubicacion).map_err(|e| ErrorAplicacion::nuevo(e.codigo()))?;
     let mut owner = DuenioTransaccionAnclado::desde_lock(&mut lock)

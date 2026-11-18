@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use universo_core::Delta;
 
-use crate::delta::{ErrorDeltaJson, parsear_delta_json_v1, serializar_delta_json_v1};
+use crate::delta::{ErrorDeltaJson, parsear_delta_json, serializar_delta_json_canonico};
 
 use super::captura::{ConfigRawCapturada, Snapshot};
 use super::journal::RawTreeDigest;
@@ -65,7 +65,8 @@ impl ContextoAdmision {
 
         // La Delta tipada ya está materializada; la cuota limita el valor que
         // conserva el contexto, no promete evitar la asignación del codec.
-        let delta_json_v1 = serializar_delta_json_v1(delta).map_err(mapear_delta)?;
+        // v1 sin notas (idéntico al formato previo); v2 si el delta crea notas.
+        let delta_json_v1 = serializar_delta_json_canonico(delta).map_err(mapear_delta)?;
         validar_limite_delta(delta_json_v1.len(), limite_delta)?;
 
         let contexto = Self {
@@ -113,8 +114,8 @@ impl ContextoAdmision {
 
     /// Parsea y vuelve a canonizar el valor retenido antes de usarlo.
     pub(crate) fn delta(&self) -> Result<Delta, ErrorContextoAdmision> {
-        let delta = parsear_delta_json_v1(&self.delta_json_v1).map_err(mapear_delta)?;
-        let canonico = serializar_delta_json_v1(&delta).map_err(mapear_delta)?;
+        let delta = parsear_delta_json(&self.delta_json_v1).map_err(mapear_delta)?;
+        let canonico = serializar_delta_json_canonico(&delta).map_err(mapear_delta)?;
         if canonico != self.delta_json_v1 {
             return Err(ErrorContextoAdmision::DeltaInvalido);
         }
@@ -220,6 +221,7 @@ impl fmt::Debug for ContextoAdmision {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delta::serializar_delta_json_v1;
     use crate::transaccion::captura::materializar_snapshot_desde_entradas;
     use crate::transaccion::snapshot::EntradaSnapshot;
     use universo_core::{Atomo, Delta};
@@ -264,6 +266,44 @@ ignorados = []
             "policy-test/1",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn contexto_sin_notas_guarda_exactamente_los_bytes_v1_de_siempre() {
+        let snapshot = snapshot();
+        let delta = Delta::nuevo([Atomo::parsear("Type(b, a)").unwrap()], []).unwrap();
+        let contexto = ContextoAdmision::capturar(&snapshot, &delta).unwrap();
+        assert_eq!(
+            contexto.delta_json_v1(),
+            r#"{"schema":"felix-delta-v1","add":["Type(b, a)"],"remove":[]}"#
+        );
+    }
+
+    #[test]
+    fn contexto_con_notas_guarda_v2_y_rechaza_formas_no_canonicas() {
+        let snapshot = snapshot();
+        let delta = Delta::default()
+            .con_notas([universo_core::NotaNueva {
+                path: universo_core::BundlePath::nuevo("n/x").unwrap(),
+                tipo: universo_core::Sorte::nuevo("a"),
+                etiqueta: universo_core::Etiqueta::nuevo("X"),
+                cuerpo: String::new(),
+            }])
+            .unwrap();
+        let mut contexto = ContextoAdmision::capturar(&snapshot, &delta).unwrap();
+        assert!(
+            contexto
+                .delta_json_v1()
+                .starts_with(r#"{"schema":"felix-delta-v2""#)
+        );
+        assert_eq!(contexto.delta().unwrap(), delta);
+        // Un v2 sin notas no es canónico (sería v1): se rechaza.
+        contexto.delta_json_v1 =
+            r#"{"schema":"felix-delta-v2","create":[],"add":[],"remove":[]}"#.into();
+        assert!(contexto.delta().is_err());
+        // Una nota alterada con otro orden de claves tampoco es canónica.
+        contexto.delta_json_v1 = r#"{"schema":"felix-delta-v2","create":[{"type":"a","path":"n/x","title":"X"}],"add":[],"remove":[]}"#.into();
+        assert!(contexto.delta().is_err());
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod conflictos;
 mod ext;
 mod nodos;
 mod notas;
+pub use notas::padre_legado;
 mod propuesta;
 mod tipos;
 

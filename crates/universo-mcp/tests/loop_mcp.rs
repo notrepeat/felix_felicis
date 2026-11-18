@@ -195,3 +195,28 @@ fn agent_context_reject_correct_readmit_restart_without_writes() {
     );
     assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 3);
 }
+
+#[test]
+fn propose_acepta_delta_v2_que_crea_notas_sin_escribir() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("bundle");
+    std::fs::create_dir_all(root.join("n")).unwrap();
+    std::fs::write(root.join("n/item.md"), "---\ntype: a\ntitle: Item\n---\n").unwrap();
+    let manifest = temp.path().join("manifest.toml");
+    let invariants = temp.path().join("invariants.sx");
+    std::fs::write(&manifest,"version = \"mcp/1\"\n[nodos]\nsortes = [\"a\", \"b\", \"Retirado\", \"Patrón\"]\n[layout]\ndirectorios = [\"n\"]\n").unwrap();
+    std::fs::write(&invariants, "(forall ((x N)) (Type x a))\n").unwrap();
+    let mut client = Client::start(&root, &manifest, &invariants);
+    let crear = |tipo: &str| json!({"schema":"felix-delta-v2","create":[{"path":"n/nueva","type":tipo,"title":"Nueva"}],"add":[],"remove":[]});
+    let admit = client.tool(
+        "propose",
+        json!({"schema":"felix-mcp-v1","delta":crear("a")}),
+    );
+    assert_eq!(admit["structuredContent"]["status"], "admit", "{admit}");
+    let reject = client.tool(
+        "propose",
+        json!({"schema":"felix-mcp-v1","delta":crear("b")}),
+    );
+    assert_eq!(reject["structuredContent"]["status"], "reject", "{reject}");
+    assert!(!root.join("n/nueva.md").exists());
+}

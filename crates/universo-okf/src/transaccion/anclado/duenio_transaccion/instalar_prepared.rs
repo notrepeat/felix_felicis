@@ -328,3 +328,6 @@ impl ErrorFinalizacionPrepared<'_, '_> {
 #[cfg(test)]
 #[path = "instalar_prepared_apply_tests.rs"]
 mod apply_recovery_tests;
+#[cfg(test)]
+#[path = "instalar_prepared_notas_tests.rs"]
+mod notas_recovery_tests;

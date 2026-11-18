@@ -27,7 +27,7 @@ CLI `universo` (`crates/universo-cli/src/main.rs:27`, verificado): `atomos`,
 
 | # | Brecha | Evidencia | Tamaño | ¿Decide Romeo? |
 |---|---|---|---|---|
-| U1 | Crear y borrar notas (nodos) por delta, con transacción y replay | ver arriba | L | Toca contratos de fase 04 |
+| U1 | **Hecho (crear)** 2026-11-18: `felix-delta-v2` con `create`, apply y recovery; borrar no (retirar es retipar). Crear y borrar notas (nodos) por delta, con transacción y replay | ver arriba | L | Toca contratos de fase 04 |
 | U2 | Generar el delta desde una edición: «edito la nota, `universo propose` calcula el delta contra el último estado admitido» | sin comando | M | Diseño de UX |
 | U3 | **Hecho** (2026-11-17): `universo init <dir>` con manifiesto, invariantes con `(regla ...)` y una nota, sellado. `universo init` y plantillas de manifiesto | sin comando (reportado) | S | No |
 | U4 | **Parcial** (2026-11-17): `log` hecho; búsqueda pendiente de confirmar (P3) y `diff` pendiente. Búsqueda, `log`, `diff` | sin comando (reportado); ver [05](05-procedencia-y-vision.md) | M | Diseño |

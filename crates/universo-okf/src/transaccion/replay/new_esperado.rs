@@ -193,13 +193,34 @@ pub(crate) fn derivar_parent_overrides(
 ) -> Result<Vec<ParentOverride>, ErrorNewEsperado> {
     let padres_snapshot = padres_por_path(snapshot);
     let padres_candidato = padres_por_path(candidato);
-    if padres_snapshot.keys().ne(padres_candidato.keys()) {
+    // El candidato puede tener notas nuevas (delta v2), nunca menos nodos.
+    if padres_snapshot
+        .keys()
+        .any(|hijo| !padres_candidato.contains_key(hijo))
+    {
         return Err(ErrorNewEsperado::SnapshotIncompatible);
+    }
+    // Una nota nueva se escribe sin clave de padre: su padre debe ser el que
+    // el cargador infiere (legado). Cambiarlo en el mismo delta no se admite.
+    for (hijo, padre) in &padres_candidato {
+        if padres_snapshot.contains_key(hijo) {
+            continue;
+        }
+        let legado = universo_core::padre_legado(candidato, hijo)
+            .and_then(|id| candidato.nodo(id))
+            .map(|nodo| nodo.path.clone());
+        if *padre != legado {
+            return Err(ErrorNewEsperado::SnapshotIncompatible);
+        }
     }
 
     Ok(padres_candidato
         .iter()
-        .filter(|(hijo, padre)| padres_snapshot.get(*hijo) != Some(*padre))
+        .filter(|(hijo, padre)| {
+            padres_snapshot
+                .get(*hijo)
+                .is_some_and(|anterior| anterior != *padre)
+        })
         .map(|(hijo, padre)| ParentOverride::new(hijo.clone(), padre.clone()))
         .collect())
 }
