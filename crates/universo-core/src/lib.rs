@@ -17,7 +17,7 @@ pub mod transaccion;
 pub mod veredicto;
 pub use anexo::{Anexo, Entrada};
 pub use atomos::{Atomo, ErrorAtomo, IdArista, Sujeto};
-pub use delta::{Delta, ErrorDelta, LadoDelta, NotaNueva};
+pub use delta::{CuerpoNuevo, Delta, ErrorDelta, LadoDelta, NotaNueva};
 pub use estructura::{Arista, ErrorEstructura, Estructura, Nodo};
 pub use evaluador::{
     AsignacionCanonica, ConstructorAtomico, ErrorEvaluacion, ErrorEvaluacionMedida,

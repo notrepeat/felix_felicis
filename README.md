@@ -20,6 +20,7 @@ Implementado:
 - validación estática, expansión de esquemas y evaluador de referencia en la API de `universo-core`;
 - `check --explain decide|enumerate` opt-in, con explicaciones redactadas en texto o JSON v2; el resultado baseline conserva JSON v1;
 - CLI (`atomos`, `validate`, `check`, `propose`, `status`, `recover`, `guard`, `seal`, `init`, `log`; `verificar` es alias compatible de `validate`);
+- `universo delta <raiz> --desde <borrador>` calcula el delta que lleva el estado admitido a un borrador editado;
 - `universo init <dir>` crea un repositorio de conocimiento mínimo, válido y sellado (no es atómico: si falla a mitad, borra el directorio y repite); `propose --apply --author <a> --reason <r>` registra la procedencia y `universo log` la muestra;
 - [guardia](docs/guardia.md) que detecta cambios hechos fuera de Felix (sello del último estado admitido y hook de pre-commit);
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
@@ -154,6 +155,32 @@ crear `index` ni notas con sorte reservada (`Retirado`, `Patrón`), ni borrar
 notas: retirar es retipar a `Retirado`. Una nota nueva queda bajo su padre
 legado (`dir/index` si existe); cambiar su padre en el mismo delta no se admite.
 
+### Editar en un borrador y calcular el delta
+
+Para no escribir deltas a mano: copia el bundle a un borrador, edítalo
+(notas nuevas, tipos, atributos, aristas, prosa) y pide el delta contra el root,
+que sigue siendo el estado admitido:
+
+```text
+universo delta <raiz> --desde <borrador> --manifiesto <m.toml> > delta.json
+universo propose <raiz> --manifiesto <m.toml> --invariantes <i.sx> --delta delta.json
+```
+
+El delta (`felix-delta-v1`, o v2 si crea notas o cambia cuerpos) se verifica
+antes de imprimirse: aplicado al root reproduce el borrador. `update` reemplaza
+el cuerpo de una nota existente; el cuerpo no participa en las invariantes pero
+el cambio pasa por la transacción, el sello y el historial. No se pueden borrar
+notas ni cambiar frontmatter no mapeado (`note_deletion_unsupported`,
+`passthrough_change_unsupported`), y los archivos que no son notas deben
+coincidir: cualquier diferencia en archivos que no son notas cargadas
+(auxiliares, ignorados, fuera del layout) se rechaza con `draft_unmanaged_change`,
+y añadir o quitar la clave explícita de padre con `parent_key_change_unsupported`.
+El formato del frontmatter (orden, comillas) no se conserva: el apply escribe la
+forma canónica. A diferencia de `check`/`propose`, la salida de `delta` contiene
+datos del bundle (es el delta). Errores por stderr con código estable y salida 1;
+stdout queda vacío. No comprueba que el root esté sellado: `--expect-snapshot`
+protege el apply.
+
 ### Nombrar reglas
 
 Una regla de nivel superior puede llevar un id y un mensaje humano opcionales:
@@ -170,9 +197,13 @@ obligatorio. La forma se reconoce sólo en el nivel superior y cuando el segundo
 elemento es `:id` o `:mensaje`, así que un predicado de extensión llamado `regla`
 sigue funcionando igual. Se muestran sólo en
 el **texto** opt-in de `check --explain` y `propose --explain`, como una línea
-`rule: id=... message=...` bajo cada objeto. El JSON v2 no cambia (su conjunto
-de claves es cerrado) y sin `--explain` no aparecen. Escribe el mensaje sabiendo
-que se mostrará a quien ejecute `--explain`.
+`rule: id=... message=...` bajo cada objeto. En JSON sólo aparecen con el opt-in
+adicional `--rules`: `check --explain ... --rules` responde `schema_version: 3`
+(v2 más `rule_id` y `rule_message`, `null` si la regla no los declara, en cada
+objeto; los errores conservan la forma v2) y `propose --explain ... --rules`
+añade los mismos campos a sus objetos. Sin `--rules` el JSON v2 no cambia y sin
+`--explain` no aparecen. Escribe el mensaje sabiendo que se mostrará a quien
+ejecute `--explain`.
 
 `--emit-snapshot-token` añade explícitamente el token sensible del snapshot;
 por defecto no se incluye. El token identifica árbol raw, configuración y

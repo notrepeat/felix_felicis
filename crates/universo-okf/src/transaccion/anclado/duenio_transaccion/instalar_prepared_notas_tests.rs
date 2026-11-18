@@ -30,6 +30,11 @@ fn delta_notas() -> Delta {
         cuerpo: "Creada por delta.\n".to_string(),
     }])
     .unwrap()
+    .con_cuerpos([universo_core::CuerpoNuevo {
+        path: BundlePath::nuevo("n/node").unwrap(),
+        cuerpo: "BODY editado\n".to_string(),
+    }])
+    .unwrap()
 }
 
 #[test]
@@ -99,8 +104,13 @@ fn recovery_de_un_apply_que_crea_notas_en_cada_corte() {
         let nodo = fs::read_to_string(root.join("n/node.md")).unwrap();
         let nueva = root.join("n/nueva.md");
         let nuevo = nueva.exists();
-        // Todo o nada: nota y cambio de tipo juntos.
+        // Todo o nada: nota, cambio de tipo y cuerpo editado juntos.
         assert_eq!(nuevo, nodo.contains("type: b"), "paso {paso}: {nodo}");
+        assert_eq!(
+            nuevo,
+            nodo.ends_with("BODY editado\n"),
+            "paso {paso}: {nodo}"
+        );
         if nuevo {
             let texto = fs::read_to_string(&nueva).unwrap();
             assert!(texto.contains("title: Nueva") && texto.ends_with("Creada por delta.\n"));

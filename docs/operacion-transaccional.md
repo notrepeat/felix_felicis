@@ -110,6 +110,11 @@ recovery reproduce el mismo candidato; un motor anterior a v2 falla cerrado al
 leer un contexto v2. Un test corta el apply de una nota en cada paso de la
 instalación y comprueba que `recover` deja el estado viejo o el nuevo completo.
 
+Un delta v2 también puede llevar `update` (cuerpos nuevos para notas
+existentes, conservando su frontmatter no mapeado); `universo delta` lo genera
+desde un borrador editado. El test de cortes del apply incluye una
+actualización de cuerpo junto con la nota nueva.
+
 ## Sello e historial
 
 Tras `Committed`, bajo el mismo lock, apply escribe el sello del estado admitido

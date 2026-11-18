@@ -58,6 +58,39 @@ fn validar(snapshot: &Estructura, nota: &NotaNueva) -> Result<(), ErrorCandidato
     Ok(())
 }
 
+/// Reemplaza el cuerpo (anexo) de notas existentes, conservando su
+/// frontmatter no mapeado. No actúa sobre notas creadas en el mismo delta.
+pub(crate) fn aplicar_cuerpos(
+    candidato: &mut Estructura,
+    snapshot: &Estructura,
+    delta: &Delta,
+) -> Result<(), ErrorCandidato> {
+    for cuerpo in delta.cuerpos() {
+        if delta
+            .crear()
+            .iter()
+            .any(|n| n.path.clave_case() == cuerpo.path.clave_case())
+        {
+            return Err(error("note_update_of_created"));
+        }
+        if snapshot.por_path(&cuerpo.path).is_none() {
+            return Err(error("note_not_found"));
+        }
+        if cuerpo.cuerpo.contains('\r') {
+            return Err(error("note_invalid_body"));
+        }
+        let id = candidato
+            .por_path(&cuerpo.path)
+            .ok_or_else(|| error("note_not_found"))?;
+        let mut anexo = candidato.anexo(id).cloned().unwrap_or_default();
+        anexo.cuerpo = cuerpo.cuerpo.clone();
+        candidato
+            .anexar(id, anexo)
+            .map_err(|_| ErrorCandidato::SnapshotInconsistente)?;
+    }
+    Ok(())
+}
+
 /// Las notas nuevas se escriben sin clave de padre: en el candidato final su
 /// padre debe ser el legado, o la recarga desde disco no lo reproduciría.
 pub(crate) fn verificar_padres_legados(

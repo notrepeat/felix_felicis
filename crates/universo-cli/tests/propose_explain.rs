@@ -190,3 +190,73 @@ fn explain_sin_invariantes_que_explicar_lo_declara_con_codigo() {
     assert_eq!(value["explanations"], Value::Null);
     assert_eq!(value["explanation_error"], "explanation_not_applicable");
 }
+
+fn check_cmd(f: &Fixture, extra: &[&str]) -> (i32, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_universo"))
+        .arg("check")
+        .arg(&f.root)
+        .arg("--manifiesto")
+        .arg(&f.manifest)
+        .arg("--invariantes")
+        .arg(&f.invariants)
+        .args(extra)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap(),
+        String::from_utf8(out.stdout).unwrap(),
+    )
+}
+
+#[test]
+fn check_rules_es_v3_con_id_y_mensaje_y_sin_flag_sigue_v2() {
+    let f = fixture(
+        "(regla :id \"tipo-b\" :mensaje \"Debe ser b.\" (Type @n/PRIVATE_NODE b))\n(Type @n/PRIVATE_NODE b)\n",
+    );
+    let (code, out) = check_cmd(
+        &f,
+        &["--explain", "enumerate", "--rules", "--format", "json"],
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(!out.contains("PRIVATE"), "{out}");
+    let value: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(value["schema_version"], 3);
+    let objects = value["explanations"]["objects"].as_array().unwrap();
+    assert_eq!(objects.len(), 2);
+    let keys: BTreeSet<_> = objects[0].as_object().unwrap().keys().cloned().collect();
+    for key in [
+        "kind",
+        "source_index",
+        "line",
+        "column",
+        "instance_index",
+        "counterexample",
+        "presence_core",
+        "gap",
+        "rule_id",
+        "rule_message",
+    ] {
+        assert!(keys.contains(key), "{key}");
+    }
+    assert_eq!(keys.len(), 10);
+    assert_eq!(objects[0]["rule_id"], "tipo-b");
+    assert_eq!(objects[0]["rule_message"], "Debe ser b.");
+    assert_eq!(objects[1]["rule_id"], Value::Null);
+    let (_, sin) = check_cmd(&f, &["--explain", "enumerate", "--format", "json"]);
+    let value: Value = serde_json::from_str(&sin).unwrap();
+    assert_eq!(value["schema_version"], 2);
+    assert!(!sin.contains("tipo-b"));
+    assert_eq!(check_cmd(&f, &["--rules"]).0, 2, "--rules exige --explain");
+}
+
+#[test]
+fn propose_explain_rules_anota_los_objetos() {
+    let f = fixture(REGLAS);
+    let (code, out, _) = propose(&f, &["--format", "json", "--explain", "decide", "--rules"]);
+    assert_eq!(code, 1);
+    let value: Value = serde_json::from_str(&out).unwrap();
+    let object = &value["explanations"]["objects"][0];
+    assert_eq!(object["rule_id"], "tipo-estable");
+    assert_eq!(object["rule_message"], "El nodo no cambia de tipo.");
+    assert_eq!(propose(&f, &["--rules"]).0, 2, "--rules exige --explain");
+}

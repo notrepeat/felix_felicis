@@ -1,5 +1,6 @@
 //! CLI del motor Universo de Conocimiento: lectura y aplicación transaccional.
 mod apply;
+mod diferencia;
 mod estado;
 mod guardia;
 mod historial;
@@ -28,10 +29,10 @@ use universo_core::{ErrorEvaluacion, Manifiesto, PRESUPUESTO_EXPLICACION_POR_DEF
 use universo_okf::{ErrorBundle, ErrorManifiestoArchivo, Regla, cargar_bundle, cargar_manifiesto};
 
 /// Uso breve, mostrado por errores de argumentos en `stderr`.
-const USO: &str = "Uso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]  (alias de validate)\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate>] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n  universo guard <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo seal <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo init <directorio> [--format <text|json>]\n  universo log <raiz> [--format <text|json>]\nUse --manifiesto=<ruta> y --invariantes=<ruta> si una ruta empieza con '-'.\n";
+const USO: &str = "Uso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]  (alias de validate)\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate> [--rules]] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n  universo guard <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo seal <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo init <directorio> [--format <text|json>]\n  universo log <raiz> [--format <text|json>]\n  universo delta <raiz> --desde <borrador> --manifiesto <m>\nUse --manifiesto=<ruta> y --invariantes=<ruta> si una ruta empieza con '-'.\n";
 
 /// Ayuda completa, mostrada en `stdout` con código de salida 0.
-const AYUDA: &str = "CLI de Felix Felicis\n\nUso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate>] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n  universo guard <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo seal <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo init <directorio> [--format <text|json>]\n  universo log <raiz> [--format <text|json>]\n\nComandos:\n  atomos     Imprime los átomos del bundle en orden canónico.\n  validate   Valida el manifiesto, el formato OKF y la estructura del bundle.\n  verificar  Alias compatible de validate.\n  check      Evalúa el programa de invariantes sobre el bundle.\n  propose    Simula por defecto; --apply publica con snapshot esperado.\n  status     Informa, sin escribir, si hay una transacción pendiente (0 limpio, 1 pendiente).\n  recover    Toma el lock y completa o revierte una transacción interrumpida.\n  guard      Valida, evalúa invariantes y compara con el sello del último estado admitido (0 sólo si todo coincide).\n  seal       Acepta el estado actual como admitido si cumple las invariantes.\n  init       Crea un repositorio de conocimiento mínimo, válido y sellado.\n  log        Muestra fecha, autor, motivo y sello de cada cambio aplicado.\n\nOpciones:\n  --manifiesto <ruta> | --manifiesto=<ruta>  Manifiesto TOML requerido.\n  --invariantes <ruta> | --invariantes=<ruta> Programa de invariantes requerido por check.\n  --explain decide|enumerate                  Explicación redactada opt-in de check y de propose (sólo simulación).\n  --format text|json                         Formato de salida de todos los comandos salvo atomos (por defecto: text).\n  -h, --help                                 Muestra esta ayuda y termina con código 0.\n\nSi la ruta de un archivo empieza con `-`, usa `--opcion=<ruta>`.\nSi la raíz posicional empieza con `-`, antepone `./` (por ejemplo, `./-bundle`).\nvalidate es una comprobación estructural; no evalúa invariantes.\ncheck informa admit/reject/error y no incluye datos concretos del bundle. La explicación es redactada; su pase opt-in usa un presupuesto de 1.000.000 unidades además del pase completo que determina el resumen.\n\nCódigos de salida:\n  0  Bundle válido, check/propose admit o ayuda mostrada.\n  1  Bundle inválido, check/propose reject/error, status pendiente/missing, guard fallido, seal/recover fallido o fallo de escritura.\n  2  Uso inválido.\n";
+const AYUDA: &str = "CLI de Felix Felicis\n\nUso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate> [--rules]] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n  universo guard <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo seal <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo init <directorio> [--format <text|json>]\n  universo log <raiz> [--format <text|json>]\n  universo delta <raiz> --desde <borrador> --manifiesto <m>\n\nComandos:\n  atomos     Imprime los átomos del bundle en orden canónico.\n  validate   Valida el manifiesto, el formato OKF y la estructura del bundle.\n  verificar  Alias compatible de validate.\n  check      Evalúa el programa de invariantes sobre el bundle.\n  propose    Simula por defecto; --apply publica con snapshot esperado.\n  status     Informa, sin escribir, si hay una transacción pendiente (0 limpio, 1 pendiente).\n  recover    Toma el lock y completa o revierte una transacción interrumpida.\n  guard      Valida, evalúa invariantes y compara con el sello del último estado admitido (0 sólo si todo coincide).\n  seal       Acepta el estado actual como admitido si cumple las invariantes.\n  init       Crea un repositorio de conocimiento mínimo, válido y sellado.\n  log        Muestra fecha, autor, motivo y sello de cada cambio aplicado.\n  delta      Calcula el delta que lleva el root admitido a un borrador editado (su salida incluye datos del bundle).\n\nOpciones:\n  --manifiesto <ruta> | --manifiesto=<ruta>  Manifiesto TOML requerido.\n  --invariantes <ruta> | --invariantes=<ruta> Programa de invariantes requerido por check.\n  --explain decide|enumerate                  Explicación redactada opt-in de check y de propose (sólo simulación).\n  --rules                                     Con --explain: id y mensaje de cada regla en el JSON (check pasa a schema v3).\n  --format text|json                         Formato de salida de todos los comandos salvo atomos y delta (por defecto: text).\n  -h, --help                                 Muestra esta ayuda y termina con código 0.\n\nSi la ruta de un archivo empieza con `-`, usa `--opcion=<ruta>`.\nSi la raíz posicional empieza con `-`, antepone `./` (por ejemplo, `./-bundle`).\nvalidate es una comprobación estructural; no evalúa invariantes.\ncheck informa admit/reject/error y no incluye datos concretos del bundle. La explicación es redactada; su pase opt-in usa un presupuesto de 1.000.000 unidades además del pase completo que determina el resumen.\n\nCódigos de salida:\n  0  Bundle válido, check/propose admit o ayuda mostrada.\n  1  Bundle inválido, check/propose reject/error, status pendiente/missing, guard fallido, seal/recover/delta fallido o fallo de escritura.\n  2  Uso inválido.\n";
 
 /// Formato de salida de `validate`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +49,7 @@ enum Comando {
     Guardia(guardia::Solicitud),
     Init(init::Solicitud),
     Log(historial::Solicitud),
+    Delta(diferencia::Solicitud),
     Atomos {
         raiz: PathBuf,
         manifiesto: PathBuf,
@@ -63,6 +65,7 @@ enum Comando {
         invariantes: PathBuf,
         formato: Formato,
         explicacion: Option<ModoExplicacion>,
+        con_reglas: bool,
     },
 }
 
@@ -72,6 +75,8 @@ struct SolicitudCheck<'a> {
     invariantes: &'a Path,
     formato: Formato,
     explicacion: Option<ModoExplicacion>,
+    /// `--rules`: JSON v3 con `rule_id`/`rule_message` por objeto.
+    con_reglas: bool,
 }
 
 /// Interpreta los argumentos de línea de comandos (sin el nombre del
@@ -106,6 +111,9 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
     if nombre_comando == "log" {
         return historial::parsear(resto).map(Comando::Log);
     }
+    if nombre_comando == "delta" {
+        return diferencia::parsear(resto).map(Comando::Delta);
+    }
     let tipo_comando = match nombre_comando.as_str() {
         "atomos" => 0,
         "validate" | "verificar" => 1,
@@ -119,6 +127,7 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
     let mut invariantes: Option<PathBuf> = None;
     let mut formato: Option<Formato> = None;
     let mut explicacion: Option<ModoExplicacion> = None;
+    let mut con_reglas = false;
     let mut i = 0;
     while i < resto.len() {
         let arg = &resto[i];
@@ -154,6 +163,12 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
             }
             invariantes = Some(PathBuf::from(valor));
             i += 2;
+        } else if arg == "--rules" {
+            if tipo_comando != 2 || con_reglas {
+                return Err(USO.to_string());
+            }
+            con_reglas = true;
+            i += 1;
         } else if arg == "--explain" {
             let valor = resto.get(i + 1).ok_or_else(|| USO.to_string())?;
             if tipo_comando != 2 || explicacion.is_some() || valor.starts_with('-') {
@@ -188,6 +203,9 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
         }
     }
 
+    if con_reglas && explicacion.is_none() {
+        return Err(USO.to_string());
+    }
     let raiz = raiz.ok_or_else(|| USO.to_string())?;
     let manifiesto = manifiesto.ok_or_else(|| USO.to_string())?;
     match tipo_comando {
@@ -203,6 +221,7 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
             invariantes: invariantes.ok_or_else(|| USO.to_string())?,
             formato: formato.unwrap_or(Formato::Texto),
             explicacion,
+            con_reglas,
         }),
     }
 }
@@ -600,9 +619,10 @@ fn resultado_json_check_explicado(
     summary: Option<Value>,
     errors: &[DiagnosticoCheck],
     explanations: Option<Value>,
+    schema_version: u8,
 ) -> Value {
     json!({
-        "schema_version": 2,
+        "schema_version": schema_version,
         "command": "check",
         "status": status,
         "summary": summary,
@@ -616,8 +636,23 @@ struct ResultadoCheckExplicado<'a> {
     summary: Option<Value>,
     errors: &'a [DiagnosticoCheck],
     explanations: Option<Value>,
-    /// Id y mensaje de cada fuente (sólo para el texto opt-in).
+    /// Id y mensaje de cada fuente (texto opt-in y JSON v3).
     reglas: Vec<(Option<String>, Option<String>)>,
+    /// `--rules`: el JSON pasa a v3 y cada objeto lleva `rule_id`/`rule_message`.
+    con_reglas: bool,
+}
+
+/// Añade `rule_id` y `rule_message` (o `null`) a cada objeto de explicación
+/// según su `source_index` (JSON v3 de `check` y `propose --explain --rules`).
+fn anotar_reglas(explanations: &mut Value, reglas: &[(Option<String>, Option<String>)]) {
+    for object in explanations["objects"].as_array_mut().into_iter().flatten() {
+        let regla = object["source_index"]
+            .as_u64()
+            .and_then(|i| reglas.get(usize::try_from(i).ok()?));
+        let (id, mensaje) = regla.cloned().unwrap_or((None, None));
+        object["rule_id"] = json!(id);
+        object["rule_message"] = json!(mensaje);
+    }
 }
 
 fn escribir_resultado_check_explicado(
@@ -628,11 +663,18 @@ fn escribir_resultado_check_explicado(
     error: &mut impl Write,
 ) -> i32 {
     if formato == Formato::Json {
+        let mut explanations = resultado.explanations;
+        if resultado.con_reglas {
+            if let Some(explanations) = explanations.as_mut() {
+                anotar_reglas(explanations, &resultado.reglas);
+            }
+        }
         let mut bytes = match serde_json::to_vec(&resultado_json_check_explicado(
             resultado.status,
             resultado.summary,
             resultado.errors,
-            resultado.explanations,
+            explanations,
+            if resultado.con_reglas { 3 } else { 2 },
         )) {
             Ok(bytes) => bytes,
             Err(causa) => {
@@ -695,6 +737,7 @@ fn escribir_error_check_explicado(
             errors: errores,
             explanations: None,
             reglas: Vec::new(),
+            con_reglas: false,
         },
         formato,
         1,
@@ -1170,29 +1213,19 @@ fn explicar_check(
 /// Ejecuta el pipeline cerrado de `check`. Ningún error de carga, autoría o
 /// presupuesto se convierte en un veredicto lógico `reject`.
 fn ejecutar_check(
-    raiz: &Path,
-    manifiesto: &Path,
-    invariantes: &Path,
-    formato: Formato,
-    explicacion: Option<ModoExplicacion>,
+    solicitud: SolicitudCheck<'_>,
     salida: &mut impl Write,
     error: &mut impl Write,
 ) -> i32 {
     // check no toma el lock: avisa por stderr si hay una transacción pendiente,
     // sin cambiar stdout ni el código de salida.
-    if let Some(aviso) = estado::aviso_pendiente(raiz) {
+    if let Some(aviso) = estado::aviso_pendiente(solicitud.raiz) {
         if let Err(causa) = error.write_all(aviso.as_bytes()) {
             reportar_fallo_escritura(error, "stderr", &causa);
         }
     }
     ejecutar_check_con_presupuesto_explicacion(
-        SolicitudCheck {
-            raiz,
-            manifiesto,
-            invariantes,
-            formato,
-            explicacion,
-        },
+        solicitud,
         PRESUPUESTO_EXPLICACION_POR_DEFECTO,
         salida,
         error,
@@ -1214,6 +1247,7 @@ fn ejecutar_check_con_presupuesto_explicacion(
         invariantes,
         formato,
         explicacion,
+        con_reglas,
     } = solicitud;
     let manifiesto_cargado = match cargar_manifiesto(manifiesto) {
         Ok(manifiesto) => manifiesto,
@@ -1431,6 +1465,7 @@ fn ejecutar_check_con_presupuesto_explicacion(
                         .iter()
                         .map(|f| (f.id.clone(), f.mensaje.clone()))
                         .collect(),
+                    con_reglas,
                 },
                 formato,
                 codigo_salida,
@@ -1481,6 +1516,7 @@ pub(crate) fn ejecutar(args: Vec<String>, salida: &mut impl Write, error: &mut i
         Comando::Guardia(solicitud) => guardia::ejecutar(solicitud, salida, error),
         Comando::Init(solicitud) => init::ejecutar(solicitud, salida, error),
         Comando::Log(solicitud) => historial::ejecutar(solicitud, salida, error),
+        Comando::Delta(solicitud) => diferencia::ejecutar(solicitud, salida, error),
         Comando::Atomos { raiz, manifiesto } => ejecutar_atomos(&raiz, &manifiesto, salida, error),
         Comando::Validate {
             raiz,
@@ -1493,12 +1529,16 @@ pub(crate) fn ejecutar(args: Vec<String>, salida: &mut impl Write, error: &mut i
             invariantes,
             formato,
             explicacion,
+            con_reglas,
         } => ejecutar_check(
-            &raiz,
-            &manifiesto,
-            &invariantes,
-            formato,
-            explicacion,
+            SolicitudCheck {
+                raiz: &raiz,
+                manifiesto: &manifiesto,
+                invariantes: &invariantes,
+                formato,
+                explicacion,
+                con_reglas,
+            },
             salida,
             error,
         ),
@@ -1591,6 +1631,7 @@ directorios = ["n"]
                     invariantes: &invariantes,
                     formato: Formato::Json,
                     explicacion: Some(modo),
+                    con_reglas: false,
                 },
                 0,
                 &mut salida,
@@ -1632,6 +1673,7 @@ directorios = ["n"]
                     invariantes: &invariantes,
                     formato: Formato::Json,
                     explicacion: Some(modo),
+                    con_reglas: false,
                 },
                 limite_inyectado,
                 &mut salida_con_limite,

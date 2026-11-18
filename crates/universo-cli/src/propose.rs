@@ -7,7 +7,7 @@ use universo_okf::transaccion::simulacion::{
     EstadoSimulacion, simular_archivo, simular_archivo_explicado,
 };
 
-pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
+pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
 pub(super) struct Solicitud {
     raiz: PathBuf,
     manifiesto: PathBuf,
@@ -18,6 +18,7 @@ pub(super) struct Solicitud {
     aplicar: bool,
     esperado: Option<String>,
     explicar: Option<ModoExplicacion>,
+    con_reglas: bool,
     autor: Option<String>,
     motivo: Option<String>,
 }
@@ -33,6 +34,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     let mut aplicar = false;
     let mut esperado = None;
     let mut explicar = None;
+    let mut con_reglas = false;
     let mut autor = None;
     let mut motivo = None;
     let mut i = 0;
@@ -43,6 +45,14 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
                 return Err(fail());
             }
             aplicar = true;
+            i += 1;
+            continue;
+        }
+        if arg == "--rules" {
+            if con_reglas {
+                return Err(fail());
+            }
+            con_reglas = true;
             i += 1;
             continue;
         }
@@ -100,6 +110,9 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     }
     // --explain sólo simula: un rechazo de apply se explica simulando el mismo delta.
     // --author/--reason describen un cambio publicado: sólo con --apply.
+    if con_reglas && explicar.is_none() {
+        return Err(fail());
+    }
     if aplicar != esperado.is_some()
         || aplicar && (emit_token || explicar.is_some())
         || !aplicar && (autor.is_some() || motivo.is_some())
@@ -116,6 +129,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
         aplicar,
         esperado,
         explicar,
+        con_reglas,
         autor,
         motivo,
     })
@@ -214,7 +228,11 @@ pub(super) fn ejecutar(
             // Con --explain las dos claves están siempre presentes; en un error
             // técnico de la propuesta no hay invariantes que explicar.
             if solicitud.explicar.is_some() {
-                value["explanations"] = explanations.clone().unwrap_or(Value::Null);
+                let mut explanations = explanations.clone().unwrap_or(Value::Null);
+                if solicitud.con_reglas && !explanations.is_null() {
+                    super::anotar_reglas(&mut explanations, &reglas);
+                }
+                value["explanations"] = explanations;
                 value["explanation_error"] = match (status, explanation_error) {
                     ("error", _) => json!("explanation_not_applicable"),
                     (_, Some(code)) => json!(code),

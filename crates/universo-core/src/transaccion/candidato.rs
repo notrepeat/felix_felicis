@@ -208,6 +208,7 @@ pub(super) fn construir_sobre(
         });
     }
     super::notas::verificar_padres_legados(&estructura, delta)?;
+    super::notas::aplicar_cuerpos(&mut estructura, snapshot, delta)?;
     Ok(Candidato { estructura })
 }
 

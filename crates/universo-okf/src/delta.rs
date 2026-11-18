@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
-use universo_core::{Atomo, BundlePath, Delta, ErrorDelta, Etiqueta, NotaNueva, Sorte};
+use universo_core::{
+    Atomo, BundlePath, CuerpoNuevo, Delta, ErrorDelta, Etiqueta, NotaNueva, Sorte,
+};
 
 pub use universo_core::LadoDelta;
 
@@ -32,7 +34,15 @@ pub enum ErrorDeltaJson {
     NotaInvalida {
         indice: usize,
     },
-    /// El formato v1 no puede representar notas nuevas.
+    /// Dos actualizaciones de cuerpo comparten path.
+    CuerpoDuplicado {
+        indice: usize,
+    },
+    /// Path de una actualización de cuerpo inválido.
+    CuerpoInvalido {
+        indice: usize,
+    },
+    /// El formato v1 no puede representar notas nuevas ni cuerpos.
     NotasNoRepresentables,
 }
 
@@ -56,6 +66,12 @@ impl std::fmt::Display for ErrorDeltaJson {
             }
             ErrorDeltaJson::NotaInvalida { indice } => {
                 write!(f, "nota inválida en create[{indice}]")
+            }
+            ErrorDeltaJson::CuerpoDuplicado { indice } => {
+                write!(f, "actualización duplicada en update[{indice}]")
+            }
+            ErrorDeltaJson::CuerpoInvalido { indice } => {
+                write!(f, "actualización inválida en update[{indice}]")
             }
             ErrorDeltaJson::NotasNoRepresentables => {
                 write!(f, "el delta v1 no puede representar notas nuevas")
@@ -96,6 +112,7 @@ pub fn parsear_delta_json_v1(texto: &str) -> Result<Delta, ErrorDeltaJson> {
             ErrorDeltaJson::AtomoNoCanonico { lado, indice }
         }
         ErrorDelta::NotaDuplicada { indice } => ErrorDeltaJson::NotaDuplicada { indice },
+        ErrorDelta::CuerpoDuplicado { indice } => ErrorDeltaJson::CuerpoDuplicado { indice },
     })
 }
 
@@ -115,8 +132,17 @@ struct NotaV2 {
 struct DocumentoDeltaV2 {
     schema: String,
     create: Vec<NotaV2>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    update: Vec<CuerpoV2>,
     add: Vec<String>,
     remove: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CuerpoV2 {
+    path: String,
+    body: String,
 }
 
 #[derive(Deserialize)]
@@ -159,22 +185,37 @@ pub fn parsear_delta_json_v2(texto: &str) -> Result<Delta, ErrorDeltaJson> {
             cuerpo: nota.body,
         });
     }
+    let mut cuerpos = Vec::with_capacity(documento.update.len());
+    for (indice, cuerpo) in documento.update.into_iter().enumerate() {
+        let path = BundlePath::nuevo(&cuerpo.path)
+            .map_err(|_| ErrorDeltaJson::CuerpoInvalido { indice })?;
+        if path.como_str() != cuerpo.path {
+            return Err(ErrorDeltaJson::CuerpoInvalido { indice });
+        }
+        cuerpos.push(CuerpoNuevo {
+            path,
+            cuerpo: cuerpo.body,
+        });
+    }
     Delta::nuevo(add, remove)
         .and_then(|delta| delta.con_notas(notas))
+        .and_then(|delta| delta.con_cuerpos(cuerpos))
         .map_err(|error| match error {
             ErrorDelta::Solapamiento => ErrorDeltaJson::Solapamiento,
             ErrorDelta::AtomoNoRepresentable { lado, indice } => {
                 ErrorDeltaJson::AtomoNoCanonico { lado, indice }
             }
             ErrorDelta::NotaDuplicada { indice } => ErrorDeltaJson::NotaDuplicada { indice },
+            ErrorDelta::CuerpoDuplicado { indice } => ErrorDeltaJson::CuerpoDuplicado { indice },
         })
 }
 
 /// Forma canónica para guardar un delta (contexto de admisión, journal): v1
-/// si no crea notas, byte a byte igual que antes de existir v2, y v2 si las
-/// crea. Un motor anterior a v2 falla cerrado al leer un v2.
+/// si no crea notas ni actualiza cuerpos, byte a byte igual que antes de
+/// existir v2, y v2 en otro caso. Un motor anterior a v2 falla cerrado al
+/// leer un v2.
 pub fn serializar_delta_json_canonico(delta: &Delta) -> Result<String, ErrorDeltaJson> {
-    if delta.crear().is_empty() {
+    if delta.crear().is_empty() && delta.cuerpos().is_empty() {
         serializar_delta_json_v1(delta)
     } else {
         serializar_delta_json_v2(delta)
@@ -194,6 +235,14 @@ pub fn serializar_delta_json_v2(delta: &Delta) -> Result<String, ErrorDeltaJson>
                 tipo: nota.tipo.como_str().to_string(),
                 title: nota.etiqueta.como_str().to_string(),
                 body: nota.cuerpo.clone(),
+            })
+            .collect(),
+        update: delta
+            .cuerpos()
+            .iter()
+            .map(|cuerpo| CuerpoV2 {
+                path: cuerpo.path.como_str().to_string(),
+                body: cuerpo.cuerpo.clone(),
             })
             .collect(),
         add: delta.agregar().iter().map(ToString::to_string).collect(),
@@ -223,7 +272,7 @@ fn parsear_lista(textos: Vec<String>, lado: LadoDelta) -> Result<Vec<Atomo>, Err
 /// Falla si el delta crea notas: v1 no puede representarlas y descartarlas en
 /// silencio rompería el replay de la transacción.
 pub fn serializar_delta_json_v1(delta: &Delta) -> Result<String, ErrorDeltaJson> {
-    if !delta.crear().is_empty() {
+    if !delta.crear().is_empty() || !delta.cuerpos().is_empty() {
         return Err(ErrorDeltaJson::NotasNoRepresentables);
     }
     let documento = DocumentoDeltaV1 {

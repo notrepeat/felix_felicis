@@ -99,3 +99,25 @@ fn v2_sin_notas_equivale_a_v1() {
         },
     );
 }
+
+#[test]
+fn update_de_cuerpos_se_parsea_serializa_y_es_canonico() {
+    let texto = r#"{"schema":"felix-delta-v2","create":[],"update":[{"path":"n/z","body":"Z\n"},{"path":"n/a","body":""}],"add":[],"remove":[]}"#;
+    let delta = parsear_delta_json_v2(texto).unwrap();
+    let paths: Vec<_> = delta.cuerpos().iter().map(|c| c.path.como_str()).collect();
+    assert_eq!(paths, vec!["n/a", "n/z"]);
+    assert_eq!(delta.cuerpos()[1].cuerpo, "Z\n");
+    let canonico = universo_okf::serializar_delta_json_canonico(&delta).unwrap();
+    assert!(canonico.contains("\"update\""), "{canonico}");
+    assert_eq!(parsear_delta_json(&canonico).unwrap(), delta);
+    assert!(universo_okf::serializar_delta_json_v1(&delta).is_err());
+    // Sin update, la clave no aparece (forma canónica estable).
+    let solo_notas = serializar_delta_json_v2(&parsear_delta_json_v2(V2).unwrap()).unwrap();
+    assert!(!solo_notas.contains("update"));
+    assert!(matches!(
+        parsear_delta_json_v2(
+            r#"{"schema":"felix-delta-v2","create":[],"update":[{"path":"n/a","body":"x"},{"path":"n/A","body":"y"}],"add":[],"remove":[]}"#
+        ),
+        Err(ErrorDeltaJson::CuerpoDuplicado { .. })
+    ));
+}

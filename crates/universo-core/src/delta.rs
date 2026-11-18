@@ -25,6 +25,14 @@ impl std::fmt::Display for LadoDelta {
     }
 }
 
+/// Cuerpo Markdown nuevo para una nota existente. El cuerpo es anexo opaco:
+/// no participa en las invariantes, pero el cambio pasa por la transacción.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CuerpoNuevo {
+    pub path: BundlePath,
+    pub cuerpo: String,
+}
+
 /// Delta transaccional explícito: los átomos a añadir y retirar.
 ///
 /// Ambos conjuntos se guardan como vectores tipados en el orden total
@@ -34,6 +42,7 @@ pub struct Delta {
     add: Vec<Atomo>,
     remove: Vec<Atomo>,
     crear: Vec<NotaNueva>,
+    cuerpos: Vec<CuerpoNuevo>,
 }
 
 /// Error al construir un delta transaccional.
@@ -45,6 +54,8 @@ pub enum ErrorDelta {
     Solapamiento,
     /// Dos notas nuevas comparten path (sin distinguir mayúsculas).
     NotaDuplicada { indice: usize },
+    /// Dos actualizaciones de cuerpo comparten path.
+    CuerpoDuplicado { indice: usize },
 }
 
 impl Delta {
@@ -64,7 +75,31 @@ impl Delta {
             add,
             remove,
             crear: Vec::new(),
+            cuerpos: Vec::new(),
         })
+    }
+
+    /// Añade cuerpos nuevos para notas existentes, ordenados por path.
+    pub fn con_cuerpos(
+        mut self,
+        cuerpos: impl IntoIterator<Item = CuerpoNuevo>,
+    ) -> Result<Self, ErrorDelta> {
+        let mut vistas: std::collections::HashSet<_> =
+            self.cuerpos.iter().map(|c| c.path.clave_case()).collect();
+        for (indice, cuerpo) in cuerpos.into_iter().enumerate() {
+            if !vistas.insert(cuerpo.path.clave_case()) {
+                return Err(ErrorDelta::CuerpoDuplicado { indice });
+            }
+            self.cuerpos.push(cuerpo);
+        }
+        self.cuerpos
+            .sort_by(|a, b| a.path.como_str().cmp(b.path.como_str()));
+        Ok(self)
+    }
+
+    /// Cuerpos que el delta reemplaza, ordenados por path.
+    pub fn cuerpos(&self) -> &[CuerpoNuevo] {
+        &self.cuerpos
     }
 
     /// Añade notas nuevas, ordenadas por path. Rechaza paths repetidos sin
@@ -128,6 +163,7 @@ impl std::fmt::Debug for Delta {
             .field("add_count", &self.add.len())
             .field("remove_count", &self.remove.len())
             .field("create_count", &self.crear.len())
+            .field("update_count", &self.cuerpos.len())
             .finish()
     }
 }
@@ -142,6 +178,9 @@ impl std::fmt::Display for ErrorDelta {
             ErrorDelta::Solapamiento => write!(f, "add y remove se solapan"),
             ErrorDelta::NotaDuplicada { indice } => {
                 write!(f, "la nota nueva {indice} repite un path")
+            }
+            ErrorDelta::CuerpoDuplicado { indice } => {
+                write!(f, "la actualización de cuerpo {indice} repite un path")
             }
         }
     }
@@ -160,6 +199,10 @@ impl std::fmt::Debug for ErrorDelta {
             ErrorDelta::Solapamiento => f.write_str("Solapamiento"),
             ErrorDelta::NotaDuplicada { indice } => f
                 .debug_struct("NotaDuplicada")
+                .field("indice", indice)
+                .finish(),
+            ErrorDelta::CuerpoDuplicado { indice } => f
+                .debug_struct("CuerpoDuplicado")
                 .field("indice", indice)
                 .finish(),
         }

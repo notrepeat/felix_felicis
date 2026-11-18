@@ -116,3 +116,22 @@ fn el_apply_crea_la_nota_sellada_y_valida() {
     let (_, value) = propose(&f, &[]);
     assert_eq!(value["errors"][0]["code"], "note_exists");
 }
+
+#[test]
+fn el_apply_actualiza_el_cuerpo_de_una_nota_existente() {
+    let f = fixture(
+        "(Type @n/existente a)\n",
+        r#"{"schema":"felix-delta-v2","create":[],"update":[{"path":"n/existente","body":"Prosa nueva.\n"}],"add":[],"remove":[]}"#,
+    );
+    let (_, value) = propose(&f, &["--emit-snapshot-token"]);
+    assert_eq!(value["status"], "admit", "{value}");
+    let token = value["snapshot_token"].as_str().unwrap().to_string();
+    let (code, value) = propose(&f, &["--apply", "--expect-snapshot", &token]);
+    assert_eq!(code, 0, "{value}");
+    let texto = fs::read_to_string(f.root.join("n/existente.md")).unwrap();
+    assert!(
+        texto.starts_with("---\ntype: a\ntitle: Existente\n---\n"),
+        "{texto}"
+    );
+    assert!(texto.ends_with("Prosa nueva.\n"), "{texto}");
+}

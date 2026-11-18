@@ -2,6 +2,7 @@
 
 pub mod bundle;
 pub mod delta;
+pub mod diferencia;
 pub mod documento;
 pub mod errores;
 pub mod manifiesto_toml;
@@ -13,6 +14,7 @@ pub use delta::{
     ErrorDeltaJson, LadoDelta, parsear_delta_json, parsear_delta_json_v1, parsear_delta_json_v2,
     serializar_delta_json_canonico, serializar_delta_json_v1, serializar_delta_json_v2,
 };
+pub use diferencia::{ErrorDiferencia, delta_desde_borrador};
 pub use documento::{Documento, EntradaCruda, parsear_documento};
 pub use errores::{
     ErrorBundle, ErrorDocumento, ErrorEntrada, ErrorEscritura, ErrorManifiestoArchivo, Regla,
