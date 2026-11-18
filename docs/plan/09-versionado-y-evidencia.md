@@ -75,6 +75,7 @@ git tag --list --sort=-version:refname
 | Fecha | Tag | Commit | CI | Resultado |
 |---|---|---|---|---|
 | 2026-09-21 | `v0.1.0` | `7c4b81b` | verde | Base pública: modelo, OKF, AST y parser; sin check semántico. |
+| 2026-11-18 | `v0.2.0` (borrador, sin tag) | — | — | [Notas en borrador](../release/v0.2.0-borrador.md). Gate pendiente de la fase 08. |
 
 ## Decisión posterior
 

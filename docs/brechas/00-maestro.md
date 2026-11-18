@@ -77,10 +77,14 @@ decisiones.
 
 > Felix Felicis guarda tu conocimiento estructurado y tus reglas como un universo
 > formal y verifica cada propuesta de cambio con un evaluador determinista: si
-> contradice una regla, la rechaza indicando qué regla falló, y si la admite, la
-> aplica con lock, control de concurrencia y recuperación ante fallos del
-> proceso. Hoy esa barrera es de uso voluntario: protege los cambios que pasan
-> por ella, pero todavía no impide los que se hacen a mano.
+> contradice una regla, la rechaza diciendo qué regla falló y, si se pide, en qué
+> nodos. Si la admite, la aplica con lock, control de concurrencia y
+> recuperación ante fallos del proceso. Puesto como paso obligatorio entre un
+> agente y la base, evitó en un estudio controlado todos los estados inválidos
+> que el agente dejaba cuando no veía la base entera, y le permitió repararlos.
+> No mejora al agente cuando éste ya ve todo, y no detecta cambios que cumplan
+> las reglas pero contradigan la intención. Fuera de ese flujo, la barrera es
+> voluntaria: `guard` detecta los cambios hechos a mano, pero no los impide.
 
 ## Método y confianza
 

@@ -24,7 +24,10 @@ Implementado:
 - `universo init <dir>` crea un repositorio de conocimiento mínimo, válido y sellado (no es atómico: si falla a mitad, borra el directorio y repite); `propose --apply --author <a> --reason <r>` registra la procedencia y `universo log` la muestra;
 - [guardia](docs/guardia.md) que detecta cambios hechos fuera de Felix (sello del último estado admitido y hook de pre-commit);
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
-- servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check` y `why`, sin escritura del bundle;
+- servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check` y `why`, sin escritura del bundle; los rechazos traen id y mensaje de la regla;
+- criterio en las reglas: valores ordenados, fechas, atributos con varios valores y el cuantificador `al-menos` (ver más abajo);
+- `propose --witness`: testigo localizado opt-in que dice en qué nodos o aristas falla un rechazo;
+- [orquestador obligatorio](docs/propuestas/08-orquestador-obligatorio.md) (`tools/orquestador.py`): el agente propone, Felix verifica siempre, el rechazo vuelve con su diagnóstico y sólo el ejecutor publica, con CAS;
 - [Code Mode local opcional](tools/codemode-local/README.md) con SDK Cloudflare real y sandbox adicional Linux; [comparación reproducible](docs/codemode-comparacion.md), sin enviar bundles a la nube;
 - pruebas unitarias, de propiedades, compile-fail y round-trip.
 
@@ -39,6 +42,21 @@ sin Felix y 12/12 con Felix disponible, sobre seis tareas repetidas; el modelo n
 No se demostró mejora ni capacidad de reparación asistida en ese escenario.
 La fase 07 queda cerrada como medición publicada, con límites y resultados
 adversos conservados; el gate para AGM y recuperación avanzada no se supera.
+
+El [estudio prerregistrado de cuatro brazos](evaluation/four_arms_report.md)
+(96 corridas con Claude Sonnet 5.5) acota cuándo sirve Felix:
+
+- **Con todos los hechos en el prompt, no aporta.** Tres calibraciones dieron
+  acierto total sin Felix.
+- **Con contexto parcial, sí.** Cuando el agente sólo ve los nodos que nombra la
+  tarea y sus vecinos, la verificación obligatoria con testigo localizado deja 0
+  estados inválidos en 24 corridas (21 éxitos). Sin Felix, con Felix opcional o
+  con una revisión neutral quedan 9 cada vez, y esos brazos no reparan ninguna
+  de las cascadas que el agente no ve. C repara las 9.
+- **Opcional, no se usa.** Con Felix disponible por MCP el agente no lo consultó
+  nunca.
+- **No detecta intenciones.** Felix no detecta cambios que cumplan las reglas
+  pero inventen hechos.
 
 ## Loop de corrección por MCP
 
