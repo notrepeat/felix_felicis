@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import orquestador as orq
 
@@ -342,13 +344,13 @@ class OrquestadorTests(unittest.TestCase):
         self.assertEqual(resultado["alertas"], ["guard_final_fallido"])
 
     def test_apply_ambiguo_es_incierto_y_un_fallo_interno_tras_publicar_no_lo_oculta(self):
+        # Determinista: el apply expira sin depender de la velocidad de la
+        # máquina; el orquestador no puede saber si llegó a publicar.
         class Timeout(orq.Orquestador):
             def _aplicar(self, archivo, token, objetivo):
-                orq.TIEMPO_LIMITE_S, previo = 0.001, orq.TIEMPO_LIMITE_S
-                try:
+                expirado = subprocess.TimeoutExpired(cmd="universo", timeout=orq.TIEMPO_LIMITE_S)
+                with mock.patch.object(orq.subprocess, "run", side_effect=expirado):
                     return super()._aplicar(archivo, token, objetivo)
-                finally:
-                    orq.TIEMPO_LIMITE_S = previo
 
         resultado = Timeout(BINARIO, self.repo).ejecutar(Guionizado(VALIDO), "x")
         self.assertEqual((resultado["resultado"], resultado["motivo"]), ("incierto", "apply_sin_confirmar"))
@@ -386,18 +388,23 @@ class OrquestadorTests(unittest.TestCase):
                 self.assertEqual((resultado["resultado"], resultado["motivo"]), esperado)
 
     def test_timeout_o_salida_ilegible_al_verificar_escala(self):
-        class Lento(orq.Orquestador):
-            def _simular(self, archivo):
-                orq.TIEMPO_LIMITE_S, previo = 0.001, orq.TIEMPO_LIMITE_S
-                try:
-                    return super()._simular(archivo)
-                finally:
-                    orq.TIEMPO_LIMITE_S = previo
+        # Determinista: el proceso de simulación no depende de cuánto tarda
+        # en la máquina (un tiempo límite de 1 ms alcanzaba en Windows).
+        expirado = subprocess.TimeoutExpired(cmd="universo", timeout=orq.TIEMPO_LIMITE_S)
+        ilegible = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"no es json", stderr=b"")
+        for falla in (expirado, ilegible):
+            class Fallido(orq.Orquestador):
+                def _simular(self, archivo):
+                    efecto = {"side_effect": falla} if isinstance(falla, Exception) else {"return_value": falla}
+                    with mock.patch.object(orq.subprocess, "run", **efecto):
+                        return super()._simular(archivo)
 
-        antes = self.bytes_bundle()
-        resultado = Lento(BINARIO, self.repo).ejecutar(Guionizado(VALIDO), "x")
-        self.assertEqual((resultado["resultado"], resultado["motivo"]), ("escalado", "error_tecnico"))
-        self.assertEqual(self.bytes_bundle(), antes)
+            antes = self.bytes_bundle()
+            resultado = Fallido(BINARIO, self.repo).ejecutar(Guionizado(VALIDO), "x")
+            self.assertEqual(
+                (resultado["resultado"], resultado["motivo"]), ("escalado", "error_tecnico"), type(falla).__name__
+            )
+            self.assertEqual(self.bytes_bundle(), antes)
 
     def test_presupuesto_invalido(self):
         with self.assertRaises(ValueError):
