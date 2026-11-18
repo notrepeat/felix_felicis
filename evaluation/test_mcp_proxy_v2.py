@@ -125,6 +125,42 @@ class ProxyV2Tests(unittest.TestCase):
         raw, entries = self.finish(process, ledger, ''.join(line + '\n' for line in lines).encode())
         return raw, [parse(line) for line in raw], entries, directory
 
+    def run_proxy_until_answered(self, lines, ids, limit=8, startup_delay=0.0):
+        """Like ``run_proxy``, but keep stdin open until the agent has every response in ``ids``.
+
+        Closing stdin starts the proxy's shutdown, which gives the child 2 s before killing it
+        and marking pending calls ``unanswered``. Waiting for the answers first keeps a slow
+        child (Windows runners) from turning that grace period into a test failure.
+        """
+        process, ledger, directory = self.start_proxy(limit, startup_delay)
+        raw, answered, pending = [], threading.Event(), set(ids)
+
+        def pump():
+            for line in process.stdout:
+                raw.append(line)
+                value = parse(line)
+                ident = value.get('id') if isinstance(value, dict) and 'method' not in value else None
+                if isinstance(ident, (int, str)):
+                    pending.discard(ident)
+                if not pending:
+                    answered.set()
+
+        reader = threading.Thread(target=pump, daemon=True)
+        reader.start()
+        process.stdin.write(''.join(line + '\n' for line in lines).encode())
+        process.stdin.flush()
+        got_all = answered.wait(30)
+        process.stdin.close()
+        reader.join(30)
+        process.wait(timeout=30)
+        self.assertTrue(got_all, 'missing responses for ids %r' % sorted(pending, key=repr))
+        self.assertEqual(process.returncode, 0, process.stderr.read().decode('utf-8', 'replace'))
+        for line in raw:
+            self.assertTrue(line.endswith(b'\n'), 'every line written to the agent ends with a newline')
+        raw = [line[:-1] for line in raw]
+        entries = [json.loads(line) for line in ledger.read_text(encoding='utf-8').splitlines()]
+        return raw, [parse(line) for line in raw], entries, directory
+
     def by_id(self, entries):
         return {entry['request'].get('id'): entry for entry in entries}
 
@@ -248,7 +284,8 @@ class ProxyV2Tests(unittest.TestCase):
 
     def test_unencodable_or_deep_lines_do_not_kill_the_bridge(self):
         lone = call(3, 'fast', n=3, s='\ud800')
-        raw, outputs, entries, _ = self.run_proxy([call(1, 'surrogate'), call(2, 'deep', n=2), lone])
+        raw, outputs, entries, _ = self.run_proxy_until_answered(
+            [call(1, 'surrogate'), call(2, 'deep', n=2), lone], ids={1, 2, 3})
         answered = self.by_id(entries)
         self.assertEqual(set(answered), {1, 2, 3})
         for entry in entries:
