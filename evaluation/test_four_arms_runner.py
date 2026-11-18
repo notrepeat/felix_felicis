@@ -51,6 +51,20 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("mutable_keys", base)
 
 
+class FalloDelProveedorTests(unittest.TestCase):
+    def test_limite_de_uso_y_turno_fallido_son_errores_de_entorno(self):
+        aviso = {"type": "item.completed", "item": {"type": "error", "message": "Under-development features enabled"}}
+        limite = [aviso, {"type": "turn.started"},
+                  {"type": "error", "message": "You’ve hit your usage limit. Visit https://example.invalid"},
+                  {"type": "turn.failed", "error": {"message": "You’ve hit your usage limit."}}]
+        self.assertEqual(runner.fallo_del_proveedor(limite), "provider_usage_limit")
+        self.assertEqual(runner.fallo_del_proveedor([{"type": "turn.failed", "error": {"message": "boom"}}]),
+                         "provider_turn_failed")
+        # Un aviso de la CLI y un turno completo no son fallos del proveedor.
+        normal = [aviso, {"type": "turn.started"}, {"type": "turn.completed", "usage": {"input_tokens": 1}}]
+        self.assertIsNone(runner.fallo_del_proveedor(normal))
+
+
 class ComandoCodexTests(unittest.TestCase):
     def test_comando_aislado_y_mcp_solo_en_el_brazo_b(self):
         import tempfile

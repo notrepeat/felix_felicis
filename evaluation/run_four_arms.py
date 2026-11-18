@@ -141,6 +141,23 @@ class ErrorDeEntorno(RuntimeError):
     """El entorno no permite correr (sin bwrap, sin login, sin Codex): aborta sin consumir la fila."""
 
 
+def fallo_del_proveedor(events):
+    """Código de un fallo del proveedor (cuota, límite de uso, turno fallido), o None.
+
+    Es un error de entorno, no una respuesta del agente: el modelo no llegó a
+    contestar. Los avisos de la CLI (eventos `item` de tipo `error`) no cuentan.
+    """
+    for event in events:
+        if event.get("type") not in ("error", "turn.failed"):
+            continue
+        mensaje = event.get("message") or (event.get("error") or {}).get("message") or ""
+        texto = str(mensaje).lower()
+        if "usage limit" in texto or "rate limit" in texto or "quota" in texto:
+            return "provider_usage_limit"
+        return "provider_turn_failed"
+    return None
+
+
 # --- Agentes ------------------------------------------------------------------------
 
 
@@ -226,6 +243,11 @@ class AgenteCodex:
             stdout, _stderr, timed_out, overflow = bounded_capture(process, texto.encode("utf-8"), self.timeout)
             elapsed = time.monotonic() - start
             events = parse_events(stdout.decode(errors="replace"))
+            proveedor = fallo_del_proveedor(events)
+            if proveedor is not None:
+                # Se aborta sin escribir la fila: al recuperar la cuota,
+                # `--resume` la corre.
+                raise ErrorDeEntorno(proveedor)
             messages = [e["item"]["text"] for e in events if e.get("type") == "item.completed"
                         and e.get("item", {}).get("type") == "agent_message"]
             delta = None

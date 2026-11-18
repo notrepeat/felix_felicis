@@ -30,7 +30,7 @@
     "evaluation/four_arms/oracle.json": "f61811dd0c0d221bbb7f3030b984720a6a4c90318d0375e9416acd48a15c9066",
     "evaluation/four_arms_dataset.py": "28cd3578d2710bf29908b1d7da3c1188ce0209b1f61b8b354d33937beeb08f9d",
     "evaluation/four_arms_scoring.py": "3d9978f538775c7eae46f8bfb66e77bbd98757daa8910fcdd11292b24f7bc0de",
-    "evaluation/run_four_arms.py": "a953929cbb5ea5b6470538e994ad274e5dbe23a424f40cc0526036a55399511a",
+    "evaluation/run_four_arms.py": "2627b73ea0449032568220aab09252eb4f7d36f7d90bf8f89e9100dd3ad07ed4",
     "evaluation/mcp_proxy_v2.py": "8483dae9882d5e4b81e8c96ca28d822055049bb9cdb44caf1eb3cdeaad0523e1",
     "evaluation/run_paired.py": "b0e40db1720ba714020c053ccc6054550ae66661ce4148b8ba2a32866175d92a",
     "tools/orquestador.py": "edd77ccdcaf50b56d807efc5a3c4a0a215accce13d4d23b33da2965ccc0b83f6"

@@ -98,7 +98,15 @@ primarios: su `score` es `null`. Una fila fallida no se repite al reanudar.
 Un **error de entorno** (falta bubblewrap, el login de Codex o un binario; no se
 puede lanzar el proceso) no es un fallo técnico del brazo. El runner lo comprueba
 antes de la primera fila (`preflight`) y, si aparece durante una fila, aborta sin
-escribirla, para que `--resume` la corra al arreglar el entorno.
+escribirla, para que `--resume` la corra al arreglar el entorno. Un fallo del
+proveedor (límite de uso o cuota, turno fallido sin respuesta del modelo) es
+también un error de entorno.
+
+**Registro de intentos.** El 2026-11-18 un primer intento de calibración falló
+en sus 16 filas por límite de uso de la suscripción, sin respuesta del modelo.
+Ese intento llevó a la regla anterior. Se conserva sin cambios en
+[`results/four-arms-v1-calibracion-intento-1-sin-cuota/`](results/four-arms-v1-calibracion-intento-1-sin-cuota/README.md)
+y no entra en ningún análisis.
 
 ## Medidas
 
