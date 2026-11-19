@@ -183,7 +183,10 @@ fn una_arista_hacia_un_nombre_repetido_no_se_admite() {
     let (code, v) = correr(
         r#"{"schema":"felix-delta-v2","create":[{"path":"m/x","type":"a","title":"Otra X","body":""},{"path":"m/y","type":"a","title":"Y","body":""}],"add":["Edge(m/y→n/x#liga#0, m/y, n/x, liga)","HasLab(m/y→n/x#liga#0, \"\")"],"remove":[]}"#,
     );
-    assert!(v.to_string().contains("edge_target_ambiguous"), "{code} {v}");
+    assert!(
+        v.to_string().contains("edge_target_ambiguous"),
+        "{code} {v}"
+    );
     // Un origen con nombre repetido hacia un destino único sí se escribe sin
     // ambigüedad: el enlace vive en el origen y nombra al destino.
     let (code, v) = correr(
