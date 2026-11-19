@@ -404,9 +404,13 @@ responde `external_change` con la entrada.
 Son conteos sin cuerpos: sirven para decidir qué revisar o promover.
 
 **Aceptación.**
-- [ ] Los conteos coinciden con `atomos` en bundles de prueba.
-- [ ] «Listas para promover» coincide con lo que la regla de `vigente`
-      admitiría.
+- [x] Los conteos coinciden con lo capturado en un repositorio de prueba
+      (`crates/universo-cli/tests/resumen.rs`).
+- [x] «Listas para promover» coincide con lo que `promover --dry-run` admite.
+- Hecho (2026-11-18): `universo resumen [--criterio <dir>] [--format]`, con
+  notas por tipo, criterios por estado, relaciones, reglas, listas para
+  promover, objetadas, sin relaciones y los tres últimos cambios. Muestra
+  rutas, no cuerpos.
 
 ### U9 — Prueba de punta a punta entre dos clones
 
