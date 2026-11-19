@@ -13,7 +13,7 @@ comparativa y benchmarks publicados»), movido desde `v0.4.0` por D5 de la
 
 | Campo | Valor |
 |---|---|
-| Estado | aprobado (2026-11-19) tal como se recomendó; dataset, runner y prerregistro listos; las corridas con LLM esperan tu OK (E1) |
+| Estado | completo (2026-11-19): 144 corridas y [informe](../../evaluation/criterio_uso_report.md) publicados; resultado **neutral** por la regla (B − A = +0,22, IC95 [0,00; 0,47]); el MCP rinde igual que el prompt |
 | Depende de | 10 tal como salió en `v0.4.0`; no requiere U10 (uso real), que sigue en privado |
 | Desbloquea | `v0.5.0`; la decisión sobre capacidades avanzadas (fase 09) |
 
@@ -94,10 +94,11 @@ cada brazo, sólo con tareas respondidas en ambos, y un intervalo bootstrap al
 
 - [x] Plan, tareas, universo y oráculo publicados con hash antes de la
       primera corrida (`evaluation/criterio_uso/plan.json`, 144 filas).
-- [ ] Corridas de los tres brazos completas, o cortadas con la causa y lo ya
+- [x] Corridas de los tres brazos completas, o cortadas con la causa y lo ya
       medido conservado.
-- [ ] Informe con la adherencia al criterio, el criterio inventado, el éxito
-      y el costo por brazo, con intervalos, publicado aunque sea neutral.
+- [x] Informe con la adherencia al criterio, el criterio citado en control,
+      las respuestas que faltan y el costo por brazo, con intervalos,
+      publicado aunque sea neutral.
 - [x] Benchmarks de las cuatro operaciones en los tamaños previstos
       (`evaluation/results/bench-criterio.json`; ver Hallazgos).
 - [x] Tests sin LLM del runner y del puntaje (oráculo y agente guionizado),
@@ -108,7 +109,7 @@ cada brazo, sólo con tareas respondidas en ambos, y un intervalo bootstrap al
 
 | # | Decisión | Opciones | Recomendación |
 |---|---|---|---|
-| E1 | Correr con un LLM real | sí / sólo el diseño | sí, con tu OK explícito antes de la primera corrida (pendiente) |
+| E1 | Correr con un LLM real | sí / sólo el diseño | sí, con tu OK explícito antes de la primera corrida (dado el 2026-11-19) |
 | E2 | Modelo | uno / dos | `claude-sonnet-5-5`, el mismo de U13; un segundo modelo sólo si el resultado lo pide |
 | E3 | Brazo C (criterio en el prompt) | incluir / omitir | incluir: sin él no se sabe si el MCP aporta |
 | E4 | Agente | Claude Code aislado con bwrap / API directa | Claude Code aislado, como U13 y los cuatro brazos |
@@ -173,7 +174,8 @@ Mediana de tres repeticiones, binario `release` 0.4.0 en el commit
 | Fecha | Commit/PR | Evidencia | Resultado |
 |---|---|---|---|
 | 2026-11-19 | — | Plan propuesto | Aprobado tal como se recomendó (E2 a E5) |
-| 2026-11-19 | — | Dataset, runner, prerregistro (`plan.json`, 144 filas) y benchmarks | Benchmarks publicados; guarda cuadrática corregida en el evaluador; corridas con LLM pendientes de tu OK |
+| 2026-11-19 | — | Dataset, runner, prerregistro (`plan.json`, 144 filas) y benchmarks | Benchmarks publicados; guarda cuadrática corregida en el evaluador |
+| 2026-11-19 | `08caf1a` | 144 corridas con `claude-sonnet-5-5`, sin cortes ni filas sin respuesta ([informe](../../evaluation/criterio_uso_report.md)) | Adherencia A 28/36, B 36/36, C 36/36; cero criterio citado en control. Neutral por la regla: el IC95 de B − A toca el cero porque sólo 3 de 12 tareas separaron a los brazos. El MCP aporta sobre el prompt (B = C), a unas 3 veces más tokens |
 
 ## Cómo correr
 

@@ -9,8 +9,12 @@ está en sus notas (`docs/release/`); aquí queda el resumen.
   ya fijado en una guarda `(Edge e x y k)`. Antes, un repositorio de criterio
   con entre 500 y 1 000 notas agotaba el presupuesto de evaluación y no
   admitía más escrituras.
-- Fase 11: dataset, runner y prerregistro de la evaluación del criterio, y
-  benchmarks del repositorio de criterio.
+- Fase 11: evaluación del criterio con 144 corridas prerregistradas
+  ([informe](evaluation/criterio_uso_report.md)). Con el criterio consultable
+  por MCP o en el prompt, el agente siguió el criterio en 36/36 decisiones;
+  sin él, en 28/36. Neutral por la regla prerregistrada: el intervalo de la
+  diferencia toca el cero porque el modelo ya seguía 9 de los 12 criterios
+  por su cuenta. Más benchmarks del repositorio de criterio.
 
 ## 0.4.0 — 2026-11-19
 
