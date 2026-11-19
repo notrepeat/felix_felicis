@@ -59,7 +59,26 @@ struct AristaToml {
 struct PredicadoToml {
     nombre: String,
     clave: String,
+    /// Obligatorio salvo para `tipo = "fecha"` (dominio abierto).
+    #[serde(default)]
     dominio: Vec<String>,
+    /// `true`: el orden de `dominio` (de menor a mayor) habilita comparaciones.
+    #[serde(default)]
+    orden: bool,
+    /// `true`: el frontmatter admite una lista de valores del dominio.
+    #[serde(default)]
+    multivalor: bool,
+    /// `"fecha"`: valores ISO `AAAA-MM-DD` con dominio abierto.
+    #[serde(default)]
+    tipo: TipoValorToml,
+}
+
+#[derive(Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum TipoValorToml {
+    #[default]
+    Constante,
+    Fecha,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +89,8 @@ struct LayoutToml {
     sin_iota: Vec<String>,
     #[serde(default)]
     ignorados: Vec<String>,
+    #[serde(default)]
+    parent_key: Option<String>,
 }
 
 impl From<ManifiestoToml> for Manifiesto {
@@ -101,13 +122,25 @@ impl From<ManifiestoToml> for Manifiesto {
                 .map(|p| DeclPredicado {
                     nombre: p.nombre,
                     clave: p.clave,
+                    // Una fecha ya es comparable: `orden = true` con
+                    // `tipo = "fecha"` deja un orden no vacío para que
+                    // `validar` lo rechace (`FechaInvalida`) en vez de
+                    // ignorarlo en silencio.
+                    orden: match (p.orden, &p.tipo) {
+                        (true, TipoValorToml::Fecha) => vec![String::from("orden")],
+                        (true, _) => p.dominio.clone(),
+                        (false, _) => Vec::new(),
+                    },
                     dominio: p.dominio.into_iter().collect(),
+                    multivalor: p.multivalor,
+                    fecha: p.tipo == TipoValorToml::Fecha,
                 })
                 .collect(),
             layout: Layout {
                 directorios: m.layout.directorios,
                 sin_iota: m.layout.sin_iota,
                 ignorados: m.layout.ignorados,
+                parent_key: m.layout.parent_key,
             },
         }
     }
@@ -117,13 +150,22 @@ impl From<ManifiestoToml> for Manifiesto {
 /// el schema esperado (un campo desconocido es `Sintaxis`, no se ignora en
 /// silencio) y llama a `Manifiesto::validar()`.
 pub fn parsear_manifiesto(texto: &str) -> Result<Manifiesto, ErrorManifiestoArchivo> {
-    let crudo: ManifiestoToml =
-        toml::from_str(texto).map_err(|e| ErrorManifiestoArchivo::Sintaxis(e.to_string()))?;
-    let manifiesto: Manifiesto = crudo.into();
+    let manifiesto = parsear_manifiesto_sin_validar(texto)?;
     manifiesto
         .validar()
         .map_err(ErrorManifiestoArchivo::Validacion)?;
     Ok(manifiesto)
+}
+
+/// Deserializa el esquema TOML sin aplicar todavía las reglas semánticas.
+/// La captura usa este paso para validar una sola vez, antes de expandir
+/// Markdown y conservar la misma `Estructura` ya validada al parsear el bundle.
+pub(crate) fn parsear_manifiesto_sin_validar(
+    texto: &str,
+) -> Result<Manifiesto, ErrorManifiestoArchivo> {
+    let crudo: ManifiestoToml =
+        toml::from_str(texto).map_err(|e| ErrorManifiestoArchivo::Sintaxis(e.to_string()))?;
+    Ok(crudo.into())
 }
 
 /// Lee `ruta` y llama a `parsear_manifiesto` sobre su contenido.

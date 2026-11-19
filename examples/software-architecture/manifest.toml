@@ -1,0 +1,13 @@
+version = "demo-arquitectura/1"
+
+[nodos]
+sortes = ["domain", "port", "adapter", "Retirado", "Patrón"]
+
+[[aristas]]
+clave = "depends"
+simetrica = false
+destino = "to"
+etiqueta = "kind"
+
+[layout]
+directorios = ["n"]

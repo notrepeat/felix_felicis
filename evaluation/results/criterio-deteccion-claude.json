@@ -1,0 +1,395 @@
+{
+  "schema": "felix-criterio-deteccion-resultados-v1",
+  "agente": "claude",
+  "modelo": "claude-sonnet-5-5",
+  "version_agente": "2.1.327 (Claude Code)",
+  "fecha": "2026-11-19T11:14:21Z",
+  "corpus_sha256": "c20d7defc4ea3c1964747c8c3554ed5b11efb77e89338335444907f2ed0ca871",
+  "skill_sha256": "982ce35220dd89e455c2e479cd1c55a0e568855461617d60c54367cf1122cd87",
+  "meta_precision": 0.9,
+  "completo": true,
+  "corte": null,
+  "metricas": {
+    "casos": 45,
+    "valido": true,
+    "verdaderos_positivos": 23,
+    "falsos_positivos": 0,
+    "falsos_negativos": 0,
+    "verdaderos_negativos": 22,
+    "precision": 1.0,
+    "precision_ic95": [
+      0.8569,
+      1.0
+    ],
+    "cobertura": 1.0,
+    "cobertura_ic95": [
+      0.8569,
+      1.0
+    ],
+    "categoria_correcta": 1.0,
+    "sin_respuesta": [],
+    "errores": []
+  },
+  "casos": [
+    {
+      "id": "e01",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Al agregar una dependencia nueva, se fija su versión exacta en el manifiesto.",
+      "segundos": 2.9
+    },
+    {
+      "id": "e02",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Nunca se hace push directo a main, ni siquiera para cambios de una sola línea.",
+      "segundos": 2.88
+    },
+    {
+      "id": "e03",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Se prefieren funciones cortas con nombres largos y descriptivos antes que comentarios que expliquen qué hace el código.",
+      "segundos": 3.03
+    },
+    {
+      "id": "e04",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Todos los mensajes de error que vea el usuario deben estar en español e indicar qué hacer a continuación.",
+      "segundos": 2.85
+    },
+    {
+      "id": "e05",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "En los proyectos del dueño, los tests se ubican junto al código que prueban, no en una carpeta aparte.",
+      "segundos": 3.01
+    },
+    {
+      "id": "e06",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Al arreglar un fallo, primero se escribe un test que lo reproduzca (que falle) y después se aplica la corrección.",
+      "segundos": 2.94
+    },
+    {
+      "id": "e07",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Se hace un commit por cada cambio lógico, con el mensaje en imperativo.",
+      "segundos": 2.85
+    },
+    {
+      "id": "e08",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Los endpoints no se documentan en el README; su documentación va en la referencia de la API.",
+      "segundos": 2.97
+    },
+    {
+      "id": "e09",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Antes de proponer una librería externa, revisar si la biblioteca estándar ya resuelve el problema; el dueño prefiere tener pocas dependencias.",
+      "segundos": 2.97
+    },
+    {
+      "id": "e10",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Al explicar un cambio, presentar primero el resultado y después el detalle, no al revés.",
+      "segundos": 3.01
+    },
+    {
+      "id": "e11",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Al revisar PR, separar los hallazgos en bloqueantes y sugerencias, indicando archivo y línea de cada uno.",
+      "segundos": 2.87
+    },
+    {
+      "id": "e12",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Se prefiere que un sistema falle cerrado y avise, en lugar de seguir funcionando con datos dudosos.",
+      "segundos": 2.89
+    },
+    {
+      "id": "e13",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Los secretos nunca se guardan en el repositorio, ni siquiera en ejemplos; se usan variables de entorno.",
+      "segundos": 3.05
+    },
+    {
+      "id": "i01",
+      "real": "implicita",
+      "pred": "implicita",
+      "estado": "ok",
+      "afirmacion": "En todos los formularios se valida en el servidor además de en el cliente.",
+      "segundos": 3.67
+    },
+    {
+      "id": "i02",
+      "real": "implicita",
+      "pred": "implicita",
+      "estado": "ok",
+      "afirmacion": "Los módulos se nombran en singular (por ejemplo, «pago», no «pagos»), en este proyecto y en los siguientes.",
+      "segundos": 3.85
+    },
+    {
+      "id": "i03",
+      "real": "implicita",
+      "pred": "implicita",
+      "estado": "ok",
+      "afirmacion": "Se agrega un test de propiedades para cada función de cálculo monetario.",
+      "segundos": 2.84
+    },
+    {
+      "id": "i04",
+      "real": "implicita",
+      "pred": "implicita",
+      "estado": "ok",
+      "afirmacion": "Cada migración de base de datos se entrega con su reversión probada en el mismo cambio.",
+      "segundos": 3.71
+    },
+    {
+      "id": "i05",
+      "real": "implicita",
+      "pred": "implicita",
+      "estado": "ok",
+      "afirmacion": "En todos los servicios se usan logs estructurados en JSON que incluyen un id de petición.",
+      "segundos": 4.48
+    },
+    {
+      "id": "i06",
+      "real": "implicita",
+      "pred": "implicita",
+      "estado": "ok",
+      "afirmacion": "Para cada funcionalidad nueva se abre una rama corta y un PR pequeño.",
+      "segundos": 4.9
+    },
+    {
+      "id": "i07",
+      "real": "implicita",
+      "pred": "implicita",
+      "estado": "ok",
+      "afirmacion": "En todos los controles nuevos se incluye etiqueta accesible y foco visible.",
+      "segundos": 3.36
+    },
+    {
+      "id": "n01",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 3.31
+    },
+    {
+      "id": "n02",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 3.56
+    },
+    {
+      "id": "n03",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.79
+    },
+    {
+      "id": "n04",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.93
+    },
+    {
+      "id": "n05",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 3.32
+    },
+    {
+      "id": "n06",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.75
+    },
+    {
+      "id": "n07",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.77
+    },
+    {
+      "id": "n08",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.79
+    },
+    {
+      "id": "n09",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.78
+    },
+    {
+      "id": "n10",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.83
+    },
+    {
+      "id": "n11",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 3.58
+    },
+    {
+      "id": "n12",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.89
+    },
+    {
+      "id": "n13",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.78
+    },
+    {
+      "id": "n14",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 3.25
+    },
+    {
+      "id": "n15",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.74
+    },
+    {
+      "id": "n16",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 3.03
+    },
+    {
+      "id": "n17",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 3.51
+    },
+    {
+      "id": "n18",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.81
+    },
+    {
+      "id": "e14",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "Los nombres de variables se escriben en inglés, aunque los comentarios estén en español.",
+      "segundos": 3.46
+    },
+    {
+      "id": "e15",
+      "real": "explicita",
+      "pred": "explicita",
+      "estado": "ok",
+      "afirmacion": "El dueño prefiere que los PR expliquen el porqué del cambio, no sólo el qué.",
+      "segundos": 3.35
+    },
+    {
+      "id": "i08",
+      "real": "implicita",
+      "pred": "implicita",
+      "estado": "ok",
+      "afirmacion": "Los textos de interfaz se manejan en un archivo de traducciones, no incrustados en el código.",
+      "segundos": 3.84
+    },
+    {
+      "id": "n19",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.81
+    },
+    {
+      "id": "n20",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.88
+    },
+    {
+      "id": "n21",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.88
+    },
+    {
+      "id": "n22",
+      "real": "ninguna",
+      "pred": "ninguna",
+      "estado": "ok",
+      "afirmacion": "",
+      "segundos": 2.82
+    }
+  ]
+}

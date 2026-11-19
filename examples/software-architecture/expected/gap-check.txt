@@ -1,0 +1,7 @@
+REJECT: 1 fuentes, 1 instancias, 1 evaluadas, 1 fallidas
+EXPLANATIONS mode=enumerate objects=1 truncated=false reason=none
+  budget total=262 limit=1000000 semantic=48 evidence=146 aggregator=68
+  object source=0 line=2 column=1 instance=none
+    counterexample: {"instances":[{"body":null,"guard":{"predicate":"type","rule":"atom","value":false},"value":true},{"body":{"instances":[{"body":null,"guard":{"predicate":"edge","rule":"atom","value":false},"value":false},{"body":null,"guard":{"predicate":"edge","rule":"atom","value":false},"value":false},{"body":null,"guard":{"predicate":"edge","rule":"atom","value":false},"value":false}],"rule":"exists","search_exhausted":true,"value":false},"guard":{"predicate":"type","rule":"atom","value":true},"value":false}],"rule":"forall","search_exhausted":false,"value":false}
+    presence_core: null
+    gap: {"class":"forall_exists_without_witness","counts":{"available_edges":1,"available_nodes":3,"existential_candidates_evaluated":3,"universal_bindings_examined":2},"form":{"body":{"kind":"atom","predicate":"type"},"edge_binders":1,"guard":{"kind":"atom","predicate":"edge"},"node_binders":1}}

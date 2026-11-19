@@ -1,0 +1,17 @@
+# Preserve byte-exact CLI stdout goldens across Windows and Unix checkouts.
+examples/software-architecture/expected/* text eol=lf
+# Pilot 173 records the SHA-256 of these files (evaluation/results/pilot-173/plan.json);
+# a CRLF checkout on Windows would break test_pilot_173_sources_untouched.
+evaluation/mcp_proxy.py text eol=lf
+evaluation/run_paired.py text eol=lf
+evaluation/scoring.py text eol=lf
+evaluation/tasks.json text eol=lf
+evaluation/oracle.json text eol=lf
+# The four-arms plan (evaluation/four_arms/plan.json) records the SHA-256 of
+# these files; test_four_arms_runner checks them on every platform.
+evaluation/four_arms/*.json text eol=lf
+evaluation/four_arms_dataset.py text eol=lf
+evaluation/four_arms_scoring.py text eol=lf
+evaluation/run_four_arms.py text eol=lf
+evaluation/mcp_proxy_v2.py text eol=lf
+tools/orquestador.py text eol=lf

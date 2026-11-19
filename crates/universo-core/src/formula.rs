@@ -97,6 +97,53 @@ pub enum TerminoConstExt {
     Meta(Var),
 }
 
+/// Operador de una comparación de orden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpOrden {
+    Menor,
+    MenorIgual,
+    Mayor,
+    MayorIgual,
+}
+
+impl OpOrden {
+    /// Símbolo de cabeza en la sintaxis de autoría.
+    pub const fn simbolo(self) -> &'static str {
+        match self {
+            Self::Menor => "<",
+            Self::MenorIgual => "<=",
+            Self::Mayor => ">",
+            Self::MayorIgual => ">=",
+        }
+    }
+
+    pub fn desde_simbolo(simbolo: &str) -> Option<Self> {
+        Some(match simbolo {
+            "<" => Self::Menor,
+            "<=" => Self::MenorIgual,
+            ">" => Self::Mayor,
+            ">=" => Self::MayorIgual,
+            _ => return None,
+        })
+    }
+
+    /// `izquierda op derecha` sobre posiciones del orden.
+    pub fn compara<T: Ord>(self, izquierda: T, derecha: T) -> bool {
+        match self {
+            Self::Menor => izquierda < derecha,
+            Self::MenorIgual => izquierda <= derecha,
+            Self::Mayor => izquierda > derecha,
+            Self::MayorIgual => izquierda >= derecha,
+        }
+    }
+}
+
+impl std::fmt::Display for OpOrden {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.simbolo())
+    }
+}
+
 /// Fórmula de primer orden bisortida.
 ///
 /// La **guarda** de un cuantificador es un campo propio y no azúcar ya
@@ -129,6 +176,14 @@ pub enum Formula {
         sujeto: TerminoNodo,
         constante: TerminoConstExt,
     },
+    /// Comparación del valor de un predicado de extensión ordenado con una
+    /// constante de su dominio: `(>= Confianza x media)`. Sin valor es falsa.
+    Compara {
+        op: OpOrden,
+        predicado: String,
+        sujeto: TerminoNodo,
+        constante: TerminoConstExt,
+    },
     /// Clausura transitiva **estricta** de `Parent`: al menos un paso.
     TcParent {
         desde: TerminoNodo,
@@ -146,6 +201,15 @@ pub enum Formula {
         cuerpo: Box<Formula>,
     },
     Existe {
+        ligaduras: Vec<(Var, SorteVar)>,
+        guarda: Option<Box<Formula>>,
+        cuerpo: Box<Formula>,
+    },
+    /// Cuantificador de cardinalidad `(al-menos n ((x N)) …)`: al menos
+    /// `minimo` asignaciones distintas de las ligaduras cumplen `g ∧ φ`.
+    /// Con `minimo = 1` equivale a `Existe`; el parser exige `minimo ≥ 1`.
+    AlMenos {
+        minimo: u32,
         ligaduras: Vec<(Var, SorteVar)>,
         guarda: Option<Box<Formula>>,
         cuerpo: Box<Formula>,
@@ -324,6 +388,12 @@ impl std::fmt::Display for Formula {
                 sujeto,
                 constante,
             } => write!(f, "({predicado} {sujeto} {constante})"),
+            Formula::Compara {
+                op,
+                predicado,
+                sujeto,
+                constante,
+            } => write!(f, "({op} {predicado} {sujeto} {constante})"),
             Formula::TcParent { desde, hasta } => write!(f, "(tc Parent {desde} {hasta})"),
             Formula::IgualNodo(a, b) => write!(f, "(= {a} {b})"),
             Formula::IgualArista(a, b) => write!(f, "(= {a} {b})"),
@@ -343,6 +413,18 @@ impl std::fmt::Display for Formula {
                 guarda,
                 cuerpo,
             } => escribir_cuantificador(f, "exists", ligaduras, guarda.as_deref(), cuerpo),
+            Formula::AlMenos {
+                minimo,
+                ligaduras,
+                guarda,
+                cuerpo,
+            } => escribir_cuantificador(
+                f,
+                &format!("al-menos {minimo}"),
+                ligaduras,
+                guarda.as_deref(),
+                cuerpo,
+            ),
         }
     }
 }

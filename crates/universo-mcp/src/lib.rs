@@ -1,7 +1,16 @@
-//! Adaptador MCP del motor. Único crate con runtime async; vacío en el
-//! tema 01. `rmcp` se enlaza aquí desde el día uno para que el workspace
-//! resuelva y compile el SDK fijado (`rmcp = "3.2"`) y su árbol (tokio)
-//! quede en el lockfile. El guard «core sin tokio»
-//! (`universo-core/tests/sin_tokio.rs`) inspecciona solo el árbol de
-//! `universo-core`: este crate no participa en esa comprobación.
-use rmcp as _;
+//! Adaptador MCP de solo lectura; el motor y sus veredictos permanecen en core.
+pub mod dominio;
+mod servidor;
+mod transporte;
+mod worker;
+
+pub use servidor::servir;
+pub use worker::ejecutar_worker;
+pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_JSON_DEPTH: usize = 32;
+pub const TOOL_DEADLINE_MS: u64 = 5_000;
+/// Plazo de `capture`, `reinforce` y `object`, que escriben: largo, para no
+/// cortar un apply a mitad. Al vencer, la transacción queda pendiente y
+/// `universo recover` la completa o la revierte.
+pub const WRITE_DEADLINE_MS: u64 = 300_000;

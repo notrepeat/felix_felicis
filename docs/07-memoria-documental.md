@@ -196,12 +196,12 @@ $$\mathit{ID3} \equiv \forall e\, \forall x\, \forall y\, \big(
 \mathit{Ts}(r, d) \to \mathit{Type}(r, \mathit{RegistroSupersesión}) \big)$$
 
 — toda arista `supersede` toca un registro en al menos uno de sus extremos,
-y $\mathit{Ts}$ solo fecha registros. A diferencia de ID1 e ID2, **ID3 es
-del fragmento universal**: falla por **presencia** de átomos (la arista
-directa ilegal, el $\mathit{Ts}$ fuera de dominio), de modo que sus
-violaciones sí tienen testigos mínimos en el sentido del capítulo 03 y la
-maquinaria de retiro guiado por $\preceq$ las cubre — el contraste con ID1 e
-ID2 se detalla en la sutileza 1.
+y $\mathit{Ts}$ solo fecha registros. Algunos conflictos de ID3 pueden tener
+testigos positivos en el aparato formal de revisión del capítulo 03 cuando el
+delta y los tipos vigentes fuerzan la incompatibilidad; eso no significa que
+ID3 falle exclusivamente por presencia. Tampoco implica que su fórmula actual
+esté dentro del fragmento operacional de `presence_core`: usa `Implica` y `O`,
+fuera de ese fragmento. El contraste con ID1 e ID2 se detalla en la sutileza 1.
 
 Las tres son oraciones de FO sobre $\mathit{Str}(U)$ extendida con los
 átomos de la Definición 8, con pocas variables cada una — exactamente el régimen que el
@@ -215,17 +215,38 @@ Tres sutilezas, dichas sin adorno:
 
 1. **ID1 e ID2 fallan por ausencia, no por presencia.** Ambos tienen forma
    $\forall\exists$: su violación es un átomo que **falta** (la arista
-   `justifica`, la fecha), no un conjunto de átomos presentes. El capítulo
-   03 advirtió que el aparato de testigos mínimos cubre el fragmento
-   universal — el que falla por presencia — así que estas violaciones no
-   tienen testigo de ese tipo. El check las **detecta** igual (model
-   checking evalúa cualquier oración FO), pero la reparación no es un retiro
-   guiado por $\preceq$: es una obligación de **añadir** (crear la
+   `justifica`, la fecha), no un conjunto de átomos presentes. El aparato
+   formal de revisión del capítulo 03 cubre patrones que fallan por presencia,
+   no toda fórmula sintácticamente universal; estas violaciones no tienen
+   testigo positivo de ese tipo. El `check` de fase 02 las **detecta** igual
+   (model checking evalúa cualquier oración FO), pero la reparación no es un
+   retiro guiado por $\preceq$: es una obligación de **añadir** (crear la
    resolución, completar el registro) o de renunciar al ascenso a firme. El
    modo por defecto sigue siendo el del capítulo 05: la operación que deja
-   $\mathit{Str}(U') \not\models \mathit{ID1}$ se rechaza entera. ID3 es el
-   contraste exacto: universal, falla por presencia, y sus violaciones caen
-   de lleno en el aparato de testigos y retiro del capítulo 03.
+   $\mathit{Str}(U') \not\models \mathit{ID1}$ se rechaza entera. Algunos
+   conflictos de ID3 pueden tener testigos positivos cuando el delta y los
+   tipos vigentes fuerzan la incompatibilidad; la fórmula actual usa `Implica`
+   y `O`, fuera del fragmento operacional de `presence_core`. El contrato de
+   fase 03 limita `gap` a obligaciones
+   existenciales monotónicas positivas (átomos de presencia e igualdad
+   positiva, combinados con `Y`, `O` y `Existe`), ya sea un `Existe` exterior
+   falso o el primer cuerpo `Existe` falso y aplicable de un `ParaTodo` falso;
+   se saltan guardas falsas y cuerpos existenciales verdaderos. Fuera de ese
+   fragmento se conserva el `counterexample` y `gap` queda ausente. En ningún
+   caso cambia `reject`, inventa identidad de testigo ni prescribe una
+   reparación. El extractor `gap` está committeado (`df06f11`); las pruebas de
+   casos límite, replay, orden y formas positivas recursivas están en
+   `fd637ce`. El CLI opt-in v2 está integrado (`4d8b238`) y sus pruebas de
+   límites y procedencia en `ccd54b5`. En el árbol actual, `cargo test
+   --workspace` pasa 251 pruebas sin fallos; `cargo test -p universo-core`
+   pasa 151 unitarias y 7 complementarias, y `cargo test -p universo-cli`
+   pasa 1 unitaria, 8 `check`, 14 CLI y 12 explicación. El gate de fase 03
+   está cerrado; los conflictos funcionales de delta siguen asignados a la
+   aceptación de fase 04, no implementados por esta fase. La salida
+   explicativa redacta paths y contenido original, pero publica estructura
+   lógica abstracta/booleanos por instancia, ordinales y posiciones de fuente,
+   conteos derivados y métricas deterministas. La salida legacy sin flag
+   conserva paths en errores por compatibilidad.
 2. **ID1 protege también contra el retiro de justificaciones.** Si una
    revisión retira la única resolución que justificaba un nodo firme, el
    check posterior falla ID1 y la transacción se rechaza — o bien la

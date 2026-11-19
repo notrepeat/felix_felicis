@@ -1,0 +1,425 @@
+{
+  "schema": "felix-paired-tasks-v1",
+  "cases": [
+    {
+      "id": "type_a",
+      "family": "type",
+      "seed": 7100,
+      "prompt": "Promueve n/a al tipo ready. Cumple las reglas y cambia sólo lo necesario.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "type_b",
+      "family": "type",
+      "seed": 7101,
+      "prompt": "Promueve n/b al tipo ready. Su madurez ya es accepted: conserva ese dato y todo lo no requerido.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "label_copy",
+      "family": "label",
+      "seed": 7102,
+      "prompt": "Cambia el título de n/a para que sea igual al título actual de n/b. No cambies n/b ni ningún otro hecho.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "label_swap",
+      "family": "label",
+      "seed": 7103,
+      "prompt": "Intercambia los títulos actuales de n/a y n/c. Conserva tipos, atributos, parentescos y n/b.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "parent_move",
+      "family": "parent",
+      "seed": 7104,
+      "prompt": "Reubica n/a bajo n/c en lugar de su padre actual. No cambies otros hechos.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "parent_rotate",
+      "family": "parent",
+      "seed": 7105,
+      "prompt": "Haz que n/b tenga como padre n/a y que n/a tenga como padre n/c. El resultado debe ser acíclico; conserva lo demás.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "owner_copy",
+      "family": "extension",
+      "seed": 7106,
+      "prompt": "Asigna a n/a el mismo Owner que tiene n/b. Conserva todos los demás hechos.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "maturity_accept",
+      "family": "extension",
+      "seed": 7107,
+      "prompt": "Cambia solamente la madurez de n/c a accepted; su tipo debe seguir siendo draft.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "release_c",
+      "family": "compound",
+      "seed": 7108,
+      "prompt": "Prepara n/c: tipo ready, título Published, padre n/b. Satisface las reglas de madurez y conserva su Owner y el resto del bundle.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "archive_a",
+      "family": "compound",
+      "seed": 7109,
+      "prompt": "Archiva n/a con tipo archive, título Archived y Owner blue. Debe dejar de tener padre. Conserva su madurez y los demás nodos.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "noop_owner",
+      "family": "no_op",
+      "seed": 7110,
+      "prompt": "Asegura que n/b tenga Owner blue. Si ya lo tiene, no modifiques nada; conserva todos los hechos.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    },
+    {
+      "id": "noop_parent",
+      "family": "no_op",
+      "seed": 7111,
+      "prompt": "Asegura que n/c no tenga padre. Si ya es así, no modifiques nada; conserva todos los hechos.",
+      "manifest": "version = \"paired/1\"\n[nodos]\nsortes = [\"draft\", \"ready\", \"archive\", \"Retirado\", \"Patrón\"]\n[[predicados]]\nnombre = \"Maturity\"\nclave = \"maturity\"\ndominio = [\"draft\", \"accepted\"]\n[[predicados]]\nnombre = \"Owner\"\nclave = \"owner\"\ndominio = [\"red\", \"blue\"]\n[layout]\ndirectorios = [\"n\"]\nparent_key = \"parent\"\n",
+      "invariants": "(forall ((x N)) (=> (Type x ready) (Maturity x accepted)))\n",
+      "files": {
+        "n/a.md": "---\ntype: draft\ntitle: Alpha\nmaturity: draft\nowner: red\nparent: n/b\n---\nSynthetic document a; preserve this body.\n",
+        "n/b.md": "---\ntype: draft\ntitle: Beta\nmaturity: accepted\nowner: blue\n---\nSynthetic document b; preserve this body.\n",
+        "n/c.md": "---\ntype: draft\ntitle: Gamma\nmaturity: draft\nowner: red\n---\nSynthetic document c; preserve this body.\n"
+      },
+      "facts": [
+        "HasLab(n/a, \"Alpha\")",
+        "HasLab(n/b, \"Beta\")",
+        "HasLab(n/c, \"Gamma\")",
+        "Maturity(n/a, draft)",
+        "Maturity(n/b, accepted)",
+        "Maturity(n/c, draft)",
+        "Owner(n/a, red)",
+        "Owner(n/b, blue)",
+        "Owner(n/c, red)",
+        "Parent(n/a, n/b)",
+        "Type(n/a, draft)",
+        "Type(n/b, draft)",
+        "Type(n/c, draft)"
+      ],
+      "rules": [
+        "Cada nodo tiene exactamente un tipo y un título; reemplaza el hecho anterior al cambiarlo.",
+        "Cada nodo tiene como máximo un padre y los enlaces Parent no pueden formar ciclos.",
+        "Maturity y Owner tienen un único valor por nodo dentro de sus dominios declarados.",
+        "Todo nodo de tipo ready debe tener Maturity accepted.",
+        "Conserva los hechos ajenos al objetivo; no borres nodos ni inventes nuevas identidades."
+      ]
+    }
+  ]
+}

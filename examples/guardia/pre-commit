@@ -1,0 +1,14 @@
+#!/bin/sh
+# Hook pre-commit de ejemplo para un repositorio de conocimiento gestionado con
+# Felix. Cópialo a .git/hooks/pre-commit (y dale permiso de ejecución) y ajusta
+# las variables. Rechaza el commit si hay una transacción pendiente, si el
+# estado viola las invariantes o si el bundle, el manifiesto o las invariantes
+# cambiaron fuera de Felix desde el último estado admitido (sello).
+#
+# Límite: evalúa el árbol de trabajo, no el índice de git. Para aceptar a mano
+# un cambio correcto: `universo seal <raiz> --manifiesto ... --invariantes ...`.
+: "${UNIVERSO:=universo}"
+: "${FELIX_ROOT:=bundle}"
+: "${FELIX_MANIFIESTO:=manifest.toml}"
+: "${FELIX_INVARIANTES:=invariants.sx}"
+exec "$UNIVERSO" guard "$FELIX_ROOT" --manifiesto "$FELIX_MANIFIESTO" --invariantes "$FELIX_INVARIANTES"

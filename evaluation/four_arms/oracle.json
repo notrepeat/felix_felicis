@@ -1,0 +1,146 @@
+{
+  "schema": "felix-four-arms-oracle-v3",
+  "cut_date": "2027-01-01",
+  "cases": {
+    "cascada_d02": {
+      "required": [
+        "Estado(n/d02, propuesta)",
+        "Estado(n/d03, propuesta)",
+        "Estado(n/d04, propuesta)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Estado:n/d02",
+        "Ext:Estado:n/d03",
+        "Ext:Estado:n/d04"
+      ]
+    },
+    "retirar_revisor_d01": {
+      "required": [
+        "Estado(n/d01, propuesta)",
+        "Estado(n/d02, propuesta)",
+        "Estado(n/d03, propuesta)",
+        "Estado(n/d04, propuesta)",
+        "Estado(n/d14, propuesta)"
+      ],
+      "forbidden": [
+        "Edge(n/p2→n/d01#revisa#0, n/p2, n/d01, revisa)",
+        "HasLab(n/p2→n/d01#revisa#0, \"\")"
+      ],
+      "forbidden_keys": [
+        "Edge:n/p2→n/d01#revisa#0",
+        "HasLab:n/p2→n/d01#revisa#0"
+      ],
+      "mutable_keys": [
+        "Ext:Estado:n/d01",
+        "Ext:Estado:n/d02",
+        "Ext:Estado:n/d03",
+        "Ext:Estado:n/d04",
+        "Ext:Estado:n/d14",
+        "Edge:n/p2→n/d01#revisa#0",
+        "HasLab:n/p2→n/d01#revisa#0"
+      ]
+    },
+    "degradar_d01": {
+      "required": [
+        "Confianza(n/d01, baja)",
+        "Estado(n/d01, propuesta)",
+        "Estado(n/d02, propuesta)",
+        "Estado(n/d03, propuesta)",
+        "Estado(n/d04, propuesta)",
+        "Estado(n/d14, propuesta)"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Confianza:n/d01",
+        "Ext:Estado:n/d01",
+        "Ext:Estado:n/d02",
+        "Ext:Estado:n/d03",
+        "Ext:Estado:n/d04",
+        "Ext:Estado:n/d14"
+      ]
+    },
+    "verificar_dependientes": {
+      "required": [],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": []
+    },
+    "degradar_f1": {
+      "required": [
+        "Confianza(n/f1, baja)"
+      ],
+      "forbidden": [
+        "Edge(n/f1→n/d06#apoya#0, n/f1, n/d06, apoya)",
+        "HasLab(n/f1→n/d06#apoya#0, \"\")",
+        "Edge(n/f1→n/d07#apoya#0, n/f1, n/d07, apoya)",
+        "HasLab(n/f1→n/d07#apoya#0, \"\")",
+        "Edge(n/f1→n/d14#apoya#0, n/f1, n/d14, apoya)",
+        "HasLab(n/f1→n/d14#apoya#0, \"\")"
+      ],
+      "forbidden_keys": [
+        "Edge:n/f1→n/d06#apoya#0",
+        "HasLab:n/f1→n/d06#apoya#0",
+        "Edge:n/f1→n/d07#apoya#0",
+        "HasLab:n/f1→n/d07#apoya#0",
+        "Edge:n/f1→n/d14#apoya#0",
+        "HasLab:n/f1→n/d14#apoya#0"
+      ],
+      "mutable_keys": [
+        "Ext:Confianza:n/f1",
+        "Edge:n/f1→n/d06#apoya#0",
+        "HasLab:n/f1→n/d06#apoya#0",
+        "Edge:n/f1→n/d07#apoya#0",
+        "HasLab:n/f1→n/d07#apoya#0",
+        "Edge:n/f1→n/d14#apoya#0",
+        "HasLab:n/f1→n/d14#apoya#0"
+      ]
+    },
+    "promover_d13": {
+      "required": [
+        "Estado(n/d13, vigente)",
+        "Edge(n/p3→n/d13#revisa#0, n/p3, n/d13, revisa)",
+        "HasLab(n/p3→n/d13#revisa#0, \"\")"
+      ],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": [
+        "Ext:Estado:n/d13",
+        "Edge:n/p3→n/d13#revisa#0",
+        "HasLab:n/p3→n/d13#revisa#0"
+      ]
+    },
+    "reasignar_d14": {
+      "required": [
+        "Edge(n/p2→n/d14#propone#0, n/p2, n/d14, propone)",
+        "HasLab(n/p2→n/d14#propone#0, \"\")",
+        "Edge(n/p5→n/d14#revisa#0, n/p5, n/d14, revisa)",
+        "HasLab(n/p5→n/d14#revisa#0, \"\")"
+      ],
+      "forbidden": [
+        "Edge(n/p1→n/d14#propone#0, n/p1, n/d14, propone)",
+        "HasLab(n/p1→n/d14#propone#0, \"\")"
+      ],
+      "forbidden_keys": [
+        "Edge:n/p1→n/d14#propone#0",
+        "HasLab:n/p1→n/d14#propone#0"
+      ],
+      "mutable_keys": [
+        "Edge:n/p1→n/d14#propone#0",
+        "HasLab:n/p1→n/d14#propone#0",
+        "Edge:n/p2→n/d14#propone#0",
+        "HasLab:n/p2→n/d14#propone#0",
+        "Edge:n/p5→n/d14#revisa#0",
+        "HasLab:n/p5→n/d14#revisa#0"
+      ]
+    },
+    "promover_d11": {
+      "required": [],
+      "forbidden": [],
+      "forbidden_keys": [],
+      "mutable_keys": []
+    }
+  }
+}

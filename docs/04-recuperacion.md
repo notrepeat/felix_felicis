@@ -1,5 +1,8 @@
 # 04 — Recuperación: patrones para tareas repetitivas
 
+Este capítulo trata la recuperación de conocimiento por patrones. La recuperación
+de escrituras interrumpidas se documenta en [Operación transaccional](operacion-transaccional.md).
+
 Los capítulos 02 y 03 fijaron cómo el universo se defiende (check) y cómo
 cambia (revisión). Este capítulo responde a la pregunta de uso diario: ¿cómo
 se **saca** conocimiento de $U$? La respuesta es por patrones — y trae un

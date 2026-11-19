@@ -1,0 +1,104 @@
+name: Release
+
+# Binarios de `universo` y `universo-mcp` por plataforma (U6).
+# - Tag `v*`: compila, empaqueta y sube los archivos y sus .sha256 a la
+#   release de ese tag; si no existe, la crea como borrador. Publicarla es un
+#   paso humano.
+# - PR que toca este workflow o el empaquetador: sólo compila y empaqueta, como
+#   prueba, sin publicar nada.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "tools/empaquetar_release.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "crates/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest  # arm64; macos-14 ya no está disponible
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Compilar
+        run: cargo build --release --locked -p universo-cli -p universo-mcp --target ${{ matrix.target }}
+      - name: Probar los binarios compilados
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/release
+          "$bin/universo" --version
+          "$bin/universo-mcp" --version
+          # Un tag vX.Y.Z debe coincidir con la versión del paquete.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            esperado="universo ${GITHUB_REF_NAME#v}"
+            obtenido="$("$bin/universo" --version | tr -d '\r')"
+            [[ "$obtenido" == "$esperado" ]] || { echo "el tag dice '$esperado' y el binario '$obtenido'"; exit 1; }
+          fi
+          "$bin/universo" init "$RUNNER_TEMP/kb"
+          "$bin/universo" guard "$RUNNER_TEMP/kb/bundle" --manifiesto "$RUNNER_TEMP/kb/manifest.toml" --invariantes "$RUNNER_TEMP/kb/invariants.sx"
+      - name: Empaquetar
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then version="$GITHUB_REF_NAME"; else version="prueba-${GITHUB_SHA::7}"; fi
+          python tools/empaquetar_release.py --target ${{ matrix.target }} --version "$version" \
+            --bin-dir target/${{ matrix.target }}/release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: felix-felicis-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verificar sumas
+        working-directory: dist
+        run: sha256sum -c *.sha256
+      - name: Subir a la release del tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Sólo escribe en un borrador: nunca reemplaza assets de una release
+        # ya publicada. `gh release view` no encuentra borradores por tag, por
+        # eso se busca en la lista.
+        run: |
+          borrador="$(gh release list --limit 200 --json tagName,isDraft \
+            --jq ".[] | select(.tagName == env.GITHUB_REF_NAME) | .isDraft")"
+          if [[ -z "$borrador" ]]; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "$GITHUB_REF_NAME" --notes "Borrador creado por el workflow de release."
+          elif [[ "$borrador" != "true" ]]; then
+            echo "la release $GITHUB_REF_NAME ya está publicada; no se reemplazan sus archivos"
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

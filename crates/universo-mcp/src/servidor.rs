@@ -1,0 +1,256 @@
+use crate::{
+    dominio::{ESCRITURA, ServerConfig, UniversoMcp, herramientas},
+    transporte::Acotado,
+    worker,
+};
+use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext};
+use serde_json::{Map, Value, json};
+use std::{borrow::Cow, sync::Arc};
+
+/// Nombre reservado: `search` con `universe: "todos"` busca en todos.
+const TODOS: &str = "todos";
+
+struct Servidor {
+    /// Universo por defecto (o el único, con rutas explícitas).
+    config: ServerConfig,
+    /// Con `--criterio`: cada universo del repositorio; vacío con rutas.
+    universos: Vec<UniversoMcp>,
+    por_defecto: Option<String>,
+    ocupado: Arc<tokio::sync::Semaphore>,
+}
+
+impl Servidor {
+    fn escritura(&self) -> bool {
+        self.universos.iter().any(|u| u.escritura)
+    }
+
+    /// Universos sobre los que corre la herramienta, con su nombre si el
+    /// servidor tiene varios.
+    fn destinos(
+        &self,
+        herramienta: &str,
+        universo: Option<Value>,
+    ) -> Result<Vec<(Option<String>, ServerConfig)>, &'static str> {
+        let escribe = ESCRITURA.contains(&herramienta);
+        if self.universos.is_empty() {
+            return match universo {
+                None => Ok(vec![(None, self.config.clone())]),
+                Some(_) => Err("invalid_tool_arguments"),
+            };
+        }
+        let nombre = match universo {
+            None => self.por_defecto.clone().unwrap_or_default(),
+            Some(Value::String(nombre)) => nombre,
+            Some(_) => return Err("invalid_tool_arguments"),
+        };
+        if nombre == TODOS {
+            if herramienta != "search" {
+                return Err("invalid_tool_arguments");
+            }
+            return Ok(self
+                .universos
+                .iter()
+                .map(|u| (Some(u.nombre.clone()), u.config.clone()))
+                .collect());
+        }
+        let universo = self
+            .universos
+            .iter()
+            .find(|u| u.nombre == nombre)
+            .ok_or("universe_not_found")?;
+        if escribe && !universo.escritura {
+            return Err("universe_read_only");
+        }
+        Ok(vec![(
+            Some(universo.nombre.clone()),
+            universo.config.clone(),
+        )])
+    }
+}
+
+fn error(code: &str) -> (Value, bool) {
+    (
+        json!({"schema":"felix-mcp-v1","status":"error","code":code}),
+        true,
+    )
+}
+
+fn respuesta(resultado: Result<worker::Respuesta, &'static str>) -> (Value, bool) {
+    match resultado {
+        Ok(worker::Respuesta {
+            resultado: Some(value),
+            error: None,
+        }) => (value, false),
+        Ok(worker::Respuesta {
+            error: Some(code), ..
+        }) => error(&code),
+        Err(code) => error(code),
+        _ => error("worker_failed"),
+    }
+}
+
+/// `search` en todos los universos: une los resultados por puntaje, con el
+/// universo de cada uno, y respeta `limit`.
+fn unir_busquedas(resultados: Vec<(Option<String>, Value)>, limite: usize) -> Value {
+    let mut total = 0;
+    let mut coincidencias = Vec::new();
+    for (universo, valor) in resultados {
+        total += valor["summary"]["total"].as_u64().unwrap_or(0);
+        for mut m in valor["matches"].as_array().cloned().unwrap_or_default() {
+            m["universe"] = json!(universo);
+            coincidencias.push(m);
+        }
+    }
+    coincidencias.sort_by(|a, b| {
+        b["score"]
+            .as_u64()
+            .cmp(&a["score"].as_u64())
+            .then_with(|| a["universe"].as_str().cmp(&b["universe"].as_str()))
+            .then_with(|| a["path"].as_str().cmp(&b["path"].as_str()))
+    });
+    coincidencias.truncate(limite);
+    json!({"schema":"felix-mcp-v1","tool":"search","status":"ok",
+           "summary":{"total":total,"returned":coincidencias.len()},
+           "values_included":true,"matches":coincidencias,"persisted":false})
+}
+
+impl ServerHandler for Servidor {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(ProtocolVersion::V_2025_11_25)
+    }
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Owned(vec![ProtocolVersion::V_2025_11_25])
+    }
+    async fn list_tools(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        if request.is_some_and(|p| p.cursor.is_some()) {
+            return Err(ErrorData::invalid_params("pagination_not_supported", None));
+        }
+        let tools = herramientas(!self.universos.is_empty(), self.escritura())
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<Vec<Tool>, _>>()
+            .map_err(|_| ErrorData::internal_error("tool_schema_invalid", None))?;
+        Ok(ListToolsResult {
+            tools,
+            ..Default::default()
+        })
+    }
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        let nombre = request.name.into_owned();
+        let consulta = matches!(
+            nombre.as_str(),
+            "context" | "propose" | "check" | "why" | "search"
+        );
+        let escritura = ESCRITURA.contains(&nombre.as_str()) && self.escritura();
+        if !(consulta || escritura) {
+            return Err(ErrorData::invalid_params("unknown_tool", None));
+        }
+        let mut argumentos: Map<String, Value> = request.arguments.unwrap_or_default();
+        let universo = argumentos.remove("universe");
+        // Como en el worker: 5.0 es un entero válido en JSON Schema.
+        let limite = argumentos
+            .get("limit")
+            .and_then(|v| {
+                v.as_u64().or_else(|| {
+                    v.as_f64()
+                        .filter(|f| f.fract() == 0.0 && *f >= 0.0)
+                        .map(|f| f as u64)
+                })
+            })
+            .unwrap_or(20) as usize;
+        let (value, error) = match self.destinos(&nombre, universo) {
+            Err(code) => error(code),
+            Ok(destinos) => {
+                let permit = Arc::clone(&self.ocupado)
+                    .try_acquire_owned()
+                    .map_err(|_| ErrorData::internal_error("server_busy", None))?;
+                let varios = destinos.len() > 1;
+                let con_nombre = !self.universos.is_empty();
+                let corrida = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    destinos
+                        .into_iter()
+                        .map(|(universo, config)| {
+                            let peticion = worker::Peticion {
+                                nombre: nombre.clone(),
+                                argumentos: Value::Object(argumentos.clone()),
+                            };
+                            (universo, worker::consultar(config, peticion))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+                match corrida {
+                    Err(_) => error("worker_failed"),
+                    Ok(resultados) => {
+                        let mut bien = Vec::new();
+                        let mut fallo = None;
+                        for (universo, resultado) in resultados {
+                            match respuesta(resultado) {
+                                (value, false) => bien.push((universo, value)),
+                                (mut value, true) => {
+                                    // Con varios universos, decir cuál falló.
+                                    if con_nombre {
+                                        value["universe"] = json!(universo);
+                                    }
+                                    fallo.get_or_insert((value, true));
+                                }
+                            }
+                        }
+                        match fallo {
+                            Some(otro) => otro,
+                            None if varios => (unir_busquedas(bien, limite), false),
+                            None => {
+                                let (universo, mut value) =
+                                    bien.pop().unwrap_or((None, Value::Null));
+                                if con_nombre {
+                                    value["universe"] = json!(universo);
+                                }
+                                (value, false)
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let text = serde_json::to_string(&value)
+            .map_err(|_| ErrorData::internal_error("response_invalid", None))?;
+        let mut result = if error {
+            CallToolResult::error(vec![ContentBlock::text(text)])
+        } else {
+            CallToolResult::success(vec![ContentBlock::text(text)])
+        };
+        result.structured_content = Some(value);
+        Ok(result.into())
+    }
+}
+
+/// Sirve por stdio. `universos` vacío: rutas explícitas (`config`); con
+/// `--criterio`, cada universo y el nombre del por defecto.
+pub async fn servir(
+    config: ServerConfig,
+    universos: Vec<UniversoMcp>,
+    por_defecto: Option<String>,
+) -> Result<(), ()> {
+    let server = Servidor {
+        config,
+        universos,
+        por_defecto,
+        ocupado: Arc::new(tokio::sync::Semaphore::new(1)),
+    };
+    let service = server
+        .serve(Acotado::new(tokio::io::stdin(), tokio::io::stdout()))
+        .await
+        .map_err(|_| ())?;
+    service.waiting().await.map_err(|_| ())?;
+    Ok(())
+}

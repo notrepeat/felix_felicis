@@ -1,0 +1,3188 @@
+//! Captura inmutable del bundle y de sus entradas raw de configuración.
+//!
+//! Esta etapa rechaza enlaces observables y parsea solo desde buffers ya
+//! capturados. La captura por ruta conserva el límite TOCTOU de su backend; la
+//! variante anclada inventaría desde un handle root y materializa desde buffers
+//! raw. Las APIs siguen internas mientras apply no coordina lock y contexto.
+
+use std::collections::HashMap;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+#[cfg(windows)]
+use std::fs;
+
+use universo_core::{Estructura, SentenciaFuente, parsear_programa};
+
+use crate::bundle::{directorio_layout_seguro, parsear_bundle_desde_estructura};
+use crate::manifiesto_toml::parsear_manifiesto_sin_validar;
+
+use super::anclado::{DirectorioAnclado, IdentidadDirectorio};
+use super::inventario::{
+    inventariar_root, inventariar_root_anclado, inventariar_root_con_lector_limitado,
+    leer_archivo_regular_limitado, ruta_absoluta_lexica, validar_archivo_sin_enlaces,
+};
+use super::journal::RawTreeDigest;
+use super::limites::PRESUPUESTO_BYTES_RAW;
+use super::lock::LockEscritura;
+use super::replay::semantica_archivada::{POLICY_ID_V1, VERSION_MOTOR_V1};
+use super::snapshot::{
+    EntradaSnapshot, ErrorSnapshot, SnapshotToken, TipoEntradaSnapshot, calcular_digest_raw_tree,
+    calcular_token_snapshot, validar_presupuesto_configuracion,
+};
+
+/// Snapshot completo que conserva las entradas raw y sus vistas parseadas.
+/// Sus campos no son mutables desde el exterior y su representación se redacta.
+pub(crate) struct Snapshot {
+    token: SnapshotToken,
+    raw_tree_digest: RawTreeDigest,
+    entradas: Vec<EntradaSnapshot>,
+    manifiesto_raw: Arc<[u8]>,
+    invariantes_raw: Arc<[u8]>,
+    version_motor: Arc<str>,
+    policy_id: Arc<str>,
+    identidad_root: Option<IdentidadDirectorio>,
+    ruta_manifiesto_root: Option<String>,
+    ruta_invariantes_root: Option<String>,
+    estructura: Estructura,
+    fuentes_invariantes: Vec<SentenciaFuente>,
+}
+
+/// Identidad del bundle calculada sobre buffers capturados, aún sin parsear.
+/// Solo la capa de transacción puede compararla y luego materializarla.
+pub(crate) struct CapturaSnapshotRaw {
+    token: SnapshotToken,
+    raw_tree_digest: RawTreeDigest,
+    entradas: Vec<EntradaSnapshot>,
+    manifiesto_raw: Arc<[u8]>,
+    invariantes_raw: Arc<[u8]>,
+    version_motor: Arc<str>,
+    policy_id: Arc<str>,
+    identidad_root: Option<IdentidadDirectorio>,
+    ruta_manifiesto_root: Option<String>,
+    ruta_invariantes_root: Option<String>,
+}
+
+/// Bytes raw de configuración que ya fueron capturados y permanecen
+/// inmutables durante el cálculo del token y la materialización.
+///
+/// Las rutas opcionales son procedencia root-relativa, nunca rutas a reabrir.
+/// Si son `None`, los bytes se consideran externos y ya capturados por quien
+/// posee la capability de lectura correspondiente.
+#[derive(Clone)]
+pub(crate) struct ConfigRawCapturada {
+    manifiesto_raw: Arc<[u8]>,
+    invariantes_raw: Arc<[u8]>,
+    ruta_manifiesto_root: Option<String>,
+    ruta_invariantes_root: Option<String>,
+}
+
+impl ConfigRawCapturada {
+    /// Valida el presupuesto de los bytes ya materializados sin guardar rutas
+    /// que puedan reabrirse. No limita la lectura ni la asignación previa.
+    pub(crate) fn nueva(
+        manifiesto_raw: impl Into<Arc<[u8]>>,
+        invariantes_raw: impl Into<Arc<[u8]>>,
+        ruta_manifiesto_root: Option<String>,
+        ruta_invariantes_root: Option<String>,
+    ) -> Result<Self, ErrorSnapshot> {
+        Self::nueva_con_limite(
+            manifiesto_raw,
+            invariantes_raw,
+            ruta_manifiesto_root,
+            ruta_invariantes_root,
+            PRESUPUESTO_BYTES_RAW,
+        )
+    }
+
+    fn nueva_con_limite(
+        manifiesto_raw: impl Into<Arc<[u8]>>,
+        invariantes_raw: impl Into<Arc<[u8]>>,
+        ruta_manifiesto_root: Option<String>,
+        ruta_invariantes_root: Option<String>,
+        limite: usize,
+    ) -> Result<Self, ErrorSnapshot> {
+        let manifiesto_raw = manifiesto_raw.into();
+        let invariantes_raw = invariantes_raw.into();
+        validar_suma_bytes_configuracion(manifiesto_raw.len(), invariantes_raw.len())?;
+        validar_presupuesto_configuracion(&manifiesto_raw, &invariantes_raw, limite)?;
+
+        Ok(Self {
+            manifiesto_raw,
+            invariantes_raw,
+            ruta_manifiesto_root,
+            ruta_invariantes_root,
+        })
+    }
+
+    pub(crate) fn manifiesto_raw(&self) -> &[u8] {
+        &self.manifiesto_raw
+    }
+
+    pub(crate) fn invariantes_raw(&self) -> &[u8] {
+        &self.invariantes_raw
+    }
+
+    pub(crate) fn ruta_manifiesto_root(&self) -> Option<&str> {
+        self.ruta_manifiesto_root.as_deref()
+    }
+
+    pub(crate) fn ruta_invariantes_root(&self) -> Option<&str> {
+        self.ruta_invariantes_root.as_deref()
+    }
+}
+
+fn validar_suma_bytes_configuracion(
+    manifiesto: usize,
+    invariantes: usize,
+) -> Result<(), ErrorSnapshot> {
+    manifiesto
+        .checked_add(invariantes)
+        .map(|_| ())
+        .ok_or(ErrorSnapshot::LimiteInventarioExcedido)
+}
+
+impl fmt::Debug for ConfigRawCapturada {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ConfigRawCapturada { .. }")
+    }
+}
+
+struct FuenteRaw {
+    bytes: Arc<[u8]>,
+    ruta_root: Option<String>,
+}
+
+struct PresupuestoConfiguracion {
+    limite: usize,
+    usados: usize,
+}
+
+impl PresupuestoConfiguracion {
+    fn nuevo(limite: usize) -> Self {
+        Self { limite, usados: 0 }
+    }
+
+    fn restante(&self) -> usize {
+        self.limite - self.usados
+    }
+
+    fn maximo_lectura(&self) -> Result<usize, ErrorSnapshot> {
+        self.restante()
+            .checked_add(1)
+            .ok_or(ErrorSnapshot::LongitudExcedida)
+    }
+
+    fn cobrar(&mut self, bytes: usize) -> Result<(), ErrorSnapshot> {
+        self.usados = self
+            .usados
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limite)
+            .ok_or(ErrorSnapshot::LimiteInventarioExcedido)?;
+        Ok(())
+    }
+}
+
+impl fmt::Debug for CapturaSnapshotRaw {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("CapturaSnapshotRaw { .. }")
+    }
+}
+
+impl Snapshot {
+    /// Token opaco; la representación solo se revela mediante `to_hex`.
+    pub(crate) fn token(&self) -> SnapshotToken {
+        self.token
+    }
+
+    pub(crate) fn raw_tree_digest(&self) -> &RawTreeDigest {
+        &self.raw_tree_digest
+    }
+
+    /// Entradas raw del root, ordenadas por bytes UTF-8 de la ruta.
+    pub(crate) fn entradas(&self) -> &[EntradaSnapshot] {
+        &self.entradas
+    }
+
+    /// Bytes exactos del manifiesto capturado.
+    pub(crate) fn manifiesto_raw(&self) -> &[u8] {
+        &self.manifiesto_raw
+    }
+
+    /// Bytes exactos del programa de invariantes capturado.
+    pub(crate) fn invariantes_raw(&self) -> &[u8] {
+        &self.invariantes_raw
+    }
+
+    pub(crate) fn version_motor(&self) -> &str {
+        &self.version_motor
+    }
+
+    pub(crate) fn policy_id(&self) -> &str {
+        &self.policy_id
+    }
+
+    /// Configuración raw capturada, con bytes compartidos y solo procedencia
+    /// root-relative. No conserva una ruta que pueda reabrirse.
+    pub(crate) fn configuracion_raw_capturada(&self) -> ConfigRawCapturada {
+        ConfigRawCapturada {
+            manifiesto_raw: Arc::clone(&self.manifiesto_raw),
+            invariantes_raw: Arc::clone(&self.invariantes_raw),
+            ruta_manifiesto_root: self.ruta_manifiesto_root.clone(),
+            ruta_invariantes_root: self.ruta_invariantes_root.clone(),
+        }
+    }
+
+    pub(crate) fn identidad_root(&self) -> Option<IdentidadDirectorio> {
+        self.identidad_root
+    }
+
+    pub(crate) fn ruta_manifiesto_root(&self) -> Option<&str> {
+        self.ruta_manifiesto_root.as_deref()
+    }
+
+    pub(crate) fn ruta_invariantes_root(&self) -> Option<&str> {
+        self.ruta_invariantes_root.as_deref()
+    }
+
+    /// Estructura del bundle parseada desde los bytes de `entradas`.
+    pub(crate) fn estructura(&self) -> &Estructura {
+        &self.estructura
+    }
+
+    /// Fuentes del programa parseadas desde `invariantes_raw`.
+    pub(crate) fn fuentes_invariantes(&self) -> &[SentenciaFuente] {
+        &self.fuentes_invariantes
+    }
+}
+
+impl fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Snapshot { .. }")
+    }
+}
+
+/// Lee y captura un root, su manifiesto y su programa de invariantes.
+///
+/// Toda entrada regular del root se lee una vez a un buffer raw; manifiesto,
+/// invariantes y Markdown se parsean desde esos mismos buffers. Las rutas de
+/// configuración externas al root también se leen una sola vez y se rechazan
+/// cuando algún componente observado es un symlink o reparse point. Apply usa
+/// la variante anclada cuando la operación requiere identidad de root estable.
+pub(crate) fn capturar_snapshot(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<Snapshot, ErrorSnapshot> {
+    materializar(capturar_snapshot_raw(
+        raiz,
+        ruta_manifiesto,
+        ruta_invariantes,
+        version_motor,
+        policy_id,
+    )?)
+}
+
+/// Captura, compara el token antes de parsear y materializa únicamente si el
+/// snapshot sigue siendo el esperado. Esta variante por ruta es para
+/// simulación y tests; apply usa la variante que recibe un root anclado.
+pub(crate) fn capturar_snapshot_con_cas(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let captura = capturar_snapshot_raw(
+        raiz,
+        ruta_manifiesto,
+        ruta_invariantes,
+        version_motor,
+        policy_id,
+    )?;
+    super::snapshot::comparar_snapshot_esperado(esperado, captura.token)?;
+    materializar(captura)
+}
+
+/// Captura el inventario desde un directorio ya abierto y combina sus bytes
+/// con configuración raw capturada previamente. No acepta rutas ni reabre el
+/// root; manifiesto e invariantes se parsearán después desde estos mismos bytes.
+pub(crate) fn capturar_snapshot_raw_anclado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
+    let captura =
+        capturar_snapshot_raw_anclado_sin_validar(raiz, configuracion, version_motor, policy_id)?;
+    validar_procedencia(&captura)?;
+    Ok(captura)
+}
+
+/// Captura y materializa usando el único perfil semántico archivado soportado.
+/// Los tags resultantes describen datos; no prueban admisión ni conceden autoridad.
+pub(crate) fn capturar_snapshot_soportado_anclado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let captura =
+        capturar_snapshot_raw_anclado(raiz, configuracion, VERSION_MOTOR_V1, POLICY_ID_V1)?;
+    materializar(captura)
+}
+
+/// Captura desde el handle root, compara CAS antes de validar procedencia o
+/// parsear configuración, y materializa desde los buffers ya capturados.
+pub(crate) fn capturar_snapshot_con_cas_anclado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let captura =
+        capturar_snapshot_raw_anclado_sin_validar(raiz, configuracion, version_motor, policy_id)?;
+    super::snapshot::comparar_snapshot_esperado(esperado, captura.token)?;
+    materializar(captura)
+}
+
+/// Mantiene el orden CAS existente: comparar el token antes de validar
+/// procedencia raw o materializar/parsing la configuración.
+pub(crate) fn capturar_snapshot_soportado_con_cas_anclado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    capturar_snapshot_con_cas_anclado(
+        raiz,
+        configuracion,
+        VERSION_MOTOR_V1,
+        POLICY_ID_V1,
+        esperado,
+    )
+}
+
+/// Abre el root desde la ubicación protegida por el lock y ejecuta el CAS
+/// anclado sin adquirir ni liberar el guard.
+pub(crate) fn capturar_snapshot_con_cas_bajo_lock(
+    lock: &mut LockEscritura,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    capturar_snapshot_con_cas_bajo_lock_con_limite(
+        lock,
+        configuracion,
+        version_motor,
+        policy_id,
+        esperado,
+        PRESUPUESTO_BYTES_RAW,
+    )
+}
+
+fn capturar_snapshot_con_cas_bajo_lock_con_limite(
+    lock: &mut LockEscritura,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+    limite_configuracion: usize,
+) -> Result<Snapshot, ErrorSnapshot> {
+    validar_presupuesto_configuracion(
+        &configuracion.manifiesto_raw,
+        &configuracion.invariantes_raw,
+        limite_configuracion,
+    )?;
+    let raiz = DirectorioAnclado::desde_ubicacion(lock.ubicacion())
+        .map_err(super::inventario::mapear_error_anclado)?;
+    capturar_snapshot_con_cas_anclado_prevalidado(
+        &raiz,
+        configuracion,
+        version_motor,
+        policy_id,
+        esperado,
+    )
+}
+
+fn capturar_snapshot_raw_anclado_sin_validar(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
+    capturar_snapshot_raw_anclado_con_limite(
+        raiz,
+        configuracion,
+        version_motor,
+        policy_id,
+        PRESUPUESTO_BYTES_RAW,
+        inventariar_root_anclado,
+    )
+}
+
+fn capturar_snapshot_raw_anclado_con_limite<F>(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    limite_configuracion: usize,
+    inventariar: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnOnce(DirectorioAnclado) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>,
+{
+    validar_presupuesto_configuracion(
+        &configuracion.manifiesto_raw,
+        &configuracion.invariantes_raw,
+        limite_configuracion,
+    )?;
+    capturar_snapshot_raw_anclado_prevalidado(
+        raiz,
+        configuracion,
+        version_motor,
+        policy_id,
+        inventariar,
+    )
+}
+
+fn capturar_snapshot_raw_anclado_prevalidado<F>(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    inventariar: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnOnce(DirectorioAnclado) -> Result<Vec<EntradaSnapshot>, ErrorSnapshot>,
+{
+    let entradas = inventariar(raiz.clonar().map_err(|_| ErrorSnapshot::Io)?)?;
+    let identidad_root = raiz.identidad_raiz().ok_or(ErrorSnapshot::RaizInvalida)?;
+    let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
+    let token = calcular_token_snapshot(
+        version_motor,
+        policy_id,
+        &configuracion.manifiesto_raw,
+        &configuracion.invariantes_raw,
+        &entradas,
+    )?;
+
+    Ok(CapturaSnapshotRaw {
+        token,
+        raw_tree_digest,
+        entradas,
+        manifiesto_raw: configuracion.manifiesto_raw,
+        invariantes_raw: configuracion.invariantes_raw,
+        version_motor: Arc::from(version_motor),
+        policy_id: Arc::from(policy_id),
+        identidad_root: Some(identidad_root),
+        ruta_manifiesto_root: configuracion.ruta_manifiesto_root,
+        ruta_invariantes_root: configuracion.ruta_invariantes_root,
+    })
+}
+
+fn capturar_snapshot_con_cas_anclado_prevalidado(
+    raiz: &DirectorioAnclado,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+    esperado: SnapshotToken,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let captura = capturar_snapshot_raw_anclado_prevalidado(
+        raiz,
+        configuracion,
+        version_motor,
+        policy_id,
+        inventariar_root_anclado,
+    )?;
+    super::snapshot::comparar_snapshot_esperado(esperado, captura.token)?;
+    materializar(captura)
+}
+
+/// Lee las entradas y configura la identidad solo desde sus buffers raw. Debe
+/// seguir privada para la captura por ruta usada en simulación y tests.
+fn capturar_snapshot_raw(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot> {
+    let raiz = ruta_absoluta_lexica(raiz)?;
+    let entradas = inventariar_root(&raiz)?;
+    capturar_snapshot_raw_con_entradas(
+        raiz,
+        [ruta_manifiesto, ruta_invariantes],
+        version_motor,
+        policy_id,
+        entradas,
+        PresupuestoConfiguracion::nuevo(PRESUPUESTO_BYTES_RAW),
+        leer_archivo_regular_limitado,
+    )
+}
+
+fn capturar_snapshot_con_lector<F>(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+    leer: F,
+) -> Result<Snapshot, ErrorSnapshot>
+where
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    materializar(capturar_snapshot_raw_con_lector(
+        raiz,
+        ruta_manifiesto,
+        ruta_invariantes,
+        version_motor,
+        policy_id,
+        leer,
+    )?)
+}
+
+fn capturar_snapshot_raw_con_lector<F>(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+    mut leer: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let raiz = ruta_absoluta_lexica(raiz)?;
+    let entradas = inventariar_root_con_lector_limitado(&raiz, &mut leer)?;
+    capturar_snapshot_raw_con_entradas(
+        raiz,
+        [ruta_manifiesto, ruta_invariantes],
+        version_motor,
+        policy_id,
+        entradas,
+        PresupuestoConfiguracion::nuevo(PRESUPUESTO_BYTES_RAW),
+        leer,
+    )
+}
+
+fn capturar_snapshot_raw_con_lector_y_limite<F>(
+    raiz: &Path,
+    ruta_manifiesto: &Path,
+    ruta_invariantes: &Path,
+    version_motor: &str,
+    policy_id: &str,
+    limite_configuracion: usize,
+    mut leer: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let raiz = ruta_absoluta_lexica(raiz)?;
+    let entradas = inventariar_root_con_lector_limitado(&raiz, &mut leer)?;
+    capturar_snapshot_raw_con_entradas(
+        raiz,
+        [ruta_manifiesto, ruta_invariantes],
+        version_motor,
+        policy_id,
+        entradas,
+        PresupuestoConfiguracion::nuevo(limite_configuracion),
+        leer,
+    )
+}
+
+fn capturar_snapshot_raw_con_entradas<F>(
+    raiz: PathBuf,
+    rutas_configuracion: [&Path; 2],
+    version_motor: &str,
+    policy_id: &str,
+    entradas: Vec<EntradaSnapshot>,
+    mut presupuesto: PresupuestoConfiguracion,
+    mut leer: F,
+) -> Result<CapturaSnapshotRaw, ErrorSnapshot>
+where
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let [ruta_manifiesto, ruta_invariantes] = rutas_configuracion;
+    let mut cache_externa = HashMap::new();
+    let manifiesto = bytes_fuente(
+        &raiz,
+        ruta_manifiesto,
+        &entradas,
+        &mut cache_externa,
+        &mut presupuesto,
+        &mut leer,
+    )?;
+    let invariantes = bytes_fuente(
+        &raiz,
+        ruta_invariantes,
+        &entradas,
+        &mut cache_externa,
+        &mut presupuesto,
+        &mut leer,
+    )?;
+
+    let token = calcular_token_snapshot(
+        version_motor,
+        policy_id,
+        &manifiesto.bytes,
+        &invariantes.bytes,
+        &entradas,
+    )?;
+    let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
+
+    Ok(CapturaSnapshotRaw {
+        token,
+        raw_tree_digest,
+        entradas,
+        manifiesto_raw: manifiesto.bytes,
+        invariantes_raw: invariantes.bytes,
+        version_motor: Arc::from(version_motor),
+        policy_id: Arc::from(policy_id),
+        identidad_root: None,
+        ruta_manifiesto_root: manifiesto.ruta_root,
+        ruta_invariantes_root: invariantes.ruta_root,
+    })
+}
+
+/// Reinterpreta el inventario ya recapturado de un sibling con la misma
+/// configuración raw e identidad de motor/política que originaron `original`.
+/// No vuelve a leer root ni rutas de configuración. La recaptura del inventario
+/// sigue siendo path-based: esto no ancla el objeto filesystem ni elimina TOCTOU.
+pub(crate) fn materializar_desde_entradas(
+    original: &Snapshot,
+    entradas: Vec<EntradaSnapshot>,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
+    let token = calcular_token_snapshot(
+        original.version_motor(),
+        original.policy_id(),
+        original.manifiesto_raw(),
+        original.invariantes_raw(),
+        &entradas,
+    )?;
+    materializar(CapturaSnapshotRaw {
+        token,
+        raw_tree_digest,
+        entradas,
+        manifiesto_raw: Arc::clone(&original.manifiesto_raw),
+        invariantes_raw: Arc::clone(&original.invariantes_raw),
+        version_motor: Arc::clone(&original.version_motor),
+        policy_id: Arc::clone(&original.policy_id),
+        identidad_root: original.identidad_root,
+        ruta_manifiesto_root: original.ruta_manifiesto_root.clone(),
+        ruta_invariantes_root: original.ruta_invariantes_root.clone(),
+    })
+}
+
+/// Reconstruye un snapshot exclusivamente desde el inventario raw y la
+/// configuración capturada. No consulta el filesystem y deja sin identidad
+/// root el snapshot reproducido; las rutas de configuración solo sirven para
+/// verificar procedencia contra las entradas suministradas.
+pub(crate) fn materializar_snapshot_desde_entradas(
+    entradas: Vec<EntradaSnapshot>,
+    configuracion: ConfigRawCapturada,
+    version_motor: &str,
+    policy_id: &str,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let ConfigRawCapturada {
+        manifiesto_raw,
+        invariantes_raw,
+        ruta_manifiesto_root,
+        ruta_invariantes_root,
+    } = configuracion;
+
+    // Revalidar antes de hashear o materializar protege también los contextos
+    // reconstruidos desde un journal, sin depender de quién creó la captura.
+    validar_presupuesto_configuracion(&manifiesto_raw, &invariantes_raw, PRESUPUESTO_BYTES_RAW)?;
+    let raw_tree_digest = calcular_digest_raw_tree(&entradas)?;
+    let token = calcular_token_snapshot(
+        version_motor,
+        policy_id,
+        &manifiesto_raw,
+        &invariantes_raw,
+        &entradas,
+    )?;
+
+    materializar(CapturaSnapshotRaw {
+        token,
+        raw_tree_digest,
+        entradas,
+        manifiesto_raw,
+        invariantes_raw,
+        version_motor: Arc::from(version_motor),
+        policy_id: Arc::from(policy_id),
+        identidad_root: None,
+        ruta_manifiesto_root,
+        ruta_invariantes_root,
+    })
+}
+
+/// Parsea únicamente los buffers que ya forman la identidad raw. No vuelve a
+/// consultar el filesystem, así que el modelo y token describen los mismos
+/// bytes incluso si los archivos cambian después de la captura.
+fn materializar(raw: CapturaSnapshotRaw) -> Result<Snapshot, ErrorSnapshot> {
+    materializar_con_expansor(raw, archivos_markdown)
+}
+
+fn materializar_con_expansor(
+    raw: CapturaSnapshotRaw,
+    expandir_archivos: impl FnOnce(
+        &[EntradaSnapshot],
+        &[String],
+        &[String],
+    ) -> Result<Vec<(String, String)>, ErrorSnapshot>,
+) -> Result<Snapshot, ErrorSnapshot> {
+    let CapturaSnapshotRaw {
+        token,
+        raw_tree_digest,
+        entradas,
+        manifiesto_raw,
+        invariantes_raw,
+        version_motor,
+        policy_id,
+        identidad_root,
+        ruta_manifiesto_root,
+        ruta_invariantes_root,
+    } = raw;
+    validar_procedencia_campos(
+        &entradas,
+        &manifiesto_raw,
+        &invariantes_raw,
+        ruta_manifiesto_root.as_deref(),
+        ruta_invariantes_root.as_deref(),
+    )?;
+    let manifiesto_texto =
+        std::str::from_utf8(&manifiesto_raw).map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
+    let manifiesto = parsear_manifiesto_sin_validar(manifiesto_texto)
+        .map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
+    let estructura =
+        Estructura::nueva(manifiesto).map_err(|_| ErrorSnapshot::ManifiestoInvalido)?;
+    let archivos = expandir_archivos(
+        &entradas,
+        &estructura.manifiesto().layout.directorios,
+        &estructura.manifiesto().layout.ignorados,
+    )?;
+    let estructura = parsear_bundle_desde_estructura(&archivos, estructura)
+        .map_err(|_| ErrorSnapshot::BundleInvalido)?;
+
+    let invariantes_texto =
+        std::str::from_utf8(&invariantes_raw).map_err(|_| ErrorSnapshot::InvariantesInvalidas)?;
+    let fuentes_invariantes =
+        parsear_programa(invariantes_texto).map_err(|_| ErrorSnapshot::InvariantesInvalidas)?;
+    Ok(Snapshot {
+        token,
+        raw_tree_digest,
+        entradas,
+        manifiesto_raw,
+        invariantes_raw,
+        version_motor,
+        policy_id,
+        identidad_root,
+        ruta_manifiesto_root,
+        ruta_invariantes_root,
+        estructura,
+        fuentes_invariantes,
+    })
+}
+
+fn validar_procedencia(raw: &CapturaSnapshotRaw) -> Result<(), ErrorSnapshot> {
+    validar_procedencia_campos(
+        &raw.entradas,
+        &raw.manifiesto_raw,
+        &raw.invariantes_raw,
+        raw.ruta_manifiesto_root.as_deref(),
+        raw.ruta_invariantes_root.as_deref(),
+    )
+}
+
+fn validar_procedencia_campos(
+    entradas: &[EntradaSnapshot],
+    manifiesto_raw: &[u8],
+    invariantes_raw: &[u8],
+    ruta_manifiesto_root: Option<&str>,
+    ruta_invariantes_root: Option<&str>,
+) -> Result<(), ErrorSnapshot> {
+    if ruta_manifiesto_root.is_some() && ruta_manifiesto_root == ruta_invariantes_root {
+        return Err(ErrorSnapshot::BundleInvalido);
+    }
+    for (ruta, bytes) in [
+        (ruta_manifiesto_root, manifiesto_raw),
+        (ruta_invariantes_root, invariantes_raw),
+    ] {
+        if let Some(ruta) = ruta {
+            let coincide = entradas.iter().any(|entrada| {
+                entrada.ruta() == ruta
+                    && entrada.tipo() == TipoEntradaSnapshot::Archivo
+                    && entrada.bytes() == Some(bytes)
+            });
+            if !coincide {
+                return Err(ErrorSnapshot::BundleInvalido);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn bytes_fuente<F>(
+    raiz: &Path,
+    ruta: &Path,
+    entradas: &[EntradaSnapshot],
+    cache_externa: &mut HashMap<PathBuf, Arc<[u8]>>,
+    presupuesto: &mut PresupuestoConfiguracion,
+    leer: &mut F,
+) -> Result<FuenteRaw, ErrorSnapshot>
+where
+    F: FnMut(&Path, usize) -> Result<Vec<u8>, ErrorSnapshot>,
+{
+    let absoluta = ruta_absoluta_lexica(ruta)?;
+    let relativa_lexica = absoluta
+        .starts_with(raiz)
+        .then(|| ruta_relativa(raiz, &absoluta))
+        .transpose()?;
+    if let Some(relativa) = relativa_lexica.as_deref()
+        && let Some(bytes) = bytes_entrada(entradas, relativa)
+    {
+        return Ok(FuenteRaw {
+            bytes: cobrar_configuracion(presupuesto, bytes)?,
+            ruta_root: Some(relativa.to_owned()),
+        });
+    }
+
+    #[cfg(windows)]
+    {
+        // `Path::starts_with` compara componentes con caso exacto incluso en
+        // Windows. Resuelve la ruta solo después de rechazar reparse points,
+        // y usa el spelling real devuelto por el sistema únicamente para
+        // localizar el buffer ya leído; el token conserva la ruta inventariada.
+        validar_archivo_sin_enlaces(&absoluta)?;
+        let raiz_real = fs::canonicalize(raiz).map_err(|_| ErrorSnapshot::Io)?;
+        let archivo_real = fs::canonicalize(&absoluta).map_err(|_| ErrorSnapshot::Io)?;
+        if archivo_real.starts_with(&raiz_real) {
+            let relativa = ruta_relativa(&raiz_real, &archivo_real)?;
+            let bytes = bytes_entrada(entradas, &relativa).ok_or(ErrorSnapshot::Io)?;
+            return Ok(FuenteRaw {
+                bytes: cobrar_configuracion(presupuesto, bytes)?,
+                ruta_root: Some(relativa),
+            });
+        }
+    }
+
+    #[cfg(not(windows))]
+    if relativa_lexica.is_some() {
+        return Err(ErrorSnapshot::Io);
+    }
+
+    #[cfg(not(windows))]
+    validar_archivo_sin_enlaces(&absoluta)?;
+    if let Some(bytes) = cache_externa.get(&absoluta) {
+        return Ok(FuenteRaw {
+            bytes: cobrar_configuracion(presupuesto, Arc::clone(bytes))?,
+            ruta_root: None,
+        });
+    }
+    let maximo_lectura = presupuesto.maximo_lectura()?;
+    let bytes: Arc<[u8]> = Arc::from(leer(&absoluta, maximo_lectura)?);
+    let bytes = cobrar_configuracion(presupuesto, bytes)?;
+    cache_externa.insert(absoluta, Arc::clone(&bytes));
+    Ok(FuenteRaw {
+        bytes,
+        ruta_root: None,
+    })
+}
+
+fn cobrar_configuracion(
+    presupuesto: &mut PresupuestoConfiguracion,
+    bytes: Arc<[u8]>,
+) -> Result<Arc<[u8]>, ErrorSnapshot> {
+    presupuesto.cobrar(bytes.len())?;
+    Ok(bytes)
+}
+
+fn ruta_relativa(raiz: &Path, absoluta: &Path) -> Result<String, ErrorSnapshot> {
+    absoluta
+        .strip_prefix(raiz)
+        .map_err(|_| ErrorSnapshot::RutaNoRepresentable)?
+        .to_str()
+        .ok_or(ErrorSnapshot::RutaNoUtf8)
+        .map(|ruta| ruta.replace('\\', "/"))
+}
+
+fn bytes_entrada(entradas: &[EntradaSnapshot], relativa: &str) -> Option<Arc<[u8]>> {
+    entradas
+        .iter()
+        .find(|entrada| {
+            entrada.ruta() == relativa && entrada.tipo() == TipoEntradaSnapshot::Archivo
+        })
+        .and_then(EntradaSnapshot::bytes)
+        .map(Arc::from)
+}
+
+fn archivos_markdown(
+    entradas: &[EntradaSnapshot],
+    directorios: &[String],
+    ignorados: &[String],
+) -> Result<Vec<(String, String)>, ErrorSnapshot> {
+    archivos_markdown_observando(entradas, directorios, ignorados, || {})
+}
+
+fn archivos_markdown_observando(
+    entradas: &[EntradaSnapshot],
+    directorios: &[String],
+    ignorados: &[String],
+    mut observar_trabajo: impl FnMut(),
+) -> Result<Vec<(String, String)>, ErrorSnapshot> {
+    let mut directorios_existentes: Vec<&str> = Vec::new();
+    let mut nombres_ignorados: Vec<&str> = ignorados.iter().map(String::as_str).collect();
+    nombres_ignorados.sort_unstable();
+    nombres_ignorados.dedup();
+
+    for entrada in entradas {
+        observar_trabajo();
+        if entrada.tipo() == TipoEntradaSnapshot::Directorio {
+            directorios_existentes.push(entrada.ruta());
+        }
+    }
+    directorios_existentes.sort_unstable();
+    for directorio in directorios {
+        observar_trabajo();
+        if !directorio_layout_seguro(directorio)
+            || !contiene_nombre_ordenado(&directorios_existentes, directorio, &mut observar_trabajo)
+        {
+            return Err(ErrorSnapshot::BundleInvalido);
+        }
+    }
+
+    // Las claves toman prestadas las rutas del layout y los valores guardan
+    // solo índices del inventario capturado. Cada archivo se indexa bajo cada
+    // ancestro declarado, conservando la inclusión recursiva del layout.
+    let mut indices_por_directorio: HashMap<&str, Vec<usize>> = HashMap::new();
+    for directorio in directorios {
+        indices_por_directorio
+            .entry(directorio.as_str())
+            .or_default();
+    }
+    for (indice, entrada) in entradas.iter().enumerate() {
+        observar_trabajo();
+        if entrada.tipo() != TipoEntradaSnapshot::Archivo
+            || Path::new(entrada.ruta())
+                .extension()
+                .and_then(|ext| ext.to_str())
+                != Some("md")
+        {
+            continue;
+        }
+        let nombre = entrada.ruta().rsplit('/').next().unwrap_or(entrada.ruta());
+        if contiene_nombre_ordenado(&nombres_ignorados, nombre, &mut observar_trabajo) {
+            continue;
+        }
+        for (fin_ancestro, _) in entrada.ruta().match_indices('/') {
+            observar_trabajo();
+            let ancestro = &entrada.ruta()[..fin_ancestro];
+            if let Some(indices) = indices_por_directorio.get_mut(ancestro) {
+                indices.push(indice);
+            }
+        }
+    }
+
+    let mut archivos = Vec::new();
+    for directorio in directorios {
+        observar_trabajo();
+        if let Some(indices) = indices_por_directorio.get(directorio.as_str()) {
+            for &indice in indices {
+                observar_trabajo();
+                let entrada = &entradas[indice];
+                let bytes = entrada.bytes().ok_or(ErrorSnapshot::BundleInvalido)?;
+                let texto =
+                    std::str::from_utf8(bytes).map_err(|_| ErrorSnapshot::BundleInvalido)?;
+                archivos.push((entrada.ruta().to_owned(), texto.to_owned()));
+            }
+        }
+    }
+    Ok(archivos)
+}
+
+fn contiene_nombre_ordenado(
+    nombres: &[&str],
+    nombre: &str,
+    mut observar_comparacion: impl FnMut(),
+) -> bool {
+    let mut inicio = 0;
+    let mut fin = nombres.len();
+    while inicio < fin {
+        observar_comparacion();
+        let medio = inicio + (fin - inicio) / 2;
+        match nombres[medio].cmp(nombre) {
+            std::cmp::Ordering::Less => inicio = medio + 1,
+            std::cmp::Ordering::Greater => fin = medio,
+            std::cmp::Ordering::Equal => return true,
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transaccion::lock::{
+        ErrorLockEscritura, LockEscritura, serializar_forks_y_reacquisiciones_test,
+    };
+    use crate::transaccion::raiz::UbicacionRaiz;
+    use crate::transaccion::replay::semantica_archivada::{POLICY_ID_V1, VERSION_MOTOR_V1};
+    use std::collections::HashMap;
+    use std::fs;
+    use tempfile::tempdir;
+
+    const MANIFIESTO: &str = r#"version = "snapshot-test/1"
+
+[nodos]
+sortes = ["a", "Retirado", "Patrón"]
+
+[nodos.disco]
+"Patrón" = "pattern"
+
+[layout]
+directorios = ["knowledge"]
+sin_iota = []
+ignorados = ["ignored.md"]
+"#;
+
+    fn inventario_para_assertions(
+        raiz: &Path,
+    ) -> Vec<(String, TipoEntradaSnapshot, Option<Vec<u8>>)> {
+        fn visitar(
+            raiz: &Path,
+            directorio: &Path,
+            entradas: &mut Vec<(String, TipoEntradaSnapshot, Option<Vec<u8>>)>,
+        ) {
+            let mut hijos: Vec<_> = fs::read_dir(directorio)
+                .unwrap()
+                .map(|entrada| entrada.unwrap())
+                .collect();
+            hijos.sort_by_key(|entrada| entrada.file_name());
+
+            for hijo in hijos {
+                let ruta = hijo.path();
+                let relativa = ruta
+                    .strip_prefix(raiz)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let tipo = hijo.file_type().unwrap();
+                if tipo.is_dir() {
+                    entradas.push((relativa, TipoEntradaSnapshot::Directorio, None));
+                    visitar(raiz, &ruta, entradas);
+                } else {
+                    assert!(
+                        tipo.is_file(),
+                        "fixture only contains files and directories"
+                    );
+                    entradas.push((
+                        relativa,
+                        TipoEntradaSnapshot::Archivo,
+                        Some(fs::read(ruta).unwrap()),
+                    ));
+                }
+            }
+        }
+
+        let mut entradas = Vec::new();
+        visitar(raiz, raiz, &mut entradas);
+        entradas.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
+        entradas
+    }
+
+    fn inventario_parent_para_assertions(
+        parent: &Path,
+    ) -> Vec<(String, TipoEntradaSnapshot, Option<Vec<u8>>)> {
+        let mut entradas = fs::read_dir(parent)
+            .unwrap()
+            .map(|entrada| {
+                let entrada = entrada.unwrap();
+                let nombre = entrada.file_name().to_string_lossy().into_owned();
+                let tipo = entrada.file_type().unwrap();
+                if tipo.is_dir() {
+                    (nombre, TipoEntradaSnapshot::Directorio, None)
+                } else {
+                    assert!(
+                        tipo.is_file(),
+                        "fixture only contains files and directories"
+                    );
+                    (
+                        nombre,
+                        TipoEntradaSnapshot::Archivo,
+                        Some(fs::read(entrada.path()).unwrap()),
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+        entradas.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
+        entradas
+    }
+
+    fn fingerprint_para_assertions(
+        raiz: &Path,
+    ) -> crate::transaccion::journal::ArtifactFingerprint {
+        let ubicacion = UbicacionRaiz::nueva(raiz).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let identidad = ancla.identidad_raiz().unwrap().journal_identity().unwrap();
+        let digest = calcular_digest_raw_tree(&inventariar_root_anclado(ancla).unwrap()).unwrap();
+        crate::transaccion::journal::ArtifactFingerprint::new(identidad, digest)
+    }
+
+    fn assert_error_snapshot_redactado(error: ErrorSnapshot, codigo: &str, secretos: &[&str]) {
+        assert_eq!(error.codigo(), codigo);
+        assert_eq!(error.to_string(), codigo);
+        let debug = format!("{error:?}");
+        assert_eq!(debug, format!("ErrorSnapshot({codigo:?})"));
+        for secreto in secretos {
+            assert!(!debug.contains(secreto), "Debug leaked {secreto}");
+            assert!(
+                !error.to_string().contains(secreto),
+                "Display leaked {secreto}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_raw_capturada_acepta_limite_inclusivo_y_rechaza_un_byte_mas() {
+        let exacta = ConfigRawCapturada::nueva_con_limite(
+            b"manifest".as_slice(),
+            b"vars".as_slice(),
+            None,
+            None,
+            12,
+        )
+        .unwrap();
+        assert_eq!(
+            exacta.manifiesto_raw.len() + exacta.invariantes_raw.len(),
+            12
+        );
+
+        let error = ConfigRawCapturada::nueva_con_limite(
+            b"manifest".as_slice(),
+            b"vars!".as_slice(),
+            None,
+            None,
+            12,
+        )
+        .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+    }
+
+    #[test]
+    fn config_raw_capturada_cuenta_arc_compartida_por_sus_dos_vistas() {
+        let compartida: Arc<[u8]> = Arc::from(&b"shared"[..]);
+        let aceptada = ConfigRawCapturada::nueva_con_limite(
+            Arc::clone(&compartida),
+            Arc::clone(&compartida),
+            None,
+            None,
+            12,
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(
+            &aceptada.manifiesto_raw,
+            &aceptada.invariantes_raw
+        ));
+
+        let error =
+            ConfigRawCapturada::nueva_con_limite(compartida.clone(), compartida, None, None, 11)
+                .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+    }
+
+    #[test]
+    fn config_raw_capturada_rechaza_overflow_y_redacta_error() {
+        assert_eq!(
+            validar_suma_bytes_configuracion(usize::MAX, 1),
+            Err(ErrorSnapshot::LimiteInventarioExcedido)
+        );
+
+        let error = ConfigRawCapturada::nueva_con_limite(
+            b"PRIVATE-CONFIG-CANARY".as_slice(),
+            b"config".as_slice(),
+            Some("PRIVATE-CANARY.toml".to_owned()),
+            None,
+            1,
+        )
+        .unwrap_err();
+        assert_eq!(error.codigo(), "snapshot_resource_limit");
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        assert_eq!(
+            format!("{error:?}"),
+            "ErrorSnapshot(\"snapshot_resource_limit\")"
+        );
+        for secreto in ["PRIVATE-CONFIG-CANARY", "PRIVATE-CANARY.toml"] {
+            assert!(!format!("{error:?}").contains(secreto));
+            assert!(!error.to_string().contains(secreto));
+        }
+    }
+
+    #[test]
+    fn materializador_raw_reconstruye_identidad_sin_root_filesystem() {
+        let entradas = vec![
+            EntradaSnapshot::archivo("manifest.toml", MANIFIESTO.as_bytes()),
+            EntradaSnapshot::archivo("invariants.smt2", b"\n".as_slice()),
+            EntradaSnapshot::directorio("knowledge"),
+            EntradaSnapshot::archivo(
+                "knowledge/a.md",
+                b"---\ntype: a\ntitle: A\n---\n".as_slice(),
+            ),
+        ];
+        let configuracion = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .unwrap();
+        let token_esperado = calcular_token_snapshot(
+            "engine-test/1",
+            "policy-test/1",
+            MANIFIESTO.as_bytes(),
+            b"\n",
+            &entradas,
+        )
+        .unwrap();
+        let digest_esperado = calcular_digest_raw_tree(&entradas).unwrap();
+
+        let snapshot = materializar_snapshot_desde_entradas(
+            entradas,
+            configuracion,
+            "engine-test/1",
+            "policy-test/1",
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), token_esperado);
+        assert!(snapshot.raw_tree_digest() == &digest_esperado);
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.version_motor(), "engine-test/1");
+        assert_eq!(snapshot.policy_id(), "policy-test/1");
+        assert_eq!(snapshot.identidad_root(), None);
+        assert_eq!(snapshot.ruta_manifiesto_root(), Some("manifest.toml"));
+        assert_eq!(snapshot.ruta_invariantes_root(), Some("invariants.smt2"));
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+
+        let replay_config = snapshot.configuracion_raw_capturada();
+        assert!(Arc::ptr_eq(
+            &snapshot.manifiesto_raw,
+            &replay_config.manifiesto_raw
+        ));
+        assert!(Arc::ptr_eq(
+            &snapshot.invariantes_raw,
+            &replay_config.invariantes_raw
+        ));
+    }
+
+    #[test]
+    fn materializador_raw_rechaza_procedencia_root_relative_que_no_coincide() {
+        let entradas = vec![
+            EntradaSnapshot::archivo("manifest.toml", b"contenido distinto".as_slice()),
+            EntradaSnapshot::archivo("invariants.smt2", b"\n".as_slice()),
+        ];
+        let configuracion = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .unwrap();
+
+        let error = materializar_snapshot_desde_entradas(
+            entradas,
+            configuracion,
+            "engine-test/1",
+            "policy-test/1",
+        )
+        .err()
+        .unwrap();
+
+        assert_eq!(error, ErrorSnapshot::BundleInvalido);
+    }
+
+    #[test]
+    fn archivos_markdown_distribuye_por_ancestros_con_crecimiento_acotado() {
+        fn techo_log2(valor: usize) -> usize {
+            if valor <= 1 {
+                0
+            } else {
+                usize::BITS as usize - (valor - 1).leading_zeros() as usize
+            }
+        }
+
+        const DIRECTORIOS: usize = 64;
+        const IGNORADOS: usize = 4096;
+        let nombre_ignorado = format!("ignorado_{:04}.md", IGNORADOS - 1);
+        let ignorados: Vec<String> = (0..IGNORADOS)
+            .map(|indice| format!("ignorado_{indice:04}.md"))
+            .collect();
+        let mut entradas = Vec::new();
+        for indice in (0..DIRECTORIOS).rev() {
+            let directorio = format!("d{indice:03}");
+            entradas.push(EntradaSnapshot::archivo(
+                format!("{directorio}/z.md"),
+                b"z".as_slice(),
+            ));
+            entradas.push(EntradaSnapshot::archivo(
+                format!("{directorio}/a.md"),
+                b"a".as_slice(),
+            ));
+            entradas.push(EntradaSnapshot::archivo(
+                format!("{directorio}/{nombre_ignorado}"),
+                b"skip".as_slice(),
+            ));
+            entradas.push(EntradaSnapshot::directorio(directorio));
+        }
+        let directorios: Vec<String> = (0..DIRECTORIOS)
+            .rev()
+            .map(|indice| format!("d{indice:03}"))
+            .collect();
+        assert!(directorios.iter().all(|directorio| {
+            directorio_layout_seguro(directorio)
+                && entradas.iter().any(|entrada| {
+                    entrada.ruta() == directorio
+                        && entrada.tipo() == TipoEntradaSnapshot::Directorio
+                })
+        }));
+        let mut operaciones = 0;
+        let archivos =
+            archivos_markdown_observando(&entradas, &directorios, &ignorados, || operaciones += 1)
+                .unwrap();
+
+        let esperados: Vec<String> = directorios
+            .iter()
+            .flat_map(|directorio| [format!("{directorio}/z.md"), format!("{directorio}/a.md")])
+            .collect();
+        assert_eq!(
+            archivos.iter().map(|(ruta, _)| ruta).collect::<Vec<_>>(),
+            esperados.iter().collect::<Vec<_>>()
+        );
+
+        let limite = directorios.len()
+            + 2 * entradas.len()
+            + directorios.len() * techo_log2(DIRECTORIOS + 1)
+            + 3 * DIRECTORIOS * techo_log2(IGNORADOS + 1)
+            + 6 * DIRECTORIOS;
+        assert!(
+            operaciones <= limite,
+            "{operaciones} comparaciones/visitas exceden la cota {limite}"
+        );
+    }
+
+    #[test]
+    fn captura_reutiliza_buffers_del_root_para_configuracion_y_parsing() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let mut lecturas = HashMap::<PathBuf, usize>::new();
+        let snapshot = capturar_snapshot_con_lector(
+            root.path(),
+            &root.path().join("manifest.toml"),
+            &root.path().join("invariants.smt2"),
+            "engine-test/1",
+            "policy-test/1",
+            |path, maximo_lectura| {
+                *lecturas.entry(path.to_path_buf()).or_default() += 1;
+                leer_archivo_regular_limitado(path, maximo_lectura)
+            },
+        )
+        .unwrap();
+
+        assert!(lecturas.values().all(|&count| count == 1));
+        assert_eq!(lecturas.len(), 3);
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.version_motor(), "engine-test/1");
+        assert_eq!(snapshot.policy_id(), "policy-test/1");
+        assert_eq!(snapshot.ruta_manifiesto_root(), Some("manifest.toml"));
+        assert_eq!(snapshot.ruta_invariantes_root(), Some("invariants.smt2"));
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+        assert!(snapshot.fuentes_invariantes().is_empty());
+        assert!(!format!("{snapshot:?}").contains("snapshot-test"));
+        assert!(!format!("{snapshot:?}").contains("knowledge/a.md"));
+    }
+
+    #[test]
+    fn presupuesto_configuracion_cuenta_root_y_fuente_externa_hasta_el_limite() {
+        for (bytes_externos, debe_exceder) in [(&b"abc"[..], false), (&b"SECR"[..], true)] {
+            let temporal = tempdir().unwrap();
+            let root = temporal.path().join("bundle");
+            fs::create_dir(&root).unwrap();
+            let manifiesto = root.join("manifest.toml");
+            let invariantes = temporal.path().join("private-config-canary");
+            fs::write(&manifiesto, b"root").unwrap();
+            fs::write(&invariantes, bytes_externos).unwrap();
+            let mut lecturas = HashMap::<PathBuf, usize>::new();
+            let mut maximo_externo = None;
+
+            let resultado = capturar_snapshot_raw_con_lector_y_limite(
+                &root,
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+                7,
+                |path, maximo_lectura| {
+                    *lecturas.entry(path.to_path_buf()).or_default() += 1;
+                    if path == invariantes.as_path() {
+                        maximo_externo = Some(maximo_lectura);
+                    }
+                    leer_archivo_regular_limitado(path, maximo_lectura)
+                },
+            );
+
+            assert_eq!(
+                lecturas.get(&manifiesto),
+                Some(&1),
+                "el root se lee una vez"
+            );
+            assert_eq!(lecturas.get(&invariantes), Some(&1));
+            assert_eq!(maximo_externo, Some(4), "restante más el byte centinela");
+            if debe_exceder {
+                let error = resultado.unwrap_err();
+                assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+                assert!(!format!("{error:?}").contains("private-config-canary"));
+                assert!(!error.to_string().contains("SECR"));
+            } else {
+                let raw = resultado.unwrap();
+                assert_eq!(&*raw.manifiesto_raw, b"root");
+                assert_eq!(&*raw.invariantes_raw, b"abc");
+            }
+        }
+    }
+
+    #[test]
+    fn presupuesto_restante_cero_admite_configuracion_externa_vacia() {
+        for (bytes_externos, debe_exceder) in [(&b""[..], false), (&b"x"[..], true)] {
+            let temporal = tempdir().unwrap();
+            let root = temporal.path().join("bundle");
+            fs::create_dir(&root).unwrap();
+            let manifiesto = root.join("manifest.toml");
+            let invariantes = temporal.path().join("invariants.smt2");
+            fs::write(&manifiesto, b"root").unwrap();
+            fs::write(&invariantes, bytes_externos).unwrap();
+            let mut maximo_externo = None;
+
+            let resultado = capturar_snapshot_raw_con_lector_y_limite(
+                &root,
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+                4,
+                |path, maximo_lectura| {
+                    if path == invariantes.as_path() {
+                        maximo_externo = Some(maximo_lectura);
+                    }
+                    leer_archivo_regular_limitado(path, maximo_lectura)
+                },
+            );
+
+            assert_eq!(maximo_externo, Some(1));
+            if debe_exceder {
+                assert_eq!(
+                    resultado.unwrap_err(),
+                    ErrorSnapshot::LimiteInventarioExcedido
+                );
+            } else {
+                assert_eq!(&*resultado.unwrap().invariantes_raw, b"");
+            }
+        }
+    }
+
+    #[test]
+    fn cache_externa_lee_una_vez_y_cobra_cada_campo_logico() {
+        for (limite, debe_exceder) in [(8, false), (7, true)] {
+            let temporal = tempdir().unwrap();
+            let root = temporal.path().join("bundle");
+            fs::create_dir(&root).unwrap();
+            let externa = temporal.path().join("shared-config");
+            fs::write(&externa, b"raw!").unwrap();
+            let mut lecturas_externas = 0;
+            let mut maximo_externo = None;
+
+            let resultado = capturar_snapshot_raw_con_lector_y_limite(
+                &root,
+                &externa,
+                &externa,
+                "engine/1",
+                "policy/1",
+                limite,
+                |path, maximo_lectura| {
+                    if path == externa.as_path() {
+                        lecturas_externas += 1;
+                        maximo_externo = Some(maximo_lectura);
+                    }
+                    leer_archivo_regular_limitado(path, maximo_lectura)
+                },
+            );
+
+            assert_eq!(lecturas_externas, 1);
+            assert_eq!(maximo_externo, Some(limite + 1));
+            if debe_exceder {
+                assert_eq!(
+                    resultado.unwrap_err(),
+                    ErrorSnapshot::LimiteInventarioExcedido
+                );
+            } else {
+                let raw = resultado.unwrap();
+                assert_eq!(&*raw.manifiesto_raw, b"raw!");
+                assert_eq!(&*raw.invariantes_raw, b"raw!");
+            }
+        }
+    }
+
+    #[test]
+    fn presupuesto_configuracion_detecta_overflow_con_error_redactado() {
+        let mut presupuesto = PresupuestoConfiguracion::nuevo(usize::MAX);
+        presupuesto.cobrar(usize::MAX).unwrap();
+        let error = presupuesto.cobrar(1).unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        assert_eq!(
+            PresupuestoConfiguracion::nuevo(usize::MAX).maximo_lectura(),
+            Err(ErrorSnapshot::LongitudExcedida)
+        );
+    }
+
+    #[test]
+    fn captura_raw_se_materializa_desde_los_mismos_buffers_sin_releer() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifiesto = root.path().join("manifest.toml");
+        let invariantes = root.path().join("invariants.smt2");
+        let documento = root.path().join("knowledge/a.md");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(&documento, "---\ntype: a\ntitle: A\n---\n").unwrap();
+
+        let raw = capturar_snapshot_raw(
+            root.path(),
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+        )
+        .unwrap();
+        fs::write(&manifiesto, b"\xffMANIFEST-CANARY").unwrap();
+        fs::write(&documento, b"\xffDOCUMENT-CANARY").unwrap();
+
+        let snapshot = materializar(raw).unwrap();
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+    }
+
+    #[test]
+    fn manifiesto_invalido_no_expande_ni_clona_contenido_markdown() {
+        let casos = [
+            (
+                "duplicados",
+                MANIFIESTO.replace(
+                    "directorios = [\"knowledge\"]",
+                    "directorios = [\"knowledge\", \"knowledge\"]",
+                ),
+            ),
+            (
+                "solapados",
+                MANIFIESTO.replace(
+                    "directorios = [\"knowledge\"]",
+                    "directorios = [\"knowledge\", \"knowledge/sub\"]",
+                ),
+            ),
+            (
+                "vacio",
+                MANIFIESTO.replace("directorios = [\"knowledge\"]", "directorios = []"),
+            ),
+        ];
+
+        for (caso, manifiesto) in casos {
+            let root = tempdir().unwrap();
+            fs::create_dir_all(root.path().join("knowledge/sub")).unwrap();
+            fs::write(root.path().join("manifest.toml"), manifiesto).unwrap();
+            fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+            let canary = format!("CANARY-{caso}-no-expand");
+            fs::write(root.path().join("knowledge/canary.md"), &canary).unwrap();
+
+            let raw = capturar_snapshot_raw(
+                root.path(),
+                &root.path().join("manifest.toml"),
+                &root.path().join("invariants.smt2"),
+                "engine/1",
+                "policy/1",
+            )
+            .unwrap();
+            let mut operaciones_expansion = 0;
+            let error = materializar_con_expansor(raw, |entradas, directorios, ignorados| {
+                archivos_markdown_observando(entradas, directorios, ignorados, || {
+                    operaciones_expansion += 1;
+                })
+            })
+            .unwrap_err();
+
+            assert_eq!(error, ErrorSnapshot::ManifiestoInvalido, "caso: {caso}");
+            assert_eq!(operaciones_expansion, 0, "caso: {caso}");
+            assert!(!format!("{error:?}").contains(&canary));
+            assert!(!error.to_string().contains(&canary));
+        }
+    }
+
+    #[test]
+    fn captura_anclada_coincide_con_path_y_repite_inventario_por_handle() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifest = root.path().join("manifest.toml");
+        let invariants = root.path().join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+
+        let por_path =
+            capturar_snapshot(root.path(), &manifest, &invariants, "engine/1", "policy/1").unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(&manifest).unwrap(),
+            fs::read(&invariants).unwrap(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+
+        for _ in 0..2 {
+            let anclado = materializar(
+                capturar_snapshot_raw_anclado(
+                    &ancla,
+                    configuracion.clone(),
+                    "engine/1",
+                    "policy/1",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+            assert_eq!(anclado.token(), por_path.token());
+            assert!(anclado.identidad_root().is_some());
+            assert!(por_path.identidad_root().is_none());
+            assert_eq!(anclado.manifiesto_raw(), por_path.manifiesto_raw());
+            assert_eq!(anclado.invariantes_raw(), por_path.invariantes_raw());
+            assert_eq!(
+                anclado
+                    .entradas()
+                    .iter()
+                    .map(EntradaSnapshot::ruta)
+                    .collect::<Vec<_>>(),
+                por_path
+                    .entradas()
+                    .iter()
+                    .map(EntradaSnapshot::ruta)
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                anclado
+                    .entradas()
+                    .windows(2)
+                    .all(|par| { par[0].ruta().as_bytes() < par[1].ruta().as_bytes() })
+            );
+            assert_eq!(
+                anclado.estructura().atomos(),
+                por_path.estructura().atomos()
+            );
+        }
+
+        let casos_invalidos = [
+            ConfigRawCapturada::nueva(
+                fs::read(&manifest).unwrap(),
+                b"\n".as_slice(),
+                Some("manifest.toml".to_owned()),
+                Some("manifest.toml".to_owned()),
+            )
+            .expect("fixture de configuración dentro del presupuesto"),
+            ConfigRawCapturada::nueva(
+                b"PRIVATE-CANARY mismatched config".as_slice(),
+                b"\n".as_slice(),
+                Some("manifest.toml".to_owned()),
+                Some("invariants.smt2".to_owned()),
+            )
+            .expect("fixture de configuración dentro del presupuesto"),
+        ];
+        for config in casos_invalidos {
+            let error =
+                capturar_snapshot_raw_anclado(&ancla, config, "engine/1", "policy/1").unwrap_err();
+            assert_eq!(error, ErrorSnapshot::BundleInvalido);
+            assert!(!format!("{error:?}").contains("PRIVATE-CANARY"));
+            assert!(!error.to_string().contains("manifest.toml"));
+        }
+    }
+
+    #[test]
+    fn captura_anclada_rechaza_procedencia_ausente_o_no_regular_redactada() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+
+        for ruta in ["PRIVATE-CANARY-missing.toml", "knowledge"] {
+            let config = ConfigRawCapturada::nueva(
+                MANIFIESTO.as_bytes(),
+                b"\n".as_slice(),
+                Some(ruta.to_owned()),
+                None,
+            )
+            .expect("fixture de configuración dentro del presupuesto");
+            let error =
+                capturar_snapshot_raw_anclado(&ancla, config, "engine/1", "policy/1").unwrap_err();
+            assert_eq!(error, ErrorSnapshot::BundleInvalido);
+            assert_eq!(error.to_string(), "snapshot_bundle_invalid");
+            assert!(!format!("{error:?}").contains("PRIVATE-CANARY"));
+            assert!(!format!("{error:?}").contains(ruta));
+            assert!(!error.to_string().contains("PRIVATE-CANARY"));
+            assert!(!error.to_string().contains(ruta));
+        }
+    }
+
+    #[test]
+    fn captura_anclada_usa_config_raw_capturada_aunque_cambien_sus_fuentes() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let source = temp.path().join("config-source");
+        fs::create_dir(&source).unwrap();
+        let manifest = source.join("manifest.toml");
+        let invariants = source.join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(&manifest).unwrap(),
+            fs::read(&invariants).unwrap(),
+            None,
+            None,
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        fs::write(&manifest, b"PRIVATE-CANARY invalid manifest").unwrap();
+        fs::write(&invariants, b"PRIVATE-CANARY invalid invariants").unwrap();
+
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(
+                &DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap(),
+                configuracion,
+                "engine/1",
+                "policy/1",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+        assert!(!format!("{snapshot:?}").contains("PRIVATE-CANARY"));
+    }
+
+    #[test]
+    fn captura_anclada_no_relee_config_externa_eliminada() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let source = temp.path().join("PRIVATE-CANARY-config-source");
+        fs::create_dir(&source).unwrap();
+        let manifest = source.join("manifest.toml");
+        let invariants = source.join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+
+        let config = ConfigRawCapturada::nueva(
+            fs::read(&manifest).unwrap(),
+            fs::read(&invariants).unwrap(),
+            None,
+            None,
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        let debug_config = format!("{config:?}");
+        fs::remove_file(&manifest).unwrap();
+        fs::remove_file(&invariants).unwrap();
+        fs::remove_dir(&source).unwrap();
+        assert!(!source.exists());
+
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(
+                &DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap(),
+                config,
+                "engine/1",
+                "policy/1",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+        assert!(!debug_config.contains("PRIVATE-CANARY"));
+        assert!(!format!("{snapshot:?}").contains("PRIVATE-CANARY"));
+    }
+
+    // Prueba datos y tags de captura; no ejercita exclusión por lock ni integración owner.
+    #[test]
+    fn captura_soportada_anclada_fija_tags_y_usa_config_y_inventario_capturados() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let auxiliar_raw = [0x00_u8, 0xff, 0x7f];
+        fs::write(root.join("auxiliar.bin"), auxiliar_raw).unwrap();
+        fs::create_dir(root.join("vacio")).unwrap();
+
+        let source = temp.path().join("config-source");
+        fs::create_dir(&source).unwrap();
+        let manifest = source.join("manifest.toml");
+        let invariants = source.join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(&manifest).unwrap(),
+            fs::read(&invariants).unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+        fs::remove_file(&manifest).unwrap();
+        fs::remove_file(&invariants).unwrap();
+        fs::remove_dir(&source).unwrap();
+        assert!(!source.exists());
+
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let raiz_anclada = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let snapshot = capturar_snapshot_soportado_anclado(&raiz_anclada, configuracion).unwrap();
+
+        assert_eq!(snapshot.version_motor(), VERSION_MOTOR_V1);
+        assert_eq!(snapshot.policy_id(), POLICY_ID_V1);
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert!(snapshot.identidad_root().is_some());
+
+        let auxiliar = snapshot
+            .entradas()
+            .iter()
+            .find(|entrada| entrada.ruta() == "auxiliar.bin")
+            .expect("el inventario incluye el archivo auxiliar");
+        assert_eq!(auxiliar.tipo(), TipoEntradaSnapshot::Archivo);
+        assert_eq!(auxiliar.bytes(), Some(auxiliar_raw.as_slice()));
+        assert!(snapshot.entradas().iter().any(|entrada| {
+            entrada.ruta() == "vacio" && entrada.tipo() == TipoEntradaSnapshot::Directorio
+        }));
+        assert!(snapshot.entradas().iter().any(|entrada| {
+            entrada.ruta() == "knowledge/a.md"
+                && entrada.tipo() == TipoEntradaSnapshot::Archivo
+                && entrada.bytes() == Some(b"---\ntype: a\ntitle: A\n---\n".as_slice())
+        }));
+    }
+
+    #[test]
+    fn cas_soportado_anclado_devuelve_stale_antes_de_parsear_configuracion() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        let documento = b"---\ntype: a\ntitle: A\n---\n";
+        fs::write(root.join("knowledge/a.md"), documento).unwrap();
+
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let raiz_anclada = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let valida =
+            ConfigRawCapturada::nueva(MANIFIESTO.as_bytes(), b"\n".as_slice(), None, None).unwrap();
+        let esperado = capturar_snapshot_soportado_anclado(&raiz_anclada, valida.clone())
+            .unwrap()
+            .token();
+        let antes = inventario_para_assertions(&root);
+        let invalida = ConfigRawCapturada::nueva(
+            b"PRIVATE-CANARY invalid manifest".as_slice(),
+            b"PRIVATE-CANARY invalid invariants".as_slice(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let error = capturar_snapshot_soportado_con_cas_anclado(&raiz_anclada, invalida, esperado)
+            .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(error.to_string(), "stale");
+        assert!(!format!("{error:?} {error}").contains("PRIVATE-CANARY"));
+        assert_eq!(inventario_para_assertions(&root), antes);
+        assert_eq!(fs::read(root.join("knowledge/a.md")).unwrap(), documento);
+    }
+
+    #[test]
+    fn snapshot_anclado_conserva_identidad_root_sin_incluirla_en_token() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        let moved = temp.path().join("bundle-old");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.join("invariants.smt2"), "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let identidad_original = ancla.identidad_raiz().unwrap();
+        let config = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(&ancla, config, "engine/1", "policy/1").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(snapshot.identidad_root(), Some(identidad_original));
+        drop(ancla);
+
+        fs::rename(&root, &moved).unwrap();
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.join("invariants.smt2"), "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let nueva_ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let nueva_config = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        let nuevo_snapshot = materializar(
+            capturar_snapshot_raw_anclado(&nueva_ancla, nueva_config, "engine/1", "policy/1")
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            nueva_ancla.identidad_raiz(),
+            nuevo_snapshot.identidad_root()
+        );
+        assert_ne!(snapshot.identidad_root(), nuevo_snapshot.identidad_root());
+        assert_eq!(snapshot.token(), nuevo_snapshot.token());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captura_anclada_no_sigue_un_ancestro_reemplazado_por_enlace() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let moved = temp.path().join("parent-moved");
+        let outside = temp.path().join("outside");
+        let root = parent.join("stable").join("bundle");
+        let outside_root = outside.join("stable").join("bundle");
+        fs::create_dir(&parent).unwrap();
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.join("invariants.smt2"), "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        fs::create_dir_all(&outside_root).unwrap();
+        fs::write(
+            outside_root.join("external-canary.bin"),
+            b"EXTERNAL-ROOT-CANARY",
+        )
+        .unwrap();
+
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(root.join("manifest.toml")).unwrap(),
+            fs::read(root.join("invariants.smt2")).unwrap(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+
+        fs::rename(&parent, &moved).unwrap();
+        crear_junction(&parent, &outside);
+
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(&ancla, configuracion, "engine/1", "policy/1").unwrap(),
+        )
+        .unwrap();
+        let rutas = snapshot
+            .entradas()
+            .iter()
+            .map(EntradaSnapshot::ruta)
+            .collect::<Vec<_>>();
+
+        assert!(rutas.contains(&"knowledge"));
+        assert!(rutas.contains(&"knowledge/a.md"));
+        assert!(!rutas.iter().any(|ruta| ruta.contains("external-canary")));
+        assert_eq!(
+            fs::read(outside_root.join("external-canary.bin")).unwrap(),
+            b"EXTERNAL-ROOT-CANARY"
+        );
+        assert_eq!(
+            fs::read(moved.join("stable/bundle/knowledge/a.md")).unwrap(),
+            b"---\ntype: a\ntitle: A\n---\n"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn handle_root_impide_reemplazar_su_ancestro_y_preserva_canary() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let moved = temp.path().join("parent-moved");
+        let outside = temp.path().join("outside");
+        let root = parent.join("bundle");
+        let outside_root = outside.join("bundle");
+        fs::create_dir(&parent).unwrap();
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::write(root.join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.join("invariants.smt2"), "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        fs::create_dir_all(&outside_root).unwrap();
+        fs::write(
+            outside_root.join("external-canary.bin"),
+            b"EXTERNAL-ROOT-CANARY",
+        )
+        .unwrap();
+
+        let configuracion = ConfigRawCapturada::nueva(
+            fs::read(root.join("manifest.toml")).unwrap(),
+            fs::read(root.join("invariants.smt2")).unwrap(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+
+        let error = fs::rename(&parent, &moved).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let snapshot = materializar(
+            capturar_snapshot_raw_anclado(&ancla, configuracion, "engine/1", "policy/1").unwrap(),
+        )
+        .unwrap();
+        assert!(
+            snapshot
+                .entradas()
+                .iter()
+                .all(|entrada| !entrada.ruta().contains("external-canary"))
+        );
+        assert_eq!(
+            fs::read(outside_root.join("external-canary.bin")).unwrap(),
+            b"EXTERNAL-ROOT-CANARY"
+        );
+    }
+
+    #[test]
+    fn cas_stale_precede_parseo_de_manifest_e_invariantes_invalidos() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifiesto = root.path().join("manifest.toml");
+        let invariantes = root.path().join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let capturar = || {
+            capturar_snapshot(
+                root.path(),
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+            )
+            .unwrap()
+        };
+        let esperado = capturar().token();
+        assert!(
+            capturar_snapshot_con_cas(
+                root.path(),
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+                esperado,
+            )
+            .is_ok()
+        );
+
+        for (ruta, bytes) in [
+            (&manifiesto, &b"\xffMANIFEST-CANARY"[..]),
+            (&invariantes, &b"\xffINVARIANTS-CANARY"[..]),
+        ] {
+            fs::write(ruta, bytes).unwrap();
+            let error = capturar_snapshot_con_cas(
+                root.path(),
+                &manifiesto,
+                &invariantes,
+                "engine/1",
+                "policy/1",
+                esperado,
+            )
+            .unwrap_err();
+            assert_eq!(error, ErrorSnapshot::Stale);
+            assert_eq!(error.codigo(), "stale");
+            assert!(!format!("{error:?}").contains("CANARY"));
+            assert!(!error.to_string().contains("CANARY"));
+            fs::write(
+                ruta,
+                if ruta == &manifiesto {
+                    MANIFIESTO.as_bytes()
+                } else {
+                    b"\n"
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn cas_por_ruta_match_con_configuracion_externa_no_modifica_archivos_ni_crea_lock() {
+        let temporal = tempdir().unwrap();
+        let root = temporal.path().join("bundle");
+        let configuracion = temporal.path().join("config");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&configuracion).unwrap();
+        let manifiesto = configuracion.join("manifest.toml");
+        let invariantes = configuracion.join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+
+        let esperado = capturar_snapshot(&root, &manifiesto, &invariantes, "engine/1", "policy/1")
+            .unwrap()
+            .token();
+        let lockfile = temporal.path().join(".bundle.felix.lock");
+        assert!(!lockfile.exists());
+        let root_antes = inventario_para_assertions(&root);
+        let config_antes = inventario_para_assertions(&configuracion);
+
+        let snapshot = capturar_snapshot_con_cas(
+            &root,
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), esperado);
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(inventario_para_assertions(&root), root_antes);
+        assert_eq!(inventario_para_assertions(&configuracion), config_antes);
+        assert!(!lockfile.exists());
+    }
+
+    #[test]
+    fn cas_por_ruta_match_y_stale_preserva_parent_y_journal_sin_dispatcher() {
+        use crate::transaccion::journal::{ArtifactFingerprint, Journal, RawTreeDigest};
+
+        const TXN: &str = "0123456789abcdef0123456789abcdef";
+
+        let temporal = tempdir().unwrap();
+        let root = temporal.path().join("bundle");
+        let configuracion = temporal.path().join("config");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&configuracion).unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let manifiesto = configuracion.join("manifest.toml");
+        let invariantes = configuracion.join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+
+        let esperado = capturar_snapshot(&root, &manifiesto, &invariantes, "engine/1", "policy/1")
+            .unwrap()
+            .token();
+        let ubicacion = UbicacionRaiz::nueva(&root).unwrap();
+        let fingerprint_old = fingerprint_para_assertions(&root);
+        let identidad_parent = DirectorioAnclado::parent_solo_lectura_desde_ubicacion(&ubicacion)
+            .unwrap()
+            .identidad_parent()
+            .journal_identity()
+            .unwrap();
+        let fingerprint_new = ArtifactFingerprint::new(
+            fingerprint_old.identity().clone(),
+            RawTreeDigest::from_digest([0xff; 32]),
+        );
+        assert!(fingerprint_new != fingerprint_old);
+        let journal = Journal::new(
+            TXN,
+            identidad_parent,
+            fingerprint_old.clone(),
+            fingerprint_new,
+        )
+        .unwrap();
+        let journal_path = ubicacion.journal().as_path().to_path_buf();
+        let journal_bytes = journal.encode().unwrap();
+        fs::write(&journal_path, &journal_bytes).unwrap();
+
+        let backup = ubicacion.backup().as_path().to_path_buf();
+        let stage = ubicacion.stage(TXN).unwrap().as_path().to_path_buf();
+        let lockfile = ubicacion.lock().as_path().to_path_buf();
+        let mut parent_esperado = vec![
+            (
+                ".bundle.felix.journal".to_owned(),
+                TipoEntradaSnapshot::Archivo,
+                Some(journal_bytes.clone()),
+            ),
+            ("bundle".to_owned(), TipoEntradaSnapshot::Directorio, None),
+            ("config".to_owned(), TipoEntradaSnapshot::Directorio, None),
+        ];
+        parent_esperado.sort_by(|izquierda, derecha| izquierda.0.cmp(&derecha.0));
+
+        let root_antes = inventario_para_assertions(&root);
+        let config_antes = inventario_para_assertions(&configuracion);
+        let fingerprint_antes = fingerprint_para_assertions(&root);
+        assert!(fingerprint_antes == fingerprint_old);
+        assert_eq!(
+            inventario_parent_para_assertions(temporal.path()),
+            parent_esperado
+        );
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert!(!lockfile.exists());
+
+        let snapshot = capturar_snapshot_con_cas(
+            &root,
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), esperado);
+        assert_eq!(inventario_para_assertions(&root), root_antes);
+        assert_eq!(inventario_para_assertions(&configuracion), config_antes);
+        assert!(fingerprint_para_assertions(&root) == fingerprint_antes);
+        assert_eq!(
+            inventario_parent_para_assertions(temporal.path()),
+            parent_esperado
+        );
+        assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert!(!lockfile.exists());
+
+        fs::write(&invariantes, "\n\n").unwrap();
+        let root_antes_stale = inventario_para_assertions(&root);
+        let config_antes_stale = inventario_para_assertions(&configuracion);
+        let parent_antes_stale = inventario_parent_para_assertions(temporal.path());
+        let fingerprint_antes_stale = fingerprint_para_assertions(&root);
+        let error = capturar_snapshot_con_cas(
+            &root,
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(inventario_para_assertions(&root), root_antes_stale);
+        assert_eq!(
+            inventario_para_assertions(&configuracion),
+            config_antes_stale
+        );
+        assert!(fingerprint_para_assertions(&root) == fingerprint_antes_stale);
+        assert_eq!(
+            inventario_parent_para_assertions(temporal.path()),
+            parent_antes_stale
+        );
+        assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
+        assert!(!backup.exists());
+        assert!(!stage.exists());
+        assert!(!lockfile.exists());
+    }
+
+    #[test]
+    fn cas_por_ruta_match_conserva_guard_de_lock_adquirido_por_quien_llama() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifiesto = root.path().join("manifest.toml");
+        let invariantes = root.path().join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let esperado = capturar_snapshot(
+            root.path(),
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+        )
+        .unwrap()
+        .token();
+        let guard = LockEscritura::adquirir(root.path()).unwrap();
+
+        let snapshot = capturar_snapshot_con_cas(
+            root.path(),
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), esperado);
+        let error = LockEscritura::adquirir(root.path()).unwrap_err();
+        assert_eq!(error, ErrorLockEscritura::Busy);
+        assert_eq!(error.codigo(), "writer_lock_busy");
+        assert_eq!(error.to_string(), "writer_lock_busy");
+        let debug = format!("{error:?}");
+        assert_eq!(debug, "ErrorLockEscritura(\"writer_lock_busy\")");
+        assert!(!debug.contains(root.path().to_string_lossy().as_ref()));
+        assert!(
+            !error
+                .to_string()
+                .contains(root.path().to_string_lossy().as_ref())
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn cas_stale_por_configuracion_externa_precede_parseo_sin_modificar_archivos_ni_crear_lock() {
+        let temporal = tempdir().unwrap();
+        let root = temporal.path().join("bundle");
+        let configuracion = temporal.path().join("config");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&configuracion).unwrap();
+        let manifiesto = configuracion.join("PRIVATE-CONFIG-CANARY.toml");
+        let invariantes = configuracion.join("invariants.smt2");
+        fs::write(&manifiesto, MANIFIESTO).unwrap();
+        fs::write(&invariantes, "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let esperado = capturar_snapshot(&root, &manifiesto, &invariantes, "engine/1", "policy/1")
+            .unwrap()
+            .token();
+        fs::write(&manifiesto, b"\xffPRIVATE-CANARY invalid manifest").unwrap();
+        let lockfile = temporal.path().join(".bundle.felix.lock");
+        assert!(!lockfile.exists());
+        let root_antes = inventario_para_assertions(&root);
+        let config_antes = inventario_para_assertions(&configuracion);
+        let root_path = root.to_string_lossy().into_owned();
+        let config_path = configuracion.to_string_lossy().into_owned();
+
+        let error = capturar_snapshot_con_cas(
+            &root,
+            &manifiesto,
+            &invariantes,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_error_snapshot_redactado(
+            error,
+            "stale",
+            &[
+                "PRIVATE-CANARY",
+                "PRIVATE-CONFIG-CANARY",
+                root_path.as_str(),
+                config_path.as_str(),
+            ],
+        );
+        assert_eq!(inventario_para_assertions(&root), root_antes);
+        assert_eq!(inventario_para_assertions(&configuracion), config_antes);
+        assert!(!lockfile.exists());
+    }
+
+    #[test]
+    fn cas_anclado_stale_precede_validacion_y_parseo_y_redacta_configuracion() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifest = root.path().join("manifest.toml");
+        let invariants = root.path().join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let validada = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        let esperado =
+            capturar_snapshot_raw_anclado(&ancla, validada.clone(), "engine/1", "policy/1")
+                .unwrap()
+                .token;
+        let snapshot = capturar_snapshot_con_cas_anclado(
+            &ancla,
+            validada.clone(),
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+        assert_eq!(snapshot.token(), esperado);
+        assert!(snapshot.identidad_root().is_some());
+
+        fs::write(&manifest, b"PRIVATE-MISMATCH-CANARY root bytes changed").unwrap();
+        let error =
+            capturar_snapshot_con_cas_anclado(&ancla, validada, "engine/1", "policy/1", esperado)
+                .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(error.to_string(), "stale");
+        assert!(!format!("{error:?}").contains("PRIVATE-MISMATCH-CANARY"));
+        assert!(!format!("{error:?}").contains("manifest.toml"));
+        assert!(!error.to_string().contains("PRIVATE-MISMATCH-CANARY"));
+        assert!(!error.to_string().contains("manifest.toml"));
+
+        for (config, canary) in [
+            (
+                ConfigRawCapturada::nueva(
+                    MANIFIESTO.as_bytes(),
+                    b"\n".as_slice(),
+                    Some("PRIVATE-CANARY-missing.toml".to_owned()),
+                    None,
+                )
+                .expect("fixture de configuración dentro del presupuesto"),
+                "PRIVATE-CANARY-missing.toml",
+            ),
+            (
+                ConfigRawCapturada::nueva(
+                    MANIFIESTO.as_bytes(),
+                    b"\n".as_slice(),
+                    Some("knowledge".to_owned()),
+                    None,
+                )
+                .expect("fixture de configuración dentro del presupuesto"),
+                "knowledge",
+            ),
+            (
+                ConfigRawCapturada::nueva(
+                    b"PRIVATE-CANARY invalid local manifest".as_slice(),
+                    b"\n".as_slice(),
+                    Some("manifest.toml".to_owned()),
+                    Some("invariants.smt2".to_owned()),
+                )
+                .expect("fixture de configuración dentro del presupuesto"),
+                "PRIVATE-CANARY",
+            ),
+        ] {
+            let error =
+                capturar_snapshot_con_cas_anclado(&ancla, config, "engine/1", "policy/1", esperado)
+                    .unwrap_err();
+            assert_eq!(error, ErrorSnapshot::Stale);
+            assert_eq!(error.to_string(), "stale");
+            assert!(!format!("{error:?}").contains(canary));
+            assert!(!format!("{error:?}").contains("manifest.toml"));
+            assert!(!format!("{error:?}").contains("invariants.smt2"));
+            assert!(!error.to_string().contains(canary));
+            assert!(!error.to_string().contains("manifest.toml"));
+            assert!(!error.to_string().contains("invariants.smt2"));
+        }
+
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        for (manifiesto, invariantes, canary) in [
+            (
+                b"PRIVATE-MANIFEST-CANARY invalid".as_slice(),
+                b"\n".as_slice(),
+                "PRIVATE-MANIFEST-CANARY",
+            ),
+            (
+                MANIFIESTO.as_bytes(),
+                b"PRIVATE-INVARIANT-CANARY invalid".as_slice(),
+                "PRIVATE-INVARIANT-CANARY",
+            ),
+        ] {
+            let invalida = ConfigRawCapturada::nueva(manifiesto, invariantes, None, None)
+                .expect("fixture de configuración dentro del presupuesto");
+            let error = capturar_snapshot_con_cas_anclado(
+                &ancla, invalida, "engine/1", "policy/1", esperado,
+            )
+            .unwrap_err();
+            assert_eq!(error, ErrorSnapshot::Stale);
+            assert_eq!(error.to_string(), "stale");
+            assert!(!format!("{error:?}").contains(canary));
+            assert!(!error.to_string().contains(canary));
+        }
+    }
+
+    #[test]
+    fn configuracion_raw_anclada_excedida_no_invoca_inventariador() {
+        let root = tempdir().unwrap();
+        let ubicacion = UbicacionRaiz::nueva(root.path()).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(&ubicacion).unwrap();
+        let llamadas_inventario = std::cell::Cell::new(0);
+        let configuracion = ConfigRawCapturada::nueva(
+            b"PRIVATE-CONFIG-CANARY".as_slice(),
+            b"".as_slice(),
+            None,
+            None,
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+
+        let error = capturar_snapshot_raw_anclado_con_limite(
+            &ancla,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            4,
+            |_| {
+                llamadas_inventario.set(llamadas_inventario.get() + 1);
+                Ok(Vec::new())
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(llamadas_inventario.get(), 0);
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(error.codigo(), "snapshot_resource_limit");
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        assert_eq!(
+            format!("{error:?}"),
+            "ErrorSnapshot(\"snapshot_resource_limit\")"
+        );
+        assert!(!format!("{error:?}").contains("PRIVATE-CONFIG-CANARY"));
+        assert!(!error.to_string().contains("PRIVATE-CONFIG-CANARY"));
+    }
+
+    #[test]
+    fn cas_bajo_lock_configuracion_excedida_precede_apertura_root_y_reten_guard() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir(&root).unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            b"PRIVATE-CONFIG-CANARY".as_slice(),
+            b"".as_slice(),
+            None,
+            None,
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+        let mut lock = LockEscritura::adquirir(&root).unwrap();
+        fs::remove_dir(&root).unwrap();
+        fs::write(&root, b"PRIVATE-ROOT-CANARY").unwrap();
+
+        let error = capturar_snapshot_con_cas_bajo_lock_con_limite(
+            &mut lock,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            SnapshotToken::from_hex(&"0".repeat(64)).unwrap(),
+            4,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::LimiteInventarioExcedido);
+        assert_eq!(error.codigo(), "snapshot_resource_limit");
+        assert_eq!(error.to_string(), "snapshot_resource_limit");
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for secreto in [
+            "PRIVATE-CONFIG-CANARY",
+            "PRIVATE-ROOT-CANARY",
+            root.to_string_lossy().as_ref(),
+        ] {
+            assert!(!debug.contains(secreto), "Debug leaked {secreto}");
+            assert!(!display.contains(secreto), "Display leaked {secreto}");
+        }
+        assert_eq!(fs::read(&root).unwrap(), b"PRIVATE-ROOT-CANARY");
+        assert_eq!(
+            LockEscritura::adquirir_en(lock.ubicacion()).unwrap_err(),
+            ErrorLockEscritura::Busy,
+            "la prevalidación debe dejar retenido el guard recibido"
+        );
+    }
+
+    #[test]
+    fn cas_bajo_lock_materializa_snapshot_con_token_esperado() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+
+        let mut lock = LockEscritura::adquirir(root.path()).unwrap();
+        let _: fn(
+            &mut LockEscritura,
+            ConfigRawCapturada,
+            &str,
+            &str,
+            SnapshotToken,
+        ) -> Result<Snapshot, ErrorSnapshot> = capturar_snapshot_con_cas_bajo_lock;
+        let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
+        let esperado =
+            capturar_snapshot_raw_anclado(&ancla, configuracion.clone(), "engine/1", "policy/1")
+                .unwrap()
+                .token;
+
+        let snapshot = capturar_snapshot_con_cas_bajo_lock(
+            &mut lock,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap();
+
+        assert_eq!(snapshot.token(), esperado);
+        assert!(snapshot.identidad_root().is_some());
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+        assert_eq!(snapshot.estructura().nodos().count(), 1);
+        assert!(snapshot.fuentes_invariantes().is_empty());
+        assert_eq!(
+            LockEscritura::adquirir(root.path()).unwrap_err(),
+            ErrorLockEscritura::Busy,
+            "el helper debe dejar el guard retenido por quien lo recibió"
+        );
+    }
+
+    #[test]
+    fn cas_bajo_lock_redacta_y_preserva_error_si_root_no_es_directorio() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir(&root).unwrap();
+        let configuracion =
+            ConfigRawCapturada::nueva(MANIFIESTO.as_bytes(), b"\n".as_slice(), None, None)
+                .expect("fixture de configuración dentro del presupuesto");
+        let mut lock = LockEscritura::adquirir(&root).unwrap();
+        let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
+        let esperado =
+            capturar_snapshot_raw_anclado(&ancla, configuracion.clone(), "engine/1", "policy/1")
+                .unwrap()
+                .token;
+        drop(ancla);
+        fs::remove_dir(&root).unwrap();
+        fs::write(&root, b"PRIVATE-ROOT-CANARY").unwrap();
+
+        let error = capturar_snapshot_con_cas_bajo_lock(
+            &mut lock,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::TipoNoAdmitido);
+        assert_eq!(error.codigo(), "snapshot_entry_type_not_allowed");
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for secreto in ["PRIVATE-ROOT-CANARY", root.to_string_lossy().as_ref()] {
+            assert!(!debug.contains(secreto), "Debug leaked {secreto}");
+            assert!(!display.contains(secreto), "Display leaked {secreto}");
+        }
+        assert_eq!(fs::read(&root).unwrap(), b"PRIVATE-ROOT-CANARY");
+    }
+
+    #[test]
+    fn cas_bajo_lock_rechaza_snapshot_stale_tras_otra_epoca_de_escritura() {
+        let _serializacion = serializar_forks_y_reacquisiciones_test();
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        let documento = root.path().join("knowledge/a.md");
+        fs::write(&documento, "---\ntype: a\ntitle: A\n---\n").unwrap();
+        let configuracion = ConfigRawCapturada::nueva(
+            MANIFIESTO.as_bytes(),
+            b"\n".as_slice(),
+            Some("manifest.toml".to_owned()),
+            Some("invariants.smt2".to_owned()),
+        )
+        .expect("fixture de configuración dentro del presupuesto");
+
+        let esperado = {
+            let lock = LockEscritura::adquirir(root.path()).unwrap();
+            let ancla = DirectorioAnclado::desde_ubicacion(lock.ubicacion()).unwrap();
+            capturar_snapshot_raw_anclado(&ancla, configuracion.clone(), "engine/1", "policy/1")
+                .unwrap()
+                .token
+        };
+
+        {
+            let _epoca_mutadora = LockEscritura::adquirir(root.path()).unwrap();
+            fs::write(&documento, b"\xffPRIVATE-CANARY invalid markdown").unwrap();
+        }
+
+        let contenido_antes = fs::read(&documento).unwrap();
+        let mut nombres_antes = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entrada| entrada.unwrap().file_name())
+            .collect::<Vec<_>>();
+        nombres_antes.sort();
+        let mut lock = LockEscritura::adquirir(root.path()).unwrap();
+        let error = capturar_snapshot_con_cas_bajo_lock(
+            &mut lock,
+            configuracion,
+            "engine/1",
+            "policy/1",
+            esperado,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ErrorSnapshot::Stale);
+        assert_eq!(error.codigo(), "stale");
+        let debug = format!("{error:?}");
+        let display = error.to_string();
+        for secreto in [
+            "PRIVATE-CANARY",
+            "knowledge/a.md",
+            root.path().to_string_lossy().as_ref(),
+        ] {
+            assert!(!debug.contains(secreto), "Debug leaked {secreto}");
+            assert!(!display.contains(secreto), "Display leaked {secreto}");
+        }
+        assert_eq!(fs::read(&documento).unwrap(), contenido_antes);
+        let mut nombres_despues = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entrada| entrada.unwrap().file_name())
+            .collect::<Vec<_>>();
+        nombres_despues.sort();
+        assert_eq!(nombres_despues, nombres_antes);
+    }
+
+    #[test]
+    fn replay_y_cambios_raw_auxiliares_y_directorios_cambian_la_identidad() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        let manifest = temp.path().join("manifest.toml");
+        let invariants = temp.path().join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+        fs::write(root.join("knowledge/ignored.md"), [0xff, 0x00]).unwrap();
+        fs::write(root.join("payload.bin"), []).unwrap();
+
+        let capturar =
+            || capturar_snapshot(&root, &manifest, &invariants, "engine/1", "policy/1").unwrap();
+        let base = capturar();
+        let replay = capturar();
+        assert_eq!(base.token(), replay.token());
+        assert_eq!(base.estructura().nodos().count(), 1);
+        assert!(base.fuentes_invariantes().is_empty());
+        assert!(base.entradas().iter().any(|entry| {
+            entry.ruta() == "knowledge/ignored.md" && entry.bytes() == Some([0xff, 0x00].as_slice())
+        }));
+
+        fs::write(root.join("payload.bin"), [0, 255, 1]).unwrap();
+        let binary_changed = capturar().token();
+        assert_ne!(base.token(), binary_changed);
+        fs::write(&manifest, format!("{MANIFIESTO}\n")).unwrap();
+        let manifest_changed = capturar().token();
+        assert_ne!(binary_changed, manifest_changed);
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n\n").unwrap();
+        let invariants_changed = capturar().token();
+        assert_ne!(binary_changed, invariants_changed);
+
+        fs::write(&invariants, "\n").unwrap();
+        fs::create_dir(root.join("empty-dir")).unwrap();
+        assert_ne!(base.token(), capturar().token());
+    }
+
+    #[test]
+    fn captura_detecta_altas_bajas_renombres_y_cambios_solo_de_case() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        let manifest = temp.path().join("manifest.toml");
+        let invariants = temp.path().join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        fs::write(root.join("knowledge/a.md"), "---\ntype: a\ntitle: A\n---\n").unwrap();
+
+        let capturar =
+            || capturar_snapshot(&root, &manifest, &invariants, "engine/1", "policy/1").unwrap();
+        let base = capturar().token();
+
+        let archivo = root.join("auxiliar.bin");
+        fs::write(&archivo, []).unwrap();
+        let agregado = capturar().token();
+        assert_ne!(
+            base, agregado,
+            "agregar un archivo vacío debe cambiar el token"
+        );
+        fs::remove_file(&archivo).unwrap();
+        assert_eq!(
+            base,
+            capturar().token(),
+            "eliminar el archivo revierte el token"
+        );
+
+        let original = root.join("original.bin");
+        let renombrado = root.join("renombrado.bin");
+        fs::write(&original, [0, 255]).unwrap();
+        let antes_renombrar = capturar().token();
+        fs::rename(&original, &renombrado).unwrap();
+        assert_ne!(antes_renombrar, capturar().token());
+        fs::rename(&renombrado, &original).unwrap();
+        assert_eq!(antes_renombrar, capturar().token());
+
+        let mayusculas = root.join("Case.bin");
+        let intermedio = root.join("case-temp.bin");
+        let minusculas = root.join("case.bin");
+        fs::write(&mayusculas, [7]).unwrap();
+        let antes_case = capturar().token();
+        // El paso intermedio hace que el renombre solo de case funcione también
+        // en volúmenes Windows case-insensitive.
+        fs::rename(&mayusculas, &intermedio).unwrap();
+        fs::rename(&intermedio, &minusculas).unwrap();
+        assert_ne!(antes_case, capturar().token());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn alias_de_case_para_manifest_e_invariants_reusa_los_buffers_capturados() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        fs::write(root.path().join("manifest.toml"), MANIFIESTO).unwrap();
+        fs::write(root.path().join("invariants.smt2"), "\n").unwrap();
+        fs::write(
+            root.path().join("knowledge/a.md"),
+            "---\ntype: a\ntitle: A\n---\n",
+        )
+        .unwrap();
+        // Cambia también el case de los componentes del root: con el root
+        // lexical original, cambiar solo el nombre final no prueba el caso en
+        // que `starts_with` clasifica la fuente como externa.
+        let root_case_alias = PathBuf::from(root.path().to_string_lossy().to_ascii_uppercase());
+        let mut lecturas = HashMap::<PathBuf, usize>::new();
+        let snapshot = capturar_snapshot_con_lector(
+            root.path(),
+            &root_case_alias.join("MANIFEST.TOML"),
+            &root_case_alias.join("INVARIANTS.SMT2"),
+            "engine/1",
+            "policy/1",
+            |path, maximo_lectura| {
+                let real = fs::canonicalize(path).unwrap();
+                *lecturas.entry(real).or_default() += 1;
+                leer_archivo_regular_limitado(path, maximo_lectura)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(lecturas.len(), 3);
+        assert!(lecturas.values().all(|&count| count == 1));
+        assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+        assert_eq!(snapshot.invariantes_raw(), b"\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rechaza_links_usados_como_ruta_de_manifest_o_invariants() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let manifest_target = outside.join("manifest.toml");
+        let invariants_target = outside.join("invariants.smt2");
+        let manifest_link = temp.path().join("manifest-link.toml");
+        let invariants_link = temp.path().join("invariants-link.smt2");
+        fs::write(&manifest_target, MANIFIESTO).unwrap();
+        fs::write(&invariants_target, "\n").unwrap();
+        symlink(&manifest_target, &manifest_link).unwrap();
+        symlink(&invariants_target, &invariants_link).unwrap();
+
+        assert_eq!(
+            capturar_snapshot(
+                &root,
+                &manifest_link,
+                &invariants_target,
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+        assert_eq!(
+            capturar_snapshot(
+                &root,
+                &manifest_target,
+                &invariants_link,
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rechaza_reparse_points_en_root_y_en_rutas_de_configuracion() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+        use std::process::Command;
+
+        fn junction(enlace: &Path, destino: &Path) {
+            if let Err(error) = symlink_dir(destino, enlace) {
+                eprintln!("aviso: symlink_dir no disponible ({error}); se usa junction");
+                let resultado = Command::new("cmd")
+                    .args(["/c", "mklink", "/J"])
+                    .arg(enlace)
+                    .arg(destino)
+                    .output()
+                    .expect("cmd debe poder crear junctions");
+                assert!(
+                    resultado.status.success(),
+                    "no se pudo crear junction: {}",
+                    String::from_utf8_lossy(&resultado.stderr)
+                );
+            }
+        }
+
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bundle");
+        let config_target = temp.path().join("config-target");
+        fs::create_dir_all(root.join("knowledge")).unwrap();
+        fs::create_dir(&config_target).unwrap();
+        let manifest = config_target.join("manifest.toml");
+        let invariants = config_target.join("invariants.smt2");
+        fs::write(&manifest, MANIFIESTO).unwrap();
+        fs::write(&invariants, "\n").unwrap();
+        let outside_file = temp.path().join("outside.bin");
+        fs::write(&outside_file, b"raw").unwrap();
+
+        let file_link = root.join("file-link.bin");
+        match symlink_file(&outside_file, &file_link) {
+            Ok(()) => {
+                assert_eq!(
+                    capturar_snapshot(&root, &manifest, &invariants, "engine/1", "policy/1")
+                        .unwrap_err(),
+                    ErrorSnapshot::EnlaceNoPermitido
+                );
+                fs::remove_file(file_link).unwrap();
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(1314) =>
+            {
+                eprintln!(
+                    "SKIP explícito: symlink_file no disponible ({error}); este subcaso no cuenta como cobertura"
+                );
+            }
+            Err(error) => panic!("no se pudo crear symlink_file: {error}"),
+        }
+
+        let root_link = root.join("directory-link");
+        junction(&root_link, &config_target);
+        assert_eq!(
+            capturar_snapshot(&root, &manifest, &invariants, "engine/1", "policy/1").unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+        fs::remove_dir(root_link).unwrap();
+
+        let alias = temp.path().join("config-alias");
+        junction(&alias, &config_target);
+        assert_eq!(
+            capturar_snapshot(
+                &root,
+                &alias.join("manifest.toml"),
+                &invariants,
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+        assert_eq!(
+            capturar_snapshot(
+                &root,
+                &manifest,
+                &alias.join("invariants.smt2"),
+                "engine/1",
+                "policy/1"
+            )
+            .unwrap_err(),
+            ErrorSnapshot::EnlaceNoPermitido
+        );
+    }
+
+    #[test]
+    fn error_de_parseo_no_revela_contenido_raw() {
+        let root = tempdir().unwrap();
+        fs::create_dir(root.path().join("knowledge")).unwrap();
+        let manifest = root.path().join("manifest.toml");
+        let invariants = root.path().join("invariants.smt2");
+        fs::write(&manifest, "PRIVATE-CANARY invalid manifest").unwrap();
+        fs::write(&invariants, "").unwrap();
+
+        let error = capturar_snapshot(root.path(), &manifest, &invariants, "engine/1", "policy/1")
+            .unwrap_err();
+        assert_eq!(error, ErrorSnapshot::ManifiestoInvalido);
+        assert!(!format!("{error:?}").contains("PRIVATE-CANARY"));
+        assert!(!error.to_string().contains("PRIVATE-CANARY"));
+    }
+
+    #[test]
+    #[ignore = "harness runtime; ejecutar en release con --ignored --nocapture"]
+    fn runtime_snapshot_mide_bundles_de_1_10_y_100_mib() {
+        use std::io::Write;
+        use std::time::Instant;
+
+        const MIB: usize = 1024 * 1024;
+        const DOCUMENTO: &str = "---\ntype: a\ntitle: A\n---\n";
+        const MOTOR: &str = "runtime/1";
+        const POLITICA: &str = "policy/1";
+
+        fn escribir_payload(path: &Path, bytes: usize) {
+            let mut archivo = fs::File::create(path).unwrap();
+            let mut bloque = [0_u8; 64 * 1024];
+            for (indice, byte) in bloque.iter_mut().enumerate() {
+                *byte = (indice % 251) as u8;
+            }
+            let mut restantes = bytes;
+            while restantes > 0 {
+                let tamano = restantes.min(bloque.len());
+                archivo.write_all(&bloque[..tamano]).unwrap();
+                restantes -= tamano;
+            }
+        }
+
+        fn bytes_archivos(snapshot: &Snapshot) -> usize {
+            snapshot
+                .entradas()
+                .iter()
+                .filter_map(EntradaSnapshot::bytes)
+                .map(|bytes| bytes.len())
+                .sum()
+        }
+
+        fn firma_estructura(snapshot: &Snapshot) -> Vec<String> {
+            snapshot
+                .estructura()
+                .atomos()
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        }
+
+        for mib in [1, 10, 100] {
+            let bytes_objetivo = mib * MIB;
+            let temporal = tempdir().unwrap();
+            let raiz = temporal.path();
+            fs::create_dir(raiz.join("knowledge")).unwrap();
+            fs::create_dir(raiz.join("aux")).unwrap();
+            fs::write(raiz.join("manifest.toml"), MANIFIESTO).unwrap();
+            fs::write(raiz.join("invariants.smt2"), "\n").unwrap();
+            fs::write(raiz.join("knowledge/a.md"), DOCUMENTO).unwrap();
+
+            let base = MANIFIESTO.len() + 1 + DOCUMENTO.len();
+            assert!(bytes_objetivo > base);
+            escribir_payload(&raiz.join("aux/payload.bin"), bytes_objetivo - base);
+
+            let inicio = Instant::now();
+            let snapshot = capturar_snapshot(
+                raiz,
+                &raiz.join("manifest.toml"),
+                &raiz.join("invariants.smt2"),
+                MOTOR,
+                POLITICA,
+            )
+            .unwrap();
+            let captura = inicio.elapsed();
+
+            assert_eq!(snapshot.entradas().len(), 6, "inventario y directorios");
+            assert_eq!(bytes_archivos(&snapshot), bytes_objetivo, "bytes exactos");
+            assert_eq!(snapshot.manifiesto_raw(), MANIFIESTO.as_bytes());
+            assert_eq!(snapshot.invariantes_raw(), b"\n");
+            assert_eq!(snapshot.estructura().nodos().count(), 1);
+            assert_eq!(snapshot.fuentes_invariantes().len(), 0);
+            let firma = firma_estructura(&snapshot);
+            let token = snapshot.token();
+
+            let inicio_framing = Instant::now();
+            let token_recalculado = calcular_token_snapshot(
+                MOTOR,
+                POLITICA,
+                snapshot.manifiesto_raw(),
+                snapshot.invariantes_raw(),
+                snapshot.entradas(),
+            )
+            .unwrap();
+            let framing = inicio_framing.elapsed();
+            assert_eq!(token_recalculado, token, "framing sobre buffers capturados");
+            drop(snapshot);
+
+            let inicio_replay = Instant::now();
+            let replay = capturar_snapshot(
+                raiz,
+                &raiz.join("manifest.toml"),
+                &raiz.join("invariants.smt2"),
+                MOTOR,
+                POLITICA,
+            )
+            .unwrap();
+            let duracion_replay = inicio_replay.elapsed();
+            assert_eq!(replay.token(), token, "replay del token");
+            assert_eq!(bytes_archivos(&replay), bytes_objetivo, "replay de bytes");
+            assert_eq!(replay.estructura().nodos().count(), 1);
+            assert_eq!(firma_estructura(&replay), firma, "replay de estructura");
+
+            let mb_por_segundo = bytes_objetivo as f64 / captura.as_secs_f64() / 1_000_000.0;
+            let porcentaje_framing = framing.as_secs_f64() / captura.as_secs_f64() * 100.0;
+            println!(
+                "Runtime U4: {mib} MiB, bytes={bytes_objetivo}, captura={:.3} ms, MB/s={mb_por_segundo:.2}, framing={:.3} ms ({porcentaje_framing:.1}% de captura), replay={:.3} ms, token/replay/estructura=OK (orientativo; sin SLA)",
+                captura.as_secs_f64() * 1_000.0,
+                framing.as_secs_f64() * 1_000.0,
+                duracion_replay.as_secs_f64() * 1_000.0,
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    fn crear_junction(enlace: &Path, destino: &Path) {
+        std::os::unix::fs::symlink(destino, enlace).unwrap();
+    }
+}
+
+pub(crate) mod configuracion_apply;

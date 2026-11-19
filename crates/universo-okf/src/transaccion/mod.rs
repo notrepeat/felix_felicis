@@ -1,0 +1,30 @@
+//! Operaciones OKF sobre snapshots transaccionales.
+
+// U4 prepara estas piezas internas; U5/U6 las conectan al guard transaccional.
+#[allow(dead_code)]
+pub(crate) mod admision;
+#[allow(dead_code)]
+pub(crate) mod anclado;
+pub mod cambio_config;
+#[allow(dead_code)]
+pub(crate) mod captura;
+pub mod composicion;
+pub(crate) mod durabilidad;
+pub mod estado;
+pub mod historial;
+#[allow(dead_code)]
+pub(crate) mod inventario;
+#[allow(dead_code)]
+pub(crate) mod journal;
+pub(crate) mod limites;
+pub mod lock;
+pub(crate) mod raiz;
+pub mod recuperacion;
+#[allow(dead_code)]
+pub(crate) mod replay;
+pub mod sello;
+pub mod simulacion;
+pub mod snapshot;
+pub(crate) mod stage;
+
+pub mod aplicar;

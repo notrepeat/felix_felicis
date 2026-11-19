@@ -82,16 +82,51 @@ su tipo $\tau(v)$ y su etiqueta $\lambda(v)$. Nada más.
 La unidad mínima de conocimiento es el **átomo lógico**: un hecho básico
 sobre la estructura de incidencia. Los átomos son las oraciones de
 $\mathit{At}(\Sigma)$; los que **valen** en $U$ son los verdaderos en
-$\mathit{Str}(U)$. Su lectura:
+$\mathit{Str}(U)$. Las firmas base quedan fijadas así:
 
-- $\mathit{Type}(v, k)$ — el nodo (o arista) $v$ tiene tipo $k$;
+| Predicado | Firma | Lectura |
+|---|---|---|
+| $\mathit{Type}$ | $V \times K_V$ | $\tau_V(v)=k$: tipa nodos, no aristas. |
+| $\mathit{Edge}$ | $E \times V \times V \times K_E$ | $s(e)=x$, $t(e)=y$ y $\tau_E(e)=k$: una relación de arista tipada. |
+| $\mathit{Parent}$ | $V \times V$ | $\iota(x)=y$. |
+| $\mathit{HasLab}$ | $(V \cup E) \times \mathit{Lab}$ | $\lambda(x)=l$. |
+
+Por tanto, $\mathit{Type}(v,k)$ solo se aplica a nodos. El átomo
+$\mathit{Edge}(e,x,y,k)$ afirma conjuntamente la identidad de la arista, sus
+extremos y su tipo: no es azúcar para una incidencia más
+$\mathit{Type}(e,k)$, pues ese último átomo no pertenece a la firma.
+La lectura de cada átomo es:
+
+- $\mathit{Type}(v, k)$ — el nodo $v$ tiene tipo $k$;
 - $\mathit{Edge}(e, x, y, k)$ — existe la arista $e$ de tipo $k$ con
-  $s(e) = x$ y $t(e) = y$; el cuarto argumento es azúcar notacional:
-  $\mathit{Edge}(e, x, y, k)$ abrevia la incidencia de $e$ entre $x$ e $y$
-  en conjunción con $\mathit{Type}(e, k)$;
+  $s(e) = x$ y $t(e) = y$;
 - $\mathit{Parent}(x, y)$ — $\iota(x) = y$;
 - $\mathit{HasLab}(x, l)$ — $\lambda(x) = l$ (el predicado se llama
   $\mathit{HasLab}$ para no colisionar con el conjunto $\mathit{Lab}$).
+
+## Sintaxis de autoría y alcance
+
+Un archivo de invariantes es una secuencia de cero o más sentencias escritas
+como S-expresiones de nivel superior; puede incluir espacios, saltos de línea
+y comentarios entre ellas. Cada sentencia es una oración o un esquema y
+tiene un contexto de ligaduras independiente; repetir un nombre en otra
+sentencia no crea una colisión.
+
+Dentro de una sentencia, el nombre textual de una variable determina una
+sola sorte en todos sus alcances. Los ambientes de evaluación de nodos ($N$)
+y aristas ($E$) se mantienen separados, pero eso no crea dos espacios
+léxicos que permitan usar el mismo nombre para ambas sortes: tampoco se
+puede cambiarle la sorte al nombre en un alcance hermano. Un alcance activo
+no se puede sombrear; un nombre sí puede reaparecer en alcances hermanos si
+conserva la misma sorte. Así se evita que una variable tenga dos
+interpretaciones según la posición del átomo.
+
+Las constantes de nodo y arista se escriben con la marca `@` y se resuelven
+contra la estructura concreta. Una constante sintácticamente válida que no
+designa un elemento de la sorte correspondiente es un error de autoría, no
+un átomo falso. El diagnóstico de validación identifica el código y la
+posición estructural de la expresión, sin repetir rutas, etiquetas ni
+contenido del bundle.
 
 El conocimiento vive, por tanto, en la **estructura de incidencia** — qué
 está conectado con qué, bajo qué tipo, dentro de qué todo — y no dentro de

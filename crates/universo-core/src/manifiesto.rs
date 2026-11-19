@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::path::{LIMITE_SEGMENTO_UTF16, clave_case_ruta, validar_segmento_portable_windows};
 use crate::tipos::Sorte;
 
 /// Sortes de nodo reservados por el motor (plan 07: `Retirado`, lápida con
@@ -18,6 +19,17 @@ pub const PREDICADOS_BASE: [&str; 4] = ["Type", "Edge", "Parent", "HasLab"];
 /// Claves de frontmatter que el motor interpreta de forma especial y que
 /// ninguna clave de arista o de predicado puede reutilizar.
 const CLAVES_FRONTMATTER_RESERVADAS: [&str; 2] = ["type", "title"];
+
+/// El parser de frontmatter acepta esta misma gramática para las claves.
+fn clave_frontmatter_valida(clave: &str) -> bool {
+    let mut caracteres = clave.chars();
+    let Some(primera) = caracteres.next() else {
+        return false;
+    };
+    (primera.is_ascii_alphabetic() || primera == '_')
+        && caracteres
+            .all(|caracter| caracter.is_ascii_alphanumeric() || matches!(caracter, '_' | '-'))
+}
 
 /// Parámetros de instanciación del motor sobre un bundle concreto: los
 /// alfabetos $K_V$ (sortes de nodo) y $K_E$ (declaraciones de arista), los
@@ -66,21 +78,100 @@ pub struct DeclPredicado {
     pub clave: String,
     /// Dominio cerrado de constantes admitidas.
     pub dominio: BTreeSet<String>,
+    /// Orden total declarado del dominio (de menor a mayor), o vacío si el
+    /// predicado no es ordenado. Si no está vacío es una permutación del
+    /// dominio y habilita las comparaciones `<`, `<=`, `>`, `>=`.
+    pub orden: Vec<String>,
+    /// `true`: un nodo puede tener varios valores del dominio a la vez (lista
+    /// en el frontmatter); cada valor es un átomo `Ext`. Incompatible con
+    /// `orden`.
+    pub multivalor: bool,
+    /// `true`: valores fecha ISO `AAAA-MM-DD` (dominio abierto, `dominio`
+    /// vacío), comparables cronológicamente con `<`, `<=`, `>`, `>=`.
+    pub fecha: bool,
 }
+
+/// `AAAA-MM-DD` con mes y día válidos (años bisiestos incluidos).
+pub fn es_fecha_iso(valor: &str) -> bool {
+    let b = valor.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    let digitos = |r: std::ops::Range<usize>| -> Option<u32> {
+        valor
+            .get(r)
+            .filter(|t| t.bytes().all(|c| c.is_ascii_digit()))?
+            .parse()
+            .ok()
+    };
+    let (Some(anio), Some(mes), Some(dia)) = (digitos(0..4), digitos(5..7), digitos(8..10)) else {
+        return false;
+    };
+    let bisiesto = anio % 4 == 0 && (anio % 100 != 0 || anio % 400 == 0);
+    let dias = match mes {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if bisiesto => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=dias).contains(&dia)
+}
+
+impl DeclPredicado {
+    /// Si `valor` es admisible: fecha ISO válida o constante del dominio.
+    pub fn admite(&self, valor: &str) -> bool {
+        if self.fecha {
+            es_fecha_iso(valor)
+        } else {
+            self.dominio.contains(valor)
+        }
+    }
+
+    /// Si admite comparaciones de orden (`orden` declarado o fecha).
+    pub fn es_comparable(&self) -> bool {
+        self.fecha || !self.orden.is_empty()
+    }
+
+    /// Compara dos valores admisibles según el orden del predicado.
+    pub fn comparar(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
+        if self.fecha {
+            (es_fecha_iso(a) && es_fecha_iso(b)).then(|| a.cmp(b))
+        } else {
+            Some(self.rango(a)?.cmp(&self.rango(b)?))
+        }
+    }
+    /// Posición de `valor` en el orden declarado; `None` si el predicado no
+    /// es ordenado o el valor no está en el dominio.
+    pub fn rango(&self, valor: &str) -> Option<usize> {
+        self.orden.iter().position(|v| v == valor)
+    }
+}
+
+/// Cabezas de fórmula reservadas para comparaciones; ningún predicado de
+/// extensión puede llamarse así.
+pub const FORMAS_COMPARACION: [&str; 4] = ["<", "<=", ">", ">="];
 
 /// Layout de disco del bundle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Layout {
-    /// Directorios del bundle que el motor recorre.
+    /// Directorios del bundle que el motor recorre. Deben ser únicos y no
+    /// pueden contenerse unos a otros por componentes.
     pub directorios: Vec<String>,
     /// Subconjunto de `directorios` (o subrutas suyas) sin nodo $\iota$
     /// implícito.
     pub sin_iota: Vec<String>,
     /// Rutas ignoradas por el motor.
     pub ignorados: Vec<String>,
+    /// Clave optativa de frontmatter cuyo escalar declara el `BundlePath`
+    /// lógico del padre; una cadena vacía declara una raíz explícita.
+    pub parent_key: Option<String>,
 }
 
 /// Motivo de rechazo de un `Manifiesto` por `validar`.
+///
+/// Este enum público es exhaustivo; agregar variantes puede requerir cambios
+/// en `match` exhaustivos de consumidores. El crate sigue en pre-1.0.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ErrorManifiesto {
     /// `version` está vacía.
@@ -113,6 +204,12 @@ pub enum ErrorManifiesto {
     PredicadoReservado(String),
     /// Un nombre de predicado aparece más de una vez.
     PredicadoDuplicado(String),
+    /// El `orden` de un predicado no es una permutación de su dominio.
+    OrdenInvalido(String),
+    /// Un predicado declara a la vez `orden` y `multivalor`.
+    OrdenMultivalor(String),
+    /// Un predicado fecha declara dominio, orden o multivalor.
+    FechaInvalida(String),
     /// El dominio de un predicado está vacío.
     DominioVacio(String),
     /// Una clave de arista o de predicado coincide con `type`, `title` o
@@ -122,8 +219,22 @@ pub enum ErrorManifiesto {
     ClaveDuplicada(String),
     /// Una entrada de `sin_iota` no está contenida en `directorios`.
     SinIotaFueraDeLayout(String),
+    /// `directorios` contiene la misma ruta más de una vez.
+    DirectoriosDuplicados,
+    /// Una ruta de `directorios` está contenida en otra ruta declarada.
+    DirectoriosSolapados,
     /// `directorios` está vacío.
     DirectoriosVacio,
+    /// Alguna ruta de `layout.directorios` no es relativa o portable.
+    DirectoriosRutaInvalida,
+    /// Alguna ruta de `layout.sin_iota` no es relativa o portable.
+    SinIotaRutaInvalida,
+    /// Algún nombre de `layout.ignorados` no es portable o contiene separadores.
+    IgnoradosRutaInvalida,
+    /// `layout.parent_key` se declaró vacío.
+    ParentKeyVacia,
+    /// `layout.parent_key` no coincide con la gramática de claves frontmatter.
+    ParentKeyInvalida,
     /// Un valor de `sortes_nodo_disco` coincide con el nombre de otro
     /// sorte de `sortes_nodo` distinto de su propia clave.
     AliasDeDiscoColisiona(String),
@@ -179,6 +290,24 @@ impl std::fmt::Display for ErrorManifiesto {
             ErrorManifiesto::PredicadoDuplicado(n) => {
                 write!(f, "el predicado {n:?} está duplicado")
             }
+            ErrorManifiesto::FechaInvalida(n) => {
+                write!(
+                    f,
+                    "el predicado fecha {n:?} no admite dominio, orden ni multivalor"
+                )
+            }
+            ErrorManifiesto::OrdenMultivalor(n) => {
+                write!(
+                    f,
+                    "el predicado {n:?} no puede ser a la vez ordenado y multivalor"
+                )
+            }
+            ErrorManifiesto::OrdenInvalido(n) => {
+                write!(
+                    f,
+                    "el orden del predicado {n:?} no es una permutación de su dominio"
+                )
+            }
             ErrorManifiesto::DominioVacio(n) => {
                 write!(f, "el predicado {n:?} tiene el dominio vacío")
             }
@@ -191,7 +320,26 @@ impl std::fmt::Display for ErrorManifiesto {
             ErrorManifiesto::SinIotaFueraDeLayout(p) => {
                 write!(f, "{p:?} en sin_iota no está contenido en directorios")
             }
+            ErrorManifiesto::DirectoriosDuplicados => {
+                write!(f, "layout.directorios contiene rutas duplicadas")
+            }
+            ErrorManifiesto::DirectoriosSolapados => {
+                write!(f, "layout.directorios contiene rutas solapadas")
+            }
             ErrorManifiesto::DirectoriosVacio => write!(f, "layout.directorios está vacío"),
+            ErrorManifiesto::DirectoriosRutaInvalida => {
+                write!(f, "layout.directorios contiene una ruta no portable")
+            }
+            ErrorManifiesto::SinIotaRutaInvalida => {
+                write!(f, "layout.sin_iota contiene una ruta no portable")
+            }
+            ErrorManifiesto::IgnoradosRutaInvalida => {
+                write!(f, "layout.ignorados contiene un nombre no portable")
+            }
+            ErrorManifiesto::ParentKeyVacia => write!(f, "layout.parent_key está vacío"),
+            ErrorManifiesto::ParentKeyInvalida => {
+                write!(f, "layout.parent_key no es una clave frontmatter válida")
+            }
             ErrorManifiesto::AliasDeDiscoColisiona(v) => write!(
                 f,
                 "el alias de disco {v:?} coincide con el nombre de otro sorte declarado"
@@ -211,6 +359,21 @@ impl std::fmt::Display for ErrorManifiesto {
 
 impl std::error::Error for ErrorManifiesto {}
 
+fn ruta_layout_portable(ruta: &str, permite_directorios: bool) -> bool {
+    if ruta.is_empty() || ruta.starts_with('/') || ruta.contains('\\') {
+        return false;
+    }
+    if !permite_directorios && ruta.contains('/') {
+        return false;
+    }
+    ruta.split('/').all(|segmento| {
+        !segmento.is_empty()
+            && segmento != "."
+            && segmento != ".."
+            && validar_segmento_portable_windows(segmento, LIMITE_SEGMENTO_UTF16).is_ok()
+    })
+}
+
 /// `true` si `nombre` está vacío o contiene un blanco, un carácter de
 /// control, o uno de `, ( ) " \ # → : [ ]`: cualquiera de esos caracteres
 /// rompería el texto canónico de un átomo (`Nombre(sujeto, constante)`) o
@@ -225,6 +388,110 @@ fn nombre_invalido(nombre: &str) -> bool {
                     ',' | '(' | ')' | '"' | '\\' | '#' | '→' | ':' | '[' | ']'
                 )
         })
+}
+
+#[derive(Default)]
+struct ConflictosDirectorios {
+    duplicados: bool,
+    solapados: bool,
+}
+
+/// El separador ordena antes que cualquier otro byte: así, una ruta seguida
+/// por `/` queda antes que sus hermanos (`a/x` antes que `a-`) y el primer
+/// descendiente de cualquier ruta es su vecino inmediato en el índice.
+fn clave_byte_ruta(byte: u8) -> u16 {
+    if byte == b'/' { 0 } else { u16::from(byte) + 1 }
+}
+
+fn comparar_rutas(a: &str, b: &str) -> std::cmp::Ordering {
+    a.bytes()
+        .map(clave_byte_ruta)
+        .cmp(b.bytes().map(clave_byte_ruta))
+}
+
+fn rutas_solapadas(a: &str, b: &str) -> bool {
+    let es_ancestro = |posible_ancestro: &str, posible_descendiente: &str| {
+        posible_descendiente
+            .strip_prefix(posible_ancestro)
+            .is_some_and(|resto| resto.starts_with('/'))
+    };
+    es_ancestro(a, b) || es_ancestro(b, a)
+}
+
+/// Índice compacto de rutas declaradas. Retiene solo una referencia prestada
+/// por ruta; las búsquedas estrechan un intervalo ordenado por byte, sin nodos
+/// por byte ni materializar prefijos.
+struct IndiceRutas<'a> {
+    rutas: Vec<&'a str>,
+    conflictos: ConflictosDirectorios,
+}
+
+impl<'a> IndiceRutas<'a> {
+    fn nuevo(directorios: &'a [String], mut observar_comparacion: impl FnMut()) -> Self {
+        let mut rutas: Vec<&str> = directorios.iter().map(String::as_str).collect();
+        rutas.sort_unstable_by(|a, b| {
+            observar_comparacion();
+            comparar_rutas(a, b)
+        });
+
+        let mut conflictos = ConflictosDirectorios::default();
+        for par in rutas.windows(2) {
+            conflictos.duplicados |= par[0] == par[1];
+            conflictos.solapados |= rutas_solapadas(par[0], par[1]);
+        }
+        let mut rutas_case: Vec<String> = directorios
+            .iter()
+            .map(|ruta| clave_case_ruta(ruta))
+            .collect();
+        rutas_case.sort_unstable_by(|a, b| {
+            observar_comparacion();
+            comparar_rutas(a, b)
+        });
+        for par in rutas_case.windows(2) {
+            conflictos.duplicados |= par[0] == par[1];
+            conflictos.solapados |= rutas_solapadas(&par[0], &par[1]);
+        }
+
+        Self { rutas, conflictos }
+    }
+
+    fn contiene_prefijo_de(&self, ruta: &str, mut observar_comparacion: impl FnMut()) -> bool {
+        let bytes = ruta.as_bytes();
+        let mut inicio = 0;
+        let mut fin = self.rutas.len();
+
+        for (indice, &byte) in bytes.iter().enumerate() {
+            // En el intervalo actual todas las rutas comparten los bytes ya
+            // recorridos; la más corta termina aquí si la ruta está declarada.
+            if byte == b'/' && inicio < fin && self.rutas[inicio].len() == indice {
+                return true;
+            }
+
+            let intervalo = &self.rutas[inicio..fin];
+            let desplazamiento = intervalo.partition_point(|candidato| {
+                observar_comparacion();
+                candidato
+                    .as_bytes()
+                    .get(indice)
+                    .copied()
+                    .map(clave_byte_ruta)
+                    < Some(clave_byte_ruta(byte))
+            });
+            inicio += desplazamiento;
+            let intervalo = &self.rutas[inicio..fin];
+            let cantidad_iguales = intervalo.partition_point(|candidato| {
+                observar_comparacion();
+                candidato.as_bytes().get(indice).copied() == Some(byte)
+            });
+            fin = inicio + cantidad_iguales;
+
+            if inicio == fin {
+                return false;
+            }
+        }
+
+        inicio < fin && self.rutas[inicio].len() == bytes.len()
+    }
 }
 
 impl Manifiesto {
@@ -260,16 +527,21 @@ impl Manifiesto {
 
         let mut vistas_arista: BTreeSet<&str> = BTreeSet::new();
         let mut reportadas_arista: BTreeSet<&str> = BTreeSet::new();
+        let mut primera_arista_por_clave: BTreeMap<&str, &DeclArista> = BTreeMap::new();
         for a in &self.aristas {
             if !vistas_arista.insert(&a.clave) && reportadas_arista.insert(&a.clave) {
                 errores.push(ErrorManifiesto::AristaDuplicada(a.clave.clone()));
             }
+            primera_arista_por_clave
+                .entry(a.clave.as_str())
+                .or_insert(a);
         }
 
-        let claves_arista: BTreeSet<&str> = self.aristas.iter().map(|a| a.clave.as_str()).collect();
         let mut reportados_ambos: BTreeSet<&str> = BTreeSet::new();
         for s in &self.sortes_nodo {
-            if claves_arista.contains(s.como_str()) && reportados_ambos.insert(s.como_str()) {
+            if primera_arista_por_clave.contains_key(s.como_str())
+                && reportados_ambos.insert(s.como_str())
+            {
                 errores.push(ErrorManifiesto::SorteEnAmbosAlfabetos(
                     s.como_str().to_string(),
                 ));
@@ -283,7 +555,7 @@ impl Manifiesto {
             if let Some(inversa) = &a.inversa {
                 if inversa == &a.clave {
                     errores.push(ErrorManifiesto::InversaASiMisma(a.clave.clone()));
-                } else if let Some(destino) = self.aristas.iter().find(|b| &b.clave == inversa) {
+                } else if let Some(destino) = primera_arista_por_clave.get(inversa.as_str()) {
                     if destino.inversa.as_deref() != Some(a.clave.as_str()) {
                         errores.push(ErrorManifiesto::InversaNoReciproca(a.clave.clone()));
                     }
@@ -302,13 +574,31 @@ impl Manifiesto {
         let mut vistos_predicado: BTreeSet<&str> = BTreeSet::new();
         let mut reportados_predicado: BTreeSet<&str> = BTreeSet::new();
         for p in &self.predicados {
-            if PREDICADOS_BASE.contains(&p.nombre.as_str()) {
+            if PREDICADOS_BASE.contains(&p.nombre.as_str())
+                || FORMAS_COMPARACION.contains(&p.nombre.as_str())
+            {
                 errores.push(ErrorManifiesto::PredicadoReservado(p.nombre.clone()));
+            }
+            if !p.orden.is_empty() && p.multivalor {
+                errores.push(ErrorManifiesto::OrdenMultivalor(p.nombre.clone()));
+            }
+            if !p.orden.is_empty() {
+                let unicos: BTreeSet<&String> = p.orden.iter().collect();
+                if unicos.len() != p.orden.len()
+                    || p.orden.len() != p.dominio.len()
+                    || p.orden.iter().any(|v| !p.dominio.contains(v))
+                {
+                    errores.push(ErrorManifiesto::OrdenInvalido(p.nombre.clone()));
+                }
             }
             if !vistos_predicado.insert(&p.nombre) && reportados_predicado.insert(&p.nombre) {
                 errores.push(ErrorManifiesto::PredicadoDuplicado(p.nombre.clone()));
             }
-            if p.dominio.is_empty() {
+            if p.fecha {
+                if !p.dominio.is_empty() || !p.orden.is_empty() || p.multivalor {
+                    errores.push(ErrorManifiesto::FechaInvalida(p.nombre.clone()));
+                }
+            } else if p.dominio.is_empty() {
                 errores.push(ErrorManifiesto::DominioVacio(p.nombre.clone()));
             }
         }
@@ -322,7 +612,8 @@ impl Manifiesto {
             .aristas
             .iter()
             .map(|a| a.clave.as_str())
-            .chain(self.predicados.iter().map(|p| p.clave.as_str()));
+            .chain(self.predicados.iter().map(|p| p.clave.as_str()))
+            .chain(self.layout.parent_key.as_deref());
         for clave in claves_declaradas {
             let es_reservada =
                 CLAVES_FRONTMATTER_RESERVADAS.contains(&clave) || clave_retirado == Some(clave);
@@ -337,40 +628,75 @@ impl Manifiesto {
             .aristas
             .iter()
             .map(|a| a.clave.as_str())
-            .chain(self.predicados.iter().map(|p| p.clave.as_str()));
+            .chain(self.predicados.iter().map(|p| p.clave.as_str()))
+            .chain(self.layout.parent_key.as_deref());
         for clave in todas_las_claves {
             if !vistas_clave.insert(clave) && reportadas_clave.insert(clave) {
                 errores.push(ErrorManifiesto::ClaveDuplicada(clave.to_string()));
             }
         }
 
+        let indice_directorios = IndiceRutas::nuevo(&self.layout.directorios, || {});
+        if self
+            .layout
+            .directorios
+            .iter()
+            .any(|ruta| !ruta_layout_portable(ruta, true))
+        {
+            errores.push(ErrorManifiesto::DirectoriosRutaInvalida);
+        }
+        if self
+            .layout
+            .ignorados
+            .iter()
+            .any(|nombre| !ruta_layout_portable(nombre, false))
+        {
+            errores.push(ErrorManifiesto::IgnoradosRutaInvalida);
+        }
+        let mut sin_iota_ruta_invalida = false;
         for entrada in &self.layout.sin_iota {
-            let contenido = self.layout.directorios.iter().any(|dir| {
-                entrada == dir
-                    || entrada
-                        .strip_prefix(dir)
-                        .is_some_and(|resto| resto.starts_with('/'))
-            });
+            if !ruta_layout_portable(entrada, true) {
+                sin_iota_ruta_invalida = true;
+                continue;
+            }
+            let contenido = indice_directorios.contiene_prefijo_de(entrada, || {});
             if !contenido {
                 errores.push(ErrorManifiesto::SinIotaFueraDeLayout(entrada.clone()));
             }
+        }
+        if sin_iota_ruta_invalida {
+            errores.push(ErrorManifiesto::SinIotaRutaInvalida);
+        }
+
+        if indice_directorios.conflictos.duplicados {
+            errores.push(ErrorManifiesto::DirectoriosDuplicados);
+        }
+        if indice_directorios.conflictos.solapados {
+            errores.push(ErrorManifiesto::DirectoriosSolapados);
         }
 
         if self.layout.directorios.is_empty() {
             errores.push(ErrorManifiesto::DirectoriosVacio);
         }
+        if self.layout.parent_key.as_deref() == Some("") {
+            errores.push(ErrorManifiesto::ParentKeyVacia);
+        } else if self
+            .layout
+            .parent_key
+            .as_deref()
+            .is_some_and(|clave| !clave_frontmatter_valida(clave))
+        {
+            errores.push(ErrorManifiesto::ParentKeyInvalida);
+        }
 
         let mut reportados_alias_colision: BTreeSet<&str> = BTreeSet::new();
         for (sorte, valor) in &self.sortes_nodo_disco {
-            if !self.sortes_nodo.contains(sorte) {
+            if !vistos_nodo.contains(sorte.como_str()) {
                 errores.push(ErrorManifiesto::AliasDeSorteDesconocida(
                     sorte.como_str().to_string(),
                 ));
             }
-            let colisiona = self
-                .sortes_nodo
-                .iter()
-                .any(|s| s != sorte && s.como_str() == valor.as_str());
+            let colisiona = valor != sorte.como_str() && vistos_nodo.contains(valor.as_str());
             if colisiona && reportados_alias_colision.insert(valor.as_str()) {
                 errores.push(ErrorManifiesto::AliasDeDiscoColisiona(valor.clone()));
             }
@@ -392,6 +718,11 @@ impl Manifiesto {
         }
         for v in self.sortes_nodo_disco.values() {
             nombres_a_validar.push(v.as_str());
+        }
+        if let Some(parent_key) = self.layout.parent_key.as_deref() {
+            if !parent_key.is_empty() {
+                nombres_a_validar.push(parent_key);
+            }
         }
         let mut reportados_nombre: BTreeSet<&str> = BTreeSet::new();
         for nombre in nombres_a_validar {
@@ -502,11 +833,15 @@ pub(crate) mod tests {
                 nombre: "Nivel".into(),
                 clave: "nivel".into(),
                 dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
+                orden: Vec::new(),
+                multivalor: false,
+                fecha: false,
             }],
             layout: Layout {
                 directorios: vec!["n".into()],
                 sin_iota: vec![],
                 ignorados: vec!["log.md".into()],
+                parent_key: None,
             },
         }
     }
@@ -631,6 +966,245 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn validar_sin_iota_consulta_prefijos_segun_componentes_de_ruta() {
+        let mut directorios = Vec::new();
+        for indice in 0..8192 {
+            directorios.push(format!("externo/{indice:04}"));
+        }
+        directorios.push("root".into());
+        directorios.push("root/".into());
+        let indice = IndiceRutas::nuevo(&directorios, || {});
+
+        assert!(!indice.contiene_prefijo_de("raiz/sub/hoja", || {}));
+        assert!(indice.contiene_prefijo_de("root/sub", || {}));
+        assert!(indice.contiene_prefijo_de("root//sub", || {}));
+        assert!(!indice.contiene_prefijo_de("rooted/sub", || {}));
+    }
+
+    #[test]
+    fn consulta_sin_iota_halla_ancestro_aunque_no_sea_el_predecessor() {
+        let directorios = ["a".into(), "a/b".into()];
+        let indice = IndiceRutas::nuevo(&directorios, || {});
+        assert!(indice.contiene_prefijo_de("a/c", || {}));
+
+        let solo_a = ["a".into()];
+        let indice = IndiceRutas::nuevo(&solo_a, || {});
+        assert!(!indice.contiene_prefijo_de("ab/c", || {}));
+        assert!(indice.contiene_prefijo_de("a/bc", || {}));
+    }
+
+    #[test]
+    fn muchas_rutas_largas_disjuntas_usan_busquedas_logaritmicas() {
+        const DIRECTORIOS: usize = 1024;
+        let prefijo = std::iter::repeat_n("segmento", 64)
+            .collect::<Vec<_>>()
+            .join("/");
+        let rutas: Vec<String> = (0..DIRECTORIOS)
+            .map(|indice| format!("{prefijo}/ruta-{indice:04}"))
+            .collect();
+        let mut comparaciones_ordenamiento = 0;
+        let indice = IndiceRutas::nuevo(&rutas, || comparaciones_ordenamiento += 1);
+        assert_eq!(indice.rutas.len(), DIRECTORIOS);
+        assert!(comparaciones_ordenamiento < 4 * DIRECTORIOS * 11);
+
+        let consulta = format!("{prefijo}/ruta-z");
+        let mut comparaciones_busqueda = 0;
+        assert!(!indice.contiene_prefijo_de(&consulta, || comparaciones_busqueda += 1));
+        assert!(comparaciones_busqueda <= 2 * consulta.len() * 11);
+    }
+
+    #[test]
+    fn rechaza_directorios_duplicados_y_solapados_con_errores_redactados() {
+        let mut duplicados = base();
+        duplicados.layout.directorios = vec!["secreto/ruta".into(), "secreto/ruta".into()];
+        let error = duplicados
+            .validar()
+            .unwrap_err()
+            .into_iter()
+            .find(|error| *error == ErrorManifiesto::DirectoriosDuplicados)
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "layout.directorios contiene rutas duplicadas"
+        );
+        assert!(!error.to_string().contains("secreto"));
+
+        let mut solapados = base();
+        solapados.layout.directorios = vec!["secreto".into(), "secreto/sub".into()];
+        let error = solapados
+            .validar()
+            .unwrap_err()
+            .into_iter()
+            .find(|error| *error == ErrorManifiesto::DirectoriosSolapados)
+            .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "layout.directorios contiene rutas solapadas"
+        );
+        assert!(!error.to_string().contains("secreto"));
+    }
+
+    #[test]
+    fn acepta_directorios_disjuntos_con_prefijos_de_nombre_compartidos() {
+        let mut m = base();
+        m.layout.directorios = vec!["n".into(), "notes".into()];
+        m.layout.sin_iota = vec!["n/sub".into()];
+        m.validar().unwrap();
+
+        let mut case_insensitive_near_miss = base();
+        case_insensitive_near_miss.layout.directorios = vec!["Docs".into(), "docs-extra".into()];
+        case_insensitive_near_miss.layout.sin_iota = vec!["Docs/sub".into()];
+        case_insensitive_near_miss
+            .validar()
+            .expect("prefijo de nombre no es solapamiento de componente");
+    }
+
+    #[test]
+    fn rechaza_duplicados_y_solapamientos_case_insensitive_en_directorios() {
+        let mut duplicados = base();
+        duplicados.layout.directorios = vec!["Docs".into(), "docs".into()];
+        let errores = duplicados.validar().unwrap_err();
+        assert!(errores.contains(&ErrorManifiesto::DirectoriosDuplicados));
+        assert!(!errores.contains(&ErrorManifiesto::DirectoriosSolapados));
+
+        let mut solapados = base();
+        solapados.layout.directorios = vec!["Docs".into(), "docs/sub".into()];
+        let errores = solapados.validar().unwrap_err();
+        assert!(errores.contains(&ErrorManifiesto::DirectoriosSolapados));
+    }
+
+    #[test]
+    fn claves_portables_detectan_sigma_final_y_preservan_el_caso_i_con_punto() {
+        let mut sigma = base();
+        sigma.layout.directorios = vec!["Σ".into(), "ς".into()];
+        sigma.layout.sin_iota.clear();
+        assert!(
+            sigma
+                .validar()
+                .unwrap_err()
+                .contains(&ErrorManifiesto::DirectoriosDuplicados)
+        );
+
+        let mut alfa_con_iota = base();
+        alfa_con_iota.layout.directorios = vec!["ᾀ".into(), "ᾈ".into()];
+        alfa_con_iota.layout.sin_iota.clear();
+        assert!(
+            alfa_con_iota
+                .validar()
+                .unwrap_err()
+                .contains(&ErrorManifiesto::DirectoriosDuplicados)
+        );
+
+        let mut i_con_punto = base();
+        i_con_punto.layout.directorios = vec!["İ".into(), "i\u{307}".into()];
+        i_con_punto.layout.sin_iota.clear();
+        i_con_punto
+            .validar()
+            .expect("la clave conservadora mantiene este near-miss");
+    }
+
+    #[test]
+    fn valida_portabilidad_de_cada_campo_de_ruta_del_layout() {
+        let mut directorios = base();
+        directorios.layout.directorios = vec!["docs/CON.txt".into()];
+        let error = directorios.validar().unwrap_err();
+        assert!(error.contains(&ErrorManifiesto::DirectoriosRutaInvalida));
+
+        let mut dispositivo_superscript = base();
+        dispositivo_superscript.layout.directorios = vec!["docs/LPT³".into()];
+        let error = dispositivo_superscript.validar().unwrap_err();
+        assert!(error.contains(&ErrorManifiesto::DirectoriosRutaInvalida));
+
+        let mut sin_iota = base();
+        sin_iota.layout.sin_iota = vec!["n/com1".into()];
+        let error = sin_iota.validar().unwrap_err();
+        assert!(error.contains(&ErrorManifiesto::SinIotaRutaInvalida));
+        assert!(!error.contains(&ErrorManifiesto::SinIotaFueraDeLayout("n/com1".into())));
+
+        let mut ignorados = base();
+        ignorados.layout.ignorados = vec!["bad?/name.md".into()];
+        let error = ignorados.validar().unwrap_err();
+        assert!(error.contains(&ErrorManifiesto::IgnoradosRutaInvalida));
+
+        let mut validos = base();
+        validos.layout.directorios = vec!["docs/COM0".into()];
+        validos.layout.sin_iota = vec!["docs/COM0/sub".into()];
+        validos.layout.ignorados = vec!["read me.md".into()];
+        validos.validar().unwrap();
+    }
+
+    #[test]
+    fn limita_segmentos_del_layout_a_255_unidades_utf16() {
+        let segmento_255 = "a".repeat(255);
+        let segmento_256 = "a".repeat(256);
+        let astrales_255 = format!("{}a", "😀".repeat(127));
+        let astrales_256 = "😀".repeat(128);
+
+        for segmento in [&segmento_255, &astrales_255] {
+            for campo in 0..3 {
+                let mut manifiesto = base();
+                match campo {
+                    0 => manifiesto.layout.directorios = vec![format!("docs/{segmento}")],
+                    1 => manifiesto.layout.sin_iota = vec![format!("n/{segmento}")],
+                    _ => manifiesto.layout.ignorados = vec![segmento.to_string()],
+                }
+                manifiesto.validar().unwrap();
+            }
+        }
+
+        for segmento in [&segmento_256, &astrales_256] {
+            for (campo, esperado) in [
+                (0, ErrorManifiesto::DirectoriosRutaInvalida),
+                (1, ErrorManifiesto::SinIotaRutaInvalida),
+                (2, ErrorManifiesto::IgnoradosRutaInvalida),
+            ] {
+                let mut manifiesto = base();
+                match campo {
+                    0 => manifiesto.layout.directorios = vec![format!("docs/{segmento}")],
+                    1 => manifiesto.layout.sin_iota = vec![format!("n/{segmento}")],
+                    _ => manifiesto.layout.ignorados = vec![segmento.to_string()],
+                }
+                let errores = manifiesto.validar().unwrap_err();
+                assert!(errores.contains(&esperado), "campo {campo}: {errores:?}");
+                if campo == 1 {
+                    assert!(
+                        !errores.contains(&ErrorManifiesto::SinIotaFueraDeLayout(format!(
+                            "n/{segmento}"
+                        )))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn detecta_solapamiento_aunque_haya_un_hermano_lexico_entre_ambos() {
+        let mut m = base();
+        m.layout.directorios = vec!["a".into(), "a-".into(), "a/x".into()];
+        m.layout.sin_iota.clear();
+        assert!(
+            m.validar()
+                .unwrap_err()
+                .contains(&ErrorManifiesto::DirectoriosSolapados)
+        );
+    }
+
+    #[test]
+    fn diez_mil_directorios_repetidos_producen_un_error_estable() {
+        let mut m = base();
+        m.layout.directorios = vec!["ruta".into(); 10_000];
+        let errores = m.validar().unwrap_err();
+        assert_eq!(
+            errores
+                .iter()
+                .filter(|error| **error == ErrorManifiesto::DirectoriosDuplicados)
+                .count(),
+            1
+        );
+        assert!(errores.contains(&ErrorManifiesto::DirectoriosDuplicados));
+        assert!(!errores.contains(&ErrorManifiesto::DirectoriosSolapados));
+    }
+    #[test]
     fn rechaza_duplicados_y_directorios_vacio() {
         let mut m = base();
         m.sortes_nodo.push(Sorte::nuevo("a"));
@@ -668,6 +1242,58 @@ pub(crate) mod tests {
                 .contains(&ErrorManifiesto::InversaDesconocida("nope".into()))
         );
     }
+
+    #[test]
+    fn indice_de_inversas_preserva_la_primera_declaracion_duplicada() {
+        let mut m = base();
+        m.aristas[2].inversa = None;
+        m.aristas.push(DeclArista {
+            clave: "sup".into(),
+            simetrica: false,
+            inversa: Some("sub".into()),
+            destino: None,
+            etiqueta: None,
+        });
+
+        let errores = m.validar().unwrap_err();
+        assert!(errores.contains(&ErrorManifiesto::AristaDuplicada("sup".into())));
+        assert!(errores.contains(&ErrorManifiesto::InversaNoReciproca("sub".into())));
+    }
+
+    #[test]
+    fn valida_muchas_inversas_y_aliases_con_indice() {
+        const PARES: usize = 1024;
+        let mut m = base();
+        for indice in 0..PARES {
+            let ida = format!("edge-{indice:04}");
+            let vuelta = format!("edge-inverse-{indice:04}");
+            m.aristas.push(DeclArista {
+                clave: ida.clone(),
+                simetrica: false,
+                inversa: Some(vuelta.clone()),
+                destino: None,
+                etiqueta: None,
+            });
+            m.aristas.push(DeclArista {
+                clave: vuelta,
+                simetrica: false,
+                inversa: Some(ida),
+                destino: None,
+                etiqueta: None,
+            });
+
+            let nombre = format!("tipo-{indice:04}");
+            let sorte = Sorte::nuevo(&nombre);
+            m.sortes_nodo.push(sorte.clone());
+            m.sortes_nodo_disco
+                .insert(sorte, format!("disk-{indice:04}"));
+        }
+
+        assert_eq!(m.aristas.len(), 3 + PARES * 2);
+        assert_eq!(m.sortes_nodo_disco.len(), PARES);
+        m.validar().unwrap();
+    }
+
     #[test]
     fn rechaza_alias_de_disco_colisionante() {
         let mut m = base();
@@ -704,6 +1330,9 @@ pub(crate) mod tests {
             nombre: "Ni(vel".into(),
             clave: "otro".into(),
             dominio: ["alto, medio"].into_iter().map(String::from).collect(),
+            orden: Vec::new(),
+            multivalor: false,
+            fecha: false,
         });
         let errores = m.validar().unwrap_err();
         for esperado in [
@@ -735,6 +1364,9 @@ pub(crate) mod tests {
             nombre: "Nivel".into(),
             clave: "nivel2".into(),
             dominio: ["bajo", "alto"].into_iter().map(String::from).collect(),
+            orden: Vec::new(),
+            multivalor: false,
+            fecha: false,
         });
         assert!(
             m.validar()

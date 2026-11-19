@@ -1,0 +1,169 @@
+{
+  "schema": "felix-paired-summary-v1",
+  "complete": true,
+  "planned_runs": 24,
+  "observed_runs": 24,
+  "arms": {
+    "without_felix": {
+      "planned_runs": 12,
+      "observed_runs": 12,
+      "missing_runs": 0,
+      "status_counts": {
+        "completed": 12
+      },
+      "successes": 12,
+      "final_invalid": 0,
+      "goal_unsatisfied": 0,
+      "unrelated_regressions": 0,
+      "elapsed_seconds": {
+        "n": 12,
+        "min": 4.421467053001834,
+        "median": 5.296527459999197,
+        "max": 8.34048474300289
+      },
+      "edits": {
+        "n": 12,
+        "min": 0,
+        "median": 3.5,
+        "max": 7
+      },
+      "extra_edits": {
+        "n": 12,
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "reported_usage_totals": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 32768,
+        "input_tokens": 121996,
+        "output_tokens": 684,
+        "reasoning_output_tokens": 48
+      },
+      "runs_missing_usage": 0,
+      "mcp_calls_attempted": 0,
+      "mcp_calls_executed": 0,
+      "mcp_calls_budget_denied": 0,
+      "rejected_proposals": 0,
+      "success_after_observed_rejection": 0,
+      "cost_usd": null
+    },
+    "with_felix": {
+      "planned_runs": 12,
+      "observed_runs": 12,
+      "missing_runs": 0,
+      "status_counts": {
+        "completed": 12
+      },
+      "successes": 12,
+      "final_invalid": 0,
+      "goal_unsatisfied": 0,
+      "unrelated_regressions": 0,
+      "elapsed_seconds": {
+        "n": 12,
+        "min": 4.131538560999616,
+        "median": 5.111962519498775,
+        "max": 7.437803405999148
+      },
+      "edits": {
+        "n": 12,
+        "min": 0,
+        "median": 3.5,
+        "max": 7
+      },
+      "extra_edits": {
+        "n": 12,
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      },
+      "reported_usage_totals": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 24576,
+        "input_tokens": 122188,
+        "output_tokens": 734,
+        "reasoning_output_tokens": 94
+      },
+      "runs_missing_usage": 0,
+      "mcp_calls_attempted": 0,
+      "mcp_calls_executed": 0,
+      "mcp_calls_budget_denied": 0,
+      "rejected_proposals": 0,
+      "success_after_observed_rejection": 0,
+      "cost_usd": null
+    }
+  },
+  "paired_counts": {
+    "both_success": 12
+  },
+  "pairs": [
+    {
+      "case_id": "label_swap",
+      "repetition": 1,
+      "category": "both_success"
+    },
+    {
+      "case_id": "label_swap",
+      "repetition": 2,
+      "category": "both_success"
+    },
+    {
+      "case_id": "noop_owner",
+      "repetition": 1,
+      "category": "both_success"
+    },
+    {
+      "case_id": "noop_owner",
+      "repetition": 2,
+      "category": "both_success"
+    },
+    {
+      "case_id": "owner_copy",
+      "repetition": 1,
+      "category": "both_success"
+    },
+    {
+      "case_id": "owner_copy",
+      "repetition": 2,
+      "category": "both_success"
+    },
+    {
+      "case_id": "parent_rotate",
+      "repetition": 1,
+      "category": "both_success"
+    },
+    {
+      "case_id": "parent_rotate",
+      "repetition": 2,
+      "category": "both_success"
+    },
+    {
+      "case_id": "release_c",
+      "repetition": 1,
+      "category": "both_success"
+    },
+    {
+      "case_id": "release_c",
+      "repetition": 2,
+      "category": "both_success"
+    },
+    {
+      "case_id": "type_a",
+      "repetition": 1,
+      "category": "both_success"
+    },
+    {
+      "case_id": "type_a",
+      "repetition": 2,
+      "category": "both_success"
+    }
+  ],
+  "interpretation_limits": [
+    "small_synthetic_pilot",
+    "two_repetitions_not_independent_tasks",
+    "model_alias_not_provider_snapshot",
+    "sampling_seed_unavailable",
+    "no_observed_monetary_cost",
+    "baseline_internal_repair_unobserved"
+  ]
+}

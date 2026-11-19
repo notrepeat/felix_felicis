@@ -3,7 +3,8 @@
 //! todo lo demás (`salientes`, `entrantes`, `hijos`, `indice`,
 //! `indice_case`) es derivado y se mantiene coherente en cada operación.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use slotmap::{SecondaryMap, SlotMap};
 
@@ -46,16 +47,22 @@ pub struct Arista {
 #[derive(Debug)]
 pub struct Estructura {
     manifiesto: Manifiesto,
+    sortes_nodo_index: Arc<BTreeSet<Sorte>>,
+    claves_arista_index: Arc<BTreeSet<String>>,
     nodos: SlotMap<NodoId, Nodo>,
     aristas: SlotMap<AristaId, Arista>,
     salientes: SecondaryMap<NodoId, Vec<AristaId>>,
     entrantes: SecondaryMap<NodoId, Vec<AristaId>>,
+    conteos_arista: HashMap<(NodoId, Sorte, NodoId), usize>,
     padre: SecondaryMap<NodoId, NodoId>,
     hijos: SecondaryMap<NodoId, Vec<NodoId>>,
     indice: HashMap<BundlePath, NodoId>,
     indice_case: HashMap<String, NodoId>,
     atributos: SecondaryMap<NodoId, BTreeMap<String, String>>,
+    /// Valores de predicados `multivalor` (los funcionales van en `atributos`).
+    multivalores: SecondaryMap<NodoId, BTreeMap<String, BTreeSet<String>>>,
     anexos: SecondaryMap<NodoId, Anexo>,
+    parent_frontmatter_explicito: HashSet<NodoId>,
 }
 
 /// Motivo de rechazo de una operación sobre `Estructura`.
@@ -76,6 +83,8 @@ pub enum ErrorEstructura {
     AristaInexistente,
     /// Se intentó asignar un nodo como padre de sí mismo.
     PadreDeSiMismo,
+    /// Un hijo aparece más de una vez en una asignación de padres por lote.
+    HijoDuplicadoEnLote,
     /// Asignar ese padre crearía un ciclo en $\iota$.
     CicloEnIota,
     /// El predicado no está declarado en el manifiesto.
@@ -118,6 +127,12 @@ impl std::fmt::Display for ErrorEstructura {
             ErrorEstructura::PadreDeSiMismo => {
                 write!(f, "un nodo no puede ser padre de sí mismo")
             }
+            ErrorEstructura::HijoDuplicadoEnLote => {
+                write!(
+                    f,
+                    "un hijo aparece más de una vez en el lote de relaciones Parent"
+                )
+            }
             ErrorEstructura::CicloEnIota => {
                 write!(f, "esa asignación crearía un ciclo en ι")
             }
@@ -150,19 +165,55 @@ impl Estructura {
     /// validarlo.
     pub fn nueva(manifiesto: Manifiesto) -> Result<Self, ErrorEstructura> {
         manifiesto.validar().map_err(ErrorEstructura::Manifiesto)?;
+        let sortes_nodo_index = Arc::new(manifiesto.sortes_nodo.iter().cloned().collect());
+        let claves_arista_index = Arc::new(
+            manifiesto
+                .aristas
+                .iter()
+                .map(|arista| arista.clave.clone())
+                .collect(),
+        );
         Ok(Self {
             manifiesto,
+            sortes_nodo_index,
+            claves_arista_index,
             nodos: SlotMap::with_key(),
             aristas: SlotMap::with_key(),
             salientes: SecondaryMap::new(),
             entrantes: SecondaryMap::new(),
+            conteos_arista: HashMap::new(),
             padre: SecondaryMap::new(),
             hijos: SecondaryMap::new(),
             indice: HashMap::new(),
             indice_case: HashMap::new(),
             atributos: SecondaryMap::new(),
+            multivalores: SecondaryMap::new(),
             anexos: SecondaryMap::new(),
+            parent_frontmatter_explicito: HashSet::new(),
         })
+    }
+
+    /// Clona todos los datos de la estructura para construir un candidato
+    /// aislado; no expone clonación general en la API pública.
+    pub(crate) fn clonar_para_candidato(&self) -> Self {
+        Self {
+            manifiesto: self.manifiesto.clone(),
+            sortes_nodo_index: Arc::clone(&self.sortes_nodo_index),
+            claves_arista_index: Arc::clone(&self.claves_arista_index),
+            nodos: self.nodos.clone(),
+            aristas: self.aristas.clone(),
+            salientes: self.salientes.clone(),
+            entrantes: self.entrantes.clone(),
+            conteos_arista: self.conteos_arista.clone(),
+            padre: self.padre.clone(),
+            hijos: self.hijos.clone(),
+            indice: self.indice.clone(),
+            indice_case: self.indice_case.clone(),
+            atributos: self.atributos.clone(),
+            multivalores: self.multivalores.clone(),
+            anexos: self.anexos.clone(),
+            parent_frontmatter_explicito: self.parent_frontmatter_explicito.clone(),
+        }
     }
 
     /// El manifiesto de instanciación.
@@ -188,7 +239,7 @@ impl Estructura {
         tipo: Sorte,
         etiqueta: Etiqueta,
     ) -> Result<NodoId, ErrorEstructura> {
-        if !self.manifiesto.es_sorte_nodo(&tipo) {
+        if !self.sortes_nodo_index.contains(&tipo) {
             return Err(ErrorEstructura::SorteNodoDesconocido(
                 tipo.como_str().to_string(),
             ));
@@ -235,7 +286,7 @@ impl Estructura {
         if !self.nodos.contains_key(origen) || !self.nodos.contains_key(destino) {
             return Err(ErrorEstructura::NodoInexistente);
         }
-        if !self.manifiesto.es_sorte_arista(tipo.como_str()) {
+        if !self.claves_arista_index.contains(tipo.como_str()) {
             return Err(ErrorEstructura::SorteAristaDesconocido(
                 tipo.como_str().to_string(),
             ));
@@ -245,22 +296,18 @@ impl Estructura {
                 etiqueta.como_str().to_string(),
             ));
         }
-        let ordinal = self.salientes[origen]
-            .iter()
-            .filter(|id| {
-                let a = &self.aristas[**id];
-                a.tipo == tipo && a.destino == destino
-            })
-            .count() as u32;
+        let grupo = (origen, tipo.clone(), destino);
+        let ordinal = self.conteos_arista.get(&grupo).copied().unwrap_or(0);
         let id = self.aristas.insert(Arista {
             origen,
             destino,
             tipo,
             etiqueta,
-            ordinal,
+            ordinal: ordinal as u32,
         });
         self.salientes[origen].push(id);
         self.entrantes[destino].push(id);
+        self.conteos_arista.insert(grupo, ordinal + 1);
         Ok(id)
     }
 
@@ -290,6 +337,126 @@ impl Estructura {
         Ok(())
     }
 
+    /// Asigna relaciones Parent distintas por hijo y conserva el orden del
+    /// lote en `hijos`. La operación es atómica: si alguna referencia es
+    /// inválida, un hijo se repite o el resultado contiene ciclos, no muta la
+    /// estructura. Los índices de error apuntan a la asignación que falla.
+    pub fn asignar_padres_en_lote(
+        &mut self,
+        asignaciones: &[(NodoId, NodoId)],
+    ) -> Result<(), Vec<(usize, ErrorEstructura)>> {
+        self.asignar_padres_en_lote_observando(asignaciones, || {})
+    }
+
+    fn asignar_padres_en_lote_observando(
+        &mut self,
+        asignaciones: &[(NodoId, NodoId)],
+        mut observar_operacion: impl FnMut(),
+    ) -> Result<(), Vec<(usize, ErrorEstructura)>> {
+        let mut errores = vec![None; asignaciones.len()];
+        let mut propuestas = HashMap::<NodoId, (usize, NodoId)>::new();
+        let mut hijos_vistos = HashSet::new();
+        for (indice, &(hijo, padre)) in asignaciones.iter().enumerate() {
+            observar_operacion();
+            if !hijos_vistos.insert(hijo) {
+                errores[indice] = Some(ErrorEstructura::HijoDuplicadoEnLote);
+                continue;
+            }
+            if !self.nodos.contains_key(hijo) || !self.nodos.contains_key(padre) {
+                errores[indice] = Some(ErrorEstructura::NodoInexistente);
+                continue;
+            }
+            if hijo == padre {
+                errores[indice] = Some(ErrorEstructura::PadreDeSiMismo);
+                continue;
+            }
+            propuestas.insert(hijo, (indice, padre));
+        }
+
+        // Cada nodo tiene como máximo un padre. Marcar nodos en curso o
+        // terminados procesa el bosque candidato una sola vez, sin recursión.
+        let mut estado = HashMap::<NodoId, u8>::with_capacity(self.nodos.len());
+        let mut posiciones_en_camino = HashMap::<NodoId, usize>::new();
+        let mut ciclos = vec![false; asignaciones.len()];
+        for (inicio, _) in self.nodos.iter() {
+            observar_operacion();
+            if estado.get(&inicio) == Some(&2) {
+                continue;
+            }
+            let mut camino = Vec::new();
+            let mut actual = Some(inicio);
+            while let Some(nodo) = actual {
+                observar_operacion();
+                match estado.get(&nodo).copied() {
+                    Some(1) => {
+                        let indice_inicio = posiciones_en_camino
+                            .get(&nodo)
+                            .copied()
+                            .expect("un nodo en curso pertenece al camino actual");
+                        let cierre = camino[indice_inicio..]
+                            .iter()
+                            .filter_map(|visitado| propuestas.get(visitado).map(|p| p.0))
+                            .max();
+                        if let Some(indice) = cierre {
+                            ciclos[indice] = true;
+                        }
+                        break;
+                    }
+                    Some(2) => break,
+                    _ => {
+                        estado.insert(nodo, 1);
+                        posiciones_en_camino.insert(nodo, camino.len());
+                        camino.push(nodo);
+                        actual = propuestas
+                            .get(&nodo)
+                            .map(|(_, padre)| *padre)
+                            .or_else(|| self.padre.get(nodo).copied());
+                    }
+                }
+            }
+            for nodo in camino {
+                posiciones_en_camino.remove(&nodo);
+                estado.insert(nodo, 2);
+            }
+        }
+        for (indice, ciclo) in ciclos.into_iter().enumerate() {
+            if ciclo {
+                errores[indice].get_or_insert(ErrorEstructura::CicloEnIota);
+            }
+        }
+        let errores: Vec<_> = errores
+            .into_iter()
+            .enumerate()
+            .filter_map(|(indice, error)| error.map(|error| (indice, error)))
+            .collect();
+        if !errores.is_empty() {
+            return Err(errores);
+        }
+
+        let mut padres_afectados = HashSet::new();
+        for &(hijo, padre) in asignaciones {
+            observar_operacion();
+            if let Some(anterior) = self.padre.get(hijo).copied() {
+                padres_afectados.insert(anterior);
+            }
+            padres_afectados.insert(padre);
+            self.padre.insert(hijo, padre);
+        }
+        for padre in padres_afectados {
+            let mut hijos = self.hijos.get(padre).cloned().unwrap_or_default();
+            hijos.retain(|hijo| {
+                observar_operacion();
+                !propuestas.contains_key(hijo)
+            });
+            self.hijos.insert(padre, hijos);
+        }
+        for &(hijo, padre) in asignaciones {
+            observar_operacion();
+            self.hijos[padre].push(hijo);
+        }
+        Ok(())
+    }
+
     /// Quita el padre de `hijo`, si lo tenía.
     pub fn quitar_padre(&mut self, hijo: NodoId) -> Result<(), ErrorEstructura> {
         if !self.nodos.contains_key(hijo) {
@@ -298,6 +465,54 @@ impl Estructura {
         if let Some(anterior) = self.padre.remove(hijo) {
             if let Some(vec) = self.hijos.get_mut(anterior) {
                 vec.retain(|&h| h != hijo);
+            }
+        }
+        Ok(())
+    }
+
+    /// Quita las relaciones Parent de varios hijos en una sola pasada por
+    /// cada lista de hijos afectada. La validación completa precede la mutación.
+    pub(crate) fn quitar_padres_en_lote(
+        &mut self,
+        hijos: &[NodoId],
+    ) -> Result<(), ErrorEstructura> {
+        self.quitar_padres_en_lote_observando(hijos, || {})
+    }
+
+    fn quitar_padres_en_lote_observando(
+        &mut self,
+        hijos: &[NodoId],
+        mut observar_operacion: impl FnMut(),
+    ) -> Result<(), ErrorEstructura> {
+        let mut vistos = HashSet::with_capacity(hijos.len());
+        let mut unicos = Vec::with_capacity(hijos.len());
+        for &hijo in hijos {
+            observar_operacion();
+            if !self.nodos.contains_key(hijo) {
+                return Err(ErrorEstructura::NodoInexistente);
+            }
+            if vistos.insert(hijo) {
+                unicos.push(hijo);
+            }
+        }
+
+        let mut padres_afectados = HashSet::new();
+        for &hijo in &unicos {
+            observar_operacion();
+            if let Some(&padre) = self.padre.get(hijo) {
+                padres_afectados.insert(padre);
+            }
+        }
+        for &hijo in &unicos {
+            observar_operacion();
+            self.padre.remove(hijo);
+        }
+        for padre in padres_afectados {
+            if let Some(lista) = self.hijos.get_mut(padre) {
+                lista.retain(|hijo| {
+                    observar_operacion();
+                    !vistos.contains(hijo)
+                });
             }
         }
         Ok(())
@@ -318,17 +533,71 @@ impl Estructura {
             .manifiesto
             .predicado(predicado)
             .ok_or_else(|| ErrorEstructura::PredicadoDesconocido(predicado.to_string()))?;
-        if !decl.dominio.contains(constante) {
+        if !decl.admite(constante) {
             return Err(ErrorEstructura::ConstanteFueraDeDominio(
                 predicado.to_string(),
                 constante.to_string(),
             ));
+        }
+        if decl.multivalor {
+            if !self.multivalores.contains_key(nodo) {
+                self.multivalores.insert(nodo, BTreeMap::new());
+            }
+            self.multivalores[nodo]
+                .entry(predicado.to_string())
+                .or_default()
+                .insert(constante.to_string());
+            return Ok(());
         }
         if !self.atributos.contains_key(nodo) {
             self.atributos.insert(nodo, BTreeMap::new());
         }
         self.atributos[nodo].insert(predicado.to_string(), constante.to_string());
         Ok(())
+    }
+
+    /// Quita un valor de un predicado multivalor (operación transaccional).
+    pub(crate) fn quitar_valor(&mut self, nodo: NodoId, predicado: &str, valor: &str) {
+        let vacio = self.multivalores.get_mut(nodo).is_some_and(|mapa| {
+            if let Some(valores) = mapa.get_mut(predicado) {
+                valores.remove(valor);
+                if valores.is_empty() {
+                    mapa.remove(predicado);
+                }
+            }
+            mapa.is_empty()
+        });
+        if vacio {
+            self.multivalores.remove(nodo);
+        }
+    }
+
+    /// Valores de predicados multivalor de un nodo (vacío si no tiene).
+    pub fn valores_multivalor(&self, nodo: NodoId) -> &BTreeMap<String, BTreeSet<String>> {
+        static VACIO: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        self.multivalores.get(nodo).unwrap_or(&VACIO)
+    }
+
+    /// `true` si el nodo tiene `valor` para `predicado` (funcional o multivalor).
+    pub fn tiene_valor(&self, nodo: NodoId, predicado: &str, valor: &str) -> bool {
+        self.atributos(nodo)
+            .get(predicado)
+            .is_some_and(|v| v == valor)
+            || self
+                .valores_multivalor(nodo)
+                .get(predicado)
+                .is_some_and(|valores| valores.contains(valor))
+    }
+
+    /// Quita un atributo ya validado por una operación transaccional.
+    pub(crate) fn quitar_atributo(&mut self, nodo: NodoId, predicado: &str) {
+        let vacio = self.atributos.get_mut(nodo).is_some_and(|atributos| {
+            atributos.remove(predicado);
+            atributos.is_empty()
+        });
+        if vacio {
+            self.atributos.remove(nodo);
+        }
     }
 
     /// Los atributos asignados a un nodo (mapa vacío si no tiene o el id
@@ -350,6 +619,25 @@ impl Estructura {
     /// El `Anexo` de un nodo, si tiene.
     pub fn anexo(&self, nodo: NodoId) -> Option<&Anexo> {
         self.anexos.get(nodo)
+    }
+
+    /// Indica si el documento declaró explícitamente la clave administrada
+    /// de `Parent` del manifiesto.
+    pub fn parent_frontmatter_explicito(&self, nodo: NodoId) -> bool {
+        self.parent_frontmatter_explicito.contains(&nodo)
+    }
+
+    /// Registra que el documento declaró explícitamente su clave administrada
+    /// de `Parent`, incluso cuando el valor declaraba una raíz vacía.
+    pub fn marcar_parent_frontmatter_explicito(
+        &mut self,
+        nodo: NodoId,
+    ) -> Result<(), ErrorEstructura> {
+        if !self.nodos.contains_key(nodo) {
+            return Err(ErrorEstructura::NodoInexistente);
+        }
+        self.parent_frontmatter_explicito.insert(nodo);
+        Ok(())
     }
 
     /// Renombra un nodo: reescribe su path y los índices. El `NodoId`, sus
@@ -401,6 +689,14 @@ impl Estructura {
 
     fn quitar_arista_interna(&mut self, id: AristaId) -> Option<Arista> {
         let arista = self.aristas.remove(id)?;
+        let grupo = (arista.origen, arista.tipo.clone(), arista.destino);
+        match self.conteos_arista.get_mut(&grupo) {
+            Some(conteo) if *conteo > 1 => *conteo -= 1,
+            Some(_) => {
+                self.conteos_arista.remove(&grupo);
+            }
+            None => {}
+        }
         if let Some(vec) = self.salientes.get_mut(arista.origen) {
             vec.retain(|&a| a != id);
         }
@@ -431,44 +727,148 @@ impl Estructura {
         }
     }
 
+    /// Quita varias aristas por sus handles del snapshot y compacta una vez
+    /// cada grupo afectado, conservando el orden de sus supervivientes.
+    pub(crate) fn quitar_aristas_en_lote(
+        &mut self,
+        handles: &[AristaId],
+    ) -> Result<(), ErrorEstructura> {
+        self.quitar_aristas_en_lote_observando(handles, || {})
+    }
+
+    fn quitar_aristas_en_lote_observando(
+        &mut self,
+        handles: &[AristaId],
+        mut observar_operacion: impl FnMut(),
+    ) -> Result<(), ErrorEstructura> {
+        let mut seleccionadas = HashSet::with_capacity(handles.len());
+        let mut ordinales_por_grupo = HashMap::<(NodoId, Sorte, NodoId), usize>::new();
+        let mut origenes = HashSet::new();
+        let mut destinos = HashSet::new();
+        for &id in handles {
+            observar_operacion();
+            let Some(arista) = self.aristas.get(id) else {
+                return Err(ErrorEstructura::AristaInexistente);
+            };
+            if !seleccionadas.insert(id) {
+                continue;
+            }
+            observar_operacion();
+            origenes.insert(arista.origen);
+            destinos.insert(arista.destino);
+            ordinales_por_grupo
+                .entry((arista.origen, arista.tipo.clone(), arista.destino))
+                .or_insert(0);
+        }
+
+        for &id in &seleccionadas {
+            observar_operacion();
+            self.aristas
+                .remove(id)
+                .expect("cada handle fue validado antes de mutar");
+        }
+        for &origen in &origenes {
+            if let Some(salientes) = self.salientes.get_mut(origen) {
+                salientes.retain(|id| {
+                    observar_operacion();
+                    !seleccionadas.contains(id)
+                });
+            }
+        }
+        for &destino in &destinos {
+            if let Some(entrantes) = self.entrantes.get_mut(destino) {
+                entrantes.retain(|id| {
+                    observar_operacion();
+                    !seleccionadas.contains(id)
+                });
+            }
+        }
+
+        for &origen in &origenes {
+            if let Some(salientes) = self.salientes.get(origen) {
+                for &id in salientes {
+                    observar_operacion();
+                    let arista = &self.aristas[id];
+                    let clave = (arista.origen, arista.tipo.clone(), arista.destino);
+                    if let Some(ordinal) = ordinales_por_grupo.get_mut(&clave) {
+                        self.aristas[id].ordinal = *ordinal as u32;
+                        *ordinal += 1;
+                    }
+                }
+            }
+        }
+
+        for (grupo, cantidad) in ordinales_por_grupo {
+            if cantidad == 0 {
+                self.conteos_arista.remove(&grupo);
+            } else {
+                self.conteos_arista.insert(grupo, cantidad);
+            }
+        }
+        Ok(())
+    }
+
     /// Quita un nodo en cascada (Def. 3): quita sus aristas incidentes, su
     /// entrada de padre, deja a sus hijos como raíces, borra sus
     /// atributos y su anexo. Un `NodoId` stale nunca vuelve a resolver
     /// (garantía de generación de `slotmap`), aunque el slot se reocupe.
     pub fn quitar_nodo(&mut self, id: NodoId) -> Result<Nodo, ErrorEstructura> {
-        let nodo = self
-            .nodos
-            .remove(id)
-            .ok_or(ErrorEstructura::NodoInexistente)?;
+        self.quitar_nodo_observando(id, || {})
+    }
 
-        let mut incidentes: Vec<AristaId> = Vec::new();
-        if let Some(vec) = self.salientes.get(id) {
-            incidentes.extend(vec.iter().copied());
+    fn quitar_nodo_observando(
+        &mut self,
+        id: NodoId,
+        mut observar_operacion: impl FnMut(),
+    ) -> Result<Nodo, ErrorEstructura> {
+        if !self.nodos.contains_key(id) {
+            return Err(ErrorEstructura::NodoInexistente);
         }
-        if let Some(vec) = self.entrantes.get(id) {
-            for a in vec.iter().copied() {
-                if !incidentes.contains(&a) {
-                    incidentes.push(a);
+
+        let mut incidentes = Vec::new();
+        let mut vistos = HashSet::new();
+        if let Some(vec) = self.salientes.get(id) {
+            for &arista in vec {
+                observar_operacion();
+                if self.aristas.contains_key(arista) && vistos.insert(arista) {
+                    incidentes.push(arista);
                 }
             }
         }
-        for aid in incidentes {
-            self.quitar_arista_interna(aid);
+        if let Some(vec) = self.entrantes.get(id) {
+            for &arista in vec {
+                observar_operacion();
+                if self.aristas.contains_key(arista) && vistos.insert(arista) {
+                    incidentes.push(arista);
+                }
+            }
         }
+        self.quitar_aristas_en_lote_observando(&incidentes, &mut observar_operacion)?;
+
+        let nodo = self
+            .nodos
+            .remove(id)
+            .expect("el nodo se validó antes de quitar las aristas incidentes");
 
         if let Some(padre_id) = self.padre.remove(id) {
             if let Some(vec) = self.hijos.get_mut(padre_id) {
-                vec.retain(|&h| h != id);
+                vec.retain(|&h| {
+                    observar_operacion();
+                    h != id
+                });
             }
         }
         if let Some(hijos_de) = self.hijos.remove(id) {
             for h in hijos_de {
+                observar_operacion();
                 self.padre.remove(h);
             }
         }
 
         self.atributos.remove(id);
+        self.multivalores.remove(id);
         self.anexos.remove(id);
+        self.parent_frontmatter_explicito.remove(&id);
         self.salientes.remove(id);
         self.entrantes.remove(id);
         self.indice.remove(&nodo.path);
@@ -485,6 +885,58 @@ impl Estructura {
     /// La arista, si `id` está viva.
     pub fn arista(&self, id: AristaId) -> Option<&Arista> {
         self.aristas.get(id)
+    }
+
+    pub(crate) fn reemplazar_etiqueta_arista(
+        &mut self,
+        id: AristaId,
+        etiqueta: Etiqueta,
+    ) -> Result<(), ErrorEstructura> {
+        if etiqueta.como_str().contains(['\n', '\r']) {
+            return Err(ErrorEstructura::EtiquetaInvalida(
+                etiqueta.como_str().to_string(),
+            ));
+        }
+        self.aristas
+            .get_mut(id)
+            .ok_or(ErrorEstructura::AristaInexistente)?
+            .etiqueta = etiqueta;
+        Ok(())
+    }
+
+    /// Reemplaza el tipado total sin cambiar identidad, incidencia ni anexos.
+    pub(crate) fn reemplazar_tipo_nodo(
+        &mut self,
+        id: NodoId,
+        tipo: Sorte,
+    ) -> Result<(), ErrorEstructura> {
+        if !self.sortes_nodo_index.contains(&tipo) {
+            return Err(ErrorEstructura::SorteNodoDesconocido(
+                tipo.como_str().to_string(),
+            ));
+        }
+        self.nodos
+            .get_mut(id)
+            .ok_or(ErrorEstructura::NodoInexistente)?
+            .tipo = tipo;
+        Ok(())
+    }
+
+    pub(crate) fn reemplazar_etiqueta_nodo(
+        &mut self,
+        id: NodoId,
+        etiqueta: Etiqueta,
+    ) -> Result<(), ErrorEstructura> {
+        if etiqueta.como_str().contains(['\n', '\r']) {
+            return Err(ErrorEstructura::EtiquetaInvalida(
+                etiqueta.como_str().to_string(),
+            ));
+        }
+        self.nodos
+            .get_mut(id)
+            .ok_or(ErrorEstructura::NodoInexistente)?
+            .etiqueta = etiqueta;
+        Ok(())
     }
 
     /// El id del nodo con ese path exacto, si existe.
@@ -578,6 +1030,18 @@ impl Estructura {
                 });
             }
         }
+        for (nodo, mapa) in self.multivalores.iter() {
+            let sujeto = self.nodos[nodo].path.clone();
+            for (predicado, valores) in mapa {
+                for constante in valores {
+                    atomos.push(Atomo::Ext {
+                        predicado: predicado.clone(),
+                        sujeto: sujeto.clone(),
+                        constante: constante.clone(),
+                    });
+                }
+            }
+        }
         atomos.sort();
         atomos
     }
@@ -634,21 +1098,31 @@ impl Estructura {
 
         // 3. Toda arista aparece exactamente una vez en salientes[origen] y
         //    en entrantes[destino], y nada más aparece ahí.
+        let mut apariciones_salientes = HashMap::new();
+        for (origen, ids) in self.salientes.iter() {
+            for &id in ids {
+                *apariciones_salientes.entry((origen, id)).or_insert(0usize) += 1;
+            }
+        }
+        let mut apariciones_entrantes = HashMap::new();
+        for (destino, ids) in self.entrantes.iter() {
+            for &id in ids {
+                *apariciones_entrantes.entry((destino, id)).or_insert(0usize) += 1;
+            }
+        }
         for (id, arista) in self.aristas.iter() {
-            let en_salientes = self
-                .salientes
-                .get(arista.origen)
-                .map(|v| v.iter().filter(|&&a| a == id).count())
+            let en_salientes = apariciones_salientes
+                .get(&(arista.origen, id))
+                .copied()
                 .unwrap_or(0);
             if en_salientes != 1 {
                 errores.push(format!(
                     "la arista {id:?} aparece {en_salientes} veces en salientes de su origen"
                 ));
             }
-            let en_entrantes = self
-                .entrantes
-                .get(arista.destino)
-                .map(|v| v.iter().filter(|&&a| a == id).count())
+            let en_entrantes = apariciones_entrantes
+                .get(&(arista.destino, id))
+                .copied()
                 .unwrap_or(0);
             if en_entrantes != 1 {
                 errores.push(format!(
@@ -684,15 +1158,20 @@ impl Estructura {
         }
 
         // 4. `padre`/`hijos` mutuamente coherentes.
+        let mut apariciones_hijos = HashMap::new();
+        for (padre_id, hijos) in self.hijos.iter() {
+            for &hijo in hijos {
+                *apariciones_hijos.entry((padre_id, hijo)).or_insert(0usize) += 1;
+            }
+        }
         for (hijo, &padre_id) in self.padre.iter() {
             if !self.nodos.contains_key(hijo) || !self.nodos.contains_key(padre_id) {
                 errores.push(format!("padre[{hijo:?}] referencia un nodo inexistente"));
                 continue;
             }
-            let veces = self
-                .hijos
-                .get(padre_id)
-                .map(|v| v.iter().filter(|&&h| h == hijo).count())
+            let veces = apariciones_hijos
+                .get(&(padre_id, hijo))
+                .copied()
                 .unwrap_or(0);
             if veces != 1 {
                 errores.push(format!(
@@ -711,36 +1190,57 @@ impl Estructura {
             }
         }
 
-        // 5. $\iota$ es un bosque: sin ciclos.
+        // 5. $\iota$ es un bosque: sin ciclos. Resolver cada cadena una vez
+        //    y propagar el nodo repetido conserva los diagnósticos por nodo.
+        let mut estado = HashMap::<NodoId, u8>::with_capacity(self.nodos.len());
+        let mut ciclo_por_nodo = HashMap::<NodoId, NodoId>::new();
         for (id, _) in self.nodos.iter() {
-            let mut visto = HashSet::new();
+            if estado.get(&id) == Some(&2) {
+                continue;
+            }
+            let mut camino = Vec::new();
             let mut actual = Some(id);
             while let Some(n) = actual {
-                if !visto.insert(n) {
-                    errores.push(format!("iota contiene un ciclo que pasa por {n:?}"));
-                    break;
+                match estado.get(&n).copied() {
+                    Some(1) => {
+                        let inicio = camino
+                            .iter()
+                            .position(|&visitado| visitado == n)
+                            .expect("un nodo en estado visitando pertenece al camino actual");
+                        let entrada = camino[inicio];
+                        for (indice, visitado) in camino.iter().copied().enumerate() {
+                            ciclo_por_nodo
+                                .insert(visitado, if indice < inicio { entrada } else { visitado });
+                        }
+                        break;
+                    }
+                    Some(2) => {
+                        if let Some(&entrada) = ciclo_por_nodo.get(&n) {
+                            for visitado in camino.iter().copied() {
+                                ciclo_por_nodo.insert(visitado, entrada);
+                            }
+                        }
+                        break;
+                    }
+                    _ => {
+                        estado.insert(n, 1);
+                        camino.push(n);
+                        actual = self.padre.get(n).copied();
+                    }
                 }
-                actual = self.padre.get(n).copied();
+            }
+            for visitado in camino {
+                estado.insert(visitado, 2);
+            }
+        }
+        for (id, _) in self.nodos.iter() {
+            if let Some(ciclo) = ciclo_por_nodo.get(&id) {
+                errores.push(format!("iota contiene un ciclo que pasa por {ciclo:?}"));
             }
         }
 
         // 6. Ordinales por `(origen, tipo, destino)` son `0..n` sin huecos.
-        let mut grupos: HashMap<(NodoId, Sorte, NodoId), Vec<u32>> = HashMap::new();
-        for (_, a) in self.aristas.iter() {
-            grupos
-                .entry((a.origen, a.tipo.clone(), a.destino))
-                .or_default()
-                .push(a.ordinal);
-        }
-        for ((origen, tipo, destino), mut ordinales) in grupos {
-            ordinales.sort_unstable();
-            let esperado: Vec<u32> = (0..ordinales.len() as u32).collect();
-            if ordinales != esperado {
-                errores.push(format!(
-                    "el grupo ({origen:?}, {tipo}, {destino:?}) tiene ordinales con huecos o duplicados: {ordinales:?}"
-                ));
-            }
-        }
+        errores.extend(self.verificar_ordinales_observando(|| {}));
 
         // 7. Atributos solo para nodos vivos, con predicado declarado y
         //    constante en dominio.
@@ -753,10 +1253,41 @@ impl Estructura {
             }
             for (predicado, constante) in mapa {
                 match self.manifiesto.predicado(predicado) {
-                    Some(decl) if decl.dominio.contains(constante) => {}
+                    Some(decl) if decl.admite(constante) => {}
                     Some(_) => errores.push(format!(
                         "el atributo {predicado:?} tiene la constante {constante:?} fuera de dominio"
                     )),
+                    None => errores.push(format!(
+                        "el atributo {predicado:?} no está declarado en el manifiesto"
+                    )),
+                }
+            }
+        }
+
+        // 7b. Valores multivalor: nodo vivo, predicado declarado multivalor,
+        //     conjunto no vacío y cada constante en dominio.
+        for (nodo, mapa) in self.multivalores.iter() {
+            if !self.nodos.contains_key(nodo) {
+                errores.push(format!(
+                    "multivalores[{nodo:?}] referencia un nodo inexistente"
+                ));
+                continue;
+            }
+            for (predicado, valores) in mapa {
+                match self.manifiesto.predicado(predicado) {
+                    Some(decl) if decl.multivalor => {
+                        if valores.is_empty() {
+                            errores.push(format!("el multivalor {predicado:?} está vacío"));
+                        }
+                        for constante in valores {
+                            if !decl.admite(constante) {
+                                errores.push(format!(
+                                    "el multivalor {predicado:?} tiene la constante {constante:?} fuera de dominio"
+                                ));
+                            }
+                        }
+                    }
+                    Some(_) => errores.push(format!("el predicado {predicado:?} no es multivalor")),
                     None => errores.push(format!(
                         "el atributo {predicado:?} no está declarado en el manifiesto"
                     )),
@@ -777,12 +1308,82 @@ impl Estructura {
             Err(errores)
         }
     }
+
+    fn verificar_ordinales_observando(&self, mut observar_operacion: impl FnMut()) -> Vec<String> {
+        let mut errores = Vec::new();
+        let mut grupos: HashMap<(NodoId, Sorte, NodoId), Vec<u32>> = HashMap::new();
+        for (_, arista) in self.aristas.iter() {
+            observar_operacion();
+            grupos
+                .entry((arista.origen, arista.tipo.clone(), arista.destino))
+                .or_default()
+                .push(arista.ordinal);
+        }
+        let mut conteos_reconstruidos = HashMap::with_capacity(grupos.len());
+        for (grupo, ordinales) in &grupos {
+            observar_operacion();
+            conteos_reconstruidos.insert(grupo.clone(), ordinales.len());
+        }
+        if conteos_reconstruidos != self.conteos_arista {
+            errores.push(format!(
+                "conteos_arista no coincide con los grupos de aristas: reconstruido {conteos_reconstruidos:?}, índice {:?}",
+                self.conteos_arista
+            ));
+        }
+        for ((origen, tipo, destino), mut ordinales) in grupos {
+            observar_operacion();
+            let mut presentes = vec![false; ordinales.len()];
+            let mut invalido = false;
+            for &ordinal in &ordinales {
+                observar_operacion();
+                match presentes.get_mut(ordinal as usize) {
+                    Some(presente) if !*presente => *presente = true,
+                    _ => invalido = true,
+                }
+            }
+            if invalido {
+                ordenar_ordinales_linealmente(&mut ordinales, &mut observar_operacion);
+                errores.push(format!(
+                    "el grupo ({origen:?}, {tipo}, {destino:?}) tiene ordinales con huecos o duplicados: {ordinales:?}"
+                ));
+            }
+        }
+        errores
+    }
+}
+
+fn ordenar_ordinales_linealmente(ordinales: &mut [u32], observar_operacion: &mut impl FnMut()) {
+    let mut salida = vec![0; ordinales.len()];
+    for desplazamiento in [0, 8, 16, 24] {
+        let mut offsets = [0usize; 256];
+        for &ordinal in ordinales.iter() {
+            observar_operacion();
+            offsets[((ordinal >> desplazamiento) & 0xff) as usize] += 1;
+        }
+        let mut offset = 0;
+        for cantidad in &mut offsets {
+            let actual = *cantidad;
+            *cantidad = offset;
+            offset += actual;
+        }
+        for &ordinal in ordinales.iter() {
+            observar_operacion();
+            let bucket = ((ordinal >> desplazamiento) & 0xff) as usize;
+            salida[offsets[bucket]] = ordinal;
+            offsets[bucket] += 1;
+        }
+        for (ordinal, ordenado) in ordinales.iter_mut().zip(&salida) {
+            observar_operacion();
+            *ordinal = *ordenado;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{BundlePath, Etiqueta, Sorte};
+    use slotmap::Key;
 
     fn e() -> Estructura {
         Estructura::nueva(crate::manifiesto::tests::base()).unwrap()
@@ -916,6 +1517,167 @@ mod tests {
         assert_eq!(u.hijos(a), &[b]);
         u.verificar_representacion().unwrap();
     }
+
+    #[test]
+    fn asignar_padres_en_lote_detecta_ciclos_en_orden_y_es_atomico() {
+        let mut u = e();
+        let a = u.insertar_nodo(p("n/a"), s("a"), l("A")).unwrap();
+        let b = u.insertar_nodo(p("n/b"), s("a"), l("B")).unwrap();
+        let c = u.insertar_nodo(p("n/c"), s("a"), l("C")).unwrap();
+        let d = u.insertar_nodo(p("n/d"), s("a"), l("D")).unwrap();
+        let antes = u.clonar_para_candidato();
+
+        assert_eq!(
+            u.asignar_padres_en_lote(&[(a, b), (b, a), (c, d), (d, c)]),
+            Err(vec![
+                (1, ErrorEstructura::CicloEnIota),
+                (3, ErrorEstructura::CicloEnIota),
+            ])
+        );
+        assert_eq!(u.atomos(), antes.atomos());
+        u.verificar_representacion().unwrap();
+
+        let ausente = NodoId::null();
+        assert_eq!(
+            u.asignar_padres_en_lote(&[(ausente, a), (a, a), (b, c), (b, d)]),
+            Err(vec![
+                (0, ErrorEstructura::NodoInexistente),
+                (1, ErrorEstructura::PadreDeSiMismo),
+                (3, ErrorEstructura::HijoDuplicadoEnLote),
+            ])
+        );
+        assert_eq!(u.atomos(), antes.atomos());
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn asignar_padres_en_lote_reporta_duplicados_aunque_la_primera_propuesta_falle() {
+        let mut u = e();
+        let a = u.insertar_nodo(p("n/a"), s("a"), l("A")).unwrap();
+        let b = u.insertar_nodo(p("n/b"), s("a"), l("B")).unwrap();
+        let antes = u.clonar_para_candidato();
+        let ausente = NodoId::null();
+
+        assert_eq!(
+            u.asignar_padres_en_lote(&[(ausente, a), (ausente, b), (a, a), (a, b), (a, ausente),]),
+            Err(vec![
+                (0, ErrorEstructura::NodoInexistente),
+                (1, ErrorEstructura::HijoDuplicadoEnLote),
+                (2, ErrorEstructura::PadreDeSiMismo),
+                (3, ErrorEstructura::HijoDuplicadoEnLote),
+                (4, ErrorEstructura::HijoDuplicadoEnLote),
+            ])
+        );
+        assert_eq!(u.atomos(), antes.atomos());
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn asignar_padres_en_lote_visita_cadena_de_cuatro_mil_nodos_linealmente() {
+        let mut u = e();
+        let ids: Vec<_> = (0..4_000)
+            .map(|indice| {
+                u.insertar_nodo(p(&format!("n/{indice:04}")), s("a"), l("nodo"))
+                    .unwrap()
+            })
+            .collect();
+        let sin_padres = u.clonar_para_candidato();
+        let asignaciones: Vec<_> = ids.windows(2).map(|par| (par[1], par[0])).collect();
+        let nodos_y_aristas = ids.len() + asignaciones.len();
+        let mut operaciones = 0;
+
+        u.asignar_padres_en_lote_observando(&asignaciones, || operaciones += 1)
+            .unwrap();
+
+        assert!(
+            operaciones <= 8 * nodos_y_aristas,
+            "se observaron {operaciones} operaciones para {nodos_y_aristas} nodos+aristas"
+        );
+        assert_eq!(u.padre(*ids.last().unwrap()), Some(ids[ids.len() - 2]));
+        u.verificar_representacion().unwrap();
+
+        let relaciones_ciclicas: Vec<_> = (0..ids.len())
+            .map(|indice| (ids[indice], ids[(indice + 1) % ids.len()]))
+            .collect();
+        let mut ciclo = sin_padres.clonar_para_candidato();
+        assert_eq!(
+            ciclo.asignar_padres_en_lote(&relaciones_ciclicas),
+            Err(vec![(ids.len() - 1, ErrorEstructura::CicloEnIota)])
+        );
+        assert_eq!(ciclo.atomos(), sin_padres.atomos());
+    }
+
+    #[test]
+    fn quitar_padres_en_lote_filtra_listas_una_vez_y_es_atomico() {
+        let mut u = e();
+        let padre = u.insertar_nodo(p("n/padre"), s("a"), l("padre")).unwrap();
+        let ids: Vec<_> = (0..4_000)
+            .map(|indice| {
+                u.insertar_nodo(p(&format!("n/{indice:04}")), s("a"), l("hijo"))
+                    .unwrap()
+            })
+            .collect();
+        let asignaciones: Vec<_> = ids.iter().map(|&hijo| (hijo, padre)).collect();
+        u.asignar_padres_en_lote(&asignaciones).unwrap();
+        let antes = u.atomos();
+        let removals: Vec<_> = ids.iter().step_by(2).copied().chain([ids[0]]).collect();
+
+        assert_eq!(
+            u.quitar_padres_en_lote(&[ids[0], NodoId::null()]),
+            Err(ErrorEstructura::NodoInexistente)
+        );
+        assert_eq!(u.atomos(), antes);
+
+        let mut operaciones = 0;
+        u.quitar_padres_en_lote_observando(&removals, || operaciones += 1)
+            .unwrap();
+
+        assert!(
+            operaciones <= removals.len() * 3 + ids.len(),
+            "se observaron {operaciones} operaciones para {} hijos y {} relaciones",
+            ids.len(),
+            removals.len()
+        );
+        assert_eq!(
+            u.hijos(padre),
+            &ids[1..].iter().step_by(2).copied().collect::<Vec<_>>()
+        );
+        for hijo in ids.iter().step_by(2) {
+            assert_eq!(u.padre(*hijo), None);
+        }
+        for hijo in ids.iter().skip(1).step_by(2) {
+            assert_eq!(u.padre(*hijo), Some(padre));
+        }
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn verificar_representacion_conserva_testigo_de_ciclos_por_nodo() {
+        let mut u = e();
+        let a = u.insertar_nodo(p("n/a"), s("a"), l("A")).unwrap();
+        let b = u.insertar_nodo(p("n/b"), s("a"), l("B")).unwrap();
+        let c = u.insertar_nodo(p("n/c"), s("a"), l("C")).unwrap();
+        let d = u.insertar_nodo(p("n/d"), s("a"), l("D")).unwrap();
+        for (hijo, padre) in [(a, b), (b, c), (c, a), (d, b)] {
+            u.padre.insert(hijo, padre);
+            u.hijos[padre].push(hijo);
+        }
+
+        let errores = u.verificar_representacion().unwrap_err();
+        let errores_ciclo: Vec<_> = errores
+            .into_iter()
+            .filter(|error| error.starts_with("iota contiene un ciclo"))
+            .collect();
+        assert_eq!(
+            errores_ciclo,
+            [
+                format!("iota contiene un ciclo que pasa por {a:?}"),
+                format!("iota contiene un ciclo que pasa por {b:?}"),
+                format!("iota contiene un ciclo que pasa por {c:?}"),
+                format!("iota contiene un ciclo que pasa por {b:?}"),
+            ]
+        );
+    }
     #[test]
     fn atributos_con_dominio_cerrado() {
         let mut u = e();
@@ -1018,6 +1780,100 @@ mod tests {
         );
         u.verificar_representacion().unwrap();
     }
+
+    #[test]
+    fn quitar_nodo_deduplica_incidentes_y_reutiliza_baja_batch() {
+        let mut u = e();
+        let objetivo = u
+            .insertar_nodo(p("n/objetivo"), s("a"), l("objetivo"))
+            .unwrap();
+        let mut incidentes = Vec::new();
+        for indice in 0..512 {
+            let destino = u
+                .insertar_nodo(p(&format!("n/salida-{indice:04}")), s("a"), l("salida"))
+                .unwrap();
+            incidentes.push(
+                u.insertar_arista(objetivo, destino, s("rel"), l("saliente"))
+                    .unwrap(),
+            );
+            let origen = u
+                .insertar_nodo(p(&format!("n/entrada-{indice:04}")), s("a"), l("entrada"))
+                .unwrap();
+            incidentes.push(
+                u.insertar_arista(origen, objetivo, s("rel"), l("entrante"))
+                    .unwrap(),
+            );
+        }
+        for _ in 0..32 {
+            incidentes.push(
+                u.insertar_arista(objetivo, objetivo, s("rel"), l("loop"))
+                    .unwrap(),
+            );
+        }
+        let nodos_antes = u.len_nodos();
+        let aristas_antes = u.len_aristas();
+        let mut operaciones = 0;
+
+        let nodo = u
+            .quitar_nodo_observando(objetivo, || operaciones += 1)
+            .unwrap();
+
+        assert_eq!(nodo.path, p("n/objetivo"));
+        assert_eq!(incidentes.len(), aristas_antes);
+        assert!(incidentes.iter().all(|id| u.arista(*id).is_none()));
+        assert!(
+            operaciones > 4 * aristas_antes,
+            "el contador debe incluir la baja batch, no solo recolectar incidentes: {operaciones}"
+        );
+        assert!(
+            operaciones <= 8 * (nodos_antes + aristas_antes),
+            "se observaron {operaciones} operaciones para {nodos_antes} nodos y {aristas_antes} aristas"
+        );
+        assert_eq!(u.len_aristas(), 0);
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn verificar_ordinales_visita_aristas_y_ordinales_linealmente() {
+        let mut u = e();
+        let origen = u.insertar_nodo(p("n/origen"), s("a"), l("O")).unwrap();
+        let destino = u.insertar_nodo(p("n/destino"), s("a"), l("D")).unwrap();
+        let cantidad = 4_096;
+        for _ in 0..cantidad {
+            u.insertar_arista(origen, destino, s("rel"), l("")).unwrap();
+        }
+
+        let mut operaciones = 0;
+        assert!(
+            u.verificar_ordinales_observando(|| operaciones += 1)
+                .is_empty()
+        );
+        assert!(
+            operaciones <= 3 * cantidad + 10,
+            "se observaron {operaciones} operaciones para {cantidad} aristas"
+        );
+    }
+
+    #[test]
+    fn verificar_ordinales_conserva_diagnostico_ordenado_de_grupo_invalido() {
+        let mut u = e();
+        let origen = u.insertar_nodo(p("n/origen"), s("a"), l("O")).unwrap();
+        let destino = u.insertar_nodo(p("n/destino"), s("a"), l("D")).unwrap();
+        let aristas: Vec<_> = (0..3)
+            .map(|_| u.insertar_arista(origen, destino, s("rel"), l("")).unwrap())
+            .collect();
+        u.aristas[aristas[1]].ordinal = 3;
+        u.aristas[aristas[2]].ordinal = 0;
+
+        let errores = u.verificar_representacion().unwrap_err();
+        assert!(
+            errores
+                .iter()
+                .any(|error| { error.contains("ordinales con huecos o duplicados: [0, 0, 3]") }),
+            "diagnóstico inesperado: {errores:?}"
+        );
+    }
+
     #[test]
     fn quitar_arista_reordena_ordinales() {
         let mut u = e();
@@ -1042,6 +1898,124 @@ mod tests {
         );
         u.verificar_representacion().unwrap();
     }
+
+    #[test]
+    fn conteos_de_ordinales_se_mantienen_en_bajas_unitarias_lote_y_nodo() {
+        let mut u = e();
+        let origen = u.insertar_nodo(p("n/origen"), s("a"), l("origen")).unwrap();
+        let destino = u
+            .insertar_nodo(p("n/destino"), s("a"), l("destino"))
+            .unwrap();
+        let grupo = (origen, s("rel"), destino);
+        let aristas: Vec<_> = (0..2048)
+            .map(|ordinal| {
+                let id = u.insertar_arista(origen, destino, s("rel"), l("")).unwrap();
+                assert_eq!(u.arista(id).unwrap().ordinal, ordinal);
+                assert_eq!(
+                    u.conteos_arista.get(&grupo),
+                    Some(&((ordinal + 1) as usize))
+                );
+                id
+            })
+            .collect();
+        assert_eq!(u.conteos_arista.get(&grupo), Some(&2048));
+
+        assert_eq!(
+            u.insertar_arista(NodoId::null(), destino, s("rel"), l(""))
+                .unwrap_err(),
+            ErrorEstructura::NodoInexistente
+        );
+        assert_eq!(
+            u.insertar_arista(origen, destino, s("desconocida"), l(""))
+                .unwrap_err(),
+            ErrorEstructura::SorteAristaDesconocido("desconocida".into())
+        );
+        assert_eq!(
+            u.insertar_arista(origen, destino, s("rel"), l("línea\ninválida"))
+                .unwrap_err(),
+            ErrorEstructura::EtiquetaInvalida("línea\ninválida".into())
+        );
+        assert_eq!(u.conteos_arista.get(&grupo), Some(&2048));
+
+        u.quitar_arista(aristas[1024]).unwrap();
+        assert_eq!(u.conteos_arista.get(&grupo), Some(&2047));
+        assert_eq!(u.arista(aristas[1025]).unwrap().ordinal, 1024);
+        let agregada = u
+            .insertar_arista(origen, destino, s("rel"), l("nueva"))
+            .unwrap();
+        assert_eq!(u.arista(agregada).unwrap().ordinal, 2047);
+
+        u.quitar_aristas_en_lote(&[aristas[0], aristas[17], agregada])
+            .unwrap();
+        assert_eq!(u.conteos_arista.get(&grupo), Some(&2045));
+        assert_eq!(u.arista(aristas[18]).unwrap().ordinal, 16);
+        let siguiente = u
+            .insertar_arista(origen, destino, s("rel"), l("siguiente"))
+            .unwrap();
+        assert_eq!(u.arista(siguiente).unwrap().ordinal, 2045);
+        u.verificar_representacion().unwrap();
+
+        u.quitar_nodo(destino).unwrap();
+        assert!(!u.conteos_arista.contains_key(&grupo));
+        let destino_nuevo = u
+            .insertar_nodo(p("n/destino"), s("a"), l("destino nuevo"))
+            .unwrap();
+        let reinsercion = u
+            .insertar_arista(origen, destino_nuevo, s("rel"), l("reinserción"))
+            .unwrap();
+        assert_eq!(u.arista(reinsercion).unwrap().ordinal, 0);
+        assert_eq!(
+            u.conteos_arista.get(&(origen, s("rel"), destino_nuevo)),
+            Some(&1)
+        );
+        u.verificar_representacion().unwrap();
+    }
+
+    #[test]
+    fn baja_multigrupo_filtra_adyacencias_y_renumera_linealmente() {
+        let mut u = e();
+        let origen = u.insertar_nodo(p("n/origen"), s("a"), l("origen")).unwrap();
+        let grupos = 512;
+        let mut bajas = Vec::with_capacity(grupos + 1);
+        for indice in 0..grupos {
+            let destino = u
+                .insertar_nodo(p(&format!("n/destino-{indice}")), s("a"), l("destino"))
+                .unwrap();
+            bajas.push(
+                u.insertar_arista(origen, destino, s("rel"), l("retirar"))
+                    .unwrap(),
+            );
+            u.insertar_arista(origen, destino, s("rel"), l("conservar"))
+                .unwrap();
+        }
+        bajas.push(bajas[0]);
+        let aristas_antes = u.len_aristas();
+        let mut operaciones = 0;
+
+        u.quitar_aristas_en_lote_observando(&bajas, || operaciones += 1)
+            .unwrap();
+
+        assert!(
+            operaciones <= 4 * (aristas_antes + bajas.len()),
+            "se observaron {operaciones} operaciones para {aristas_antes} aristas y {} retiros",
+            bajas.len()
+        );
+        assert_eq!(u.len_aristas(), grupos);
+        for (indice, destino) in (0..grupos).map(|indice| {
+            (
+                indice,
+                u.por_path(&p(&format!("n/destino-{indice}"))).unwrap(),
+            )
+        }) {
+            assert_eq!(u.salientes(origen).len(), grupos);
+            let arista = u.salientes(origen)[indice];
+            assert_eq!(u.arista(arista).unwrap().destino, destino);
+            assert_eq!(u.arista(arista).unwrap().ordinal, 0);
+            assert_eq!(u.conteos_arista.get(&(origen, s("rel"), destino)), Some(&1));
+        }
+        u.verificar_representacion().unwrap();
+    }
+
     #[test]
     fn atomos_de_estructura_enumera_todo_en_orden_total() {
         let mut u = e();

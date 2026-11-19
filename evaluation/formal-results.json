@@ -1,0 +1,21 @@
+{
+  "cases": 53,
+  "admit": 28,
+  "reject": 23,
+  "technical_error": 2,
+  "false_admit": 0,
+  "ast_variants": 16,
+  "schema": "felix-formal-corpus-v1",
+  "functional_conflict_cases": 3,
+  "functional_conflict_classes": [
+    "Type",
+    "HasLab",
+    "Parent"
+  ],
+  "expected_labels": "hand-authored synthetic fixture; exact match, not learned from evaluator",
+  "source_sha256": {
+    "evaluation/formal_corpus.tsv": "d052f2312bc4db3629d2adde0303819f03631a2b95c6d6590fdda9e4cb0d5ede",
+    "crates/universo-core/tests/formal_corpus.rs": "c178811ca08b02fb1391c5f729e9fac8355a7fb0a7f877f8c9e11a425fc351b9",
+    "crates/universo-core/tests/support/formal_fixture.rs": "22a74596d2df18befb82211a58633a62bf2a27261abcb7dd37e267c45cfa0e6c"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "felix-four-arms-v1-run",
+  "fase": "calibracion",
+  "agente": "codex",
+  "plan_sha256": "6f773162e0a8f473a722df0fbc47b9efa0838d5c91a44f77e04ab71400b8cc2a",
+  "git_commit": "38b1255437e34638c55c5d4a5b4265e649cea48c",
+  "git_dirty": false,
+  "universo_sha256": "f2af9a32aeeb0e86cb66351c506edc716712739f35372e494fa4b87cb69f3b34",
+  "universo_mcp_sha256": "61532d90b4a09ab1b33c9dcfcd00648e6b9f79be22053478c1886dd53474339f",
+  "codex_cli_version": "codex-cli 0.169.0"
+}

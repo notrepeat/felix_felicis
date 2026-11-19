@@ -1,0 +1,1 @@
+OK: 3 nodos, 1 aristas

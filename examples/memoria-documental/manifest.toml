@@ -1,0 +1,38 @@
+# Plantilla de memoria documental (docs/07-memoria-documental.md, Definición 8).
+# El porqué de cada criterio es grafo: preguntas, resoluciones y registros de
+# supersesión unidos por aristas tipadas. Datos ficticios.
+version = "memoria-documental/1"
+
+[nodos]
+sortes = ["Criterio", "Pregunta", "Resolución", "RegistroSupersesión", "Retirado", "Patrón"]
+
+[[aristas]]
+clave = "justifica"
+
+[[aristas]]
+clave = "responde"
+
+[[aristas]]
+clave = "motiva"
+
+[[aristas]]
+clave = "implica"
+
+[[aristas]]
+clave = "supersede"
+
+[[predicados]]
+nombre = "Standing"
+clave = "standing"
+dominio = ["firm", "practice", "hypothesis"]
+
+# Ts(r, d): la fecha de un registro. El dominio cerrado es un límite actual
+# del motor (no hay fechas abiertas, ver docs/brechas/01, R3): declara aquí las
+# fechas que uses.
+[[predicados]]
+nombre = "Ts"
+clave = "fecha"
+dominio = ["2026-01-15", "2026-06-01"]
+
+[layout]
+directorios = ["notas"]

@@ -1,19 +1,38 @@
 //! Carga de un bundle OKF a una `Estructura` (spec §3.3, §3.4, §4.2).
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Component, Path, PathBuf};
 
 use universo_core::{
-    Anexo, BundlePath, Entrada, ErrorEstructura, Estructura, Etiqueta, Manifiesto, NodoId, Sorte,
+    Anexo, BundlePath, Entrada, ErrorEstructura, ErrorManifiesto, Estructura, Etiqueta, Manifiesto,
+    NodoId, Sorte,
 };
 
 use crate::documento::{EntradaCruda, parsear_documento};
 use crate::errores::{ErrorBundle, ErrorDocumento, ErrorEntrada, Regla};
+use crate::transaccion::anclado::{
+    DirectorioLecturaAnclado, ErrorDirectorioAnclado, ErrorLecturaNombres, IdentidadDirectorio,
+    identidad_directorio_para_recorrido,
+};
+use crate::transaccion::inventario::LimitesInventario;
+use crate::transaccion::raiz::UbicacionRaiz;
 
 /// Un archivo ya localizado como `BundlePath`, con su contenido crudo.
 struct ArchivoBundle {
     path: BundlePath,
     contenido: String,
+}
+
+/// Valor pendiente de la clave optativa que declara el padre de un nodo.
+enum PadreFrontmatter {
+    /// La clave no estaba presente; conserva la inferencia por directorio.
+    InferenciaLegacy,
+    /// La clave estaba presente y vacía; no se infiere un padre.
+    RaizExplicita,
+    /// La clave declara el `BundlePath` lógico exacto del padre.
+    Referencia(BundlePath),
 }
 
 /// Último segmento del path (nombre de archivo con extensión), aceptando
@@ -23,10 +42,105 @@ fn nombre_archivo(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+fn nombres_ignorados_ordenados(ignorados: &[String]) -> Vec<&str> {
+    let mut nombres: Vec<_> = ignorados.iter().map(String::as_str).collect();
+    nombres.sort_unstable();
+    nombres.dedup();
+    nombres
+}
+
+fn contiene_nombre_ordenado(
+    nombres: &[&str],
+    nombre: &str,
+    mut observar_comparacion: impl FnMut(),
+) -> bool {
+    let mut inicio = 0;
+    let mut fin = nombres.len();
+    while inicio < fin {
+        observar_comparacion();
+        let medio = inicio + (fin - inicio) / 2;
+        match nombres[medio].cmp(nombre) {
+            std::cmp::Ordering::Less => inicio = medio + 1,
+            std::cmp::Ordering::Greater => fin = medio,
+            std::cmp::Ordering::Equal => return true,
+        }
+    }
+    false
+}
+
+fn contiene_directorio_ancestro(ruta: &str, directorios: &[String]) -> bool {
+    let contiene = |directorio: &str| {
+        directorios
+            .binary_search_by(|candidato| candidato.as_str().cmp(directorio))
+            .is_ok()
+    };
+    contiene(ruta)
+        || ruta
+            .match_indices('/')
+            .any(|(indice, _)| contiene(&ruta[..indice]))
+}
+
 /// Orden determinista por (path, línea); todo `Err` del cargador sale
 /// ordenado así.
 fn ordenar_errores(errores: &mut [ErrorBundle]) {
     errores.sort_by(|a, b| (a.path.clone(), a.linea).cmp(&(b.path.clone(), b.linea)));
+}
+
+fn errores_validacion_manifiesto(errores_manifiesto: Vec<ErrorManifiesto>) -> Vec<ErrorBundle> {
+    let mut errores: Vec<ErrorBundle> = errores_manifiesto
+        .into_iter()
+        .map(|detalle| {
+            let regla = match &detalle {
+                ErrorManifiesto::DirectoriosRutaInvalida
+                | ErrorManifiesto::SinIotaRutaInvalida
+                | ErrorManifiesto::IgnoradosRutaInvalida => Regla::PathInvalido,
+                _ => Regla::Estructura,
+            };
+            error(None, None, regla, detalle.to_string())
+        })
+        .collect();
+    ordenar_errores(&mut errores);
+    errores
+}
+
+fn errores_colisiones_case(resueltos: &[ArchivoBundle]) -> Vec<ErrorBundle> {
+    let mut por_case: HashMap<String, Vec<usize>> = HashMap::new();
+    for (indice, archivo) in resueltos.iter().enumerate() {
+        por_case
+            .entry(archivo.path.clave_case())
+            .or_default()
+            .push(indice);
+    }
+
+    let mut errores = Vec::new();
+    for indices in por_case.values_mut() {
+        if indices.len() < 2 {
+            continue;
+        }
+        // Un testigo basta para identificar cada colisión. El más corto
+        // mantiene el total de bytes diagnósticos acotado por el tamaño de
+        // las rutas de entrada, incluso si un grupo contiene miles de rutas.
+        indices.sort_unstable_by_key(|&indice| {
+            let ruta = resueltos[indice].path.como_str();
+            (ruta.len(), ruta)
+        });
+        let primero = indices[0];
+        let segundo = indices[1];
+        for (posicion, &indice) in indices.iter().enumerate() {
+            let testigo = if posicion == 0 { segundo } else { primero };
+            errores.push(error(
+                Some(resueltos[indice].path.como_str()),
+                None,
+                Regla::ColisionDeCase,
+                format!("colisiona con: {}", resueltos[testigo].path.como_str()),
+            ));
+        }
+    }
+    errores
+}
+
+fn detalle_stem_ambiguo(slug: &str, clave: &str, cantidad: usize) -> String {
+    format!("[[{slug}]] desde clave {clave} tiene {cantidad} candidatos")
 }
 
 fn error(
@@ -43,6 +157,181 @@ fn error(
     }
 }
 
+const LIMITES_BUNDLE: LimitesInventario = LimitesInventario::CONTRATO;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecursoBundle {
+    BytesRaw,
+    Entradas,
+    Profundidad,
+    BytesRutas,
+}
+
+/// Presupuesto único de una llamada a `cargar_bundle`, compartido por todas
+/// las raíces declaradas en el layout.
+#[derive(Debug)]
+struct PresupuestoBundle {
+    limites: LimitesInventario,
+    bytes_raw: usize,
+    entradas: usize,
+    bytes_rutas: usize,
+    bytes_rutas_fisicas: usize,
+}
+
+impl PresupuestoBundle {
+    fn nuevo(limites: LimitesInventario) -> Self {
+        Self {
+            limites,
+            bytes_raw: 0,
+            entradas: 0,
+            bytes_rutas: 0,
+            bytes_rutas_fisicas: 0,
+        }
+    }
+
+    fn reservar_entrada(
+        &mut self,
+        bytes_ruta: usize,
+        profundidad: usize,
+    ) -> Result<(), RecursoBundle> {
+        if profundidad > self.limites.profundidad {
+            return Err(RecursoBundle::Profundidad);
+        }
+        let entradas = self
+            .entradas
+            .checked_add(1)
+            .filter(|total| *total <= self.limites.entradas)
+            .ok_or(RecursoBundle::Entradas)?;
+        let bytes_rutas = self
+            .bytes_rutas
+            .checked_add(bytes_ruta)
+            .filter(|total| *total <= self.limites.bytes_rutas)
+            .ok_or(RecursoBundle::BytesRutas)?;
+        self.entradas = entradas;
+        self.bytes_rutas = bytes_rutas;
+        Ok(())
+    }
+
+    fn reservar_ruta_fisica(&mut self, bytes: usize) -> Result<(), RecursoBundle> {
+        let bytes_rutas_fisicas = self
+            .bytes_rutas_fisicas
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limites.bytes_rutas)
+            .ok_or(RecursoBundle::BytesRutas)?;
+        self.bytes_rutas_fisicas = bytes_rutas_fisicas;
+        Ok(())
+    }
+
+    fn bytes_raw_restantes(&self) -> usize {
+        self.limites.bytes_raw - self.bytes_raw
+    }
+
+    fn registrar_bytes_raw(&mut self, bytes: usize) -> Result<(), RecursoBundle> {
+        let bytes_raw = self
+            .bytes_raw
+            .checked_add(bytes)
+            .filter(|total| *total <= self.limites.bytes_raw)
+            .ok_or(RecursoBundle::BytesRaw)?;
+        self.bytes_raw = bytes_raw;
+        Ok(())
+    }
+}
+
+fn error_limite_bundle(
+    path: Option<&str>,
+    recurso: RecursoBundle,
+    limites: LimitesInventario,
+) -> ErrorBundle {
+    let (nombre, limite) = match recurso {
+        RecursoBundle::BytesRaw => ("bytes de contenido", limites.bytes_raw),
+        RecursoBundle::Entradas => ("entradas", limites.entradas),
+        RecursoBundle::Profundidad => ("profundidad", limites.profundidad),
+        RecursoBundle::BytesRutas => ("bytes de rutas", limites.bytes_rutas),
+    };
+    error(
+        path,
+        None,
+        Regla::LimiteBundleExcedido,
+        format!("se excedió el límite de {nombre} de carga del bundle ({limite})"),
+    )
+}
+
+/// Índices locales para las consultas repetidas del parser. Almacena claves
+/// propias e índices de declaración para no retener préstamos de la estructura
+/// mientras `parsear_bundle` la modifica.
+struct IndicesManifiesto {
+    sorte_por_nombre: HashMap<String, usize>,
+    sorte_por_alias: HashMap<String, usize>,
+    predicado_por_clave: HashMap<String, usize>,
+    arista_por_clave: HashMap<String, usize>,
+}
+
+impl IndicesManifiesto {
+    fn nuevo(manifiesto: &Manifiesto) -> Self {
+        let sorte_por_nombre: HashMap<String, usize> = manifiesto
+            .sortes_nodo
+            .iter()
+            .enumerate()
+            .map(|(indice, sorte)| (sorte.como_str().to_string(), indice))
+            .collect();
+        let mut sorte_por_alias = HashMap::with_capacity(manifiesto.sortes_nodo_disco.len());
+        // La BTreeMap conserva el orden de la búsqueda anterior. Si dos
+        // sortes comparten alias, se mantiene la primera por su clave de sorte.
+        for (sorte, alias) in &manifiesto.sortes_nodo_disco {
+            if let Some(&indice) = sorte_por_nombre.get(sorte.como_str()) {
+                sorte_por_alias.entry(alias.clone()).or_insert(indice);
+            }
+        }
+
+        Self {
+            sorte_por_nombre,
+            sorte_por_alias,
+            predicado_por_clave: manifiesto
+                .predicados
+                .iter()
+                .enumerate()
+                .map(|(indice, predicado)| (predicado.clave.clone(), indice))
+                .collect(),
+            arista_por_clave: manifiesto
+                .aristas
+                .iter()
+                .enumerate()
+                .map(|(indice, arista)| (arista.clave.clone(), indice))
+                .collect(),
+        }
+    }
+
+    fn sorte_desde_disco(&self, manifiesto: &Manifiesto, valor: &str) -> Option<Sorte> {
+        let indice = self
+            .sorte_por_alias
+            .get(valor)
+            .or_else(|| self.sorte_por_nombre.get(valor))?;
+        manifiesto.sortes_nodo.get(*indice).cloned()
+    }
+
+    fn predicado_por_clave<'a>(
+        &self,
+        manifiesto: &'a Manifiesto,
+        clave: &str,
+    ) -> Option<&'a universo_core::DeclPredicado> {
+        manifiesto
+            .predicados
+            .get(*self.predicado_por_clave.get(clave)?)
+    }
+
+    fn arista_por_clave<'a>(
+        &self,
+        manifiesto: &'a Manifiesto,
+        clave: &str,
+    ) -> Option<&'a universo_core::DeclArista> {
+        manifiesto.aristas.get(*self.arista_por_clave.get(clave)?)
+    }
+
+    fn contiene_arista(&self, clave: &str) -> bool {
+        self.arista_por_clave.contains_key(clave)
+    }
+}
+
 /// Carga pura desde memoria: `archivos` = (path relativo del archivo CON
 /// extensión `.md` y separador `/`, contenido). Acumula todos los errores
 /// encontrados; si hay al menos uno, nunca devuelve una `Estructura` a
@@ -51,32 +340,38 @@ pub fn parsear_bundle(
     archivos: &[(String, String)],
     manifiesto: Manifiesto,
 ) -> Result<Estructura, Vec<ErrorBundle>> {
-    let mut errores: Vec<ErrorBundle> = Vec::new();
-
-    let mut estructura = match Estructura::nueva(manifiesto) {
+    let estructura = match Estructura::nueva(manifiesto) {
         Ok(e) => e,
         Err(err) => {
             let detalles = match err {
                 universo_core::ErrorEstructura::Manifiesto(errs) => errs,
                 _ => unreachable!("Estructura::nueva solo falla por manifiesto inválido"),
             };
-            let mut errores: Vec<ErrorBundle> = detalles
-                .into_iter()
-                .map(|e| error(None, None, Regla::Estructura, e.to_string()))
-                .collect();
-            ordenar_errores(&mut errores);
-            return Err(errores);
+            return Err(errores_validacion_manifiesto(detalles));
         }
     };
+
+    parsear_bundle_desde_estructura(archivos, estructura)
+}
+
+pub(crate) fn parsear_bundle_desde_estructura(
+    archivos: &[(String, String)],
+    mut estructura: Estructura,
+) -> Result<Estructura, Vec<ErrorBundle>> {
+    let mut errores: Vec<ErrorBundle> = Vec::new();
+    let indices_manifiesto = IndicesManifiesto::nuevo(estructura.manifiesto());
 
     // Paso 0: saltar los archivos cuyo nombre (último segmento del path,
     // con extensión) está en `layout.ignorados` — mismo criterio que
     // aplica `cargar_bundle` al recorrer disco.
-    let ignorados = estructura.manifiesto().layout.ignorados.clone();
+    let ignorados = nombres_ignorados_ordenados(&estructura.manifiesto().layout.ignorados);
     let archivos: Vec<&(String, String)> = archivos
         .iter()
-        .filter(|(path_original, _)| !ignorados.iter().any(|i| i == nombre_archivo(path_original)))
+        .filter(|(path_original, _)| {
+            !contiene_nombre_ordenado(&ignorados, nombre_archivo(path_original), || {})
+        })
         .collect();
+    drop(ignorados);
 
     // Paso 1: resolver los paths, detectar colisiones de case y duplicados
     // exactos.
@@ -103,42 +398,20 @@ pub fn parsear_bundle(
         }
     }
 
-    // Detectar colisiones de case (incluye duplicados exactos) entre todos
-    // los pares de archivos resueltos.
-    let mut por_case: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, archivo) in resueltos.iter().enumerate() {
-        por_case
-            .entry(archivo.path.clave_case())
-            .or_default()
-            .push(i);
-    }
-    for indices in por_case.values() {
-        if indices.len() < 2 {
-            continue;
-        }
-        for &i in indices {
-            let otros: Vec<&str> = indices
-                .iter()
-                .filter(|&&j| j != i)
-                .map(|&j| resueltos[j].path.como_str())
-                .collect();
-            errores.push(error(
-                Some(resueltos[i].path.como_str()),
-                None,
-                Regla::ColisionDeCase,
-                format!("colisiona con: {}", otros.join(", ")),
-            ));
-        }
-    }
+    // Detectar colisiones de case (incluye duplicados exactos) sin enumerar
+    // todos los pares del grupo en cada diagnóstico.
+    errores.extend(errores_colisiones_case(&resueltos));
 
     struct NodoCargado {
         id: NodoId,
         path: BundlePath,
+        padre_frontmatter: PadreFrontmatter,
         /// Entradas de arista pendientes de resolver (clave, entrada).
         aristas_pendientes: Vec<(String, EntradaCruda)>,
     }
 
     let mut cargados: Vec<NodoCargado> = Vec::new();
+    let parent_key = estructura.manifiesto().layout.parent_key.clone();
 
     for archivo in &resueltos {
         let path_str = archivo.path.como_str().to_string();
@@ -151,6 +424,9 @@ pub fn parsear_bundle(
                     ErrorDocumento::FrontmatterSinCierre => (Regla::FrontmatterSinCierre, None),
                     ErrorDocumento::FrontmatterMalformado { linea } => {
                         (Regla::FrontmatterMalformado, Some(linea))
+                    }
+                    ErrorDocumento::ClaveEstructuralDuplicada { linea, .. } => {
+                        (Regla::ClaveEstructuralDuplicada, Some(linea))
                     }
                 };
                 errores.push(error(Some(&path_str), linea, regla, err.to_string()));
@@ -186,9 +462,8 @@ pub fn parsear_bundle(
         let tipo = if clave_consumida_retirado.is_some() {
             Sorte::nuevo("Retirado")
         } else {
-            match estructura
-                .manifiesto()
-                .sorte_desde_disco(&entrada_type.valor_escalar())
+            match indices_manifiesto
+                .sorte_desde_disco(estructura.manifiesto(), &entrada_type.valor_escalar())
             {
                 Some(t) if t == Sorte::nuevo("Retirado") => {
                     if let Some((k, v)) = &estructura.manifiesto().retirado_en_disco {
@@ -232,6 +507,41 @@ pub fn parsear_bundle(
         };
         let etiqueta = Etiqueta::nuevo(&entrada_title.valor_escalar());
 
+        let padre_frontmatter = if let Some(clave) = parent_key.as_deref() {
+            let mut entradas_padre = documento.entradas.iter().filter(|e| e.clave == clave);
+            let entrada_padre = entradas_padre.next();
+            if entradas_padre.next().is_some() {
+                errores.push(error(
+                    None,
+                    None,
+                    Regla::ParentDuplicado,
+                    "la clave configurada para Parent aparece más de una vez",
+                ));
+                continue;
+            }
+            match entrada_padre {
+                None => PadreFrontmatter::InferenciaLegacy,
+                Some(entrada) => {
+                    let valor = entrada.valor_escalar();
+                    if valor.is_empty() {
+                        PadreFrontmatter::RaizExplicita
+                    } else if let Ok(path) = BundlePath::nuevo(&valor) {
+                        PadreFrontmatter::Referencia(path)
+                    } else {
+                        errores.push(error(
+                            None,
+                            None,
+                            Regla::ParentInvalido,
+                            "la referencia Parent no es un BundlePath lógico válido",
+                        ));
+                        continue;
+                    }
+                }
+            }
+        } else {
+            PadreFrontmatter::InferenciaLegacy
+        };
+
         let id = match estructura.insertar_nodo(archivo.path.clone(), tipo, etiqueta) {
             Ok(id) => id,
             Err(err) => {
@@ -253,6 +563,11 @@ pub fn parsear_bundle(
             if entrada.clave == "title" {
                 continue;
             }
+            if parent_key.as_deref() == Some(entrada.clave.as_str()) {
+                // La clave configurada está administrada por el cargador:
+                // se consume y nunca se conserva como passthrough.
+                continue;
+            }
             if clave_consumida_retirado.as_deref() == Some(entrada.clave.as_str()) {
                 // La clave que activó el retiro (p. ej. `status`) queda
                 // consumida: ni passthrough ni clasificación.
@@ -269,26 +584,34 @@ pub fn parsear_bundle(
                 }
                 continue;
             }
-            if let Some(decl) = estructura.manifiesto().predicado_por_clave(&entrada.clave) {
+            if let Some(decl) =
+                indices_manifiesto.predicado_por_clave(estructura.manifiesto(), &entrada.clave)
+            {
                 let nombre = decl.nombre.clone();
-                let constante = entrada.valor_escalar();
-                if let Err(err) = estructura.asignar_atributo(id, &nombre, &constante) {
-                    let regla = match &err {
-                        ErrorEstructura::ConstanteFueraDeDominio(..) => {
-                            Regla::ConstanteFueraDeDominio
-                        }
-                        _ => Regla::Estructura,
-                    };
-                    errores.push(error(
-                        Some(&path_str),
-                        Some(entrada.linea),
-                        regla,
-                        err.to_string(),
-                    ));
+                let constantes = if decl.multivalor {
+                    entrada.lista_escalares()
+                } else {
+                    vec![entrada.valor_escalar()]
+                };
+                for constante in constantes {
+                    if let Err(err) = estructura.asignar_atributo(id, &nombre, &constante) {
+                        let regla = match &err {
+                            ErrorEstructura::ConstanteFueraDeDominio(..) => {
+                                Regla::ConstanteFueraDeDominio
+                            }
+                            _ => Regla::Estructura,
+                        };
+                        errores.push(error(
+                            Some(&path_str),
+                            Some(entrada.linea),
+                            regla,
+                            err.to_string(),
+                        ));
+                    }
                 }
                 continue;
             }
-            if estructura.manifiesto().es_sorte_arista(&entrada.clave) {
+            if indices_manifiesto.contiene_arista(&entrada.clave) {
                 aristas_pendientes.push((entrada.clave.clone(), entrada.clone()));
                 continue;
             }
@@ -313,9 +636,16 @@ pub fn parsear_bundle(
             ));
         }
 
+        if !matches!(&padre_frontmatter, PadreFrontmatter::InferenciaLegacy)
+            && let Err(err) = estructura.marcar_parent_frontmatter_explicito(id)
+        {
+            errores.push(error(None, None, Regla::Estructura, err.to_string()));
+        }
+
         cargados.push(NodoCargado {
             id,
             path: archivo.path.clone(),
+            padre_frontmatter,
             aristas_pendientes,
         });
     }
@@ -335,9 +665,8 @@ pub fn parsear_bundle(
     for nodo in &cargados {
         let path_str = nodo.path.como_str().to_string();
         for (clave, entrada) in &nodo.aristas_pendientes {
-            let decl = estructura
-                .manifiesto()
-                .arista(clave)
+            let decl = indices_manifiesto
+                .arista_por_clave(estructura.manifiesto(), clave)
                 .expect("es_sorte_arista lo garantiza")
                 .clone();
 
@@ -368,6 +697,7 @@ pub fn parsear_bundle(
                         ErrorEntrada::ValorEnLineaDeClave => Regla::ValorEnLineaDeClave,
                         ErrorEntrada::EtiquetaAusente => Regla::EtiquetaAusente,
                         ErrorEntrada::DestinoAusente => Regla::DestinoAusente,
+                        ErrorEntrada::CampoDuplicado(_) => Regla::ClaveEstructuralDuplicada,
                     };
                     errores.push(error(
                         Some(&path_str),
@@ -380,8 +710,7 @@ pub fn parsear_bundle(
             };
 
             for (slug, etiqueta) in objetivos {
-                let candidatos = stems.get(&slug).cloned().unwrap_or_default();
-                if candidatos.is_empty() {
+                let Some(candidatos) = stems.get(&slug) else {
                     errores.push(error(
                         Some(&path_str),
                         Some(entrada.linea),
@@ -389,17 +718,13 @@ pub fn parsear_bundle(
                         format!("[[{slug}]] desde clave {clave}"),
                     ));
                     continue;
-                }
+                };
                 if candidatos.len() > 1 {
-                    let lista: Vec<&str> = candidatos.iter().map(BundlePath::como_str).collect();
                     errores.push(error(
                         Some(&path_str),
                         Some(entrada.linea),
                         Regla::StemAmbiguo,
-                        format!(
-                            "[[{slug}]] desde clave {clave} candidatos: {}",
-                            lista.join(", ")
-                        ),
+                        detalle_stem_ambiguo(&slug, clave, candidatos.len()),
                     ));
                     continue;
                 }
@@ -418,24 +743,54 @@ pub fn parsear_bundle(
         }
     }
 
-    // Paso 7: ι, nodo padre implícito por directorio.
-    let sin_iota = estructura.manifiesto().layout.sin_iota.clone();
-    let es_sin_iota = |dir: &str| -> bool {
-        sin_iota.iter().any(|s| {
-            dir == s
-                || dir
-                    .strip_prefix(s.as_str())
-                    .is_some_and(|r| r.starts_with('/'))
-        })
-    };
-    for nodo in &cargados {
+    // Paso 7: resolver Parent explícito y, solo cuando la clave configurada
+    // está ausente, conservar la inferencia legacy por directorio.
+    let mut sin_iota = estructura.manifiesto().layout.sin_iota.clone();
+    sin_iota.sort_unstable();
+    sin_iota.dedup();
+    let mut errores_parent: Vec<Option<ErrorBundle>> = (0..cargados.len()).map(|_| None).collect();
+    let mut asignaciones_parent = Vec::new();
+    for (indice_nodo, nodo) in cargados.iter().enumerate() {
+        match &nodo.padre_frontmatter {
+            PadreFrontmatter::RaizExplicita => continue,
+            PadreFrontmatter::Referencia(parent_path) => {
+                let Some(&parent_id) = indice_por_path.get(parent_path) else {
+                    errores_parent[indice_nodo] = Some(error(
+                        None,
+                        None,
+                        Regla::ParentNoEncontrado,
+                        "la referencia Parent no resuelve a un nodo cargado",
+                    ));
+                    continue;
+                };
+                if parent_path == &nodo.path {
+                    errores_parent[indice_nodo] = Some(error(
+                        None,
+                        None,
+                        Regla::ParentDeSiMismo,
+                        "un nodo no puede ser su propio padre",
+                    ));
+                    continue;
+                }
+                asignaciones_parent.push((
+                    nodo.id,
+                    parent_id,
+                    true,
+                    nodo.path.clone(),
+                    indice_nodo,
+                ));
+                continue;
+            }
+            PadreFrontmatter::InferenciaLegacy => {}
+        }
+
         let Some(dir) = nodo.path.directorio() else {
             continue;
         };
         let es_index = nodo.path.stem() == "index";
         // El directorio relevante para "sin ι" es siempre el propio
         // directorio del nodo (para `d/sub/index` es `d/sub`).
-        if es_sin_iota(dir) {
+        if contiene_directorio_ancestro(dir, &sin_iota) {
             continue;
         }
         let candidato = if es_index {
@@ -453,9 +808,47 @@ pub fn parsear_bundle(
             continue;
         }
         if let Some(&padre_id) = indice_por_path.get(&candidato_path) {
-            if let Err(err) = estructura.asignar_padre(nodo.id, padre_id) {
-                errores.push(error(
-                    Some(nodo.path.como_str()),
+            asignaciones_parent.push((nodo.id, padre_id, false, nodo.path.clone(), indice_nodo));
+        }
+    }
+
+    let relaciones_parent: Vec<_> = asignaciones_parent
+        .iter()
+        .map(|&(hijo, padre, _, _, _)| (hijo, padre))
+        .collect();
+    if let Err(fallos) = estructura.asignar_padres_en_lote(&relaciones_parent) {
+        for (indice, err) in fallos {
+            let (_, _, explicito, path, indice_nodo) = &asignaciones_parent[indice];
+            if *explicito {
+                let (regla, detalle) = match err {
+                    ErrorEstructura::CicloEnIota => {
+                        (Regla::ParentCiclo, "la relación Parent formaría un ciclo")
+                    }
+                    ErrorEstructura::PadreDeSiMismo => (
+                        Regla::ParentDeSiMismo,
+                        "un nodo no puede ser su propio padre",
+                    ),
+                    _ => (
+                        Regla::ParentInvalido,
+                        "no se pudo resolver la relación Parent",
+                    ),
+                };
+                errores_parent[*indice_nodo] = Some(error(None, None, regla, detalle));
+            } else if parent_key.is_some() {
+                let regla = if err == ErrorEstructura::CicloEnIota {
+                    Regla::ParentCiclo
+                } else {
+                    Regla::ParentInvalido
+                };
+                errores_parent[*indice_nodo] = Some(error(
+                    None,
+                    None,
+                    regla,
+                    "no se pudo resolver la relación Parent",
+                ));
+            } else {
+                errores_parent[*indice_nodo] = Some(error(
+                    Some(path.como_str()),
                     None,
                     Regla::Estructura,
                     err.to_string(),
@@ -463,6 +856,7 @@ pub fn parsear_bundle(
             }
         }
     }
+    errores.extend(errores_parent.into_iter().flatten());
 
     if errores.is_empty() {
         Ok(estructura)
@@ -476,12 +870,139 @@ pub fn parsear_bundle(
 /// nombres de archivo en `layout.ignorados`, lee UTF-8, delega en
 /// `parsear_bundle`.
 pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, Vec<ErrorBundle>> {
+    cargar_bundle_observando(raiz, manifiesto, identidad_directorio_para_recorrido, || {})
+}
+
+fn cargar_bundle_observando(
+    raiz: &Path,
+    manifiesto: Manifiesto,
+    mut obtener_identidad: impl FnMut(
+        &Path,
+    )
+        -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado>,
+    mut observar_recorrido: impl FnMut(),
+) -> Result<Estructura, Vec<ErrorBundle>> {
+    cargar_bundle_con_observadores(
+        raiz,
+        manifiesto,
+        &mut obtener_identidad,
+        &mut observar_recorrido,
+        |_| {},
+    )
+}
+
+fn cargar_bundle_con_observadores(
+    raiz: &Path,
+    manifiesto: Manifiesto,
+    obtener_identidad: impl FnMut(&Path) -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado>,
+    observar_recorrido: impl FnMut(),
+    antes_de_abrir_archivo: impl FnMut(&Path),
+) -> Result<Estructura, Vec<ErrorBundle>> {
+    cargar_bundle_con_limites(
+        raiz,
+        manifiesto,
+        LIMITES_BUNDLE,
+        obtener_identidad,
+        observar_recorrido,
+        antes_de_abrir_archivo,
+    )
+}
+
+fn cargar_bundle_con_limites(
+    raiz: &Path,
+    manifiesto: Manifiesto,
+    limites: LimitesInventario,
+    mut obtener_identidad: impl FnMut(
+        &Path,
+    )
+        -> Result<Option<IdentidadDirectorio>, ErrorDirectorioAnclado>,
+    mut observar_recorrido: impl FnMut(),
+    mut antes_de_abrir_archivo: impl FnMut(&Path),
+) -> Result<Estructura, Vec<ErrorBundle>> {
     let mut errores: Vec<ErrorBundle> = Vec::new();
     let mut archivos: Vec<(String, String)> = Vec::new();
 
+    if let Err(detalles) = manifiesto.validar() {
+        return Err(errores_validacion_manifiesto(detalles));
+    }
+    let ignorados = nombres_ignorados_ordenados(&manifiesto.layout.ignorados);
+
+    let metadatos_raiz = match std::fs::metadata(raiz) {
+        Ok(metadatos) => metadatos,
+        Err(err) => {
+            return Err(vec![error(
+                None,
+                None,
+                Regla::Io,
+                format!("no se puede acceder a la raíz del bundle: {err}"),
+            )]);
+        }
+    };
+    if !metadatos_raiz.is_dir() {
+        return Err(vec![error(
+            None,
+            None,
+            Regla::Io,
+            "la raíz del bundle no es un directorio",
+        )]);
+    }
+    let ubicacion_raiz = match UbicacionRaiz::nueva(raiz) {
+        Ok(ubicacion) => ubicacion,
+        Err(err) => {
+            return Err(vec![error(
+                None,
+                None,
+                Regla::Io,
+                format!("no se puede acceder a la raíz del bundle: {err:?}"),
+            )]);
+        }
+    };
+    let raiz_anclada = match DirectorioLecturaAnclado::desde_ubicacion(&ubicacion_raiz) {
+        Ok(raiz) => raiz,
+        Err(err) => {
+            return Err(vec![error(
+                None,
+                None,
+                Regla::Io,
+                format!("no se puede acceder a la raíz del bundle: {err:?}"),
+            )]);
+        }
+    };
+    let raiz_canonica = ubicacion_raiz.ruta().to_path_buf();
+
+    let mut bases_procesadas: HashSet<IdentidadDirectorio> = HashSet::new();
+    let mut bases_canonicas_procesadas = IndiceRutasCanonicas::default();
+    let mut presupuesto = PresupuestoBundle::nuevo(limites);
     for directorio in &manifiesto.layout.directorios {
-        let base = raiz.join(directorio);
-        if !base.is_dir() {
+        if !directorio_layout_seguro(directorio) {
+            errores.push(error(
+                Some(directorio),
+                None,
+                Regla::Io,
+                "el directorio declarado debe ser una ruta relativa segura dentro de la raíz",
+            ));
+            continue;
+        }
+        let base = raiz_canonica.join(directorio);
+        let metadatos = match std::fs::metadata(&base) {
+            Ok(metadatos) => metadatos,
+            Err(err) => {
+                errores.push(error(
+                    Some(directorio),
+                    None,
+                    Regla::Io,
+                    format!("no se puede acceder al directorio declarado: {err}"),
+                ));
+                continue;
+            }
+        };
+        if !metadatos.is_dir() {
+            errores.push(error(
+                Some(directorio),
+                None,
+                Regla::Io,
+                "la ruta declarada no es un directorio",
+            ));
             continue;
         }
         let base_canonica = match std::fs::canonicalize(&base) {
@@ -491,52 +1012,187 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
                 continue;
             }
         };
+        if !base_canonica.starts_with(&raiz_canonica) {
+            errores.push(error(
+                Some(directorio),
+                None,
+                Regla::Io,
+                "el directorio declarado resuelve fuera de la raíz del bundle",
+            ));
+            continue;
+        }
+        let base_canonica_relativa = match base_canonica.strip_prefix(&raiz_canonica) {
+            Ok(relativa) => relativa,
+            Err(_) => {
+                errores.push(error(
+                    Some(directorio),
+                    None,
+                    Regla::Io,
+                    "el directorio declarado no se puede expresar relativo a la raíz",
+                ));
+                continue;
+            }
+        };
+        let identidad_base = match obtener_identidad(&base_canonica) {
+            Ok(identidad) => identidad,
+            Err(_) => {
+                errores.push(error(
+                    Some(directorio),
+                    None,
+                    Regla::Io,
+                    "no se pudo identificar el directorio declarado",
+                ));
+                continue;
+            }
+        };
+        if identidad_base.is_some_and(|identidad| bases_procesadas.contains(&identidad)) {
+            errores.push(error(
+                None,
+                None,
+                Regla::Estructura,
+                "layout.directorios contiene rutas que resuelven al mismo directorio",
+            ));
+            continue;
+        }
+        if bases_canonicas_procesadas.contiene_exacta(base_canonica_relativa) {
+            errores.push(error(
+                None,
+                None,
+                Regla::Estructura,
+                "layout.directorios contiene rutas que resuelven al mismo directorio",
+            ));
+            continue;
+        }
+        if bases_canonicas_procesadas.se_solapa(base_canonica_relativa) {
+            errores.push(error(
+                None,
+                None,
+                Regla::Estructura,
+                "layout.directorios contiene rutas que resuelven a directorios solapados",
+            ));
+            continue;
+        }
+        if let Err(recurso) =
+            presupuesto.reservar_entrada(directorio.len(), directorio.split('/').count())
+        {
+            errores.push(error_limite_bundle(Some(directorio), recurso, limites));
+            ordenar_errores(&mut errores);
+            return Err(errores);
+        }
+        // El índice y el fallback de identidad solo retienen esta ruta
+        // relativa, con un presupuesto físico independiente del lógico.
+        if let Err(recurso) =
+            presupuesto.reservar_ruta_fisica(base_canonica_relativa.as_os_str().len())
+        {
+            errores.push(error_limite_bundle(Some(directorio), recurso, limites));
+            ordenar_errores(&mut errores);
+            return Err(errores);
+        }
+        if let Some(identidad) = identidad_base {
+            bases_procesadas.insert(identidad);
+        }
+        bases_canonicas_procesadas.insertar(base_canonica_relativa);
         let mut encontrados: Vec<std::path::PathBuf> = Vec::new();
         let mut camino: Vec<PathBuf> = Vec::new();
         let mut procesados: HashSet<PathBuf> = HashSet::new();
         let recorrido = Recorrido {
-            raiz,
+            raiz: &raiz_canonica,
+            raiz_anclada: &raiz_anclada,
             base_declarada: directorio,
             base_canonica: &base_canonica,
+            raiz_canonica: &raiz_canonica,
         };
-        recorrer(
-            &recorrido,
-            &base,
-            &mut encontrados,
-            &mut errores,
-            &mut camino,
-            &mut procesados,
-        );
+        let resultado = {
+            let mut estado = EstadoRecorrido {
+                encontrados: &mut encontrados,
+                errores: &mut errores,
+                camino: &mut camino,
+                procesados: &mut procesados,
+                observar: &mut observar_recorrido,
+                presupuesto: &mut presupuesto,
+            };
+            recorrer(
+                &recorrido,
+                &base,
+                directorio.split('/').count(),
+                directorio.len(),
+                &mut estado,
+            )
+        };
+        if let Err(limite) = resultado {
+            errores.push(limite);
+            ordenar_errores(&mut errores);
+            return Err(errores);
+        }
         encontrados.sort();
         for ruta in encontrados {
-            let relativa = ruta
-                .strip_prefix(raiz)
-                .unwrap_or(&ruta)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if manifiesto
-                .layout
-                .ignorados
-                .iter()
-                .any(|i| i == nombre_archivo(&relativa))
-            {
+            let relativa = relativa_a_raiz(&raiz_canonica, &ruta);
+            if contiene_nombre_ordenado(&ignorados, nombre_archivo(&relativa), || {}) {
                 continue;
             }
-            match std::fs::read(&ruta) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(texto) => archivos.push((relativa, texto)),
-                    Err(_) => {
-                        let path_reportado = BundlePath::desde_archivo(&relativa)
-                            .map(|p| p.como_str().to_string())
-                            .unwrap_or_else(|_| relativa.clone());
-                        errores.push(error(
-                            Some(&path_reportado),
-                            None,
-                            Regla::NoUtf8,
-                            "el archivo no es UTF-8 válido",
+            let ruta_canonica = match std::fs::canonicalize(&ruta) {
+                Ok(ruta_canonica) => ruta_canonica,
+                Err(err) => {
+                    errores.push(error(
+                        Some(&relativa),
+                        None,
+                        Regla::Io,
+                        format!("no se puede resolver el archivo dentro del bundle: {err}"),
+                    ));
+                    continue;
+                }
+            };
+            if !ruta_canonica.starts_with(&raiz_canonica)
+                || !ruta_canonica.starts_with(&base_canonica)
+            {
+                errores.push(error(
+                    Some(&relativa),
+                    None,
+                    Regla::Io,
+                    format!(
+                        "enlace fuera del directorio declarado: {relativa} resuelve fuera de {directorio}"
+                    ),
+                ));
+                continue;
+            }
+            antes_de_abrir_archivo(&ruta_canonica);
+            let restante = presupuesto.bytes_raw_restantes();
+            match leer_archivo_regular_bundle(
+                &raiz_anclada,
+                &raiz_canonica,
+                &ruta_canonica,
+                restante,
+            ) {
+                Ok(bytes) => {
+                    if bytes.len() > restante {
+                        errores.push(error_limite_bundle(
+                            Some(&relativa),
+                            RecursoBundle::BytesRaw,
+                            limites,
                         ));
+                        ordenar_errores(&mut errores);
+                        return Err(errores);
                     }
-                },
+                    if let Err(recurso) = presupuesto.registrar_bytes_raw(bytes.len()) {
+                        errores.push(error_limite_bundle(Some(&relativa), recurso, limites));
+                        ordenar_errores(&mut errores);
+                        return Err(errores);
+                    }
+                    match String::from_utf8(bytes) {
+                        Ok(texto) => archivos.push((relativa, texto)),
+                        Err(_) => {
+                            let path_reportado = BundlePath::desde_archivo(&relativa)
+                                .map(|p| p.como_str().to_string())
+                                .unwrap_or_else(|_| relativa.clone());
+                            errores.push(error(
+                                Some(&path_reportado),
+                                None,
+                                Regla::NoUtf8,
+                                "el archivo no es UTF-8 válido",
+                            ));
+                        }
+                    }
+                }
                 Err(err) => errores.push(error(Some(&relativa), None, Regla::Io, err.to_string())),
             }
         }
@@ -545,6 +1201,7 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
     // Los archivos ilegibles no impiden parsear el resto: siempre se
     // reportan todos los errores del bundle a la vez, sin ocultar unos
     // detrás de otros.
+    drop(ignorados);
     match parsear_bundle(&archivos, manifiesto) {
         Ok(estructura) if errores.is_empty() => Ok(estructura),
         Ok(_) => {
@@ -559,72 +1216,258 @@ pub fn cargar_bundle(raiz: &Path, manifiesto: Manifiesto) -> Result<Estructura, 
     }
 }
 
+/// Lee solo archivos regulares con cada ancestro abierto desde la raíz.
+/// Unix añade O_NONBLOCK para que una sustitución concurrente por FIFO no
+/// bloquee; Windows abre cada componente relativo sin seguir reparse points.
+fn leer_archivo_regular_bundle(
+    raiz: &DirectorioLecturaAnclado,
+    raiz_canonica: &Path,
+    ruta_canonica: &Path,
+    maximo_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    let relativa = ruta_canonica.strip_prefix(raiz_canonica).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "ruta fuera de la raíz anclada")
+    })?;
+    let archivo = raiz
+        .abrir_archivo_regular_relativo(relativa)
+        .map_err(error_lectura_anclada)?;
+    let maximo_lectura = maximo_bytes
+        .checked_add(1)
+        .and_then(|maximo| u64::try_from(maximo).ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "límite de lectura inválido"))?;
+    let mut bytes = Vec::new();
+    archivo.take(maximo_lectura).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn error_lectura_anclada(error: ErrorDirectorioAnclado) -> io::Error {
+    let kind = match error {
+        ErrorDirectorioAnclado::EntradaAusente => io::ErrorKind::NotFound,
+        ErrorDirectorioAnclado::EnlaceNoPermitido | ErrorDirectorioAnclado::TipoNoAdmitido => {
+            io::ErrorKind::InvalidData
+        }
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, "no se pudo abrir el archivo bajo la raíz anclada")
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static COMPARACIONES_RUTAS_CANONICAS: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[derive(Clone, Debug)]
+struct RutaCanonicaIndice(PathBuf);
+
+impl PartialEq for RutaCanonicaIndice {
+    fn eq(&self, otra: &Self) -> bool {
+        self.0.components().eq(otra.0.components())
+    }
+}
+
+impl Eq for RutaCanonicaIndice {}
+
+impl Ord for RutaCanonicaIndice {
+    fn cmp(&self, otra: &Self) -> std::cmp::Ordering {
+        #[cfg(test)]
+        COMPARACIONES_RUTAS_CANONICAS.with(|comparaciones| {
+            comparaciones.set(comparaciones.get().saturating_add(1));
+        });
+        self.0.components().cmp(otra.0.components())
+    }
+}
+
+impl PartialOrd for RutaCanonicaIndice {
+    fn partial_cmp(&self, otra: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(otra))
+    }
+}
+
+#[derive(Default)]
+struct IndiceRutasCanonicas {
+    rutas: BTreeSet<RutaCanonicaIndice>,
+}
+
+impl IndiceRutasCanonicas {
+    fn contiene_exacta(&self, ruta: &Path) -> bool {
+        self.rutas.contains(&RutaCanonicaIndice(ruta.to_path_buf()))
+    }
+
+    fn se_solapa(&self, ruta: &Path) -> bool {
+        let consulta = RutaCanonicaIndice(ruta.to_path_buf());
+        let anterior = self.rutas.range(..consulta.clone()).next_back();
+        if anterior.is_some_and(|anterior| ruta.starts_with(&anterior.0)) {
+            return true;
+        }
+
+        self.rutas
+            .range((
+                std::ops::Bound::Excluded(consulta),
+                std::ops::Bound::Unbounded,
+            ))
+            .next()
+            .is_some_and(|siguiente| siguiente.0.starts_with(ruta))
+    }
+
+    fn insertar(&mut self, ruta: &Path) {
+        self.rutas.insert(RutaCanonicaIndice(ruta.to_path_buf()));
+    }
+}
+
 /// Path relativo a `raiz`, con separador `/`, tal como se reporta en los
 /// `ErrorBundle` de esta función.
 fn relativa_a_raiz(raiz: &Path, dir: &Path) -> String {
-    dir.strip_prefix(raiz)
-        .unwrap_or(dir)
-        .to_string_lossy()
-        .replace('\\', "/")
+    let relativa = dir.strip_prefix(raiz).unwrap_or(dir);
+    match relativa.to_str() {
+        Some(ruta) => ruta.replace(std::path::MAIN_SEPARATOR, "/"),
+        None => "<ruta-no-utf8>".to_string(),
+    }
+}
+
+fn nombre_componente_logico(nombre: &std::ffi::OsStr) -> Option<&str> {
+    let nombre = nombre.to_str()?;
+    (!nombre.contains('/') && !nombre.contains('\\')).then_some(nombre)
+}
+
+fn es_markdown(ruta: &Path) -> bool {
+    ruta.extension().and_then(|extension| extension.to_str()) == Some("md")
+}
+
+/// Solo se puede ignorar un archivo no Markdown cuando su tipo regular está
+/// determinado sin seguir enlaces (ruta lógica) o desde el destino ya
+/// canonicalizado. Un error de resolución o un symlink no clasificable debe
+/// fallar cerrado para no presentar una carga parcial como completa.
+fn es_archivo_regular_no_markdown(ruta: &Path, canonica: Option<&Path>) -> bool {
+    if es_markdown(ruta) {
+        return false;
+    }
+    let metadatos = canonica
+        .and_then(|ruta| std::fs::metadata(ruta).ok())
+        .or_else(|| std::fs::symlink_metadata(ruta).ok());
+    puede_ignorar_error_directorio(ruta, metadatos.is_some_and(|metadatos| metadatos.is_file()))
+}
+
+fn puede_ignorar_error_directorio(ruta: &Path, tipo_regular_confirmado: bool) -> bool {
+    tipo_regular_confirmado && !es_markdown(ruta)
+}
+
+fn error_recorrido_io(raiz: &Path, ruta: &Path, detalle: impl Into<String>) -> ErrorBundle {
+    error(Some(&relativa_a_raiz(raiz, ruta)), None, Regla::Io, detalle)
+}
+
+/// Acepta solo segmentos normales portables y separados con `/`. Se evita
+/// interpretar rutas absolutas, prefijos de unidad, `.` y `..` de manera
+/// distinta entre plataformas.
+pub(crate) fn directorio_layout_seguro(directorio: &str) -> bool {
+    if directorio.is_empty() || directorio.contains('\\') || directorio.contains(':') {
+        return false;
+    }
+    if directorio
+        .split('/')
+        .any(|segmento| segmento.is_empty() || matches!(segmento, "." | ".."))
+    {
+        return false;
+    }
+
+    let path = Path::new(directorio);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|componente| matches!(componente, Component::Normal(_)))
 }
 
 /// Contexto inmutable del recorrido de un directorio declarado del layout.
 struct Recorrido<'a> {
     /// Raíz del bundle (para reportar paths relativos).
     raiz: &'a Path,
+    /// Capability retenida para abrir y enumerar rutas sin volver a resolver
+    /// nombres desde el filesystem mutable.
+    raiz_anclada: &'a DirectorioLecturaAnclado,
     /// Nombre del directorio tal como lo declara el manifiesto.
     base_declarada: &'a str,
     /// Forma canónica de ese directorio: todo lo recorrido debe quedar
     /// dentro.
     base_canonica: &'a Path,
+    /// Raíz canónica del bundle: ningún enlace puede cruzar esta frontera.
+    raiz_canonica: &'a Path,
 }
 
-/// Recorre `dir` recursivamente. Sigue symlinks (vía `Path::is_dir`), así
+struct EstadoRecorrido<'a, O> {
+    encontrados: &'a mut Vec<PathBuf>,
+    errores: &'a mut Vec<ErrorBundle>,
+    camino: &'a mut Vec<PathBuf>,
+    procesados: &'a mut HashSet<PathBuf>,
+    observar: &'a mut O,
+    presupuesto: &'a mut PresupuestoBundle,
+}
+
+/// Recorre `dir` con DFS de profundidad limitada por el contrato de carga.
+/// Sigue symlinks a destinos internos al
+/// canonicalizar cada nombre, pero enumera esos destinos por handle anclado,
+/// así
 /// que distingue por el path canonicalizado dos situaciones que un `HashSet`
 /// único de "visitados" confundiría:
 ///
 /// - Ciclo real: el directorio a punto de entrar ya está en `camino`, la
-///   pila de directorios ancestros de la recursión actual (se empuja antes
-///   de recursar y se saca al volver). Un symlink que apunta a sí mismo o a
+///   pila de directorios ancestros del DFS (se empuja antes de bajar y se
+///   saca al volver). Un symlink que apunta a sí mismo o a
 ///   un ancestro repite un canonicalizado que ya está en esa pila; se
-///   reporta `Regla::Io` y se corta ahí en vez de recursar sin límite (lo
-///   que desbordaría la pila).
+///   reporta `Regla::Io` y se corta antes de entrar.
 /// - Diamante: dos rutas distintas, ninguna ancestro de la otra, llevan al
 ///   mismo directorio físico (p. ej. dos symlinks al mismo destino). No es
 ///   un ciclo ni un error. Para no cargar los mismos archivos dos veces
 ///   bajo paths distintos —lo que produciría nodos duplicados o colisiones
-///   de case—, `procesados` guarda el canonicalizado de cada directorio ya
-///   procesado por completo; la segunda vía que llega a él se salta en
-///   silencio, sin recursar ni reportar nada.
+///   de case—, `procesados` guarda el canonicalizado relativo a la raíz de
+///   cada directorio ya procesado por completo; la segunda vía que llega a
+///   él se salta en silencio, sin recursar ni reportar nada.
 /// - Fuga: un enlace que sale del directorio declarado (`base_canonica`),
 ///   p. ej. hacia la raíz del bundle o hacia un ancestro. El recorrido solo
 ///   puede ingerir archivos bajo los directorios del layout; un enlace así
 ///   se reporta `Regla::Io` y no se recorre. Sin esta comprobación, un
 ///   enlace a la raíz haría entrar archivos de fuera del layout antes de
 ///   que la pila de ancestros detectara el ciclo.
-fn recorrer(
+///
+/// Los nombres del directorio actual se retienen para ordenarlos, pero cada
+/// uno reserva antes sus bytes/ruta y entrada. Los límites controlan el input
+/// lógico, no el RSS exacto de `Vec`, `PathBuf` y `OsString`.
+fn recorrer<O: FnMut()>(
     ctx: &Recorrido<'_>,
     dir: &Path,
-    encontrados: &mut Vec<std::path::PathBuf>,
-    errores: &mut Vec<ErrorBundle>,
-    camino: &mut Vec<PathBuf>,
-    procesados: &mut HashSet<PathBuf>,
-) {
+    profundidad: usize,
+    bytes_ruta: usize,
+    estado: &mut EstadoRecorrido<'_, O>,
+) -> Result<(), ErrorBundle> {
     let canonico = match std::fs::canonicalize(dir) {
         Ok(c) => c,
         Err(err) => {
-            errores.push(error(
+            estado.errores.push(error(
                 Some(&relativa_a_raiz(ctx.raiz, dir)),
                 None,
                 Regla::Io,
                 err.to_string(),
             ));
-            return;
+            return Ok(());
         }
     };
 
-    if !canonico.starts_with(ctx.base_canonica) {
-        errores.push(error(
+    recorrer_canonico(ctx, dir, canonico, None, profundidad, bytes_ruta, estado)
+}
+
+/// Procesa una ruta lógica ya canonicalizada. La enumeración siempre ocurre
+/// sobre un handle abierto desde la raíz retenida, nunca sobre `dir`.
+fn recorrer_canonico<O: FnMut()>(
+    ctx: &Recorrido<'_>,
+    dir: &Path,
+    canonico: PathBuf,
+    mut directorio_abierto: Option<File>,
+    profundidad: usize,
+    bytes_ruta: usize,
+    estado: &mut EstadoRecorrido<'_, O>,
+) -> Result<(), ErrorBundle> {
+    if !canonico.starts_with(ctx.raiz_canonica) || !canonico.starts_with(ctx.base_canonica) {
+        estado.errores.push(error(
             Some(&relativa_a_raiz(ctx.raiz, dir)),
             None,
             Regla::Io,
@@ -638,11 +1481,11 @@ fn recorrer(
                 ctx.base_declarada
             ),
         ));
-        return;
+        return Ok(());
     }
 
-    if camino.contains(&canonico) {
-        errores.push(error(
+    if estado.camino.contains(&canonico) {
+        estado.errores.push(error(
             Some(&relativa_a_raiz(ctx.raiz, dir)),
             None,
             Regla::Io,
@@ -651,52 +1494,235 @@ fn recorrer(
                 relativa_a_raiz(ctx.raiz, dir)
             ),
         ));
-        return;
+        return Ok(());
     }
-    if !procesados.insert(canonico.clone()) {
+    let relativa = match canonico.strip_prefix(ctx.raiz_canonica) {
+        Ok(relativa) => relativa,
+        Err(_) => return Ok(()),
+    };
+    if estado.procesados.contains(relativa) {
         // Diamante: mismo directorio físico ya procesado por otra ruta.
-        return;
+        return Ok(());
     }
-
-    let entradas = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(err) => {
-            errores.push(error(
-                Some(&dir.to_string_lossy()),
+    estado
+        .presupuesto
+        .reservar_ruta_fisica(relativa.as_os_str().len())
+        .map_err(|recurso| {
+            error_limite_bundle(
+                Some(&relativa_a_raiz(ctx.raiz, dir)),
+                recurso,
+                estado.presupuesto.limites,
+            )
+        })?;
+    let insertado = estado.procesados.insert(relativa.to_path_buf());
+    debug_assert!(
+        insertado,
+        "el recorrido no inserta directorios concurrentemente"
+    );
+    // Seam determinista: permite sustituir la ruta tras su validación y
+    // antes de abrirla para enumerar; la apertura relativa debe fallar sin
+    // seguir symlinks ni reparse points.
+    (estado.observar)();
+    let mut directorio_abierto = match directorio_abierto.take() {
+        Some(directorio) => directorio,
+        None => match ctx.raiz_anclada.abrir_directorio_relativo(relativa) {
+            Ok(directorio) => directorio,
+            Err(err) => {
+                estado.errores.push(error(
+                    Some(&relativa_a_raiz(ctx.raiz, dir)),
+                    None,
+                    Regla::Io,
+                    error_lectura_anclada(err).to_string(),
+                ));
+                return Ok(());
+            }
+        },
+    };
+    let entradas_antes = estado.presupuesto.entradas;
+    let rutas_antes = estado.presupuesto.bytes_rutas;
+    let mut hijos = Vec::new();
+    let relativa_directorio = relativa_a_raiz(ctx.raiz, dir);
+    let nombres =
+        ctx.raiz_anclada
+            .nombres_directorio_abierto_con(&mut directorio_abierto, |nombre| {
+                let nombre_logico = nombre_componente_logico(&nombre).ok_or_else(|| {
+                    error(
+                        Some(&relativa_directorio),
+                        None,
+                        Regla::PathInvalido,
+                        "nombre de entrada no es un componente lógico UTF-8 válido",
+                    )
+                })?;
+                let profundidad_hijo = profundidad.checked_add(1).ok_or_else(|| {
+                    error_limite_bundle(
+                        Some(&relativa_directorio),
+                        RecursoBundle::Profundidad,
+                        estado.presupuesto.limites,
+                    )
+                })?;
+                let bytes_nombre = nombre_logico.len();
+                let bytes_ruta_hijo = bytes_ruta
+                    .checked_add(usize::from(bytes_ruta > 0))
+                    .and_then(|bytes| bytes.checked_add(bytes_nombre))
+                    .ok_or_else(|| {
+                        error_limite_bundle(
+                            Some(&relativa_directorio),
+                            RecursoBundle::BytesRutas,
+                            estado.presupuesto.limites,
+                        )
+                    })?;
+                estado
+                    .presupuesto
+                    .reservar_entrada(bytes_ruta_hijo, profundidad_hijo)
+                    .map_err(|recurso| {
+                        error_limite_bundle(
+                            Some(&relativa_directorio),
+                            recurso,
+                            estado.presupuesto.limites,
+                        )
+                    })?;
+                hijos.push((dir.join(&nombre), nombre, profundidad_hijo, bytes_ruta_hijo));
+                Ok(())
+            });
+    match nombres {
+        Ok(()) => {}
+        Err(ErrorLecturaNombres::Visitante(limite)) => return Err(limite),
+        Err(ErrorLecturaNombres::Directorio(err)) => {
+            estado.presupuesto.entradas = entradas_antes;
+            estado.presupuesto.bytes_rutas = rutas_antes;
+            estado.errores.push(error(
+                Some(&relativa_a_raiz(ctx.raiz, dir)),
                 None,
                 Regla::Io,
-                err.to_string(),
+                error_lectura_anclada(err).to_string(),
             ));
-            return;
+            return Ok(());
         }
-    };
-    let mut hijos: Vec<std::path::PathBuf> = Vec::new();
-    for entrada in entradas {
-        match entrada {
-            Ok(e) => hijos.push(e.path()),
+    }
+    hijos.sort_by(|(ruta_a, _, _, _), (ruta_b, _, _, _)| ruta_a.cmp(ruta_b));
+
+    estado.camino.push(canonico.clone());
+    for (ruta, nombre, profundidad_hijo, bytes_ruta_hijo) in hijos {
+        let ruta_canonica = match std::fs::canonicalize(&ruta) {
+            Ok(canonica) => canonica,
             Err(err) => {
-                errores.push(error(None, None, Regla::Io, err.to_string()));
+                if es_markdown(&ruta) {
+                    estado.encontrados.push(ruta);
+                } else if !es_archivo_regular_no_markdown(&ruta, None) {
+                    estado
+                        .errores
+                        .push(error_recorrido_io(ctx.raiz, &ruta, err.to_string()));
+                }
                 continue;
             }
+        };
+        let es_directorio = if ruta_canonica.starts_with(ctx.raiz_canonica)
+            && ruta_canonica.starts_with(ctx.base_canonica)
+        {
+            let relativa = match ruta_canonica.strip_prefix(ctx.raiz_canonica) {
+                Ok(relativa) => relativa,
+                Err(_) => continue,
+            };
+            let directorio = match ctx
+                .raiz_anclada
+                .abrir_directorio_hijo(&directorio_abierto, &nombre)
+            {
+                Ok(directorio) => Some(directorio),
+                Err(
+                    ErrorDirectorioAnclado::EnlaceNoPermitido
+                    | ErrorDirectorioAnclado::TipoNoAdmitido,
+                ) => {
+                    // Algunos sistemas reportan un symlink de directorio como
+                    // tipo no admitido al abrirlo con no-follow. La metadata
+                    // solo clasifica; nunca se usa para enumerar el destino.
+                    let destino_es_archivo = std::fs::metadata(&ruta_canonica)
+                        .map(|metadata| metadata.is_file())
+                        .unwrap_or(false);
+                    if destino_es_archivo {
+                        None
+                    } else {
+                        // Symlinks internos conservan la semántica histórica:
+                        // se sigue su destino solo tras canonicalizarlo y
+                        // comprobar que permanece dentro del layout.
+                        match ctx.raiz_anclada.abrir_directorio_relativo(relativa) {
+                            Ok(directorio) => Some(directorio),
+                            Err(err) => {
+                                estado.errores.push(error_recorrido_io(
+                                    ctx.raiz,
+                                    &ruta,
+                                    error_lectura_anclada(err).to_string(),
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    let archivo_regular = std::fs::metadata(&ruta_canonica)
+                        .map(|metadata| metadata.is_file())
+                        .unwrap_or(false);
+                    if !puede_ignorar_error_directorio(&ruta, archivo_regular) {
+                        estado.errores.push(error_recorrido_io(
+                            ctx.raiz,
+                            &ruta,
+                            error_lectura_anclada(err).to_string(),
+                        ));
+                    }
+                    continue;
+                }
+            };
+            match directorio {
+                Some(directorio) => {
+                    recorrer_canonico(
+                        ctx,
+                        &ruta,
+                        ruta_canonica,
+                        Some(directorio),
+                        profundidad_hijo,
+                        bytes_ruta_hijo,
+                        estado,
+                    )?;
+                    continue;
+                }
+                None => false,
+            }
+        } else {
+            // No se enumeran destinos externos. Solo se consulta su tipo para
+            // conservar el diagnóstico previo de una fuga de directorio.
+            match std::fs::metadata(&ruta_canonica) {
+                Ok(metadata) if metadata.is_dir() => true,
+                Ok(metadata) if puede_ignorar_error_directorio(&ruta, metadata.is_file()) => false,
+                Ok(_) => false,
+                Err(err) => {
+                    estado
+                        .errores
+                        .push(error_recorrido_io(ctx.raiz, &ruta, err.to_string()));
+                    continue;
+                }
+            }
+        };
+        if es_directorio {
+            recorrer_canonico(
+                ctx,
+                &ruta,
+                ruta_canonica,
+                None,
+                profundidad_hijo,
+                bytes_ruta_hijo,
+                estado,
+            )?;
+        } else if es_markdown(&ruta) {
+            estado.encontrados.push(ruta);
         }
     }
-    hijos.sort();
-
-    camino.push(canonico);
-    for ruta in hijos {
-        if ruta.is_dir() {
-            recorrer(ctx, &ruta, encontrados, errores, camino, procesados);
-        } else if ruta.extension().and_then(|e| e.to_str()) == Some("md") {
-            encontrados.push(ruta);
-        }
-    }
-    camino.pop();
+    estado.camino.pop();
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use universo_core::BundlePath;
+    use universo_core::{BundlePath, DeclArista, DeclPredicado, Sorte};
     use universo_testkit::manifiesto_minimo;
 
     fn doc(tipo: &str, titulo: &str, extra: &str) -> String {
@@ -704,6 +1730,204 @@ mod tests {
     }
     fn atomos_txt(u: &Estructura) -> Vec<String> {
         u.atomos().iter().map(ToString::to_string).collect()
+    }
+
+    fn cargar_bundle_con_presupuesto_test(
+        raiz: &Path,
+        manifiesto: Manifiesto,
+        limites: LimitesInventario,
+    ) -> Result<Estructura, Vec<ErrorBundle>> {
+        cargar_bundle_con_limites(
+            raiz,
+            manifiesto,
+            limites,
+            identidad_directorio_para_recorrido,
+            || {},
+            |_| {},
+        )
+    }
+
+    #[test]
+    fn errores_de_apertura_solo_omiten_archivos_regulares_no_markdown_confirmados() {
+        assert!(puede_ignorar_error_directorio(
+            Path::new("n/extra.bin"),
+            true
+        ));
+        assert!(!puede_ignorar_error_directorio(
+            Path::new("n/subdir"),
+            false
+        ));
+        assert!(!puede_ignorar_error_directorio(Path::new("n/doc.md"), true));
+    }
+
+    #[test]
+    fn componentes_logicos_rechazan_separadores() {
+        assert_eq!(
+            nombre_componente_logico(std::ffi::OsStr::new("x")),
+            Some("x")
+        );
+        assert_eq!(nombre_componente_logico(std::ffi::OsStr::new("x\\y")), None);
+        assert_eq!(nombre_componente_logico(std::ffi::OsStr::new("x/y")), None);
+    }
+
+    #[test]
+    fn presupuesto_bundle_acepta_limites_exactos_y_rechaza_el_exceso() {
+        let limites = LimitesInventario {
+            bytes_raw: 0,
+            entradas: 2,
+            profundidad: 2,
+            bytes_rutas: 5,
+        };
+        let mut presupuesto = PresupuestoBundle::nuevo(limites);
+        assert_eq!(presupuesto.reservar_entrada(2, 1), Ok(()));
+        assert_eq!(presupuesto.reservar_entrada(3, 2), Ok(()));
+        assert_eq!(presupuesto.entradas, 2);
+        assert_eq!(presupuesto.bytes_rutas, 5);
+        assert_eq!(
+            presupuesto.reservar_entrada(1, 2),
+            Err(RecursoBundle::Entradas)
+        );
+
+        let limites = LimitesInventario {
+            entradas: 4,
+            profundidad: 1,
+            bytes_rutas: 5,
+            ..limites
+        };
+        let mut presupuesto = PresupuestoBundle::nuevo(limites);
+        assert_eq!(presupuesto.reservar_entrada(5, 1), Ok(()));
+        assert_eq!(
+            presupuesto.reservar_entrada(0, 2),
+            Err(RecursoBundle::Profundidad)
+        );
+        assert_eq!(
+            presupuesto.reservar_entrada(1, 1),
+            Err(RecursoBundle::BytesRutas)
+        );
+
+        let limites = LimitesInventario {
+            bytes_raw: 4,
+            ..limites
+        };
+        let mut presupuesto = PresupuestoBundle::nuevo(limites);
+        assert_eq!(presupuesto.bytes_raw_restantes(), 4);
+        assert_eq!(presupuesto.registrar_bytes_raw(4), Ok(()));
+        assert_eq!(presupuesto.bytes_raw_restantes(), 0);
+        assert_eq!(
+            presupuesto.registrar_bytes_raw(1),
+            Err(RecursoBundle::BytesRaw)
+        );
+
+        let limites = LimitesInventario {
+            bytes_rutas: 5,
+            ..LimitesInventario::CONTRATO
+        };
+        let mut presupuesto = PresupuestoBundle::nuevo(limites);
+        assert_eq!(presupuesto.reservar_ruta_fisica(5), Ok(()));
+        assert_eq!(presupuesto.bytes_rutas_fisicas, 5);
+        assert_eq!(
+            presupuesto.reservar_ruta_fisica(1),
+            Err(RecursoBundle::BytesRutas)
+        );
+        assert_eq!(presupuesto.bytes_rutas_fisicas, 5);
+    }
+
+    #[test]
+    fn limites_de_recorrido_son_globales_y_aceptan_el_valor_exacto() {
+        let dir = tempfile::tempdir().unwrap();
+        let contenido_n = doc("a", "X", "");
+        let contenido_m = doc("a", "Y", "");
+        std::fs::create_dir_all(dir.path().join("n")).unwrap();
+        std::fs::create_dir_all(dir.path().join("m")).unwrap();
+        std::fs::write(dir.path().join("n/x.md"), &contenido_n).unwrap();
+        std::fs::write(dir.path().join("m/y.md"), &contenido_m).unwrap();
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios.push("m".to_string());
+        let exactos = LimitesInventario {
+            bytes_raw: contenido_n.len() + contenido_m.len(),
+            entradas: 4,
+            profundidad: 2,
+            bytes_rutas: 14,
+        };
+        assert_eq!(
+            cargar_bundle_con_presupuesto_test(dir.path(), manifiesto.clone(), exactos)
+                .unwrap()
+                .len_nodos(),
+            2
+        );
+
+        for (limites, esperado) in [
+            (
+                LimitesInventario {
+                    entradas: 3,
+                    ..exactos
+                },
+                "entradas",
+            ),
+            (
+                LimitesInventario {
+                    profundidad: 1,
+                    ..exactos
+                },
+                "profundidad",
+            ),
+            (
+                LimitesInventario {
+                    bytes_rutas: 13,
+                    ..exactos
+                },
+                "bytes de rutas",
+            ),
+            (
+                LimitesInventario {
+                    bytes_raw: exactos.bytes_raw - 1,
+                    ..exactos
+                },
+                "bytes de contenido",
+            ),
+        ] {
+            let errores =
+                cargar_bundle_con_presupuesto_test(dir.path(), manifiesto.clone(), limites)
+                    .unwrap_err();
+            assert!(
+                errores.iter().any(|error| {
+                    error.regla == Regla::LimiteBundleExcedido && error.detalle.contains(esperado)
+                }),
+                "se esperaba límite de {esperado}: {errores:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lectura_del_bundle_detecta_crecimiento_despues_de_validar_el_archivo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("n")).unwrap();
+        let contenido = doc("a", "X", "");
+        std::fs::write(dir.path().join("n/x.md"), &contenido).unwrap();
+        let errores = cargar_bundle_con_limites(
+            dir.path(),
+            manifiesto_minimo(),
+            LimitesInventario {
+                bytes_raw: contenido.len(),
+                entradas: 2,
+                profundidad: 2,
+                bytes_rutas: 7,
+            },
+            identidad_directorio_para_recorrido,
+            || {},
+            |ruta| {
+                std::fs::write(ruta, format!("{contenido}x")).unwrap();
+            },
+        )
+        .unwrap_err();
+        assert!(
+            errores.iter().any(|error| {
+                error.regla == Regla::LimiteBundleExcedido
+                    && error.path.as_deref() == Some("n/x.md")
+                    && error.detalle.contains("bytes de contenido")
+            }),
+            "el crecimiento concurrente debe quedar acotado y tipado: {errores:?}"
+        );
     }
 
     #[test]
@@ -756,6 +1980,75 @@ mod tests {
         assert_eq!(u.anexo(y).unwrap().cuerpo, "cuerpo\n");
         assert_eq!(u.len_nodos(), 7);
         assert_eq!(u.len_aristas(), 6);
+    }
+
+    #[test]
+    fn parser_resuelve_claves_con_indices_en_un_manifiesto_grande() {
+        const DECLARACIONES: usize = 256;
+        let mut manifiesto = manifiesto_minimo();
+        for indice in 0..DECLARACIONES {
+            let nombre_sorte = format!("tipo-{indice:03}");
+            let sorte = Sorte::nuevo(&nombre_sorte);
+            manifiesto.sortes_nodo.push(sorte.clone());
+            manifiesto
+                .sortes_nodo_disco
+                .insert(sorte, format!("disk-{indice:03}"));
+            manifiesto.predicados.push(DeclPredicado {
+                nombre: format!("atributo-{indice:03}"),
+                clave: format!("campo-{indice:03}"),
+                dominio: ["si".into()].into_iter().collect(),
+                orden: Vec::new(),
+                multivalor: false,
+                fecha: false,
+            });
+            manifiesto.aristas.push(DeclArista {
+                clave: format!("edge-{indice:03}"),
+                simetrica: true,
+                inversa: None,
+                destino: None,
+                etiqueta: None,
+            });
+        }
+
+        let ultimo = DECLARACIONES - 1;
+        let alias = format!("disk-{ultimo:03}");
+        let predicado = format!("atributo-{ultimo:03}");
+        let clave_predicado = format!("campo-{ultimo:03}");
+        let clave_arista = format!("edge-{ultimo:03}");
+        let extra = format!("{clave_predicado}: si\n{clave_arista}: []\n");
+        let archivos: Vec<(String, String)> = (0..DECLARACIONES)
+            .map(|indice| {
+                (
+                    format!("n/nodo-{indice:03}.md"),
+                    doc(&alias, &format!("Nodo {indice}"), &extra),
+                )
+            })
+            .collect();
+
+        let estructura = parsear_bundle(&archivos, manifiesto).unwrap();
+        assert_eq!(estructura.len_nodos(), DECLARACIONES);
+        assert_eq!(estructura.len_aristas(), 0);
+        let atomos = atomos_txt(&estructura);
+        assert_eq!(
+            atomos
+                .iter()
+                .filter(|atomo| atomo.starts_with("Type("))
+                .count(),
+            DECLARACIONES
+        );
+        assert_eq!(
+            atomos
+                .iter()
+                .filter(|atomo| atomo.starts_with(&format!("{predicado}(")))
+                .count(),
+            DECLARACIONES
+        );
+        assert!(
+            atomos
+                .iter()
+                .filter(|atomo| atomo.starts_with("Type("))
+                .all(|atomo| atomo.contains(&format!(", tipo-{ultimo:03})")))
+        );
     }
 
     #[test]
@@ -845,6 +2138,54 @@ mod tests {
             errores, ordenado,
             "los errores salen ordenados por (path, linea)"
         );
+        let ambiguo = errores
+            .iter()
+            .find(|error| error.regla == Regla::StemAmbiguo)
+            .unwrap();
+        assert!(ambiguo.detalle.contains("tiene 2 candidatos"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_layout_repetido_antes_de_acceder_a_la_raiz() {
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["ruta-privada".into(); 2];
+        manifiesto.layout.sin_iota.clear();
+
+        let errores = cargar_bundle(Path::new("raiz-que-no-existe"), manifiesto).unwrap_err();
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Estructura);
+        assert_eq!(errores[0].path, None);
+        assert_eq!(
+            errores[0].detalle,
+            "layout.directorios contiene rutas duplicadas"
+        );
+        assert!(!errores[0].to_string().contains("ruta-privada"));
+    }
+
+    #[test]
+    fn diez_mil_paths_colisionantes_reciben_un_testigo_por_error() {
+        let path = BundlePath::nuevo("n/repetido").unwrap();
+        let resueltos: Vec<ArchivoBundle> = (0..10_000)
+            .map(|_| ArchivoBundle {
+                path: path.clone(),
+                contenido: String::new(),
+            })
+            .collect();
+
+        let errores = errores_colisiones_case(&resueltos);
+        assert_eq!(errores.len(), resueltos.len());
+        assert!(errores.iter().all(|error| {
+            error.regla == Regla::ColisionDeCase && error.detalle == "colisiona con: n/repetido"
+        }));
+        let bytes_diagnosticos: usize = errores.iter().map(|error| error.detalle.len()).sum();
+        assert!(bytes_diagnosticos <= resueltos.len() * 32);
+    }
+
+    #[test]
+    fn detalle_de_stem_ambiguo_reporta_cantidad_sin_enumerar_paths() {
+        let detalle = detalle_stem_ambiguo("doc", "rel", 10_000);
+        assert_eq!(detalle, "[[doc]] desde clave rel tiene 10000 candidatos");
+        assert!(detalle.len() < 64);
     }
 
     #[test]
@@ -957,6 +2298,38 @@ mod tests {
     }
 
     #[test]
+    fn buscar_nombre_ignorado_es_logaritmico_y_conserva_el_nombre_exacto() {
+        fn techo_log2(valor: usize) -> usize {
+            if valor <= 1 {
+                0
+            } else {
+                usize::BITS as usize - (valor - 1).leading_zeros() as usize
+            }
+        }
+
+        let cantidad = 8192;
+        let ignorados: Vec<String> = (0..cantidad)
+            .map(|indice| format!("ignorado_{indice:05}.md"))
+            .collect();
+        let ordenados = nombres_ignorados_ordenados(&ignorados);
+        let mut comparaciones = 0;
+        assert!(contiene_nombre_ordenado(
+            &ordenados,
+            "ignorado_08191.md",
+            || comparaciones += 1,
+        ));
+        assert!(
+            comparaciones <= techo_log2(cantidad + 1),
+            "la búsqueda hizo {comparaciones} comparaciones para {cantidad} nombres"
+        );
+        assert!(!contiene_nombre_ordenado(
+            &ordenados,
+            "sub/ignorado_08191.md",
+            || {},
+        ));
+    }
+
+    #[test]
     fn cargar_desde_disco_respeta_layout_e_ignorados() {
         let c = universo_testkit::bundle_sintetico::Constructor::nuevo()
             .archivo("n/x.md", &doc("a", "X", ""))
@@ -969,12 +2342,561 @@ mod tests {
         assert_eq!(u.len_nodos(), 2);
         assert!(u.por_path(&BundlePath::nuevo("n/sub/z").unwrap()).is_some());
         let vacio = tempfile::tempdir().unwrap();
+        std::fs::create_dir(vacio.path().join("n")).unwrap();
         let u = cargar_bundle(vacio.path(), manifiesto_minimo()).unwrap();
         assert_eq!(
             u.len_nodos(),
             0,
-            "directorios ausentes se saltan en silencio"
+            "un directorio declarado existente puede estar vacío"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_rechaza_fifo_md_sin_bloquear() {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().unwrap();
+        let directorio = temp.path().join("n");
+        std::fs::create_dir(&directorio).unwrap();
+        let fifo = directorio.join("bloqueo.md");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the path is nul-terminated and mkfifo does not retain it.
+        assert_eq!(
+            unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) },
+            0,
+            "mkfifo failed: {}",
+            io::Error::last_os_error()
+        );
+
+        let raiz = temp.path().to_path_buf();
+        let (enviar, recibir) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = enviar.send(cargar_bundle(&raiz, manifiesto_minimo()));
+        });
+        let errores = recibir
+            .recv_timeout(Duration::from_secs(2))
+            .expect("la carga de un FIFO sin writer quedó bloqueada")
+            .unwrap_err();
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path.as_deref(), Some("n/bloqueo.md"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_no_sigue_ancestro_sustituido_tras_validar_archivo() {
+        let temp = tempfile::tempdir().unwrap();
+        let ancestro = temp.path().join("ancestro");
+        let raiz = ancestro.join("bundle");
+        let reubicado = temp.path().join("reubicado");
+        let externo = temp.path().join("externo");
+        std::fs::create_dir_all(raiz.join("n")).unwrap();
+        std::fs::create_dir_all(externo.join("bundle/n")).unwrap();
+        std::fs::write(raiz.join("n/x.md"), doc("a", "Interior", "")).unwrap();
+        std::fs::write(
+            externo.join("bundle/n/x.md"),
+            doc("a", "CANARY EXTERNO", ""),
+        )
+        .unwrap();
+
+        let mut sustituido = false;
+        let estructura = cargar_bundle_con_observadores(
+            &raiz,
+            manifiesto_minimo(),
+            identidad_directorio_para_recorrido,
+            || {},
+            |_| {
+                if !sustituido {
+                    std::fs::rename(&ancestro, &reubicado).unwrap();
+                    std::os::unix::fs::symlink(&externo, &ancestro).unwrap();
+                    sustituido = true;
+                }
+            },
+        )
+        .unwrap();
+
+        let id = estructura
+            .por_path(&BundlePath::nuevo("n/x").unwrap())
+            .unwrap();
+        assert!(sustituido);
+        assert_eq!(
+            estructura.nodo(id).unwrap().etiqueta.como_str(),
+            "Interior",
+            "la ruta sustituida no debe redirigir la lectura al canary externo"
+        );
+    }
+
+    #[test]
+    fn identidad_global_evitar_releer_alias() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        struct IdentidadFs(u8);
+
+        // El seam representa dos rutas declaradas distintas que el FS mapea
+        // al mismo objeto. El contador modela el recorrido que solo ocurre
+        // después de insertar una identidad nueva en el set compartido.
+        let raices = [
+            ("docs", IdentidadFs(1)),
+            ("DOCS", IdentidadFs(1)),
+            ("otra", IdentidadFs(2)),
+        ];
+        let mut procesadas = HashSet::new();
+        let mut arboles_leidos = 0;
+        for (_declarada, identidad) in raices {
+            if procesadas.insert(identidad) {
+                arboles_leidos += 1;
+            }
+        }
+        assert_eq!(arboles_leidos, 2);
+    }
+
+    #[test]
+    fn indice_de_rutas_canonicas_detecta_solapamiento_por_componentes() {
+        let mut indice = IndiceRutasCanonicas::default();
+        indice.insertar(Path::new("raiz/docs/sub"));
+        indice.insertar(Path::new("raiz/docs-extra"));
+
+        assert!(indice.contiene_exacta(Path::new("raiz/docs/sub")));
+        assert!(!indice.contiene_exacta(Path::new("raiz/docs")));
+        assert!(indice.se_solapa(Path::new("raiz/docs")));
+        assert!(indice.se_solapa(Path::new("raiz/docs/sub/mas")));
+        assert!(!indice.se_solapa(Path::new("raiz/docs-extra")));
+        assert!(!indice.se_solapa(Path::new("raiz/docs-extras")));
+        assert!(!indice.se_solapa(Path::new("raiz/docs/sub")));
+
+        let mut profunda = PathBuf::from("raiz/profunda");
+        for _ in 0..128 {
+            profunda.push("x");
+        }
+        indice.insertar(&profunda);
+        assert!(indice.se_solapa(profunda.parent().unwrap()));
+        assert!(indice.se_solapa(&profunda.join("hijo")));
+        assert!(!indice.se_solapa(Path::new("raiz/profunda-extra")));
+    }
+
+    #[test]
+    fn indice_y_presupuesto_no_retenen_prefijo_absoluto_largo() {
+        #[cfg(unix)]
+        let raiz = PathBuf::from("/");
+        #[cfg(windows)]
+        let raiz = PathBuf::from(r"C:\");
+
+        let raiz = raiz.join("p".repeat(64 * 1024));
+        let base_absoluta = raiz.join("target");
+        let base_relativa = base_absoluta.strip_prefix(&raiz).unwrap();
+        assert_eq!(base_relativa, Path::new("target"));
+
+        let mut indice = IndiceRutasCanonicas::default();
+        indice.insertar(base_relativa);
+        let almacenada = &indice.rutas.first().unwrap().0;
+        assert_eq!(almacenada, Path::new("target"));
+        assert_eq!(almacenada.as_os_str().len(), "target".len());
+
+        let mut presupuesto = PresupuestoBundle::nuevo(LimitesInventario {
+            bytes_rutas: "target".len(),
+            ..LimitesInventario::CONTRATO
+        });
+        assert_eq!(
+            presupuesto.reservar_ruta_fisica(base_relativa.as_os_str().len()),
+            Ok(())
+        );
+        assert_eq!(
+            presupuesto.reservar_ruta_fisica(1),
+            Err(RecursoBundle::BytesRutas)
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn cargar_bundle_presupuesta_ruta_fisica_canonica_exacta_y_exceso() {
+        let nombre_fisico = format!("target-{}", "p".repeat(64));
+        // La raíz canónica queda retenida por el índice de raíces y por el
+        // set `procesados` del recorrido.
+        let bytes_fisicos = nombre_fisico.len() * 2;
+        let contenido = doc("a", "Doc", "");
+
+        for (bytes_rutas, esperado) in [(bytes_fisicos, true), (bytes_fisicos - 1, false)] {
+            let raiz = tempfile::tempdir().unwrap();
+            let destino = raiz.path().join(&nombre_fisico);
+            std::fs::create_dir(&destino).unwrap();
+            std::fs::write(destino.join("doc.md"), &contenido).unwrap();
+            enlazar_directorio(&raiz.path().join("alias"), &destino);
+
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = vec!["alias".into()];
+            manifiesto.layout.sin_iota.clear();
+            let limites = LimitesInventario {
+                bytes_raw: contenido.len(),
+                entradas: 2,
+                profundidad: 2,
+                bytes_rutas,
+            };
+            let resultado = cargar_bundle_con_presupuesto_test(raiz.path(), manifiesto, limites);
+
+            if esperado {
+                assert_eq!(resultado.unwrap().len_nodos(), 1);
+            } else {
+                let errores = resultado.unwrap_err();
+                assert_eq!(errores.len(), 1, "{errores:?}");
+                assert_eq!(errores[0].regla, Regla::LimiteBundleExcedido);
+                assert_eq!(errores[0].path.as_deref(), Some("alias"));
+            }
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn cargar_bundle_presupuesta_rutas_procesadas_y_no_duplica_diamantes() {
+        let nombre_base = format!("target-{}", "p".repeat(48));
+        let nombre_subdir = "subdir";
+        let contenido = doc("a", "Doc", "");
+        let bytes_base = nombre_base.len();
+        let bytes_subdir_fisico = nombre_base.len() + 1 + nombre_subdir.len();
+        let bytes_fisicos = 2 * bytes_base + bytes_subdir_fisico;
+
+        for (bytes_rutas, esperado) in [(bytes_fisicos, true), (bytes_fisicos - 1, false)] {
+            let raiz = tempfile::tempdir().unwrap();
+            let destino = raiz.path().join(&nombre_base);
+            let subdir = destino.join(nombre_subdir);
+            std::fs::create_dir_all(&subdir).unwrap();
+            std::fs::write(subdir.join("doc.md"), &contenido).unwrap();
+            enlazar_directorio(&destino.join("a"), &subdir);
+            enlazar_directorio(&destino.join("b"), &subdir);
+            enlazar_directorio(&raiz.path().join("alias"), &destino);
+
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = vec!["alias".into()];
+            manifiesto.layout.sin_iota.clear();
+            let limites = LimitesInventario {
+                bytes_raw: contenido.len(),
+                entradas: 5,
+                profundidad: 3,
+                bytes_rutas,
+            };
+            let resultado = cargar_bundle_con_presupuesto_test(raiz.path(), manifiesto, limites);
+
+            if esperado {
+                assert_eq!(resultado.unwrap().len_nodos(), 1);
+            } else {
+                let errores = resultado.unwrap_err();
+                assert_eq!(errores.len(), 1, "{errores:?}");
+                assert_eq!(errores[0].regla, Regla::LimiteBundleExcedido);
+                assert_eq!(errores[0].path.as_deref(), Some("alias/a"));
+            }
+        }
+    }
+
+    #[test]
+    fn indice_de_roots_canonicos_limita_comparaciones_de_orden() {
+        const CANTIDAD: usize = 10_000;
+        let mut indice = IndiceRutasCanonicas::default();
+        COMPARACIONES_RUTAS_CANONICAS.with(|comparaciones| comparaciones.set(0));
+
+        for numero in 0..CANTIDAD {
+            let ruta = PathBuf::from("raiz").join(format!("docs-{numero:05}"));
+            assert!(!indice.se_solapa(&ruta));
+            indice.insertar(&ruta);
+        }
+
+        let comparaciones = COMPARACIONES_RUTAS_CANONICAS.with(std::cell::Cell::get);
+        let logaritmo = (usize::BITS - CANTIDAD.leading_zeros()) as usize;
+        let techo = CANTIDAD * (8 * logaritmo + 16);
+        assert!(
+            comparaciones <= techo,
+            "{comparaciones} comparaciones BTree para {CANTIDAD} raíces (techo {techo}); el costo por comparación depende de la longitud de ruta"
+        );
+        assert_eq!(indice.rutas.len(), CANTIDAD);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn identidad_no_soportada_deduplica_por_ruta_canonica_antes_del_recorrido() {
+        let temp = tempfile::tempdir().unwrap();
+        let docs = temp.path().join("docs");
+        let alias = temp.path().join("alias");
+        std::fs::create_dir(&docs).unwrap();
+        std::fs::write(docs.join("doc.md"), doc("a", "Doc", "")).unwrap();
+        enlazar_directorio(&alias, &docs);
+
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["docs".into(), "alias".into()];
+        manifiesto.layout.sin_iota.clear();
+        let mut rutas_identificadas = Vec::new();
+        let mut recorridos = 0;
+        let errores = cargar_bundle_observando(
+            temp.path(),
+            manifiesto,
+            |ruta| {
+                rutas_identificadas.push(ruta.to_path_buf());
+                Ok(None)
+            },
+            || recorridos += 1,
+        )
+        .unwrap_err();
+
+        assert_eq!(rutas_identificadas.len(), 2);
+        assert_eq!(rutas_identificadas[0], rutas_identificadas[1]);
+        assert_eq!(recorridos, 1);
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Estructura);
+        assert_eq!(errores[0].path, None);
+        assert_eq!(
+            errores[0].detalle,
+            "layout.directorios contiene rutas que resuelven al mismo directorio"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn roots_anidadas_fallback_no_retiene_aliases_rechazadas() {
+        let temp = tempfile::tempdir().unwrap();
+        let docs = temp.path().join("docs");
+        let sub = docs.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("doc.md"), doc("a", "Doc", "")).unwrap();
+        enlazar_directorio(&temp.path().join("alias"), &sub);
+        enlazar_directorio(&temp.path().join("alias-2"), &sub);
+
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["docs".into(), "alias".into(), "alias-2".into()];
+        manifiesto.layout.sin_iota.clear();
+        let mut recorridos = 0;
+        let errores =
+            cargar_bundle_observando(temp.path(), manifiesto, |_| Ok(None), || recorridos += 1)
+                .unwrap_err();
+
+        assert_eq!(
+            recorridos, 2,
+            "solo se recorre la raíz docs y su subdirectorio"
+        );
+        assert_eq!(errores.len(), 2, "{errores:?}");
+        assert!(errores.iter().all(|error| {
+            error.regla == Regla::Estructura
+                && error.path.is_none()
+                && error.detalle
+                    == "layout.directorios contiene rutas que resuelven a directorios solapados"
+        }));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn cargar_bundle_rechaza_raices_que_resuelven_a_ancestro_fisico() {
+        for (directorios, recorridos_esperados) in
+            [(vec!["docs", "alias"], 2), (vec!["alias", "docs"], 1)]
+        {
+            let temp = tempfile::tempdir().unwrap();
+            let docs = temp.path().join("docs");
+            let sub = docs.join("sub");
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join("doc.md"), doc("a", "Doc", "")).unwrap();
+            enlazar_directorio(&temp.path().join("alias"), &sub);
+
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = directorios.into_iter().map(str::to_string).collect();
+            manifiesto.layout.sin_iota.clear();
+            let mut recorridos = 0;
+            let errores = cargar_bundle_observando(
+                temp.path(),
+                manifiesto,
+                identidad_directorio_para_recorrido,
+                || recorridos += 1,
+            )
+            .unwrap_err();
+
+            assert_eq!(errores.len(), 1, "{errores:?}");
+            assert_eq!(errores[0].regla, Regla::Estructura);
+            assert_eq!(errores[0].path, None);
+            assert_eq!(
+                errores[0].detalle,
+                "layout.directorios contiene rutas que resuelven a directorios solapados"
+            );
+            assert_eq!(recorridos, recorridos_esperados);
+        }
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_layout_case_insensitive_antes_de_acceder_a_la_raiz() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["Docs".into(), "docs".into()];
+        manifiesto.layout.sin_iota.clear();
+        let errores = cargar_bundle(&temp.path().join("raiz-inexistente"), manifiesto).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Estructura);
+        assert_eq!(errores[0].path, None);
+        assert_eq!(
+            errores[0].detalle,
+            "layout.directorios contiene rutas duplicadas"
+        );
+        assert!(
+            !errores[0]
+                .detalle
+                .contains(&temp.path().to_string_lossy().to_string()),
+            "el error no debe revelar rutas físicas"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_rechaza_directorios_distintos_por_case_en_unix_por_portabilidad() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("docs")).unwrap();
+        std::fs::create_dir(temp.path().join("DOCS")).unwrap();
+        std::fs::write(temp.path().join("docs").join("uno.md"), doc("a", "Uno", "")).unwrap();
+        std::fs::write(temp.path().join("DOCS").join("dos.md"), doc("a", "Dos", "")).unwrap();
+
+        let mut manifiesto = manifiesto_minimo();
+        manifiesto.layout.directorios = vec!["docs".into(), "DOCS".into()];
+        manifiesto.layout.sin_iota.clear();
+        let errores = cargar_bundle(temp.path(), manifiesto).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Estructura);
+        assert_eq!(
+            errores[0].detalle,
+            "layout.directorios contiene rutas duplicadas"
+        );
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_raiz_inexistente() {
+        let dir = tempfile::tempdir().unwrap();
+        let raiz = dir.path().join("no-existe");
+
+        let errores = cargar_bundle(&raiz, manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path, None);
+        assert!(errores[0].detalle.contains("raíz del bundle"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_raiz_que_no_es_directorio() {
+        let dir = tempfile::tempdir().unwrap();
+        let raiz = dir.path().join("archivo");
+        std::fs::write(&raiz, "no es un bundle").unwrap();
+
+        let errores = cargar_bundle(&raiz, manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path, None);
+        assert!(errores[0].detalle.contains("no es un directorio"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_directorio_de_layout_ausente() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path.as_deref(), Some("n"));
+        assert!(errores[0].detalle.contains("directorio declarado"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_ruta_de_layout_que_no_es_directorio() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("n"), "no es un directorio").unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path.as_deref(), Some("n"));
+        assert!(errores[0].detalle.contains("no es un directorio"));
+    }
+
+    #[test]
+    fn cargar_bundle_rechaza_directorios_de_layout_no_relativos_o_con_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let absoluta = dir.path().join("n").to_string_lossy().into_owned();
+
+        for directorio in [absoluta, "../fuera".into(), "n/../fuera".into()] {
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = vec![directorio.clone()];
+            manifiesto.layout.sin_iota.clear();
+
+            let errores = cargar_bundle(dir.path(), manifiesto).unwrap_err();
+
+            assert_eq!(errores.len(), 1, "{directorio}: {errores:?}");
+            assert_eq!(errores[0].regla, Regla::PathInvalido);
+            assert_eq!(errores[0].path, None);
+            assert_eq!(
+                errores[0].detalle,
+                "layout.directorios contiene una ruta no portable"
+            );
+        }
+    }
+
+    #[test]
+    fn parsear_bundle_mapea_rutas_layout_no_portables_a_path_invalido() {
+        for campo in [0, 1, 2, 3] {
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.sin_iota.clear();
+            match campo {
+                0 => manifiesto.layout.directorios = vec!["docs/COM²".into()],
+                1 => manifiesto.layout.sin_iota = vec!["n/LPT9.txt".into()],
+                2 => manifiesto.layout.ignorados = vec!["COM1.md".into()],
+                _ => manifiesto.layout.directorios = vec![format!("docs/{}", "a".repeat(256))],
+            }
+            let errores = parsear_bundle(&[], manifiesto).unwrap_err();
+            assert_eq!(errores.len(), 1, "{errores:?}");
+            assert_eq!(errores[0].regla, Regla::PathInvalido);
+            assert_eq!(errores[0].path, None);
+            assert!(errores[0].detalle.contains("layout."));
+        }
+    }
+
+    #[test]
+    fn parsear_bundle_mapea_stem_temporal_demasiado_largo_a_path_invalido() {
+        let archivo = format!("n/{}.md", "a".repeat(249));
+        let path_esperado = format!("n/{}", "a".repeat(249));
+        let errores =
+            parsear_bundle(&[(archivo, doc("a", "X", ""))], manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::PathInvalido);
+        assert_eq!(errores[0].path.as_deref(), Some(path_esperado.as_str()));
+        assert!(errores[0].detalle.contains("248 unidades UTF-16"));
+    }
+
+    #[test]
+    fn parsear_bundle_rechaza_roots_case_insensitive_repetidos_o_solapados() {
+        for (directorios, detalle) in [
+            (vec!["Docs".into(), "docs".into()], "rutas duplicadas"),
+            (vec!["Docs".into(), "docs/sub".into()], "rutas solapadas"),
+        ] {
+            let mut manifiesto = manifiesto_minimo();
+            manifiesto.layout.directorios = directorios;
+            manifiesto.layout.sin_iota.clear();
+            let errores = parsear_bundle(&[], manifiesto).unwrap_err();
+            assert_eq!(errores.len(), 1, "{errores:?}");
+            assert_eq!(errores[0].regla, Regla::Estructura);
+            assert!(errores[0].detalle.contains(detalle), "{errores:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_mapea_nombre_windows_no_portable_a_path_invalido() {
+        let temp = tempfile::tempdir().unwrap();
+        let directorio = temp.path().join("n");
+        std::fs::create_dir(&directorio).unwrap();
+        std::fs::write(directorio.join("x?.md"), doc("a", "X", "")).unwrap();
+
+        let errores = cargar_bundle(temp.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::PathInvalido);
+        assert_eq!(errores[0].path.as_deref(), Some("n/x?"));
     }
 
     #[test]
@@ -989,6 +2911,42 @@ mod tests {
         let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
         assert_eq!(errores[0].regla, Regla::NoUtf8);
         assert_eq!(errores[0].path.as_deref(), Some("n/x"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_rechaza_nombre_fisico_con_backslash() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let directorio = dir.path().join("n");
+        std::fs::create_dir(&directorio).unwrap();
+        let nombre = std::ffi::OsStr::from_bytes(b"x\\y.md");
+        std::fs::write(directorio.join(nombre), doc("a", "X", "")).unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::PathInvalido);
+        assert_eq!(errores[0].path.as_deref(), Some("n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_rechaza_nombre_fisico_no_utf8() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let directorio = dir.path().join("n");
+        std::fs::create_dir(&directorio).unwrap();
+        let nombre = std::ffi::OsString::from_vec(b"x\xff.md".to_vec());
+        std::fs::write(directorio.join(nombre), doc("a", "X", "")).unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::PathInvalido);
+        assert_eq!(errores[0].path.as_deref(), Some("n"));
     }
 
     /// Crea `enlace` → `destino` como symlink de directorio o, si Windows
@@ -1013,6 +2971,76 @@ mod tests {
     #[cfg(unix)]
     fn enlazar_directorio(enlace: &Path, destino: &Path) {
         std::os::unix::fs::symlink(destino, enlace).unwrap();
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn enumeracion_no_sigue_ancestro_sustituido_tras_validarlo() {
+        let temp = tempfile::tempdir().unwrap();
+        let raiz = temp.path().join("bundle");
+        let directorio = raiz.join("n");
+        let movido = temp.path().join("n-original");
+        let externo = temp.path().join("externo");
+        std::fs::create_dir_all(&directorio).unwrap();
+        std::fs::create_dir(&externo).unwrap();
+        std::fs::write(directorio.join("interior.md"), doc("a", "Interior", "")).unwrap();
+        std::fs::write(externo.join("externo.md"), doc("a", "Externo", "")).unwrap();
+
+        let mut sustituido = false;
+        let errores = cargar_bundle_con_observadores(
+            &raiz,
+            manifiesto_minimo(),
+            identidad_directorio_para_recorrido,
+            || {
+                if !sustituido {
+                    std::fs::rename(&directorio, &movido).unwrap();
+                    enlazar_directorio(&directorio, &externo);
+                    sustituido = true;
+                }
+            },
+            |_| {},
+        )
+        .unwrap_err();
+
+        assert!(sustituido);
+        assert!(
+            errores
+                .iter()
+                .any(|error| error.path.as_deref() == Some("n")),
+            "la apertura anclada debe fallar cerrada tras sustituir el directorio: {errores:?}"
+        );
+        assert!(
+            !errores
+                .iter()
+                .any(|error| error.path.as_deref() == Some("n/externo.md")),
+            "no deben enumerarse nombres del directorio externo: {errores:?}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cargar_bundle_rechaza_ancestro_junction_del_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let ancestro = temp.path().join("ancestro");
+        let raiz = ancestro.join("bundle");
+        let reubicado = temp.path().join("reubicado");
+        let externo = temp.path().join("externo");
+        std::fs::create_dir_all(raiz.join("n")).unwrap();
+        std::fs::create_dir_all(externo.join("bundle/n")).unwrap();
+        std::fs::write(raiz.join("n/x.md"), doc("a", "Interior", "")).unwrap();
+        std::fs::write(
+            externo.join("bundle/n/x.md"),
+            doc("a", "CANARY EXTERNO", ""),
+        )
+        .unwrap();
+        std::fs::rename(&ancestro, &reubicado).unwrap();
+        enlazar_directorio(&ancestro, &externo);
+
+        let errores = cargar_bundle(&raiz, manifiesto_minimo()).unwrap_err();
+        assert_eq!(errores.len(), 1, "{errores:?}");
+        assert_eq!(errores[0].regla, Regla::Io);
+        assert_eq!(errores[0].path, None);
+        assert!(errores[0].detalle.contains("raíz del bundle"));
     }
 
     #[test]
@@ -1083,6 +3111,27 @@ mod tests {
                 .iter()
                 .any(|e| e.regla == Regla::Io && e.detalle.contains("ciclo")),
             "{errores:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargar_bundle_reporta_symlink_no_markdown_con_error_de_resolucion() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("n")).unwrap();
+        std::fs::write(dir.path().join("n/x.md"), doc("a", "X", "")).unwrap();
+        let a = dir.path().join("n/a.bin");
+        let b = dir.path().join("n/b.bin");
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+
+        let errores = cargar_bundle(dir.path(), manifiesto_minimo()).unwrap_err();
+        assert!(
+            errores.iter().any(|error| {
+                error.regla == Regla::Io
+                    && matches!(error.path.as_deref(), Some("n/a.bin" | "n/b.bin"))
+            }),
+            "un symlink no Markdown que no se puede resolver debe impedir una carga parcial: {errores:?}"
         );
     }
 

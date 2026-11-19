@@ -1,0 +1,915 @@
+//! Dueño en memoria del lock y el parent de una transacción.
+//!
+//! Conserva el lock y el parent retenido, emite leases secuenciales del journal
+//! y contexto, y observa el root raw. Sus resultados son datos, no autoridad de
+//! recovery; el token de scope no demuestra una frontera general de mounts.
+
+use std::ffi::OsStr;
+use std::fmt;
+use std::fs::File;
+use std::sync::Arc;
+
+use crate::transaccion::captura::{
+    ConfigRawCapturada, Snapshot, capturar_snapshot_soportado_anclado,
+    capturar_snapshot_soportado_con_cas_anclado,
+};
+use crate::transaccion::journal::v2::JournalV2;
+use crate::transaccion::lock::LockEscritura;
+use crate::transaccion::snapshot::{ErrorSnapshot, SnapshotToken};
+
+use super::abrir::abrir_entrada_relativa;
+use super::{
+    DirectorioAnclado, ErrorDirectorioAnclado, IdentidadDirectorio, ScopeFilesystem,
+    TipoEntradaAnclada, abrir_directorio_hijo_lectura, identidad_archivo, metadata_directorio,
+    scope_filesystem, validar_componente,
+};
+
+/// Error único y redactado cuando no se puede demostrar el ownership anclado.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ErrorDuenioTransaccionAnclado {
+    NoVerificable,
+}
+
+impl ErrorDuenioTransaccionAnclado {
+    pub(crate) const fn codigo(self) -> &'static str {
+        "transaction_owner_unverified"
+    }
+}
+
+impl fmt::Debug for ErrorDuenioTransaccionAnclado {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ErrorDuenioTransaccionAnclado")
+            .field(&self.codigo())
+            .finish()
+    }
+}
+
+impl fmt::Display for ErrorDuenioTransaccionAnclado {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.codigo())
+    }
+}
+
+impl std::error::Error for ErrorDuenioTransaccionAnclado {}
+
+/// Retiene el guard, el parent abierto y los tokens para leases futuros.
+///
+/// Sus campos son privados y el parent se conserva aunque cambie su nombre en
+/// el namespace. La capability solo coordina escritores cooperantes; no cubre
+/// hardlinks ni carreras de procesos externos.
+#[must_use = "el dueño mantiene el lock y el parent anclado durante la operación"]
+pub(crate) struct DuenioTransaccionAnclado<'lock> {
+    _lock: &'lock mut LockEscritura,
+    parent: File,
+    identidad_parent: IdentidadDirectorio,
+    scope_parent: ScopeFilesystem,
+    _autoridad: Arc<()>,
+}
+
+impl<'lock> DuenioTransaccionAnclado<'lock> {
+    /// Fija el parent de la ubicación del lock sin abrir ni inspeccionar root.
+    pub(crate) fn desde_lock(
+        lock: &'lock mut LockEscritura,
+    ) -> Result<Self, ErrorDuenioTransaccionAnclado> {
+        let ubicacion = lock.ubicacion();
+        let parent_path = ubicacion
+            .ruta()
+            .parent()
+            .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let nombre_lock = ubicacion
+            .lock()
+            .as_path()
+            .file_name()
+            .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?
+            .to_os_string();
+        validar_componente(&nombre_lock).map_err(mapear_error)?;
+
+        let parent = super::abrir_directorio_absoluto(parent_path, true).map_err(mapear_error)?;
+        let identidad_parent = metadata_directorio(&parent).map_err(mapear_error)?;
+        let scope_parent = scope_filesystem(&parent).map_err(mapear_error)?;
+        let lock_visible =
+            abrir_entrada_relativa(&parent, &nombre_lock, TipoEntradaAnclada::Archivo)
+                .map_err(mapear_error)?;
+        let identidad_visible = identidad_archivo(&lock_visible)
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let identidad_guard = lock
+            .identidad_archivo_lock()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        if identidad_visible != identidad_guard {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        let autoridad = lock.autoridad();
+        Ok(Self {
+            _lock: lock,
+            parent,
+            identidad_parent,
+            scope_parent,
+            _autoridad: autoridad,
+        })
+    }
+
+    /// Emite un lease del journal desde el mismo parent retenido por el dueño.
+    ///
+    /// Revalida parent, scope y lock sibling antes de clonar el handle. El
+    /// préstamo mutable del dueño impide mantener dos leases a la vez.
+    pub(crate) fn journal_temporal(
+        &mut self,
+    ) -> Result<
+        super::journal_temporal::JournalTemporalAnclado<'_>,
+        super::journal_temporal::ErrorJournalAnclado,
+    > {
+        let parent = self.parent_revalidado()?;
+        super::journal_temporal::desde_parent_retenido(
+            &mut *self._lock,
+            parent,
+            self.identidad_parent,
+            Arc::clone(&self._autoridad),
+        )
+    }
+
+    /// Emite un lease del Journal que conserva el scope capturado por el dueño.
+    ///
+    /// Emite el lease estricto del Journal usado por el consumidor privado
+    /// A→Journal→B. Los leases legacy conservan `journal_temporal`.
+    pub(super) fn journal_temporal_estricto(
+        &mut self,
+    ) -> Result<
+        super::journal_temporal::JournalTemporalAnclado<'_>,
+        super::journal_temporal::ErrorJournalAnclado,
+    > {
+        let parent = self.parent_revalidado()?;
+        super::journal_temporal::desde_parent_retenido_con_scope(
+            &mut *self._lock,
+            parent,
+            self.identidad_parent,
+            self.scope_parent,
+            Arc::clone(&self._autoridad),
+        )
+    }
+
+    /// Prepara el sucesor V2 y conserva su resultado hasta el postcheck exterior.
+    #[must_use]
+    pub(super) fn preparar_sucesor_journal_v2<'original>(
+        &mut self,
+        original: &'original super::journal_temporal::versionado::ObservacionJournalPersistido,
+    ) -> ResultadoOwnerPostcheck<
+        Result<
+            super::journal_temporal::ReciboTemporalSucesorJournalV2<'original>,
+            super::journal_temporal::ErrorJournalAnclado,
+        >,
+    > {
+        ejecutar_con_owner_y_postcheck(
+            self,
+            |_| {},
+            |owner| {
+                owner
+                    .journal_temporal_estricto()
+                    .and_then(|lease| lease.preparar_sucesor_temporal_v2(original))
+            },
+            |owner, _| owner.parent_revalidado().map(|_| ()),
+        )
+    }
+
+    /// Publicación de almacenamiento; el caller debe acreditar la fila del filesystem.
+    pub(super) fn publicar_sucesor_journal_v2(
+        &mut self,
+        recibo: &super::journal_temporal::ReciboTemporalSucesorJournalV2<'_>,
+    ) -> ResultadoOwnerPostcheck<
+        Result<
+            super::journal_temporal::EstadoPublicacionSucesorV2,
+            super::journal_temporal::ErrorJournalAnclado,
+        >,
+    > {
+        ejecutar_con_owner_y_postcheck(
+            self,
+            |_| {},
+            |owner| {
+                owner
+                    .journal_temporal_estricto()
+                    .and_then(|lease| lease.publicar_sucesor_v2(recibo))
+            },
+            |owner, _| owner.parent_revalidado().map(|_| ()),
+        )
+    }
+
+    /// Crea y relee el temporal v2 mientras este owner conserva el lock.
+    ///
+    /// El resultado es un recibo privado de almacenamiento; no publica el
+    /// journal ni concede una acción posterior.
+    pub(super) fn crear_temporal_journal_v2<'owner>(
+        &'owner mut self,
+        journal: &JournalV2,
+    ) -> Result<ReciboTemporalJournalV2<'owner, 'lock>, super::journal_temporal::ErrorJournalAnclado>
+    {
+        self.crear_temporal_journal_v2_con(
+            journal,
+            || {},
+            || {},
+            |owner, _| owner.parent_revalidado(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn crear_temporal_journal_v2_con_prueba<'owner, Antes, Despues, Postcheck>(
+        &'owner mut self,
+        journal: &JournalV2,
+        antes_de_lease: Antes,
+        despues_de_lease: Despues,
+        postcheck: Postcheck,
+    ) -> Result<ReciboTemporalJournalV2<'owner, 'lock>, super::journal_temporal::ErrorJournalAnclado>
+    where
+        Antes: FnOnce(),
+        Despues: FnOnce(),
+        Postcheck: FnOnce(
+            &mut Self,
+            &Result<
+                super::journal_temporal::IdentidadArchivoJournal,
+                super::journal_temporal::ErrorJournalAnclado,
+            >,
+        ) -> Result<File, super::journal_temporal::ErrorJournalAnclado>,
+    {
+        self.crear_temporal_journal_v2_con(journal, antes_de_lease, despues_de_lease, postcheck)
+    }
+
+    fn crear_temporal_journal_v2_con<'owner, Antes, Despues, Postcheck>(
+        &'owner mut self,
+        journal: &JournalV2,
+        antes_de_lease: Antes,
+        despues_de_lease: Despues,
+        postcheck: Postcheck,
+    ) -> Result<ReciboTemporalJournalV2<'owner, 'lock>, super::journal_temporal::ErrorJournalAnclado>
+    where
+        Antes: FnOnce(),
+        Despues: FnOnce(),
+        Postcheck: FnOnce(
+            &mut Self,
+            &Result<
+                super::journal_temporal::IdentidadArchivoJournal,
+                super::journal_temporal::ErrorJournalAnclado,
+            >,
+        ) -> Result<File, super::journal_temporal::ErrorJournalAnclado>,
+    {
+        use super::journal_temporal::ErrorJournalAnclado;
+
+        self.parent_revalidado()?;
+        let parent_esperado = self.identidad_parent.journal_identity();
+        antes_de_lease();
+
+        let lectura = match parent_esperado {
+            None => Err(ErrorJournalAnclado::ParentIdentityUnavailable),
+            Some(parent) if journal.parent() != &parent => {
+                Err(ErrorJournalAnclado::ParentIdentityMismatch)
+            }
+            Some(_) => self
+                .journal_temporal_estricto()
+                .and_then(|lease| lease.crear_temporal_v2(journal)),
+        };
+        despues_de_lease();
+
+        let verificacion = lectura.and_then(|identidad| {
+            let nombre_temporal = self._lock.ubicacion().nombre_journal_temporal();
+            visible_identity_probe::confirmar_sibling_presente_con_identidad(
+                &self.parent,
+                &nombre_temporal,
+                self.scope_parent,
+                identidad.identidad_archivo(),
+            )
+            .map_err(|_| ErrorJournalAnclado::IdentityMismatch)?;
+            Ok(identidad)
+        });
+
+        let resultado_postcheck = postcheck(self, &verificacion);
+        resultado_postcheck?;
+        let identidad = verificacion?;
+
+        Ok(ReciboTemporalJournalV2 {
+            _owner: self,
+            journal: journal.clone(),
+            identidad,
+        })
+    }
+
+    /// Devuelve datos versionados solo tras volver a validar el owner.
+    pub(super) fn observar_journal_versionado(
+        &mut self,
+    ) -> Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    > {
+        self.observar_journal_versionado_con(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_journal_versionado_con_prueba<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        self.observar_journal_versionado_con(despues_de_leer)
+    }
+
+    fn observar_journal_versionado_con<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = self.leer_journal_versionado_con(despues_de_leer)?;
+        let postcheck = self.parent_revalidado();
+        finalizar_observacion_journal_versionado(lectura, postcheck)
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_journal_versionado_con_posterror_prueba<F>(
+        &mut self,
+        despues_de_leer: F,
+        error: super::journal_temporal::ErrorJournalAnclado,
+    ) -> Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = self.leer_journal_versionado_con(despues_de_leer)?;
+        finalizar_observacion_journal_versionado(lectura, Err(error))
+    }
+
+    fn leer_journal_versionado_con<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Result<
+            Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+            super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+        >,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = {
+            let lease = self.journal_temporal_estricto().map_err(
+                super::journal_temporal::versionado::ErrorLecturaJournalVersionada::Lease,
+            )?;
+            lease.observar_versionado()
+        };
+        despues_de_leer();
+        Ok(lectura)
+    }
+
+    /// Emite un lease de lectura del contexto canónico desde el mismo parent.
+    ///
+    /// Revalida identidad, scope y lock visible antes de ceder el lease. Los
+    /// bytes leídos siguen siendo datos, no autorización de recovery.
+    pub(crate) fn contexto_admision(
+        &mut self,
+    ) -> Result<
+        super::contexto_admision::ContextoAdmisionAnclado<'_>,
+        super::contexto_admision::ErrorContextoAdmisionAnclado,
+    > {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| super::contexto_admision::ErrorContextoAdmisionAnclado::OwnerUnverified)?;
+        super::contexto_admision::desde_parent_retenido(
+            &mut *self._lock,
+            parent,
+            self.identidad_parent,
+            self.scope_parent,
+            Arc::clone(&self._autoridad),
+        )
+    }
+
+    /// Devuelve la lectura versionada solo tras soltar el lease y validar el owner.
+    pub(super) fn observar_contexto_versionado(
+        &mut self,
+    ) -> Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    > {
+        self.observar_contexto_versionado_con(|| {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_contexto_versionado_con_prueba<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        self.observar_contexto_versionado_con(despues_de_leer)
+    }
+
+    fn observar_contexto_versionado_con<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = self.leer_contexto_versionado_con(despues_de_leer)?;
+        let postcheck = self.parent_revalidado();
+        finalizar_observacion_contexto_versionado(lectura, postcheck)
+    }
+
+    #[cfg(test)]
+    pub(super) fn observar_contexto_versionado_con_posterror_prueba(
+        &mut self,
+        error: super::journal_temporal::ErrorJournalAnclado,
+    ) -> Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    > {
+        let lectura = self.leer_contexto_versionado_con(|| {})?;
+        finalizar_observacion_contexto_versionado(lectura, Err(error))
+    }
+
+    fn leer_contexto_versionado_con<F>(
+        &mut self,
+        despues_de_leer: F,
+    ) -> Result<
+        Result<
+            Option<super::contexto_admision::ObservacionContextoVersionada>,
+            super::contexto_admision::ErrorLecturaContextoVersionada,
+        >,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    >
+    where
+        F: FnOnce(),
+    {
+        let lectura = {
+            let lease = self
+                .contexto_admision()
+                .map_err(super::contexto_admision::ErrorLecturaContextoVersionada::Lease)?;
+            lease.observar_versionado()
+        };
+        despues_de_leer();
+        Ok(lectura)
+    }
+
+    fn abrir_root_lectura(
+        &self,
+    ) -> Result<Option<DirectorioAnclado>, ErrorDuenioTransaccionAnclado> {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        let ruta_root = self._lock.ubicacion().ruta();
+        let basename = ruta_root
+            .file_name()
+            .ok_or(ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        self.abrir_sibling_lectura_desde_parent(parent, basename)
+    }
+
+    fn abrir_sibling_lectura(
+        &self,
+        nombre: &OsStr,
+    ) -> Result<Option<DirectorioAnclado>, ErrorDuenioTransaccionAnclado> {
+        let parent = self
+            .parent_revalidado()
+            .map_err(|_| ErrorDuenioTransaccionAnclado::NoVerificable)?;
+        self.abrir_sibling_lectura_desde_parent(parent, nombre)
+    }
+
+    fn abrir_sibling_lectura_desde_parent(
+        &self,
+        parent: File,
+        nombre: &OsStr,
+    ) -> Result<Option<DirectorioAnclado>, ErrorDuenioTransaccionAnclado> {
+        let basename = validar_componente(nombre).map_err(mapear_error)?;
+        let identidad_parent = metadata_directorio(&parent).map_err(mapear_error)?;
+        let scope_parent = scope_filesystem(&parent).map_err(mapear_error)?;
+        if identidad_parent != self.identidad_parent || scope_parent != self.scope_parent {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        let raiz = match abrir_directorio_hijo_lectura(&parent, basename) {
+            Ok(raiz) => raiz,
+            Err(ErrorDirectorioAnclado::EntradaAusente) => return Ok(None),
+            Err(error) => return Err(mapear_error(error)),
+        };
+        let identidad_raiz = metadata_directorio(&raiz).map_err(mapear_error)?;
+        if scope_filesystem(&raiz).map_err(mapear_error)? != scope_parent {
+            return Err(ErrorDuenioTransaccionAnclado::NoVerificable);
+        }
+
+        Ok(Some(DirectorioAnclado {
+            parent,
+            basename: basename.to_os_string(),
+            raiz: Some(raiz),
+            identidad_parent,
+            identidad_raiz: Some(identidad_raiz),
+            permite_escritura: false,
+            puede_crear_stage_sibling: false,
+            scope_validado: None,
+        }))
+    }
+
+    /// Captura datos del root abierto desde el parent retenido por este owner.
+    /// El snapshot no concede admisión, recovery ni autoridad de escritura.
+    pub(crate) fn capturar_snapshot_soportado(
+        &mut self,
+        configuracion: ConfigRawCapturada,
+    ) -> Result<Snapshot, ErrorSnapshot> {
+        let raiz = self
+            .abrir_root_lectura()
+            .map_err(|_| ErrorSnapshot::Io)?
+            .ok_or(ErrorSnapshot::RaizInvalida)?;
+        capturar_snapshot_soportado_anclado(&raiz, configuracion)
+    }
+
+    /// Compara el token antes de validar procedencia o parsear configuración.
+    pub(crate) fn capturar_snapshot_soportado_con_cas(
+        &mut self,
+        configuracion: ConfigRawCapturada,
+        esperado: SnapshotToken,
+    ) -> Result<Snapshot, ErrorSnapshot> {
+        let raiz = self
+            .abrir_root_lectura()
+            .map_err(|_| ErrorSnapshot::Io)?
+            .ok_or(ErrorSnapshot::RaizInvalida)?;
+        capturar_snapshot_soportado_con_cas_anclado(&raiz, configuracion, esperado)
+    }
+
+    fn parent_revalidado(&self) -> Result<File, super::journal_temporal::ErrorJournalAnclado> {
+        use super::journal_temporal::ErrorJournalAnclado;
+
+        let identidad_parent =
+            metadata_directorio(&self.parent).map_err(|_| ErrorJournalAnclado::ParentChanged)?;
+        if identidad_parent != self.identidad_parent {
+            return Err(ErrorJournalAnclado::ParentChanged);
+        }
+        let scope_parent = scope_filesystem(&self.parent)
+            .map_err(|_| ErrorJournalAnclado::ParentScopeUnverified)?;
+        if scope_parent != self.scope_parent {
+            return Err(ErrorJournalAnclado::ParentScopeUnverified);
+        }
+
+        let ruta_lock = self._lock.ubicacion().lock();
+        let nombre_lock = ruta_lock
+            .as_path()
+            .file_name()
+            .ok_or(ErrorJournalAnclado::Io)?
+            .to_os_string();
+        validar_componente(&nombre_lock).map_err(|_| ErrorJournalAnclado::Io)?;
+        let lock_visible =
+            abrir_entrada_relativa(&self.parent, &nombre_lock, TipoEntradaAnclada::Archivo)
+                .map_err(|error| match error {
+                    ErrorDirectorioAnclado::EnlaceNoPermitido => {
+                        ErrorJournalAnclado::ReparseNotAllowed
+                    }
+                    ErrorDirectorioAnclado::TipoNoAdmitido => {
+                        ErrorJournalAnclado::RegularFileRequired
+                    }
+                    _ => ErrorJournalAnclado::Io,
+                })?;
+        let identidad_visible =
+            identidad_archivo(&lock_visible).map_err(|_| ErrorJournalAnclado::Io)?;
+        let identidad_guard = self
+            ._lock
+            .identidad_archivo_lock()
+            .map_err(|_| ErrorJournalAnclado::Io)?;
+        if identidad_visible != identidad_guard {
+            return Err(ErrorJournalAnclado::IdentityMismatch);
+        }
+
+        self.parent.try_clone().map_err(|_| ErrorJournalAnclado::Io)
+    }
+}
+
+/// Recibo privado que conserva el owner, el registro y la identidad creada.
+///
+/// Su consumidor solo publica el Journal retenido; no expone File, ruta ni
+/// operación de recovery.
+#[must_use = "el recibo conserva el owner mientras vive"]
+pub(super) struct ReciboTemporalJournalV2<'owner, 'lock> {
+    _owner: &'owner mut DuenioTransaccionAnclado<'lock>,
+    journal: JournalV2,
+    identidad: super::journal_temporal::IdentidadArchivoJournal,
+}
+
+impl fmt::Debug for ReciboTemporalJournalV2<'_, '_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ReciboTemporalJournalV2 { .. }")
+    }
+}
+
+#[must_use = "el resultado informa solo lo observado al publicar el Journal"]
+pub(super) enum ResultadoPublicacionJournalV2ConOwner {
+    PrecheckFallido(super::journal_temporal::ErrorJournalAnclado),
+    PostcheckNoVerificado,
+    ErrorCuerpo(super::journal_temporal::ErrorJournalAnclado),
+    Publicacion(super::journal_temporal::ResultadoPublicacionJournal),
+}
+
+/// Retiene el resultado completo del cuerpo hasta después del postcheck owner.
+pub(super) enum ResultadoOwnerPostcheck<T> {
+    PrecheckFallido(super::journal_temporal::ErrorJournalAnclado),
+    PostcheckNoVerificado {
+        cuerpo: T,
+        error: super::journal_temporal::ErrorJournalAnclado,
+    },
+    PostcheckVerificado {
+        cuerpo: T,
+    },
+}
+
+impl fmt::Debug for ResultadoPublicacionJournalV2ConOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let nombre = match self {
+            Self::PrecheckFallido(_) => "PrecheckFallido",
+            Self::PostcheckNoVerificado => "PostcheckNoVerificado",
+            Self::ErrorCuerpo(_) => "ErrorCuerpo",
+            Self::Publicacion(_) => "Publicacion",
+        };
+        formatter.write_str(nombre)
+    }
+}
+
+impl<'owner, 'lock> ReciboTemporalJournalV2<'owner, 'lock> {
+    /// Consume el recibo y publica sus datos mediante el mismo owner y lock.
+    ///
+    /// El postcheck exterior domina los resultados del cuerpo; si falla, el
+    /// efecto del syscall queda sin verificar y no se informa `NoAplicado`.
+    pub(super) fn publicar_con_owner(self) -> ResultadoPublicacionJournalV2ConOwner {
+        self.publicar_con_owner_core(
+            |_| {},
+            publicar_journal_v2_desde_owner,
+            |owner| owner.parent_revalidado(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn publicar_con_owner_con_prueba<Antes, Publicar, Postcheck>(
+        self,
+        antes_del_cuerpo: Antes,
+        publicar: Publicar,
+        postcheck: Postcheck,
+    ) -> ResultadoPublicacionJournalV2ConOwner
+    where
+        Antes: FnOnce(&mut DuenioTransaccionAnclado<'lock>),
+        Publicar: FnOnce(
+            &mut DuenioTransaccionAnclado<'lock>,
+            super::journal_temporal::IdentidadArchivoJournal,
+            &JournalV2,
+        ) -> Result<
+            super::journal_temporal::ResultadoPublicacionJournal,
+            super::journal_temporal::ErrorJournalAnclado,
+        >,
+        Postcheck: FnOnce(
+            &mut DuenioTransaccionAnclado<'lock>,
+        ) -> Result<File, super::journal_temporal::ErrorJournalAnclado>,
+    {
+        self.publicar_con_owner_core(antes_del_cuerpo, publicar, postcheck)
+    }
+
+    fn publicar_con_owner_core<Antes, Publicar, Postcheck>(
+        self,
+        antes_del_cuerpo: Antes,
+        publicar: Publicar,
+        postcheck: Postcheck,
+    ) -> ResultadoPublicacionJournalV2ConOwner
+    where
+        Antes: FnOnce(&mut DuenioTransaccionAnclado<'lock>),
+        Publicar: FnOnce(
+            &mut DuenioTransaccionAnclado<'lock>,
+            super::journal_temporal::IdentidadArchivoJournal,
+            &JournalV2,
+        ) -> Result<
+            super::journal_temporal::ResultadoPublicacionJournal,
+            super::journal_temporal::ErrorJournalAnclado,
+        >,
+        Postcheck: FnOnce(
+            &mut DuenioTransaccionAnclado<'lock>,
+        ) -> Result<File, super::journal_temporal::ErrorJournalAnclado>,
+    {
+        let Self {
+            _owner: owner,
+            journal,
+            identidad,
+        } = self;
+
+        match ejecutar_con_owner_y_postcheck(
+            owner,
+            antes_del_cuerpo,
+            |owner| publicar(owner, identidad, &journal),
+            |owner, _| postcheck(owner).map(|_| ()),
+        ) {
+            ResultadoOwnerPostcheck::PrecheckFallido(error) => {
+                ResultadoPublicacionJournalV2ConOwner::PrecheckFallido(error)
+            }
+            ResultadoOwnerPostcheck::PostcheckNoVerificado { cuerpo, error } => {
+                let _ = cuerpo;
+                let _ = error;
+                ResultadoPublicacionJournalV2ConOwner::PostcheckNoVerificado
+            }
+            ResultadoOwnerPostcheck::PostcheckVerificado {
+                cuerpo: Ok(resultado),
+            } => ResultadoPublicacionJournalV2ConOwner::Publicacion(resultado),
+            ResultadoOwnerPostcheck::PostcheckVerificado { cuerpo: Err(error) } => {
+                ResultadoPublicacionJournalV2ConOwner::ErrorCuerpo(error)
+            }
+        }
+    }
+}
+
+fn ejecutar_con_owner_y_postcheck<'lock, T, Antes, Cuerpo, Postcheck>(
+    owner: &mut DuenioTransaccionAnclado<'lock>,
+    antes_del_cuerpo: Antes,
+    cuerpo: Cuerpo,
+    postcheck: Postcheck,
+) -> ResultadoOwnerPostcheck<T>
+where
+    Antes: FnOnce(&mut DuenioTransaccionAnclado<'lock>),
+    Cuerpo: FnOnce(&mut DuenioTransaccionAnclado<'lock>) -> T,
+    Postcheck: FnOnce(
+        &mut DuenioTransaccionAnclado<'lock>,
+        &T,
+    ) -> Result<(), super::journal_temporal::ErrorJournalAnclado>,
+{
+    if let Err(error) = owner.parent_revalidado().map(|_| ()) {
+        return ResultadoOwnerPostcheck::PrecheckFallido(error);
+    }
+
+    antes_del_cuerpo(owner);
+    let cuerpo = cuerpo(owner);
+    match postcheck(owner, &cuerpo) {
+        Ok(()) => ResultadoOwnerPostcheck::PostcheckVerificado { cuerpo },
+        Err(error) => ResultadoOwnerPostcheck::PostcheckNoVerificado { cuerpo, error },
+    }
+}
+
+fn publicar_journal_v2_desde_owner(
+    owner: &mut DuenioTransaccionAnclado<'_>,
+    identidad: super::journal_temporal::IdentidadArchivoJournal,
+    journal: &JournalV2,
+) -> Result<
+    super::journal_temporal::ResultadoPublicacionJournal,
+    super::journal_temporal::ErrorJournalAnclado,
+> {
+    let lease = owner.journal_temporal_estricto()?;
+    Ok(lease.publicar_v2(identidad, journal))
+}
+
+impl fmt::Debug for DuenioTransaccionAnclado<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DuenioTransaccionAnclado { .. }")
+    }
+}
+
+fn mapear_error(_error: ErrorDirectorioAnclado) -> ErrorDuenioTransaccionAnclado {
+    ErrorDuenioTransaccionAnclado::NoVerificable
+}
+
+fn finalizar_observacion_journal_versionado(
+    lectura: Result<
+        Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+        super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+    >,
+    postcheck: Result<File, super::journal_temporal::ErrorJournalAnclado>,
+) -> Result<
+    Option<super::journal_temporal::versionado::ObservacionJournalPersistido>,
+    super::journal_temporal::versionado::ErrorLecturaJournalVersionada,
+> {
+    postcheck.map_err(super::journal_temporal::versionado::ErrorLecturaJournalVersionada::Lease)?;
+    lectura
+}
+
+fn finalizar_observacion_contexto_versionado(
+    lectura: Result<
+        Option<super::contexto_admision::ObservacionContextoVersionada>,
+        super::contexto_admision::ErrorLecturaContextoVersionada,
+    >,
+    postcheck: Result<File, super::journal_temporal::ErrorJournalAnclado>,
+) -> Result<
+    Option<super::contexto_admision::ObservacionContextoVersionada>,
+    super::contexto_admision::ErrorLecturaContextoVersionada,
+> {
+    postcheck.map_err(|_| {
+        super::contexto_admision::ErrorLecturaContextoVersionada::Lease(
+            super::contexto_admision::ErrorContextoAdmisionAnclado::OwnerUnverified,
+        )
+    })?;
+    lectura
+}
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/fixture_root_replay.rs"]
+pub(super) mod fixture_root_replay;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/captura_soportada_tests.rs"]
+mod captura_soportada_tests;
+
+#[path = "duenio_transaccion/comparar_root_replay.rs"]
+mod comparar_root_replay;
+
+#[path = "duenio_transaccion/comparar_root_normal_v2.rs"]
+mod comparar_root_normal_v2;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/normal_v2_test_support.rs"]
+pub(super) mod normal_v2_test_support;
+
+#[path = "duenio_transaccion/normal_replay_inventory_v2.rs"]
+mod normal_replay_inventory_v2;
+
+#[path = "duenio_transaccion/observar_root.rs"]
+mod observar_root;
+
+#[path = "duenio_transaccion/observar_siblings_nuevo_flujo.rs"]
+mod observar_siblings_nuevo_flujo;
+
+// El coordinador de observación legacy lo consumirá en la unidad siguiente.
+#[allow(dead_code)]
+#[path = "duenio_transaccion/auxiliary_guard.rs"]
+mod auxiliary_guard;
+#[allow(dead_code)]
+#[path = "duenio_transaccion/legacy_present_after_guard.rs"]
+mod legacy_present_after_guard;
+#[path = "duenio_transaccion/retained_v2_pair.rs"]
+mod retained_v2_pair;
+#[path = "duenio_transaccion/visible_identity_probe.rs"]
+mod visible_identity_probe;
+
+#[path = "duenio_transaccion/intent_retiro.rs"]
+pub(in crate::transaccion::anclado) mod intent_retiro;
+
+#[path = "duenio_transaccion/familia_persistida.rs"]
+mod familia_persistida;
+mod recovery_v2;
+mod retiro_c_v3;
+mod retiro_v3;
+pub(crate) use retiro_v3::{EstadoPasoRetiroV3, EvidenciaRetiroPreservada, ResultadoPasoRetiroV3};
+
+#[path = "duenio_transaccion/lector_intent_versionado.rs"]
+mod lector_intent_versionado;
+
+// El reconciliador incremental será el primer consumidor productivo.
+#[allow(dead_code)]
+#[path = "duenio_transaccion/lector_intent_canonico.rs"]
+mod lector_intent_canonico;
+
+#[path = "duenio_transaccion/observer.rs"]
+mod observer;
+
+#[path = "duenio_transaccion/prueba_root_coincidente.rs"]
+mod prueba_root_coincidente;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion_tests.rs"]
+mod tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/observer_namespace_tests.rs"]
+mod observer_namespace_tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/journal_v2_temporal_tests.rs"]
+mod journal_v2_temporal_tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/owner_body_retention_tests.rs"]
+mod owner_body_retention_tests;
+
+#[cfg(all(test, any(target_os = "linux", windows)))]
+#[path = "duenio_transaccion/context_journal_fixture_tests.rs"]
+mod context_journal_fixture_tests;
+
+#[path = "duenio_transaccion/context_journal_v2_observation.rs"]
+mod context_journal_v2_observation;
+
+#[path = "duenio_transaccion/context_journal_v2.rs"]
+mod context_journal_v2;
+
+#[path = "duenio_transaccion/publicar_intent_v3.rs"]
+mod publicar_intent_v3;
+
+pub(crate) mod preparar_apply;
+
+pub(crate) mod limpiar_backup_committed_v2;
+
+pub(crate) mod publicar_prepared;
+
+pub(crate) mod instalar_prepared;
+
+pub(crate) use recovery_v2::dispatch::ErrorRecoveryPendienteV2;
+
+mod configuracion_apply;

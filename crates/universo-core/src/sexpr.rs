@@ -10,8 +10,8 @@ use std::collections::BTreeSet;
 use crate::atomos::IdArista;
 use crate::formula::PREFIJO_GENERADO;
 use crate::formula::{
-    DominioEsquema, Formula, Sentencia, SorteVar, SujetoTermino, TerminoArista, TerminoConstExt,
-    TerminoEtiqueta, TerminoNodo, TerminoSorte, Var,
+    DominioEsquema, Formula, OpOrden, Sentencia, SorteVar, SujetoTermino, TerminoArista,
+    TerminoConstExt, TerminoEtiqueta, TerminoNodo, TerminoSorte, Var,
 };
 use crate::path::BundlePath;
 use crate::tipos::{Etiqueta, Sorte};
@@ -50,6 +50,9 @@ pub enum MotivoAutoria {
         posicion: usize,
     },
     TcSoloSobreParent(String),
+    /// `al-menos` exige un entero positivo en forma canónica (`2`, no
+    /// `0`, `02`, `-1` ni `1.5`).
+    CardinalidadInvalida(String),
     MetaFueraDeEsquema(String),
     MetaSinUso(String),
     DominioDeEsquemaDesconocido(String),
@@ -64,12 +67,17 @@ pub enum MotivoAutoria {
     ColisionConMetavariable(String),
     TextoVacio,
     TextoSobrante,
+    /// Metadato inválido en `(regla :id "..." :mensaje "..." <sentencia>)`.
+    MetadatoDeRegla(String),
 }
 
 impl std::fmt::Display for MotivoAutoria {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MotivoAutoria::ParentesisSinCerrar => write!(f, "falta cerrar un paréntesis"),
+            MotivoAutoria::MetadatoDeRegla(detalle) => {
+                write!(f, "metadato de regla inválido: {detalle}")
+            }
             MotivoAutoria::ParentesisSobrante => write!(f, "hay un paréntesis de cierre de más"),
             MotivoAutoria::CadenaSinCerrar => write!(f, "falta cerrar una cadena entre comillas"),
             MotivoAutoria::EscapeInvalido => write!(f, "escape inválido dentro de la cadena"),
@@ -117,6 +125,10 @@ impl std::fmt::Display for MotivoAutoria {
             MotivoAutoria::ConstanteMalFormada { texto, motivo } => {
                 write!(f, "la constante {texto:?} no es válida: {motivo}")
             }
+            MotivoAutoria::CardinalidadInvalida(texto) => write!(
+                f,
+                "`al-menos` espera un entero positivo sin ceros a la izquierda, no {texto}"
+            ),
             MotivoAutoria::AnidamientoExcesivo { limite } => write!(
                 f,
                 "la S-expresión anida más de {limite} niveles; el parser no baja más"
@@ -151,6 +163,20 @@ impl std::fmt::Display for ErrorAutoria {
 }
 
 impl std::error::Error for ErrorAutoria {}
+
+/// Una sentencia de un programa de invariantes junto con la ubicación de su
+/// expresión de nivel superior. Las posiciones son 1-based y se cuentan en
+/// caracteres Unicode, igual que las posiciones de [`ErrorAutoria`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SentenciaFuente {
+    pub sentencia: Sentencia,
+    pub linea: usize,
+    pub columna: usize,
+    /// Identificador opcional declarado con `(regla :id "..." ...)`.
+    pub id: Option<String>,
+    /// Mensaje humano opcional declarado con `(regla :mensaje "..." ...)`.
+    pub mensaje: Option<String>,
+}
 
 /// Un token con su posición en el texto, en base 1.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -354,6 +380,25 @@ fn arbol(tokens: &[Tok]) -> Result<Sexp, ErrorAutoria> {
         });
     }
     Ok(raiz)
+}
+
+/// Arma todas las expresiones de nivel superior de un programa. A diferencia
+/// de [`arbol`], una secuencia vacía es válida; cada elemento conserva las
+/// posiciones originales que asignó el lexer.
+fn arboles(tokens: &[Tok]) -> Result<Vec<Sexp>, ErrorAutoria> {
+    let mut posicion = 0usize;
+    let mut raices = Vec::new();
+    while let Some(tok) = tokens.get(posicion) {
+        if tok.clase == Clase::Cierra {
+            return Err(ErrorAutoria {
+                linea: tok.linea,
+                columna: tok.columna,
+                motivo: MotivoAutoria::ParentesisSobrante,
+            });
+        }
+        raices.push(arbol_desde(tokens, &mut posicion, 1)?);
+    }
+    Ok(raices)
 }
 
 /// `profundidad` es el nivel de la lista que se está armando, contando
@@ -784,6 +829,57 @@ fn cuantificador(
     })
 }
 
+/// `(al-menos n ((x N)) [:guarda g] φ)`: el número va antes de las
+/// ligaduras y el resto se lee exactamente como un `exists`.
+fn al_menos(
+    sexp: &Sexp,
+    argumentos: &[Sexp],
+    contexto: &mut Contexto,
+) -> Result<Formula, ErrorAutoria> {
+    // La aridad se comprueba aquí, contando `n`, para que el mensaje sea el
+    // mismo falte lo que falte; `cuantificador` ya no puede fallar por aridad.
+    let con_guarda = argumentos
+        .get(2)
+        .and_then(Sexp::simbolo)
+        .is_some_and(|s| s == CLAVE_GUARDA);
+    exigir_aridad(
+        sexp,
+        "al-menos",
+        if con_guarda { 5 } else { 3 },
+        argumentos.len(),
+    )?;
+    let primero = &argumentos[0];
+    let minimo = primero
+        .simbolo()
+        .and_then(|texto| {
+            texto
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n >= 1 && n.to_string() == texto)
+        })
+        .ok_or_else(|| {
+            let descrito = match primero.simbolo() {
+                Some(texto) => format!("{texto:?}"),
+                None => "una lista o una cadena".to_string(),
+            };
+            primero.error(MotivoAutoria::CardinalidadInvalida(descrito))
+        })?;
+    let Formula::Existe {
+        ligaduras,
+        guarda,
+        cuerpo,
+    } = cuantificador(sexp, "al-menos", &argumentos[1..], contexto)?
+    else {
+        unreachable!("`cuantificador` devuelve `Existe` para toda cabeza distinta de `forall`")
+    };
+    Ok(Formula::AlMenos {
+        minimo,
+        ligaduras,
+        guarda,
+        cuerpo,
+    })
+}
+
 /// `(Raiz x)` ≡ `(not (exists ((%pN N)) (Parent x %pN)))`: el azúcar del
 /// capítulo 01, cuyo cuantificador interno no cuenta para la condición de
 /// relativización guardada.
@@ -896,6 +992,7 @@ fn formula_interna(sexp: &Sexp, contexto: &mut Contexto) -> Result<Formula, Erro
     let argumentos = &elementos[1..];
     match cabeza {
         "forall" | "exists" => cuantificador(sexp, cabeza, argumentos, contexto),
+        "al-menos" => al_menos(sexp, argumentos, contexto),
         "and" | "or" => conjuncion_o_disyuncion(sexp, cabeza, argumentos, contexto),
         "not" => {
             exigir_aridad(sexp, "not", 1, argumentos.len())?;
@@ -945,6 +1042,23 @@ fn formula_interna(sexp: &Sexp, contexto: &mut Contexto) -> Result<Formula, Erro
             Ok(Formula::TcParent {
                 desde: termino_nodo(&argumentos[1], contexto, "tc", 2)?,
                 hasta: termino_nodo(&argumentos[2], contexto, "tc", 3)?,
+            })
+        }
+        cabeza if OpOrden::desde_simbolo(cabeza).is_some() => {
+            exigir_aridad(sexp, cabeza, 3, argumentos.len())?;
+            let predicado = argumentos[0]
+                .simbolo()
+                .ok_or_else(|| {
+                    argumentos[0].error(MotivoAutoria::TokenInesperado(
+                        "nombre de predicado".to_string(),
+                    ))
+                })?
+                .to_string();
+            Ok(Formula::Compara {
+                op: OpOrden::desde_simbolo(cabeza).expect("comprobado"),
+                predicado,
+                sujeto: termino_nodo(&argumentos[1], contexto, cabeza, 2)?,
+                constante: termino_const_ext(&argumentos[2], contexto)?,
             })
         }
         otro => {
@@ -1006,21 +1120,20 @@ fn ligaduras_esquema(sexp: &Sexp) -> Result<Vec<(Var, DominioEsquema)>, ErrorAut
     Ok(resultado)
 }
 
-/// Parsea la sintaxis de autoría a una [`Sentencia`].
-pub fn parsear(texto: &str) -> Result<Sentencia, ErrorAutoria> {
-    let tokens = lexar(texto)?;
-    let raiz = arbol(&tokens)?;
+/// Traduce una expresión superior al AST, con un contexto independiente por
+/// sentencia para que las ligaduras nunca crucen límites del programa.
+fn sentencia_desde(raiz: &Sexp) -> Result<Sentencia, ErrorAutoria> {
     let mut contexto = Contexto::default();
-    let es_esquema = matches!(&raiz, Sexp::Lista { elementos, .. }
+    let es_esquema = matches!(raiz, Sexp::Lista { elementos, .. }
         if elementos.first().and_then(Sexp::simbolo) == Some("esquema"));
     if !es_esquema {
-        return Ok(Sentencia::Oracion(formula(&raiz, &mut contexto)?));
+        return Ok(Sentencia::Oracion(formula(raiz, &mut contexto)?));
     }
-    let Sexp::Lista { elementos, .. } = &raiz else {
+    let Sexp::Lista { elementos, .. } = raiz else {
         unreachable!("ya se comprobó que es una lista");
     };
     let argumentos = &elementos[1..];
-    exigir_aridad(&raiz, "esquema", 2, argumentos.len())?;
+    exigir_aridad(raiz, "esquema", 2, argumentos.len())?;
     let ligaduras = ligaduras_esquema(&argumentos[0])?;
     contexto.metas = ligaduras
         .iter()
@@ -1035,6 +1148,140 @@ pub fn parsear(texto: &str) -> Result<Sentencia, ErrorAutoria> {
         }
     }
     Ok(Sentencia::Esquema { ligaduras, cuerpo })
+}
+
+/// Parsea la sintaxis de autoría a una única [`Sentencia`]. Conserva el
+/// contrato histórico de exigir exactamente una expresión de nivel superior.
+pub fn parsear(texto: &str) -> Result<Sentencia, ErrorAutoria> {
+    let tokens = lexar(texto)?;
+    let raiz = arbol(&tokens)?;
+    sentencia_desde(&raiz)
+}
+
+/// Parsea un programa UTF-8 de cero o más sentencias S-expression.
+///
+/// Los espacios y comentarios `; ...` se ignoran entre expresiones. Los
+/// errores conservan las líneas y columnas del archivo completo; la ubicación
+/// de cada elemento apunta al paréntesis inicial de su expresión top-level.
+/// El resultado es sintáctico: no evalúa ni valida sentencias contra un
+/// manifiesto. Cada sentencia obtiene un contexto de ligaduras independiente.
+pub fn parsear_programa(texto: &str) -> Result<Vec<SentenciaFuente>, ErrorAutoria> {
+    let tokens = lexar(texto)?;
+    arboles(&tokens)?
+        .iter()
+        .map(|raiz| {
+            let (linea, columna) = raiz.posicion();
+            let (sentencia, id, mensaje) = regla_desde(raiz)?;
+            Ok(SentenciaFuente {
+                sentencia,
+                linea,
+                columna,
+                id,
+                mensaje,
+            })
+        })
+        .collect()
+}
+
+/// Forma de nivel superior que nombra una sentencia:
+/// `(regla [:id "<id>"] [:mensaje "<texto>"] <sentencia>)`, con al menos un
+/// metadato. Se reconoce sólo en el nivel superior y sólo si el segundo
+/// elemento es una palabra clave `:...`; así un predicado de extensión llamado
+/// `regla` (cuyo primer argumento es una variable o una constante `@`) se sigue
+/// parseando igual que antes, en cualquier nivel.
+const MAX_ID_REGLA: usize = 64;
+const MAX_MENSAJE_REGLA: usize = 280;
+
+type SentenciaConMetadatos = (Sentencia, Option<String>, Option<String>);
+
+/// Controles, separadores de línea/párrafo y caracteres de formato invisibles
+/// o de dirección (bidi), que permitirían que un texto del usuario se muestre
+/// distinto de lo que es o rompa la línea de la salida. Compartido con el
+/// historial de procedencia.
+pub fn caracter_no_imprimible(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
+fn regla_desde(raiz: &Sexp) -> Result<SentenciaConMetadatos, ErrorAutoria> {
+    let Sexp::Lista { elementos, .. } = raiz else {
+        return Ok((sentencia_desde(raiz)?, None, None));
+    };
+    let es_regla = elementos.first().and_then(Sexp::simbolo) == Some("regla")
+        && elementos
+            .get(1)
+            .and_then(Sexp::simbolo)
+            .is_some_and(|s| s.starts_with(':'));
+    if !es_regla {
+        return Ok((sentencia_desde(raiz)?, None, None));
+    }
+    let invalido = |detalle: &str| raiz.error(MotivoAutoria::MetadatoDeRegla(detalle.to_string()));
+    let argumentos = &elementos[1..];
+    if argumentos.len() < 3 || argumentos.len() % 2 == 0 {
+        return Err(invalido(
+            "se espera (regla :clave \"valor\" ... <sentencia>)",
+        ));
+    }
+    let (pares, cuerpo) = argumentos.split_at(argumentos.len() - 1);
+    let (mut id, mut mensaje) = (None, None);
+    for par in pares.chunks_exact(2) {
+        let valor = match &par[1] {
+            Sexp::Hoja(Tok {
+                clase: Clase::Cadena(texto),
+                ..
+            }) => texto.clone(),
+            otro => {
+                return Err(otro.error(MotivoAutoria::MetadatoDeRegla(
+                    "el valor debe ser una cadena".to_string(),
+                )));
+            }
+        };
+        let destino = match par[0].simbolo() {
+            Some(":id") => {
+                if valor.is_empty()
+                    || valor.chars().count() > MAX_ID_REGLA
+                    || !valor
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                {
+                    return Err(par[1].error(MotivoAutoria::MetadatoDeRegla(format!(
+                        ":id admite 1 a {MAX_ID_REGLA} caracteres ASCII alfanuméricos, '-', '_' o '.'"
+                    ))));
+                }
+                &mut id
+            }
+            Some(":mensaje") => {
+                if valor.trim().is_empty()
+                    || valor.chars().count() > MAX_MENSAJE_REGLA
+                    || valor.chars().any(caracter_no_imprimible)
+                {
+                    return Err(par[1].error(MotivoAutoria::MetadatoDeRegla(format!(
+                        ":mensaje admite 1 a {MAX_MENSAJE_REGLA} caracteres en una línea"
+                    ))));
+                }
+                &mut mensaje
+            }
+            _ => {
+                return Err(par[0].error(MotivoAutoria::MetadatoDeRegla(
+                    "clave desconocida; se admiten :id y :mensaje".to_string(),
+                )));
+            }
+        };
+        if destino.replace(valor).is_some() {
+            return Err(par[0].error(MotivoAutoria::MetadatoDeRegla("clave repetida".to_string())));
+        }
+    }
+    Ok((sentencia_desde(&cuerpo[0])?, id, mensaje))
 }
 
 #[cfg(test)]
@@ -1063,6 +1310,118 @@ mod tests {
                 }),
             })
         );
+    }
+
+    #[test]
+    fn programa_vacio_admite_blancos_y_comentarios() {
+        assert_eq!(
+            parsear_programa(" \n ; solo comentarios\n\t").unwrap(),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn programa_parsea_sentencias_top_level_con_posiciones_del_archivo() {
+        let texto = "; cabecera\n\n  (Type @a rule) ; comentario final\n(HasLab @a \"x\")\n";
+        let programa = parsear_programa(texto).unwrap();
+        assert_eq!(programa.len(), 2);
+        assert_eq!((programa[0].linea, programa[0].columna), (3, 3));
+        assert_eq!((programa[1].linea, programa[1].columna), (4, 1));
+        assert_eq!(programa[0].sentencia, parsear("(Type @a rule)").unwrap());
+        assert_eq!(programa[1].sentencia, parsear("(HasLab @a \"x\")").unwrap());
+    }
+
+    #[test]
+    fn regla_con_id_y_mensaje_conserva_sentencia_y_posicion() {
+        let texto = "; c\n(regla :id \"capas-1\" :mensaje \"El dominio no depende de adaptadores.\"\n  (Type @a rule))\n(Type @b rule)\n";
+        let programa = parsear_programa(texto).unwrap();
+        assert_eq!(programa.len(), 2);
+        assert_eq!(programa[0].sentencia, parsear("(Type @a rule)").unwrap());
+        assert_eq!((programa[0].linea, programa[0].columna), (2, 1));
+        assert_eq!(programa[0].id.as_deref(), Some("capas-1"));
+        assert_eq!(
+            programa[0].mensaje.as_deref(),
+            Some("El dominio no depende de adaptadores.")
+        );
+        assert_eq!(
+            (programa[1].id.clone(), programa[1].mensaje.clone()),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn regla_admite_solo_id_o_solo_mensaje_y_esquemas() {
+        let solo_id = parsear_programa("(regla :id \"r.1_a\" (Type @a rule))").unwrap();
+        assert_eq!(solo_id[0].id.as_deref(), Some("r.1_a"));
+        assert_eq!(solo_id[0].mensaje, None);
+        let esquema = "(regla :mensaje \"m\" (esquema ((l Lab)) (forall ((x N)) (HasLab x l))))";
+        let programa = parsear_programa(esquema).unwrap();
+        assert!(matches!(programa[0].sentencia, Sentencia::Esquema { .. }));
+        assert_eq!(programa[0].mensaje.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn un_predicado_de_extension_llamado_regla_se_parsea_igual_que_antes() {
+        let programa =
+            parsear_programa("(regla @n/x alto)\n(forall ((x N)) (regla x bajo))").unwrap();
+        assert_eq!(programa[0].sentencia, parsear("(regla @n/x alto)").unwrap());
+        assert_eq!(
+            (programa[0].id.clone(), programa[0].mensaje.clone()),
+            (None, None)
+        );
+        assert_eq!(programa.len(), 2);
+    }
+
+    #[test]
+    fn regla_mal_formada_es_error_de_autoria() {
+        for texto in [
+            "(regla (Type @a rule))",
+            "(regla :id \"x\")",
+            "(regla :id \"x\" :id \"y\" (Type @a rule))",
+            "(regla :id \"con espacio\" (Type @a rule))",
+            "(regla :id \"\" (Type @a rule))",
+            "(regla :mensaje \"\" (Type @a rule))",
+            "(regla :mensaje \"dos\nlíneas\" (Type @a rule))",
+            "(regla :id x (Type @a rule))",
+            "(regla :otro \"x\" (Type @a rule))",
+            "(regla :id \"x\" (Type @a rule) (Type @b rule))",
+            "(regla :id \"x\" (regla :id \"y\" (Type @a rule)))",
+            "(and (regla :id \"x\" (Type @a rule)) (Type @b rule))",
+            "(regla :mensaje \"invisible\u{202E}\" (Type @a rule))",
+            "(regla :mensaje \"sep\u{2028}arado\" (Type @a rule))",
+        ] {
+            assert!(parsear_programa(texto).is_err(), "{texto}");
+        }
+        // Los errores de la forma regla son de metadato, no de otra cosa.
+        let error = parsear_programa("(regla :id \"x\" :id \"y\" (Type @a rule))").unwrap_err();
+        assert!(matches!(error.motivo, MotivoAutoria::MetadatoDeRegla(_)));
+        let largo = format!("(regla :id \"{}\" (Type @a rule))", "a".repeat(65));
+        assert!(parsear_programa(&largo).is_err());
+        let largo = format!("(regla :mensaje \"{}\" (Type @a rule))", "a".repeat(281));
+        assert!(parsear_programa(&largo).is_err());
+    }
+
+    #[test]
+    fn programa_aisla_ligaduras_y_preserva_posicion_de_error_absoluta() {
+        let independientes =
+            parsear_programa("(forall ((x N)) (Parent x @a))\n(forall ((x N)) (Parent x @b))")
+                .unwrap();
+        assert_eq!(independientes.len(), 2);
+
+        let texto = "(forall ((x N)) (Parent x @a))\n  (forall ((x N)) (Parent x padre))";
+        let error = parsear_programa(texto).unwrap_err();
+        assert_eq!(
+            error.motivo,
+            MotivoAutoria::SimboloLibre("padre".to_string())
+        );
+        assert_eq!((error.linea, error.columna), (2, 29));
+        assert!(matches!(
+            parsear("(forall ((x N)) (Parent x @a)) (Type @a rule)"),
+            Err(ErrorAutoria {
+                motivo: MotivoAutoria::TextoSobrante,
+                ..
+            })
+        ));
     }
 
     fn oracion(texto: &str) -> Formula {

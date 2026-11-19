@@ -1,1 +1,4 @@
 target/
+.codegraph/
+__pycache__/
+graphify-out/

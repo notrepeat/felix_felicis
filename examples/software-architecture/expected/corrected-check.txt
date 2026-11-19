@@ -1,0 +1,3 @@
+ADMIT: 1 fuentes, 1 instancias, 1 evaluadas, 0 fallidas
+EXPLANATIONS mode=decide objects=0 truncated=false reason=none
+  budget total=984 limit=1000000 semantic=122 evidence=861 aggregator=1
