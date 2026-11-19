@@ -41,7 +41,9 @@ fn uso(comando: &str) -> Option<Uso> {
         "atomos" | "validate" | "verificar" => (true, false, Extra::Libres),
         "check" | "propose" | "guard" | "seal" => (true, true, Extra::Libres),
         "search" | "delta" => (true, false, Extra::Libres),
-        "capturar" | "reforzar" | "objetar" => (true, true, Extra::Libres),
+        "capturar" | "reforzar" | "objetar" | "relacion" | "atributo" | "nota" => {
+            (true, true, Extra::Libres)
+        }
         "status" | "recover" | "log" => (false, false, Extra::Ninguno),
         "show" => (false, false, Extra::Uno),
         "diff" => (false, false, Extra::Numeros),
@@ -201,6 +203,28 @@ fn ruta(ruta: &Path) -> String {
     } else {
         texto
     }
+}
+
+/// El repositorio de criterio para comandos que usan varios universos
+/// (`promover`): `--criterio`, `FELIX_CRITERIO` o el `felix.toml` más
+/// cercano, con el control de versión del motor.
+pub(super) fn resolver_repo(
+    criterio: Option<PathBuf>,
+    ignorar_version: bool,
+) -> Result<RepoCriterio, ErrorCriterio> {
+    let raiz = match (criterio, de_entorno("FELIX_CRITERIO")) {
+        (Some(dir), _) => dir,
+        (None, Some(dir)) => PathBuf::from(dir),
+        (None, None) => std::env::current_dir()
+            .ok()
+            .and_then(|cwd| buscar_hacia_arriba(&cwd))
+            .ok_or(ErrorCriterio::NoEncontrado)?,
+    };
+    let repo = RepoCriterio::cargar(&raiz)?;
+    if !ignorar_version {
+        repo.comprobar_motor(env!("CARGO_PKG_VERSION"))?;
+    }
+    Ok(repo)
 }
 
 /// Prepara `args` (con el comando en la primera posición) para el parser.

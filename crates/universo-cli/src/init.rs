@@ -168,7 +168,7 @@ clave = "en_proyecto"
 [[predicados]]
 nombre = "Estado"
 clave = "estado"
-dominio = ["candidato", "vigente", "retirado"]
+dominio = ["candidato", "promovido", "vigente", "retirado"]
 
 [[predicados]]
 nombre = "Validacion"
@@ -193,7 +193,7 @@ const INVARIANTES_CANDIDATOS: &str = r#"; Reglas de candidatos creadas por `univ
 (regla :id "criterio-con-contexto" :mensaje "Todo criterio tiene estado, fecha, validación y al menos un proyecto donde se expresó."
   (forall ((x N))
     (=> (Type x criterio)
-        (and (or (Estado x candidato) (Estado x vigente) (Estado x retirado))
+        (and (or (Estado x candidato) (Estado x promovido) (Estado x vigente) (Estado x retirado))
              (>= Fecha x 1900-01-01)
              (or (Validacion x explicita) (Validacion x implicita) (Validacion x pendiente))
              (al-menos 1 ((e E) (y N)) :guarda (Edge e x y confirmado_en) (Type y proyecto))))))
@@ -223,7 +223,7 @@ const INVARIANTES_VIGENTE: &str = r#"; Reglas de vigente creadas por `universo i
 (regla :id "criterio-con-contexto" :mensaje "Todo criterio tiene estado, fecha, validación y al menos un proyecto donde se expresó."
   (forall ((x N))
     (=> (Type x criterio)
-        (and (or (Estado x candidato) (Estado x vigente) (Estado x retirado))
+        (and (or (Estado x candidato) (Estado x promovido) (Estado x vigente) (Estado x retirado))
              (>= Fecha x 1900-01-01)
              (or (Validacion x explicita) (Validacion x implicita) (Validacion x pendiente))
              (al-menos 1 ((e E) (y N)) :guarda (Edge e x y confirmado_en) (Type y proyecto))))))
@@ -243,6 +243,10 @@ const INVARIANTES_VIGENTE: &str = r#"; Reglas de vigente creadas por `universo i
     (forall ((e E) (x N) (y N)) :guarda (Edge e x y objeta) (and (Type x evidencia) (Type y criterio)))
     (forall ((e E) (x N) (y N)) :guarda (Edge e x y en_proyecto) (and (Type x evidencia) (Type y proyecto)))))
 
+(regla :id "solo-criterio-probado" :mensaje "En vigente, un criterio está vigente o retirado: las candidatas viven en candidatos."
+  (forall ((x N))
+    (=> (Type x criterio) (or (Estado x vigente) (Estado x retirado)))))
+
 (regla :id "vigente-confirmado" :mensaje "Un criterio vigente está confirmado en al menos dos proyectos."
   (forall ((x N))
     (=> (Estado x vigente)
@@ -257,7 +261,7 @@ const HOOK: &str = "#!/bin/sh\n# Hook de Felix: verifica cada universo antes de 
 
 const README: &str = "# Repositorio de criterio\n\nCreado con `universo init --git` (Felix Felicis).\nGuarda criterio, no código: decisiones, principios y preferencias que Felix\nverifica antes de aceptar.\n\n## Universos\n\n- `universos/candidatos`: todo lo que se captura, con su contexto. Los agentes\n  pueden escribir aquí.\n- `universos/vigente`: criterio probado. Sólo entra por promoción.\n\n`felix.toml` los declara; `escritura_agentes` es por ahora una convención que\nla CLI no hace cumplir. Dentro de este directorio los comandos no necesitan\nrutas: `universo check`, `universo search <términos>`, `universo log`, y\n`--universo vigente` para el otro universo.\n\n## Flujo entre computadores\n\n```sh\ngit pull --rebase\nuniverso guard --universo candidatos && universo guard --universo vigente\n# ... trabajar con universo ...\ngit add -A && git commit -m \"criterio: ...\"\ngit push\n```\n\nPara verificar antes de cada commit: `git config core.hooksPath .githooks`.\n\n## Privacidad\n\nQuien tenga acceso a este repositorio ve todo su criterio y su historial,\nincluso lo retirado. No guardes secretos ni credenciales.\n";
 
-const AGENTS: &str = "# Instrucciones para agentes\n\nEste repositorio guarda el criterio de su dueño. Úsalo con la CLI `universo`\n(o con `universo-mcp`); dentro de este directorio no hace falta pasar rutas.\n\n- **Antes de decidir**, consulta: `universo search <términos> --universo vigente`\n  y luego `--universo candidatos`.\n- **Cuando el dueño exprese criterio** («quiero que…», «siempre…», «prefiero…»),\n  guárdalo: `universo capturar \"<paráfrasis concisa>\" --proyecto <proyecto> --tarea <tarea>\n  --validacion explicita|implicita|pendiente --autor agente:<nombre>`. Guarda una\n  paráfrasis, no la conversación. Si responde `capture_similar`, ya existe: refuerza\n  la nota que indica en vez de duplicarla. La fecha por defecto es la UTC de hoy.\n- **Cuando un criterio se aplique en otro proyecto** y se sostenga:\n  `universo reforzar <nota> --proyecto <p> --contexto <c>`. Si el dueño lo\n  contradice: `universo objetar <nota> --proyecto <p> --contexto <c>`.\n- **Cambia el criterio sólo con Felix.** Para otros cambios, `universo propose\n  --delta <d.json>` simula y `--apply` publica. Nunca edites los archivos de\n  `universos/` a mano ni ejecutes `universo seal`.\n- **Escribe sólo en `candidatos`**. A `vigente` se llega por promoción, que\n  confirma el dueño. Es una regla de uso: la CLI todavía no lo impide.\n- Si Felix rechaza un cambio, lee la regla que falla y corrige; no la evites.\n";
+const AGENTS: &str = "# Instrucciones para agentes\n\nEste repositorio guarda el criterio de su dueño. Úsalo con la CLI `universo`\n(o con `universo-mcp`); dentro de este directorio no hace falta pasar rutas.\n\n- **Antes de decidir**, consulta: `universo search <términos> --universo vigente`\n  y luego `--universo candidatos`.\n- **Cuando el dueño exprese criterio** («quiero que…», «siempre…», «prefiero…»),\n  guárdalo: `universo capturar \"<paráfrasis concisa>\" --proyecto <proyecto> --tarea <tarea>\n  --validacion explicita|implicita|pendiente --autor agente:<nombre>`. Guarda una\n  paráfrasis, no la conversación. Si responde `capture_similar`, ya existe: refuerza\n  la nota que indica en vez de duplicarla. La fecha por defecto es la UTC de hoy.\n- **Cuando un criterio se aplique en otro proyecto** y se sostenga:\n  `universo reforzar <nota> --proyecto <p> --contexto <c>`. Si el dueño lo\n  contradice: `universo objetar <nota> --proyecto <p> --contexto <c>`.\n- **Cambia el criterio sólo con Felix.** Para otros cambios, `universo propose\n  --delta <d.json>` simula y `--apply` publica. Nunca edites los archivos de\n  `universos/` a mano ni ejecutes `universo seal`.\n- **Escribe sólo en `candidatos`** y **no promuevas**: `universo promover` lo\n  ejecuta el dueño cuando lo decide. Es una regla de uso: la CLI no distingue\n  a una persona de un agente.\n- Para correcciones puntuales: `universo atributo <nota> <clave> <valor>`,\n  `universo relacion <origen> <clave> <destino> [--quitar]`.\n- Si Felix rechaza un cambio, lee la regla que falla y corrige; no la evites.\n";
 
 const FELIX_TOML_PLANTILLA: &str = "# Repositorio de criterio creado por `universo init --git`.\nschema = \"felix-criterio-v1\"\nmotor = \"{motor}\"\npor_defecto = \"candidatos\"\n\n# Todo lo que se captura, con su contexto. Los agentes pueden escribir aquí.\n[universos.candidatos]\ndir = \"universos/candidatos\"\nescritura_agentes = true\n\n# Criterio probado: sólo entra por promoción.\n[universos.vigente]\ndir = \"universos/vigente\"\nescritura_agentes = false\n";
 

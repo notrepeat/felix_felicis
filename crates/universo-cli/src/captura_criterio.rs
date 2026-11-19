@@ -71,7 +71,7 @@ const MAX_PROYECTO: usize = 100;
 const MAX_DETALLE: usize = 2000;
 
 /// Una línea imprimible, sin controles ni caracteres invisibles.
-fn linea_valida(texto: &str, maximo: usize) -> bool {
+pub(super) fn linea_valida(texto: &str, maximo: usize) -> bool {
     !texto.trim().is_empty()
         && texto.chars().count() <= maximo
         && !texto
@@ -180,7 +180,7 @@ pub(super) fn parsear(accion: Accion, args: &[String]) -> Result<Solicitud, Stri
 
 /// Palabras normalizadas (sin tildes, minúsculas) unidas por guiones, hasta
 /// 60 caracteres sin cortar una palabra.
-fn slug(texto: &str) -> String {
+pub(super) fn slug(texto: &str) -> String {
     let mut salida = String::new();
     for palabra in normalizar(texto)
         .split(|c: char| !c.is_ascii_alphanumeric())
@@ -225,12 +225,12 @@ fn con_prefijo(prefijo: &str, texto: &str) -> String {
 }
 
 /// Error de dominio (salida 1) con su código y, si hace falta, un detalle.
-struct Fallo {
-    codigo: &'static str,
-    detalle: Value,
+pub(super) struct Fallo {
+    pub codigo: &'static str,
+    pub detalle: Value,
 }
 
-fn fallo(codigo: &'static str) -> Fallo {
+pub(super) fn fallo(codigo: &'static str) -> Fallo {
     Fallo {
         codigo,
         detalle: Value::Null,
@@ -288,7 +288,12 @@ fn esquema_faltante(e: &Estructura, accion: Accion) -> Vec<String> {
 
 /// Ruta libre `dir/base`, `dir/base-2`, … cuyo nombre (stem) no repita el de
 /// ninguna nota: los enlaces del frontmatter se resuelven por nombre.
-fn ruta_libre(e: &Estructura, dir: &str, base: &str, reservados: &BTreeSet<String>) -> String {
+pub(super) fn ruta_libre(
+    e: &Estructura,
+    dir: &str,
+    base: &str,
+    reservados: &BTreeSet<String>,
+) -> String {
     // Como el motor, sin distinguir mayúsculas.
     let stems: BTreeSet<String> = e
         .nodos()
@@ -309,13 +314,13 @@ fn ruta_libre(e: &Estructura, dir: &str, base: &str, reservados: &BTreeSet<Strin
     }
 }
 
-fn es_arista(a: &Atomo, origen: &str, destino: &str, clave: &str) -> bool {
+pub(super) fn es_arista(a: &Atomo, origen: &str, destino: &str, clave: &str) -> bool {
     matches!(a, Atomo::Edge { origen: o, destino: d, sorte, .. }
         if o.como_str() == origen && d.como_str() == destino && sorte.como_str() == clave)
 }
 
 /// Una arista nueva `origen → destino` de clave `clave`, con su etiqueta vacía.
-fn arista(e: &Estructura, origen: &str, destino: &str, clave: &str) -> [String; 2] {
+pub(super) fn arista(e: &Estructura, origen: &str, destino: &str, clave: &str) -> [String; 2] {
     let ordinal = e
         .atomos()
         .iter()
@@ -330,7 +335,11 @@ fn arista(e: &Estructura, origen: &str, destino: &str, clave: &str) -> [String; 
 
 /// Proyecto con ese nombre (sin distinguir mayúsculas ni tildes), o la ruta
 /// que tendrá si hay que crearlo.
-fn proyecto(e: &Estructura, nombre: &str, reservados: &BTreeSet<String>) -> (String, bool) {
+pub(super) fn proyecto(
+    e: &Estructura,
+    nombre: &str,
+    reservados: &BTreeSet<String>,
+) -> (String, bool) {
     // «tienda-web» y «Tienda Web» son el mismo proyecto: se compara también
     // por slug, que ignora mayúsculas, tildes, espacios y puntuación.
     let buscado = normalizar(nombre.trim());
@@ -528,30 +537,49 @@ enum Resultado {
     },
 }
 
-fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
-    let vista = VistaSimulacion::capturar(&s.raiz, &s.manifiesto, &s.invariantes)
-        .map_err(|e| fallo(e.codigo()))?;
-    let falta = esquema_faltante(vista.estructura(), s.accion);
-    if !falta.is_empty() {
-        return Err(Fallo {
-            codigo: "capture_schema_missing",
-            detalle: json!(falta),
-        });
-    }
-    let plan = planificar(s, vista.estructura())?;
-    let texto = plan.delta.to_string();
-    let delta = parsear_delta_json(&texto).map_err(|_| fallo("delta_invalid"))?;
-    match vista.proponer(&delta).map_err(|e| fallo(e.codigo()))? {
+/// Rutas de un universo.
+pub(super) struct Rutas<'a> {
+    pub raiz: &'a Path,
+    pub manifiesto: &'a Path,
+    pub invariantes: &'a Path,
+}
+
+/// Veredicto de simular un delta y, si se admite y no es `--dry-run`, aplicarlo.
+pub(super) enum Veredicto {
+    Admitido {
+        aplicado: bool,
+        sellado: bool,
+        /// El historial anotó el cambio; si no, falta su entrada.
+        registrado: bool,
+    },
+    Rechazado {
+        reglas: Vec<Value>,
+        conflictos: usize,
+    },
+}
+
+/// Simula `delta` sobre `vista` y, si se admite, lo aplica con CAS sobre el
+/// mismo estado (el token de la vista), con autor y motivo en el historial.
+pub(super) fn simular_y_aplicar(
+    vista: &VistaSimulacion,
+    rutas: &Rutas<'_>,
+    delta: &Value,
+    procedencia: &Procedencia,
+    dry_run: bool,
+) -> Result<Veredicto, Fallo> {
+    let texto = delta.to_string();
+    let tipado = parsear_delta_json(&texto).map_err(|_| fallo("delta_invalid"))?;
+    match vista.proponer(&tipado).map_err(|e| fallo(e.codigo()))? {
         ResultadoPropuesta::Admitida(_) => {}
         ResultadoPropuesta::RechazadaConflictos(conflictos) => {
-            return Ok(Resultado::Rechazado {
+            return Ok(Veredicto::Rechazado {
                 reglas: Vec::new(),
                 conflictos: conflictos.total_conflictos(),
             });
         }
         ResultadoPropuesta::RechazadaInvariantes(fuentes) => {
             let reglas = vista.invariantes();
-            return Ok(Resultado::Rechazado {
+            return Ok(Veredicto::Rechazado {
                 reglas: fuentes
                     .iter()
                     .map(|p| {
@@ -564,15 +592,49 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
             });
         }
     }
-    if s.dry_run {
-        return Ok(Resultado::Hecho {
-            plan,
+    if dry_run {
+        return Ok(Veredicto::Admitido {
             aplicado: false,
             sellado: false,
             registrado: false,
         });
     }
     let archivo = ArchivoTemporal::crear(&texto).map_err(|_| fallo("capture_io"))?;
+    let resultado = aplicar_archivo_con_procedencia(
+        rutas.raiz,
+        rutas.manifiesto,
+        rutas.invariantes,
+        archivo.ruta(),
+        vista.snapshot_token(),
+        procedencia,
+    )
+    .map_err(|e| Fallo {
+        codigo: e.codigo(),
+        detalle: json!(["si quedó una transacción a medias, `universo status` lo dice y `universo recover` la completa"]),
+    })?;
+    match resultado.estado {
+        EstadoAplicacion::Aplicada => Ok(Veredicto::Admitido {
+            aplicado: true,
+            sellado: resultado.sellado,
+            registrado: resultado.registrado,
+        }),
+        // Un cambio de estado entre simular y aplicar lo rechaza el CAS como
+        // error; un veredicto distinto sobre el mismo estado no debería darse.
+        EstadoAplicacion::Rechazada => Err(fallo("capture_rejected_on_apply")),
+    }
+}
+
+fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
+    let vista = VistaSimulacion::capturar(&s.raiz, &s.manifiesto, &s.invariantes)
+        .map_err(|e| fallo(e.codigo()))?;
+    let falta = esquema_faltante(vista.estructura(), s.accion);
+    if !falta.is_empty() {
+        return Err(Fallo {
+            codigo: "capture_schema_missing",
+            detalle: json!(falta),
+        });
+    }
+    let plan = planificar(s, vista.estructura())?;
     let motivo = s.motivo.clone().unwrap_or_else(|| {
         format!("{}: {}", s.accion.nombre(), s.objetivo.trim())
             .chars()
@@ -583,29 +645,28 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
         autor: s.autor.clone(),
         motivo: Some(motivo),
     };
-    let resultado = aplicar_archivo_con_procedencia(
-        &s.raiz,
-        &s.manifiesto,
-        &s.invariantes,
-        archivo.ruta(),
-        vista.snapshot_token(),
-        &procedencia,
+    let rutas = Rutas {
+        raiz: &s.raiz,
+        manifiesto: &s.manifiesto,
+        invariantes: &s.invariantes,
+    };
+    Ok(
+        match simular_y_aplicar(&vista, &rutas, &plan.delta, &procedencia, s.dry_run)? {
+            Veredicto::Admitido {
+                aplicado,
+                sellado,
+                registrado,
+            } => Resultado::Hecho {
+                plan,
+                aplicado,
+                sellado,
+                registrado,
+            },
+            Veredicto::Rechazado { reglas, conflictos } => {
+                Resultado::Rechazado { reglas, conflictos }
+            }
+        },
     )
-    .map_err(|e| Fallo {
-        codigo: e.codigo(),
-        detalle: json!(["si quedó una transacción a medias, `universo status` lo dice y `universo recover` la completa"]),
-    })?;
-    match resultado.estado {
-        EstadoAplicacion::Aplicada => Ok(Resultado::Hecho {
-            plan,
-            aplicado: true,
-            sellado: resultado.sellado,
-            registrado: resultado.registrado,
-        }),
-        // Un cambio de estado entre simular y aplicar lo rechaza el CAS como
-        // error; un veredicto distinto sobre el mismo estado no debería darse.
-        EstadoAplicacion::Rechazada => Err(fallo("capture_rejected_on_apply")),
-    }
 }
 
 fn texto_hecho(

@@ -35,6 +35,7 @@ universo capturar "Los componentes deben ser reutilizables" --proyecto tienda-we
 universo reforzar criterios/los-componentes-deben-ser-reutilizables \
     --proyecto api-pagos --contexto "se aplicó al crear el módulo de cobros"
 universo search reutilizables
+universo promover criterios/los-componentes-deben-ser-reutilizables --a vigente
 ```
 
 `init --git` crea un repositorio Git aparte, vacío y sin commits, con `felix.toml`,
@@ -42,7 +43,9 @@ dos universos (`candidatos` y `vigente`) con el esquema de captura, `README.md`,
 para los transitorios, `.gitattributes` con LF y un hook de `guard` apagado.
 Dentro de él los comandos no necesitan rutas. `capturar` guarda una afirmación
 como candidata con su proyecto y contexto; `reforzar` y `objetar` registran
-que se sostuvo, o no, en otro proyecto. Desde otro lugar, usa
+que se sostuvo, o no, en otro proyecto. `promover` la lleva a `vigente`, cuyas
+reglas exigen la confirmación en al menos dos proyectos; `relacion`,
+`atributo` y `nota editar` hacen correcciones puntuales. Desde otro lugar, usa
 `--criterio <dir>` o `FELIX_CRITERIO`, y `universo-mcp --criterio <dir>` para
 un agente. El plan completo está en la [fase 10](docs/plan/10-criterio-distribuible.md).
 

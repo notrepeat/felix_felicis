@@ -279,7 +279,9 @@ universo atributo notas/a estado vigente
 - [x] Una captura con el mismo título que un criterio existente (sin
       distinguir mayúsculas ni tildes) no duplica salvo con `--forzar`. No
       detecta paráfrasis: eso es búsqueda semántica, fuera de alcance.
-- [ ] `nota editar`, `relacion` y `atributo`: pendientes, para el paso 3.
+- [x] `nota editar`, `relacion` y `atributo` (paso 3, 2026-11-18). `relacion
+      --quitar` retira la de mayor ordinal; `atributo` reemplaza un valor único
+      o suma y quita valores múltiples; `nota editar` usa `$VISUAL` o `$EDITOR`.
 - Hecho en el paso 2 (2026-11-18):
   - **Esquema de captura v1**, el que deja `init --git` en cada universo: tipos
     `criterio`, `evidencia` y `proyecto`; aristas `confirmado_en`, `apoya`,
@@ -422,7 +424,7 @@ criterio en serio lo decides tú; hasta entonces no reemplaza lo que ya usas.
    falten);
 2. la propone allí: las reglas de `vigente` deciden. Si falla, rechaza con la
    regla y no toca nada;
-3. si se admite, marca la candidata como `promovida` en el origen, con
+3. si se admite, marca la candidata como `promovido` en el origen, con
    referencia al destino.
 
 **Límite.** Son dos transacciones, una por universo, no una atómica. El orden
@@ -436,10 +438,26 @@ las reglas de `vigente` exigen la evidencia. Que la promoción la confirmas tú
 es una convención, no algo que Felix pueda garantizar. Lo documentamos así.
 
 **Aceptación.**
-- [ ] Promover una candidata con evidencia en un solo proyecto se rechaza por
+- [x] Promover una candidata con evidencia en un solo proyecto se rechaza por
       la regla, sin escribir en ningún universo.
-- [ ] Con dos proyectos se admite, y la candidata queda `promovida`.
-- [ ] Un fallo simulado entre las dos transacciones se completa al repetir.
+- [x] Con dos proyectos se admite, y la candidata queda `promovido`.
+- [x] Un fallo simulado entre las dos transacciones se completa al repetir.
+- Hecho en el paso 3 (2026-11-18): `universo promover <nota> --a <universo>
+  [--de <universo>]`. El estado `promovido` se agrega al dominio de `estado`,
+  y `vigente` suma la regla `solo-criterio-probado` (sólo `vigente` o
+  `retirado`). Copia el texto, la validación, la fecha original y las
+  relaciones `confirmado_en` (creando los proyectos en el destino); la
+  evidencia queda en el origen.
+  - `--de` es opcional: por defecto, el universo por defecto del repositorio.
+  - Una promoción a medias se reconoce por la marca de procedencia que deja en
+    el destino («Promovido desde <origen> (<nota>)»). Otro criterio con el
+    mismo título y sin esa marca es `promote_conflict`.
+  - `--dry-run` simula los dos pasos.
+  - Los atributos extra del frontmatter no se copian al destino.
+  - `vigente` no exige `validacion` distinta de `pendiente`: promover es la
+    confirmación del dueño.
+- `nota editar` aplica sólo cambios en la nota abierta: si el editor toca otra,
+  es `edit_outside_note` y no se escribe nada.
 
 ### U12 — Reforzar y objetar
 
