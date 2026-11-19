@@ -10,9 +10,9 @@ instalador. Compilar desde el código queda para quien desarrolla Felix.
 Las releases posteriores a `v0.5.0` traen, junto a los binarios, `instalar.sh`
 (Linux y macOS) e `instalar.ps1` (Windows). Cada uno baja el archivo de tu
 plataforma desde esa misma release y verifica su suma SHA-256: si no coincide,
-no instala nada. Después reemplaza los dos ejecutables a la vez en una carpeta
-de tu usuario, sin pedir permisos de administrador: si algo falla, queda la
-versión anterior completa. La suma viene de la misma release, así que detecta
+no instala nada. Después prepara los dos ejecutables completos en una carpeta de
+tu usuario antes de reemplazar ninguno, sin pedir permisos de administrador:
+si la descarga o la verificación fallan, queda la versión anterior intacta. La suma viene de la misma release, así que detecta
 una descarga corrupta o incompleta, no una release adulterada; cada instalador
 trae también su propio `.sha256`.
 
@@ -91,7 +91,7 @@ Sólo hace falta para trabajar en Felix o para una plataforma sin binario
 ```sh
 git clone <url-del-repositorio> felix_felicis
 cd felix_felicis
-git checkout v0.5.0        # o la versión que quieras; sin esto, la rama actual
+git checkout v0.6.0        # o la versión que quieras; sin esto, la rama actual
 cargo install --locked --path crates/universo-cli
 cargo install --locked --path crates/universo-mcp
 ```
