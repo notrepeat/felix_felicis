@@ -75,6 +75,12 @@ impl VistaSimulacion {
         self.0.estructura()
     }
 
+    /// Token del estado capturado, para aplicar con CAS lo que se simuló aquí.
+    /// Opt-in explícito: el token es sensible.
+    pub fn snapshot_token(&self) -> SnapshotToken {
+        self.0.token()
+    }
+
     pub fn invariantes(&self) -> &[universo_core::SentenciaFuente] {
         self.0.fuentes_invariantes()
     }

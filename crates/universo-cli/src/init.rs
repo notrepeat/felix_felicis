@@ -146,6 +146,109 @@ fn crear(dir: &Path) -> Result<(), &'static str> {
 
 const UNIVERSOS: [&str; 2] = ["candidatos", "vigente"];
 
+/// Esquema de captura v1 (fase 10): el que usan `capturar`, `reforzar` y `objetar`.
+const MANIFIESTO_CRITERIO: &str = r#"# Esquema de captura v1 (fase 10).
+version = "criterio/1"
+
+[nodos]
+sortes = ["criterio", "evidencia", "proyecto", "Retirado", "Patrón"]
+
+[[aristas]]
+clave = "confirmado_en"
+
+[[aristas]]
+clave = "apoya"
+
+[[aristas]]
+clave = "objeta"
+
+[[aristas]]
+clave = "en_proyecto"
+
+[[predicados]]
+nombre = "Estado"
+clave = "estado"
+dominio = ["candidato", "vigente", "retirado"]
+
+[[predicados]]
+nombre = "Validacion"
+clave = "validacion"
+dominio = ["explicita", "implicita", "pendiente"]
+
+[[predicados]]
+nombre = "Fecha"
+clave = "fecha"
+tipo = "fecha"
+
+[layout]
+directorios = ["criterios", "evidencias", "proyectos"]
+"#;
+
+/// Reglas de `candidatos`: toda nota con su contexto y aristas bien tipadas.
+const INVARIANTES_CANDIDATOS: &str = r#"; Reglas de candidatos creadas por `universo init --git`.
+(regla :id "tipo-conocido" :mensaje "Cada nota es un criterio, una evidencia o un proyecto."
+  (forall ((x N))
+    (or (Type x criterio) (Type x evidencia) (Type x proyecto))))
+
+(regla :id "criterio-con-contexto" :mensaje "Todo criterio tiene estado, fecha, validación y al menos un proyecto donde se expresó."
+  (forall ((x N))
+    (=> (Type x criterio)
+        (and (or (Estado x candidato) (Estado x vigente) (Estado x retirado))
+             (>= Fecha x 1900-01-01)
+             (or (Validacion x explicita) (Validacion x implicita) (Validacion x pendiente))
+             (al-menos 1 ((e E) (y N)) :guarda (Edge e x y confirmado_en) (Type y proyecto))))))
+
+(regla :id "evidencia-con-contexto" :mensaje "Toda evidencia tiene fecha, un proyecto y apoya u objeta un criterio."
+  (forall ((x N))
+    (=> (Type x evidencia)
+        (and (>= Fecha x 1900-01-01)
+             (al-menos 1 ((e E) (y N)) :guarda (Edge e x y en_proyecto) (Type y proyecto))
+             (or (al-menos 1 ((e E) (y N)) :guarda (Edge e x y apoya) (Type y criterio))
+                 (al-menos 1 ((e E) (y N)) :guarda (Edge e x y objeta) (Type y criterio)))))))
+
+(regla :id "aristas-bien-tipadas" :mensaje "confirmado_en va de un criterio a un proyecto; apoya y objeta, de una evidencia a un criterio; en_proyecto, de una evidencia a un proyecto."
+  (and
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y confirmado_en) (and (Type x criterio) (Type y proyecto)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y apoya) (and (Type x evidencia) (Type y criterio)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y objeta) (and (Type x evidencia) (Type y criterio)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y en_proyecto) (and (Type x evidencia) (Type y proyecto)))))
+"#;
+
+/// Reglas de `vigente`: las de candidatos y, además, confirmación en dos proyectos.
+const INVARIANTES_VIGENTE: &str = r#"; Reglas de vigente creadas por `universo init --git`.
+(regla :id "tipo-conocido" :mensaje "Cada nota es un criterio, una evidencia o un proyecto."
+  (forall ((x N))
+    (or (Type x criterio) (Type x evidencia) (Type x proyecto))))
+
+(regla :id "criterio-con-contexto" :mensaje "Todo criterio tiene estado, fecha, validación y al menos un proyecto donde se expresó."
+  (forall ((x N))
+    (=> (Type x criterio)
+        (and (or (Estado x candidato) (Estado x vigente) (Estado x retirado))
+             (>= Fecha x 1900-01-01)
+             (or (Validacion x explicita) (Validacion x implicita) (Validacion x pendiente))
+             (al-menos 1 ((e E) (y N)) :guarda (Edge e x y confirmado_en) (Type y proyecto))))))
+
+(regla :id "evidencia-con-contexto" :mensaje "Toda evidencia tiene fecha, un proyecto y apoya u objeta un criterio."
+  (forall ((x N))
+    (=> (Type x evidencia)
+        (and (>= Fecha x 1900-01-01)
+             (al-menos 1 ((e E) (y N)) :guarda (Edge e x y en_proyecto) (Type y proyecto))
+             (or (al-menos 1 ((e E) (y N)) :guarda (Edge e x y apoya) (Type y criterio))
+                 (al-menos 1 ((e E) (y N)) :guarda (Edge e x y objeta) (Type y criterio)))))))
+
+(regla :id "aristas-bien-tipadas" :mensaje "confirmado_en va de un criterio a un proyecto; apoya y objeta, de una evidencia a un criterio; en_proyecto, de una evidencia a un proyecto."
+  (and
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y confirmado_en) (and (Type x criterio) (Type y proyecto)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y apoya) (and (Type x evidencia) (Type y criterio)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y objeta) (and (Type x evidencia) (Type y criterio)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y en_proyecto) (and (Type x evidencia) (Type y proyecto)))))
+
+(regla :id "vigente-confirmado" :mensaje "Un criterio vigente está confirmado en al menos dos proyectos."
+  (forall ((x N))
+    (=> (Estado x vigente)
+        (al-menos 2 ((e E) (y N)) :guarda (Edge e x y confirmado_en) (Type y proyecto)))))
+"#;
+
 const GITIGNORE: &str = "# Transitorios de Felix: el lock y los archivos de una transacción a medias.\n# El historial (*.felix.log) y el sello (*.felix.seal) sí se versionan.\n*.felix.lock\n*.felix.journal\n*.felix.*.tmp\n*.felix.backup\n*.felix.stage.*\n*.felix.admctx*\n";
 
 const GITATTRIBUTES: &str = "# Finales de línea LF en todos los computadores: con CRLF el sello deja de\n# coincidir y `universo guard` falla.\n* text=auto eol=lf\n# El historial sólo crece: un merge conserva las líneas de ambos lados.\n*.felix.log merge=union\n";
@@ -154,7 +257,7 @@ const HOOK: &str = "#!/bin/sh\n# Hook de Felix: verifica cada universo antes de 
 
 const README: &str = "# Repositorio de criterio\n\nCreado con `universo init --git` (Felix Felicis).\nGuarda criterio, no código: decisiones, principios y preferencias que Felix\nverifica antes de aceptar.\n\n## Universos\n\n- `universos/candidatos`: todo lo que se captura, con su contexto. Los agentes\n  pueden escribir aquí.\n- `universos/vigente`: criterio probado. Sólo entra por promoción.\n\n`felix.toml` los declara; `escritura_agentes` es por ahora una convención que\nla CLI no hace cumplir. Dentro de este directorio los comandos no necesitan\nrutas: `universo check`, `universo search <términos>`, `universo log`, y\n`--universo vigente` para el otro universo.\n\n## Flujo entre computadores\n\n```sh\ngit pull --rebase\nuniverso guard --universo candidatos && universo guard --universo vigente\n# ... trabajar con universo ...\ngit add -A && git commit -m \"criterio: ...\"\ngit push\n```\n\nPara verificar antes de cada commit: `git config core.hooksPath .githooks`.\n\n## Privacidad\n\nQuien tenga acceso a este repositorio ve todo su criterio y su historial,\nincluso lo retirado. No guardes secretos ni credenciales.\n";
 
-const AGENTS: &str = "# Instrucciones para agentes\n\nEste repositorio guarda el criterio de su dueño. Úsalo con la CLI `universo`\n(o con `universo-mcp`); dentro de este directorio no hace falta pasar rutas.\n\n- **Antes de decidir**, consulta: `universo search <términos> --universo vigente`\n  y luego `--universo candidatos`.\n- **Cambia el criterio sólo con Felix**: `universo propose --delta <d.json>` simula, y\n  `--apply` publica con el token de la simulación. Nunca edites los archivos de\n  `universos/` a mano ni ejecutes `universo seal`.\n- **Escribe sólo en `candidatos`**. A `vigente` se llega por promoción, que\n  confirma el dueño. Es una regla de uso: la CLI todavía no lo impide.\n- Si Felix rechaza un cambio, lee la regla que falla y corrige; no la evites.\n";
+const AGENTS: &str = "# Instrucciones para agentes\n\nEste repositorio guarda el criterio de su dueño. Úsalo con la CLI `universo`\n(o con `universo-mcp`); dentro de este directorio no hace falta pasar rutas.\n\n- **Antes de decidir**, consulta: `universo search <términos> --universo vigente`\n  y luego `--universo candidatos`.\n- **Cuando el dueño exprese criterio** («quiero que…», «siempre…», «prefiero…»),\n  guárdalo: `universo capturar \"<paráfrasis concisa>\" --proyecto <proyecto> --tarea <tarea>\n  --validacion explicita|implicita|pendiente --autor agente:<nombre>`. Guarda una\n  paráfrasis, no la conversación. Si responde `capture_similar`, ya existe: refuerza\n  la nota que indica en vez de duplicarla. La fecha por defecto es la UTC de hoy.\n- **Cuando un criterio se aplique en otro proyecto** y se sostenga:\n  `universo reforzar <nota> --proyecto <p> --contexto <c>`. Si el dueño lo\n  contradice: `universo objetar <nota> --proyecto <p> --contexto <c>`.\n- **Cambia el criterio sólo con Felix.** Para otros cambios, `universo propose\n  --delta <d.json>` simula y `--apply` publica. Nunca edites los archivos de\n  `universos/` a mano ni ejecutes `universo seal`.\n- **Escribe sólo en `candidatos`**. A `vigente` se llega por promoción, que\n  confirma el dueño. Es una regla de uso: la CLI todavía no lo impide.\n- Si Felix rechaza un cambio, lee la regla que falla y corrige; no la evites.\n";
 
 const FELIX_TOML_PLANTILLA: &str = "# Repositorio de criterio creado por `universo init --git`.\nschema = \"felix-criterio-v1\"\nmotor = \"{motor}\"\npor_defecto = \"candidatos\"\n\n# Todo lo que se captura, con su contexto. Los agentes pueden escribir aquí.\n[universos.candidatos]\ndir = \"universos/candidatos\"\nescritura_agentes = true\n\n# Criterio probado: sólo entra por promoción.\n[universos.vigente]\ndir = \"universos/vigente\"\nescritura_agentes = false\n";
 
@@ -194,14 +297,17 @@ fn crear_repositorio(dir: &Path) -> Result<(), &'static str> {
     }
     for universo in UNIVERSOS {
         let base = format!("universos/{universo}");
-        escribir(&format!("{base}/manifest.toml"), MANIFIESTO)?;
-        escribir(&format!("{base}/invariants.sx"), INVARIANTES)?;
-        if universo == "candidatos" {
-            escribir(&format!("{base}/bundle/notas/bienvenida.md"), NOTA)?;
+        escribir(&format!("{base}/manifest.toml"), MANIFIESTO_CRITERIO)?;
+        let reglas = if universo == "vigente" {
+            INVARIANTES_VIGENTE
         } else {
-            // Git no versiona directorios vacíos: sin esto, un clon perdería
-            // el directorio de notas y el universo no cargaría.
-            escribir(&format!("{base}/bundle/notas/.gitkeep"), "")?;
+            INVARIANTES_CANDIDATOS
+        };
+        escribir(&format!("{base}/invariants.sx"), reglas)?;
+        // La base empieza vacía. Git no versiona directorios vacíos: sin el
+        // .gitkeep, un clon perdería los directorios y el universo no cargaría.
+        for dir in ["criterios", "evidencias", "proyectos"] {
+            escribir(&format!("{base}/bundle/{dir}/.gitkeep"), "")?;
         }
         let raiz = dir.join(&base);
         sellar(

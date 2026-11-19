@@ -41,6 +41,7 @@ fn uso(comando: &str) -> Option<Uso> {
         "atomos" | "validate" | "verificar" => (true, false, Extra::Libres),
         "check" | "propose" | "guard" | "seal" => (true, true, Extra::Libres),
         "search" | "delta" => (true, false, Extra::Libres),
+        "capturar" | "reforzar" | "objetar" => (true, true, Extra::Libres),
         "status" | "recover" | "log" => (false, false, Extra::Ninguno),
         "show" => (false, false, Extra::Uno),
         "diff" => (false, false, Extra::Numeros),
@@ -65,6 +66,13 @@ const CON_VALOR: &[&str] = &[
     "--expect-snapshot",
     "--author",
     "--reason",
+    "--proyecto",
+    "--tarea",
+    "--contexto",
+    "--validacion",
+    "--fecha",
+    "--autor",
+    "--motivo",
 ];
 
 /// Posicionales de `args` (sin el comando), saltando los valores de opciones.

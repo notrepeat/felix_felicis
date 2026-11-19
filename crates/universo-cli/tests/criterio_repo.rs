@@ -89,7 +89,25 @@ fn aplicar(repo: &Path, delta: &str) {
     assert_eq!(s.codigo, 0, "{}{}", s.stdout, s.stderr);
 }
 
-const ACTIVAR: &str = r#"{"schema":"felix-delta-v1","add":["Estado(notas/bienvenida, vigente)"],"remove":["Estado(notas/bienvenida, borrador)"]}"#;
+const NOTA: &str = "criterios/bienvenida-al-criterio";
+const ACTIVAR: &str = r#"{"schema":"felix-delta-v1","add":["Estado(criterios/bienvenida-al-criterio, vigente)"],"remove":["Estado(criterios/bienvenida-al-criterio, candidato)"]}"#;
+
+/// Siembra la base vacía con una candidata, sin rutas.
+fn sembrar(repo: &Path) {
+    let s = universo_en(
+        repo,
+        &[
+            "capturar",
+            "Bienvenida al criterio",
+            "--proyecto",
+            "Prueba",
+            "--fecha",
+            "2026-11-18",
+        ],
+        &[],
+    );
+    assert_eq!(s.codigo, 0, "{}{}", s.stdout, s.stderr);
+}
 
 #[test]
 fn init_git_crea_un_repositorio_de_criterio_listo() {
@@ -104,7 +122,8 @@ fn init_git_crea_un_repositorio_de_criterio_listo() {
         ".githooks/pre-commit",
         "universos/candidatos/manifest.toml",
         "universos/candidatos/invariants.sx",
-        "universos/candidatos/bundle/notas/bienvenida.md",
+        "universos/candidatos/bundle/criterios/.gitkeep",
+        "universos/vigente/bundle/criterios/.gitkeep",
         "universos/vigente/manifest.toml",
         "universos/vigente/invariants.sx",
     ] {
@@ -126,6 +145,7 @@ fn init_git_crea_un_repositorio_de_criterio_listo() {
     );
 
     // Tras un apply, git no ve el lock ni otros transitorios; sí el log y el sello.
+    sembrar(&repo);
     aplicar(&repo, ACTIVAR);
     let estado = git(&repo, &["status", "--porcelain", "--untracked-files=all"]);
     assert!(!estado.contains(".felix.lock"), "{estado}");
@@ -146,6 +166,7 @@ fn init_git_crea_un_repositorio_de_criterio_listo() {
 fn un_clon_con_autocrlf_pasa_guard_en_todos_los_universos() {
     let dir = tempfile::tempdir().unwrap();
     let repo = repo(dir.path());
+    sembrar(&repo);
     aplicar(&repo, ACTIVAR);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "inicio"]);
@@ -161,7 +182,11 @@ fn un_clon_con_autocrlf_pasa_guard_en_todos_los_universos() {
             clon.to_str().unwrap(),
         ],
     );
-    let nota = std::fs::read(clon.join("universos/candidatos/bundle/notas/bienvenida.md")).unwrap();
+    let nota = std::fs::read(
+        clon.join("universos/candidatos/bundle")
+            .join(format!("{NOTA}.md")),
+    )
+    .unwrap();
     assert!(!nota.contains(&b'\r'), "el clon convirtió a CRLF");
     for universo in ["candidatos", "vigente"] {
         let s = universo_en(&clon, &["guard", "--universo", universo], &[]);
@@ -169,18 +194,22 @@ fn un_clon_con_autocrlf_pasa_guard_en_todos_los_universos() {
     }
     // El historial viaja con el clon.
     let s = universo_en(&clon, &["log"], &[]);
-    assert!(s.stdout.contains("log: 1 entries"), "{}", s.stdout);
+    assert!(s.stdout.contains("log: 2 entries"), "{}", s.stdout);
 }
 
 #[test]
 fn los_comandos_resuelven_el_universo_sin_rutas_y_respetan_la_precedencia() {
     let dir = tempfile::tempdir().unwrap();
     let repo = repo(dir.path());
+    sembrar(&repo);
     aplicar(&repo, ACTIVAR);
     let afuera = dir.path();
 
     // Dentro del repositorio y desde un subdirectorio.
-    for cwd in [repo.clone(), repo.join("universos/candidatos/bundle/notas")] {
+    for cwd in [
+        repo.clone(),
+        repo.join("universos/candidatos/bundle/criterios"),
+    ] {
         assert_eq!(
             universo_en(&cwd, &["check"], &[]).codigo,
             0,

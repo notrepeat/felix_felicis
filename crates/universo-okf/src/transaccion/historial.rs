@@ -291,6 +291,11 @@ fn ruta_historial(ubicacion: &UbicacionRaiz) -> Option<(std::path::PathBuf, std:
 
 /// Fecha UTC RFC 3339 con segundos (`AAAA-MM-DDTHH:MM:SSZ`). Un reloj anterior
 /// a 1970 se registra como `1970-01-01T00:00:00Z`.
+/// Fecha UTC de hoy, `AAAA-MM-DD`.
+pub fn fecha_hoy() -> String {
+    fecha_utc(SystemTime::now())[..10].to_string()
+}
+
 pub(crate) fn fecha_utc(instante: SystemTime) -> String {
     let segundos = instante
         .duration_since(UNIX_EPOCH)

@@ -30,13 +30,19 @@ su `.sha256`. Ver [instalación](docs/instalacion.md).
 universo init mi-criterio --git
 cd mi-criterio
 universo guard                       # universo por defecto: candidatos
-universo search reutilizar --universo vigente
+universo capturar "Los componentes deben ser reutilizables" --proyecto tienda-web \
+    --tarea "refactor del carrito" --validacion explicita
+universo reforzar criterios/los-componentes-deben-ser-reutilizables \
+    --proyecto api-pagos --contexto "se aplicó al crear el módulo de cobros"
+universo search reutilizables
 ```
 
-`init --git` crea un repositorio Git aparte, sin commits, con `felix.toml`, dos
-universos (`candidatos` y `vigente`), `README.md`, `AGENTS.md`, `.gitignore`
+`init --git` crea un repositorio Git aparte, vacío y sin commits, con `felix.toml`,
+dos universos (`candidatos` y `vigente`) con el esquema de captura, `README.md`, `AGENTS.md`, `.gitignore`
 para los transitorios, `.gitattributes` con LF y un hook de `guard` apagado.
-Dentro de él los comandos no necesitan rutas. Desde otro lugar, usa
+Dentro de él los comandos no necesitan rutas. `capturar` guarda una afirmación
+como candidata con su proyecto y contexto; `reforzar` y `objetar` registran
+que se sostuvo, o no, en otro proyecto. Desde otro lugar, usa
 `--criterio <dir>` o `FELIX_CRITERIO`, y `universo-mcp --criterio <dir>` para
 un agente. El plan completo está en la [fase 10](docs/plan/10-criterio-distribuible.md).
 

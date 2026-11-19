@@ -273,11 +273,22 @@ universo atributo notas/a estado vigente
   falla.
 
 **Aceptación.**
-- [ ] Capturar es un comando, sin escribir JSON.
-- [ ] Cada captura deja una entrada de historial con su efecto y su autor.
-- [ ] Un rechazo no modifica nada.
-- [ ] Una captura casi idéntica a una existente avisa y no duplica salvo con
-      `--forzar`.
+- [x] Capturar es un comando, sin escribir JSON (`universo capturar`).
+- [x] Cada captura deja una entrada de historial con su efecto y su autor.
+- [x] Un rechazo no modifica nada y muestra la regla que falla.
+- [x] Una captura con el mismo título que un criterio existente (sin
+      distinguir mayúsculas ni tildes) no duplica salvo con `--forzar`. No
+      detecta paráfrasis: eso es búsqueda semántica, fuera de alcance.
+- [ ] `nota editar`, `relacion` y `atributo`: pendientes, para el paso 3.
+- Hecho en el paso 2 (2026-11-18):
+  - **Esquema de captura v1**, el que deja `init --git` en cada universo: tipos
+    `criterio`, `evidencia` y `proyecto`; aristas `confirmado_en`, `apoya`,
+    `objeta` y `en_proyecto`; atributos `estado`, `validacion` y `fecha`.
+    Los dominios de atributos son cerrados, así que el proyecto es una nota y
+    la tarea y el contexto van en el cuerpo.
+  - **La base empieza vacía:** sin nota de bienvenida.
+  - **Notas con nombre único en el universo** (`proyecto-…`, `evidencia-…`),
+    porque los enlaces del frontmatter se resuelven por nombre.
 
 ### U4 — Plantillas de los universos de partida
 
@@ -453,9 +464,10 @@ universo objetar  notas/componentes-reutilizables --proyecto prototipo-x \
   estrecho del que parecía.
 
 **Aceptación.**
-- [ ] Dos refuerzos en el mismo proyecto dejan un solo `confirmado_en` a ese
+- [x] Dos refuerzos en el mismo proyecto dejan un solo `confirmado_en` a ese
       proyecto.
-- [ ] Una objeción aparece en `resumen` y en `context` del criterio.
+- [x] Objetar deja la evidencia con `objeta` y no confirma.
+- [ ] Una objeción aparece en `resumen` (U8) y en `context` del criterio.
 
 ### U13 — Detectar el criterio en la conversación
 
@@ -489,6 +501,16 @@ Es la parte difícil: cuándo una frase es criterio y cuándo no.
 - [ ] La precisión medida es alta, por ejemplo ≥ 0,9, porque un falso
       positivo ensucia la base. La cobertura se informa tal cual.
 - [ ] Ninguna captura al cierre se escribe sin tu confirmación.
+
+## Hallazgos
+
+- **Simulación y apply no coinciden con nombres repetidos (2026-11-18).**
+  Crear dos notas con el mismo nombre en carpetas distintas
+  (`criterios/x` y `proyectos/x`) unidas por una arista pasa la simulación,
+  pero el apply falla con `snapshot_bundle_invalid`: el enlace `[[x]]` es
+  ambiguo al recargar. No se corrompe nada (`guard` sigue en `pass`), pero la
+  simulación debería rechazarlo. Los comandos de captura lo evitan con nombres
+  únicos; la corrección en el motor queda pendiente.
 
 ## Decisiones
 
