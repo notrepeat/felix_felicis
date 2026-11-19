@@ -68,13 +68,13 @@ impl DirTemporal {
         getrandom::fill(&mut azar).map_err(|_| io::Error::other("random"))?;
         let sufijo: String = azar.iter().map(|b| format!("{b:02x}")).collect();
         let ruta = parent.join(format!(".felix-config-{sufijo}"));
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
+            fs::DirBuilder::new().mode(0o700).create(&ruta)?;
         }
-        builder.create(&ruta)?;
+        #[cfg(not(unix))]
+        fs::DirBuilder::new().create(&ruta)?;
         Ok(Self(ruta))
     }
 }
