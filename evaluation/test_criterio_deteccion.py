@@ -181,6 +181,51 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(json.loads(cmd[cmd.index("--json-schema") + 1]), runner.SCHEMA)
         self.assertNotIn("--mcp-config", cmd)
 
+    def test_la_version_se_pide_dentro_del_mismo_aislamiento(self):
+        agente = runner.AgenteClaude("/usr/bin/true", "claude-sonnet-5-5")
+        cmd = agente.comando_version(Path("/tmp/h"))
+        self.assertEqual(cmd[0], "bwrap")
+        self.assertIn("--clearenv", cmd)
+        self.assertEqual(cmd[-2:], ["/opt/claude/claude", "--version"])
+
+    @unittest.skipIf(os.name == "nt", "los shims de mise se prueban en Unix")
+    def test_un_shim_de_mise_se_resuelve_al_binario_real(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            real = tmp / "installs" / "claude"
+            real.parent.mkdir()
+            real.write_text("binario")
+            mise = tmp / "mise"
+            mise.write_text(f"#!/bin/sh\n[ \"$1 $2\" = 'which claude' ] && echo {real} || exit 1\n")
+            mise.chmod(0o755)
+            shim = tmp / "claude"
+            shim.symlink_to(mise)
+            self.assertEqual(runner.binario_real(shim), real)
+            self.assertEqual(runner.binario_real(real), real)
+            agente = runner.AgenteClaude(shim, "m")
+            cmd = agente.aislamiento(Path("/tmp/h"))
+            i = cmd.index("/opt/claude/claude")
+            self.assertEqual(cmd[i - 1], str(real))
+
+    @unittest.skipIf(os.name == "nt", "los shims de mise se prueban en Unix")
+    def test_un_shim_que_mise_no_resuelve_es_error_de_entorno(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            for cuerpo in ("exit 1", "true"):
+                mise = tmp / "mise"
+                mise.write_text(f"#!/bin/sh\n{cuerpo}\n")
+                mise.chmod(0o755)
+                shim = tmp / "claude"
+                shim.unlink(missing_ok=True)
+                shim.symlink_to(mise)
+                with self.assertRaisesRegex(runner.ErrorDeEntorno, "claude_shim_unresolved"):
+                    runner.binario_real(shim)
+                with tempfile.TemporaryDirectory() as out:
+                    codigo = runner.main(["--agente", "claude", "--claude-binary", str(shim),
+                                          "--salida", str(Path(out) / "r.json")])
+                    self.assertEqual(codigo, 2)
+                    self.assertFalse((Path(out) / "r.json").exists())
+
 
 class ClaudeFalso(runner.AgenteClaude):
     """`claude` sustituido por un script que imprime eventos stream-json."""
@@ -222,6 +267,21 @@ class ClaudeTest(unittest.TestCase):
             siempre = f"import json; print(json.dumps({fallo!r}))"
             with self.assertRaises(runner.ErrorDeEntorno):
                 self.clasificar(siempre)
+
+    def test_un_binario_que_no_arranca_en_el_aislamiento_corta_antes_de_clasificar(self):
+        class SinArranque(ClaudeFalso):
+            def comando_version(self, home):
+                return [sys.executable, "-c", "import sys; print('shim roto', file=sys.stderr); sys.exit(1)"]
+
+        with self.assertRaises(runner.ErrorDeEntorno) as error:
+            SinArranque("").version()
+        self.assertIn("shim roto", str(error.exception))
+
+        class Arranca(ClaudeFalso):
+            def comando_version(self, home):
+                return [sys.executable, "-c", "print('9.9.9 (Claude Code)')"]
+
+        self.assertEqual(Arranca("").version(), "9.9.9 (Claude Code)")
 
     def test_un_limite_del_proveedor_corta_la_corrida(self):
         evento = {"type": "result", "is_error": True, "result": "Usage limit reached"}

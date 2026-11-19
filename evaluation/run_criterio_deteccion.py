@@ -185,6 +185,28 @@ class AgenteOraculo:
         return {"categoria": self.etiquetas[caso["id"]], "afirmacion": ""}, "ok"
 
 
+GESTORES_DE_SHIMS = ("mise",)
+
+
+def binario_real(ruta):
+    """Ruta real del binario de Claude. Un shim de mise (enlace a ``mise``)
+    no sirve dentro de bwrap, que no ve su configuración: se le pregunta a
+    mise qué binario ejecutaría. Otros envoltorios (scripts de asdf, un
+    ``cli.js`` de npm) no se resuelven; ``version()`` los rechaza antes del
+    primer caso porque no arrancan en el aislamiento."""
+    ruta = Path(ruta)
+    resuelto = ruta.resolve()
+    if resuelto.name not in GESTORES_DE_SHIMS:
+        return resuelto
+    try:
+        salida = subprocess.run([str(resuelto), "which", ruta.name], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ErrorDeEntorno(f"claude_shim_unresolved: {type(error).__name__}") from error
+    if salida.returncode != 0 or not salida.stdout.strip():
+        raise ErrorDeEntorno(f"claude_shim_unresolved: {resuelto.name}")
+    return Path(salida.stdout.strip()).resolve()
+
+
 class AgenteClaude:
     """Claude Code en modo no interactivo, aislado con bubblewrap.
 
@@ -196,7 +218,7 @@ class AgenteClaude:
     nombre = "claude"
 
     def __init__(self, claude_binary, model, timeout=TIMEOUT_S):
-        self.claude_binary = Path(claude_binary).resolve()
+        self.claude_binary = binario_real(claude_binary)
         self.model = model
         self.timeout = timeout
 
@@ -204,7 +226,9 @@ class AgenteClaude:
     def credenciales():
         return Path.home() / ".claude/.credentials.json"
 
-    def command(self, home, sistema_texto):
+    def aislamiento(self, home):
+        """Prefijo bwrap: sistema de sólo lectura, un HOME vacío con las
+        credenciales y el binario de Claude en ``/opt/claude/claude``."""
         cmd = ["bwrap", "--unshare-all", "--share-net", "--die-with-parent", "--new-session", "--clearenv"]
         for path in ["/usr", "/bin", "/lib", "/lib64", "/etc/ssl", "/etc/ca-certificates", "/etc/resolv.conf",
                      "/etc/hosts", "/etc/nsswitch.conf"]:
@@ -214,7 +238,14 @@ class AgenteClaude:
                 "--bind", str(home), "/agente-home",
                 "--bind", str(self.credenciales()), "/agente-home/.claude/.credentials.json",
                 "--ro-bind", str(self.claude_binary), "/opt/claude/claude", "--chdir", "/tmp",
-                "--setenv", "HOME", "/agente-home", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "LANG", "C.UTF-8",
+                "--setenv", "HOME", "/agente-home", "--setenv", "PATH", "/usr/bin:/bin", "--setenv", "LANG", "C.UTF-8"]
+        return cmd
+
+    def comando_version(self, home):
+        return self.aislamiento(home) + ["/opt/claude/claude", "--version"]
+
+    def command(self, home, sistema_texto):
+        cmd = self.aislamiento(home) + [
                 "/opt/claude/claude", "-p", "--output-format", "stream-json", "--verbose",
                 "--model", self.model, "--tools", "", "--setting-sources", "", "--strict-mcp-config",
                 "--no-session-persistence", "--max-turns", "3",
@@ -230,8 +261,20 @@ class AgenteClaude:
             raise ErrorDeEntorno("missing_claude")
 
     def version(self):
-        return subprocess.check_output([str(self.claude_binary), "--version"], text=True,
-                                       stderr=subprocess.DEVNULL).strip()
+        """Pide la versión dentro del mismo aislamiento que la corrida: si el
+        binario no arranca ahí, la corrida se corta antes del primer caso."""
+        with tempfile.TemporaryDirectory(prefix="felix-criterio-") as temporal:
+            home = Path(temporal) / "home"
+            (home / ".claude").mkdir(parents=True)
+            try:
+                proceso = subprocess.run(self.comando_version(home), capture_output=True, text=True,
+                                         timeout=60, env={"PATH": "/usr/bin:/bin"})
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise ErrorDeEntorno(f"claude_sandbox_failed: {type(error).__name__}") from error
+        if proceso.returncode != 0:
+            detalle = (proceso.stderr or proceso.stdout).strip()[-300:]
+            raise ErrorDeEntorno(f"claude_sandbox_failed: {detalle}")
+        return proceso.stdout.strip()
 
     def clasificar(self, caso, sistema_texto, texto):
         """(salida estructurada o None, estado): ``ok``, ``timeout``,
@@ -306,8 +349,8 @@ def main(argv=None):
 
     casos = cargar_corpus(args.corpus)
     skill = cargar_skill(args.skill)
-    agente = AgenteOraculo(casos) if args.agente == "oraculo" else AgenteClaude(args.claude_binary, args.model)
     try:
+        agente = AgenteOraculo(casos) if args.agente == "oraculo" else AgenteClaude(args.claude_binary, args.model)
         agente.preflight()
         version = agente.version()
     except (ErrorDeEntorno, OSError, subprocess.CalledProcessError) as error:

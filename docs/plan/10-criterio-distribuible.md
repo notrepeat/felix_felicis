@@ -599,8 +599,8 @@ Es la parte difícil: cuándo una frase es criterio y cuándo no.
   publican aunque sean malos, como en la fase 07.
 
 **Aceptación.**
-- [ ] La guía y la skill existen y están probadas con el corpus.
-- [ ] La precisión medida es alta, por ejemplo ≥ 0,9, porque un falso
+- [x] La guía y la skill existen y están probadas con el corpus.
+- [x] La precisión medida es alta, por ejemplo ≥ 0,9, porque un falso
       positivo ensucia la base. La cobertura se informa tal cual.
 - [x] Ninguna captura al cierre se escribe sin tu confirmación (la skill y
       `AGENTS.md` lo exigen; es una regla de uso, no algo que la CLI impida).
@@ -630,16 +630,36 @@ Es la parte difícil: cuándo una frase es criterio y cuándo no.
   cinco palabras del corpus, pero comparten vocabulario, así que el resultado será optimista frente a
   conversaciones reales (U10 es la prueba de verdad).
 
-**Pendiente de tu decisión:** la corrida con Claude, como las corridas reales
-del estudio de cuatro brazos, usa tu suscripción. Son 45 llamadas, una por
-caso:
+**Corrida con Claude** (2026-11-19, `claude-sonnet-5-5`, Claude Code
+2.1.327), autorizada por ti:
 
 ```sh
 python3 evaluation/run_criterio_deteccion.py --agente claude --model claude-sonnet-5-5
 ```
 
-El resultado queda en `evaluation/results/criterio-deteccion-claude.json`;
-se publica aunque sea malo. Con eso se marcan las dos primeras casillas.
+| Medida | Valor | IC95 (Wilson) |
+| --- | --- | --- |
+| Precisión | 23/23 = 1,000 | [0,857; 1,000] |
+| Cobertura | 23/23 = 1,000 | [0,857; 1,000] |
+| Categoría correcta | 45/45 | — |
+
+Sin falsos positivos ni negativos y sin casos sin respuesta. El resultado
+está en `evaluation/results/criterio-deteccion-claude.json`, con el hash del
+corpus y de la skill.
+
+Cómo leerlo: es un techo, no una estimación del uso real. El límite inferior
+del intervalo (0,857) queda bajo la meta de 0,9: 23 positivos no bastan para
+asegurarla, aunque no hubo ningún error. El corpus y la skill los escribió la
+misma mano, y un corpus que no hace fallar al agente ya no discrimina. La
+prueba de verdad es U10; si ahí aparecen falsos positivos, los casos que los
+producen deben entrar al corpus.
+
+La primera corrida falló en los 45 casos sin llegar al modelo: `claude` era
+un shim de mise, y bubblewrap montaba `/usr/bin/mise` en vez del binario. El
+runner ahora resuelve el shim con `mise which` y pide `--version` dentro del
+mismo aislamiento antes del primer caso, así que un binario que no arranca
+corta la corrida con `claude_sandbox_failed` en vez de invalidarla caso por
+caso.
 
 ## Hallazgos
 
