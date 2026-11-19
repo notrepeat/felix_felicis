@@ -2,7 +2,8 @@ name: Release
 
 # Binarios de `universo` y `universo-mcp` por plataforma (U6).
 # - Tag `v*`: compila, empaqueta y sube los archivos y sus .sha256 a la
-#   release de ese tag; si no existe, la crea como borrador. Publicarla es un
+#   release de ese tag, con los instaladores sin Rust (instalar.sh e
+#   instalar.ps1); si no existe, la crea como borrador. Publicarla es un
 #   paso humano.
 # - PR que toca este workflow o el empaquetador: sólo compila y empaqueta, como
 #   prueba, sin publicar nada.
@@ -13,6 +14,8 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - "tools/empaquetar_release.py"
+      - "tools/instalar.sh"
+      - "tools/instalar.ps1"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -78,10 +81,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Antes de bajar los artefactos: checkout limpia el directorio de trabajo.
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      # Instaladores sin Rust con el repositorio y el tag de esta release.
+      - name: Preparar instaladores
+        run: python tools/empaquetar_release.py --instaladores --version "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --out dist
       - name: Verificar sumas
         working-directory: dist
         run: sha256sum -c *.sha256

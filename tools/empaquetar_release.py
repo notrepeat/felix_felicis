@@ -3,6 +3,10 @@
 Uso: python tools/empaquetar_release.py --target <triple> --version <v>
        --bin-dir <dir con universo y universo-mcp> --out <dir>
 
+Con `--instaladores --repo <dueño/nombre>` (sin --target ni --bin-dir)
+escribe en cambio `instalar.sh` e `instalar.ps1`, los instaladores sin Rust,
+con el repositorio y la versión del release, y sus `.sha256`.
+
 Escribe `felix-felicis-<v>-<triple>.tar.gz` (o `.zip` en Windows) con los dos
 binarios, LICENSE y README.md bajo un directorio raíz del mismo nombre, y al
 lado `<archivo>.sha256` en el formato de `sha256sum`. Con los mismos binarios
@@ -24,6 +28,8 @@ BINARIOS = ("universo", "universo-mcp")
 DOCUMENTOS = ("LICENSE", "README.md")
 VERSION_VALIDA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 FECHA_FIJA = 315532800  # 1980-01-01, lo mínimo que admite zip.
+REPO_VALIDO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
+INSTALADORES = ("instalar.sh", "instalar.ps1")
 
 
 class ErrorEmpaquetado(Exception):
@@ -86,14 +92,47 @@ def empaquetar(target: str, version: str, bin_dir: Path, out: Path) -> Path:
     return archivo
 
 
+def _escribir_con_suma(destino: Path, contenido: str) -> None:
+    destino.write_text(contenido, encoding="utf-8", newline="\n")
+    suma = hashlib.sha256(destino.read_bytes()).hexdigest()
+    (destino.parent / f"{destino.name}.sha256").write_text(f"{suma}  {destino.name}\n", newline="\n")
+
+
+def preparar_instaladores(version: str, repo: str, out: Path) -> list[Path]:
+    """Los instaladores del release: las plantillas de `tools/` con el
+    repositorio y la versión reemplazados. Las plantillas no nombran un
+    repositorio concreto; el workflow pasa el suyo."""
+    if not VERSION_VALIDA.fullmatch(version) or not REPO_VALIDO.fullmatch(repo):
+        raise ErrorEmpaquetado("versión o repositorio inválido")
+    out.mkdir(parents=True, exist_ok=True)
+    escritos = []
+    for nombre in INSTALADORES:
+        plantilla = (RAIZ_REPO / "tools" / nombre).read_text(encoding="utf-8")
+        texto = plantilla.replace("__REPO__", repo).replace("__VERSION__", version)
+        destino = out / nombre
+        _escribir_con_suma(destino, texto)
+        escritos.append(destino)
+    return escritos
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--target", required=True)
+    p.add_argument("--target")
     p.add_argument("--version", required=True)
-    p.add_argument("--bin-dir", required=True, type=Path)
+    p.add_argument("--bin-dir", type=Path)
     p.add_argument("--out", required=True, type=Path)
+    p.add_argument("--instaladores", action="store_true")
+    p.add_argument("--repo")
     a = p.parse_args(argv)
     try:
+        if a.instaladores:
+            if not a.repo or a.target or a.bin_dir:
+                raise ErrorEmpaquetado("--instaladores pide --repo y no lleva --target ni --bin-dir")
+            for ruta in preparar_instaladores(a.version, a.repo, a.out):
+                print(ruta)
+            return 0
+        if not a.target or not a.bin_dir:
+            raise ErrorEmpaquetado("faltan --target y --bin-dir")
         archivo = empaquetar(a.target, a.version, a.bin_dir, a.out)
     except ErrorEmpaquetado as e:
         print(f"empaquetar: {e}", file=sys.stderr)
