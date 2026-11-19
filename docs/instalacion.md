@@ -75,15 +75,42 @@ directorio de trabajo del proceso lo decide el cliente.
 `skills/felix-criterio/SKILL.md` enseña a un agente qué frases son criterio
 (instrucciones generales, validaciones explícitas o implícitas), qué no lo es,
 a preguntar ante la duda y a no guardar nada al cerrar una sesión sin tu
-confirmación. Para instalarla en Claude Code, copia el directorio:
+confirmación. `evaluation/run_criterio_deteccion.py` mide su precisión sobre un
+corpus ficticio (fase 10, U13).
+
+## Conectar un repositorio de criterio a Claude Code
+
+Dentro del repositorio de criterio (el que crea `universo init --git`):
 
 ```sh
-mkdir -p ~/.claude/skills
-cp -r skills/felix-criterio ~/.claude/skills/
+universo conectar            # muestra qué cambiaría, sin escribir nada
+universo conectar --aplicar  # lo hace
+universo conectar --verificar
 ```
 
-`evaluation/run_criterio_deteccion.py` mide su precisión sobre un corpus
-ficticio (fase 10, U13); la corrida con Claude está pendiente.
+`--aplicar` revisa cinco pasos y hace sólo los que faltan:
+
+- `binario`: guarda la ruta de este `universo` en `git config felix.bin`, para
+  que los hooks no dependan del `PATH`. Usa siempre el mismo binario, el
+  instalado: correrlo con otro (por ejemplo, `target/debug/universo`) cambia
+  la ruta guardada;
+- `hooks_archivos`: pone al día `.githooks/` si son de una versión anterior.
+  Como están versionados, queda un `git commit` pendiente. Un hook que no
+  escribió Felix no se toca: el paso lo informa;
+- `hooks_activos`: activa los hooks (`git config core.hooksPath .githooks`);
+- `mcp`: registra el MCP `felix-criterio` en Claude Code a nivel de usuario
+  (`claude mcp add --scope user`), con `universo-mcp` y el repositorio en rutas
+  absolutas. El nombre es uno por usuario: si ya apunta a otro repositorio de
+  criterio, la vista previa lo dice y `--aplicar` lo reemplaza. Un servidor con
+  el mismo nombre en otro alcance (local o de proyecto) no se toca;
+- `skill`: deja la skill de esta versión en `~/.claude/skills/felix-criterio/`.
+
+Sólo toca la configuración local de Git de ese repositorio, la de Claude Code y
+la carpeta de la skill: no hace commits, no cambia la shell ni otros programas.
+Para revisar el MCP usa `claude mcp get`, que arranca el servidor registrado
+para ver su estado (con un límite de 60 s). Si `claude` no está instalado,
+aplica el resto, muestra el comando del MCP para correrlo a mano y termina con
+1 hasta que el MCP quede registrado. Repítelo en cada computador donde clones el repositorio.
 
 ## Desinstalar
 

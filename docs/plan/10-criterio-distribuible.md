@@ -710,7 +710,7 @@ recomendaron.
 | D1 | Escritura de agentes | (a) sólo CLI; (b) `capture` en el MCP; (c) sólo orquestador | **Resuelta por el diseño de universos, aceptada el 2026-11-19:** los agentes escriben (CLI o MCP) sólo en universos con `escritura_agentes = true` (`candidatos`); `vigente` sólo por promoción |
 | D2 | Plantillas (U4) | la propuesta, otra taxonomía, o sólo la mínima | la propuesta, revisada contigo: aceptada el 2026-11-19 en la versión aditiva de U4 |
 | D3 | `init --git` hace el primer commit | sí / no | no: el primer commit lo haces tú |
-| D4 | Felix ejecuta Git más allá de `init` | nunca / comandos de ayuda | nunca |
+| D4 | Felix ejecuta Git más allá de `init` | nunca / comandos de ayuda | nunca. Excepción aprobada el 2026-11-19: `universo conectar --aplicar` escribe configuración local del repositorio (`felix.bin`, `core.hooksPath`); nunca commit ni push |
 | D5 | Gates de 09 | `v0.4.0` = evaluación comparativa, o esta fase | esta fase como `v0.4.0` y la evaluación a `v0.5.0` |
 | D6 | Traer algo de la biblioteca legacy (U10) | nada / a mano / script | empezar vacío y traer a mano sólo lo vigente |
 | D7 | Escalera de universos | dos (`candidatos`, `vigente`) / la escalera completa hasta `axiomas` / por dominio | empezar con dos; `consolidado` y `axiomas` se agregan cuando haya criterio que los merezca, con U5 y U11 (que ya sirven para cualquier par de escalones) |

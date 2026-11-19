@@ -3,6 +3,16 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
+## Sin publicar
+
+- `universo conectar` conecta un repositorio de criterio a Claude Code en un
+  paso, con vista previa por defecto, `--aplicar` y `--verificar`. Guarda la
+  ruta del binario en `git config felix.bin` y activa los hooks, registra el
+  MCP a nivel de usuario e instala la skill de esta versión.
+- Los hooks leen `felix.bin`, así que ya no dependen del `PATH`. Si no
+  encuentran el binario, `pre-commit` falla con un mensaje que dice cómo
+  arreglarlo, en vez de «orden no encontrada».
+
 ## 0.5.0 — 2026-11-19
 
 Gate «evaluación comparativa y benchmarks publicados». Ver
