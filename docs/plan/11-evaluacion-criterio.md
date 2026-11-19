@@ -165,7 +165,8 @@ Mediana de tres repeticiones, binario `release` 0.4.0 en el commit
    de cada archivo antes de publicarlo de forma atómica: unos 3 ms por nota en
    este equipo. Es el precio de su garantía de atomicidad; reducirlo (por
    ejemplo, staging sólo de lo que cambia) toca el núcleo transaccional y
-   queda como trabajo aparte.
+   queda como trabajo aparte: propuesta en la
+   [fase 12](12-apply-incremental.md).
 
 ## Registro de evidencia
 
