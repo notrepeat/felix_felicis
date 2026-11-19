@@ -46,7 +46,7 @@ async fn run() -> Result<(), ()> {
         }
         *target = Some(PathBuf::from(args.next().ok_or(())?));
     }
-    let config = match criterio {
+    let (config, universos, por_defecto) = match criterio {
         // Repositorio de criterio (fase 10): las rutas salen de felix.toml.
         Some(dir) => {
             if root.is_some() || manifiesto.is_some() || invariantes.is_some() {
@@ -66,26 +66,41 @@ async fn run() -> Result<(), ()> {
                 .map(|u| u.to_str().ok_or(()))
                 .transpose()?;
             let elegido = repo.universo(nombre).map_err(informar)?;
-            ServerConfig {
-                root: elegido.bundle(),
-                manifiesto: elegido.manifiesto(),
-                invariantes: elegido.invariantes(),
+            let config_de = |u: &universo_okf::criterio::Universo| ServerConfig {
+                root: u.bundle(),
+                manifiesto: u.manifiesto(),
+                invariantes: u.invariantes(),
+            };
+            // Cada universo, para elegirlo por llamada (`universe`).
+            let mut universos = Vec::new();
+            for nombre in repo.universos.keys() {
+                let u = repo.universo(Some(nombre)).map_err(informar)?;
+                universos.push(universo_mcp::dominio::UniversoMcp {
+                    nombre: u.nombre.clone(),
+                    config: config_de(u),
+                    escritura: u.escritura_agentes,
+                });
             }
+            (config_de(elegido), universos, Some(elegido.nombre.clone()))
         }
         None => {
             if universo.is_some() || ignorar_version {
                 return Err(());
             }
-            ServerConfig {
-                root: root.ok_or(())?,
-                manifiesto: manifiesto.ok_or(())?,
-                invariantes: invariantes.ok_or(())?,
-            }
+            (
+                ServerConfig {
+                    root: root.ok_or(())?,
+                    manifiesto: manifiesto.ok_or(())?,
+                    invariantes: invariantes.ok_or(())?,
+                },
+                Vec::new(),
+                None,
+            )
         }
     };
     if worker {
         universo_mcp::ejecutar_worker(&config).map_err(|_| ())
     } else {
-        universo_mcp::servir(config).await
+        universo_mcp::servir(config, universos, por_defecto).await
     }
 }

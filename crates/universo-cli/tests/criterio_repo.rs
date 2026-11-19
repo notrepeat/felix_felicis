@@ -415,3 +415,74 @@ fn felix_universo_no_unicode_es_error_de_uso() {
     let s = universo_en(&repo, &["log"], &[("FELIX_UNIVERSO", Path::new(invalido))]);
     assert_eq!(s.codigo, 2, "{}{}", s.stdout, s.stderr);
 }
+
+#[test]
+fn mcp_config_imprime_la_configuracion_para_cada_cliente() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    let real = repo.canonicalize().unwrap();
+    let s = universo_en(&repo, &["mcp-config"], &[]);
+    assert_eq!(s.codigo, 0, "{}{}", s.stdout, s.stderr);
+    assert!(
+        s.stdout
+            .contains("claude mcp add --scope user felix-criterio -- "),
+        "{}",
+        s.stdout
+    );
+    assert!(
+        s.stdout.contains(&format!("--criterio {}", real.display())),
+        "{}",
+        s.stdout
+    );
+    let s = universo_en(
+        &repo,
+        &["mcp-config", "--cliente", "json", "--nombre", "mi-criterio"],
+        &[],
+    );
+    let json: Value = serde_json::from_str(&s.stdout).unwrap();
+    let servidor = &json["mcpServers"]["mi-criterio"];
+    assert!(
+        servidor["command"]
+            .as_str()
+            .unwrap()
+            .contains("universo-mcp"),
+        "{json}"
+    );
+    assert_eq!(servidor["args"][0], "--criterio");
+    assert_eq!(servidor["args"][1], real.display().to_string());
+    let s = universo_en(&repo, &["mcp-config", "--cliente=codex"], &[]);
+    assert!(
+        s.stdout.contains("[mcp_servers.felix-criterio]"),
+        "{}",
+        s.stdout
+    );
+    // Fuera de un repositorio, y un cliente desconocido.
+    let s = universo_en(dir.path(), &["mcp-config"], &[]);
+    assert_eq!(s.codigo, 1);
+    assert!(s.stdout.contains("criterio_not_found"), "{}", s.stdout);
+    assert_eq!(
+        universo_en(&repo, &["mcp-config", "--cliente", "otro"], &[]).codigo,
+        2
+    );
+}
+
+#[test]
+fn mcp_config_fija_el_universo_de_arranque() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    let s = universo_en(
+        &repo,
+        &["mcp-config", "--cliente", "json", "--universo", "vigente"],
+        &[],
+    );
+    let json: Value = serde_json::from_str(&s.stdout).unwrap();
+    let args = &json["mcpServers"]["felix-criterio"]["args"];
+    assert_eq!(
+        (args[2].as_str(), args[3].as_str()),
+        (Some("--universo"), Some("vigente")),
+        "{json}"
+    );
+    let s = universo_en(&repo, &["mcp-config", "--universo", "axiomas"], &[]);
+    assert_eq!(s.codigo, 1);
+    assert!(s.stdout.contains("universe_not_found"), "{}", s.stdout);
+}

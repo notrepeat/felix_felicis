@@ -41,7 +41,9 @@ universo promover criterios/los-componentes-deben-ser-reutilizables --a vigente
 `init --git` crea un repositorio Git aparte, vacío y sin commits, con `felix.toml`,
 dos universos (`candidatos` y `vigente`) con el esquema de captura, `README.md`, `AGENTS.md`, `.gitignore`
 para los transitorios, `.gitattributes` con LF y un hook de `guard` apagado.
-Dentro de él los comandos no necesitan rutas. `capturar` guarda una afirmación
+Dentro de él los comandos no necesitan rutas, y `universo mcp-config` imprime
+la configuración para conectar un agente (Claude Code, Codex o JSON), que podrá
+consultar todos los universos y capturar candidatas. `capturar` guarda una afirmación
 como candidata con su proyecto y contexto; `reforzar` y `objetar` registran
 que se sostuvo, o no, en otro proyecto. `promover` la lleva a `vigente`, cuyas
 reglas exigen la confirmación en al menos dos proyectos; `relacion`,
@@ -64,7 +66,7 @@ Implementado:
 - `universo init <dir>` crea un repositorio de conocimiento mínimo, válido y sellado (no es atómico: si falla a mitad, borra el directorio y repite); `propose --apply --author <a> --reason <r>` registra la procedencia y el delta aplicado; `universo log` lista los cambios, `universo show <raiz> <n>` muestra los hechos que agregó y retiró uno de ellos, y `universo diff <raiz> <desde> [<hasta>]` los cambios netos entre dos estados del log, compuestos con el efecto que cada apply registró (la salida de ambos incluye datos del bundle; no cubre ediciones hechas fuera de Felix, que detecta `guard`, ni entradas escritas antes de que el historial guardara ese efecto);
 - [guardia](docs/guardia.md) que detecta cambios hechos fuera de Felix (sello del último estado admitido y hook de pre-commit);
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
-- servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check`, `why` y `search` (búsqueda léxica sobre título, tipo y atributos, con opt-in), sin escritura del bundle; los rechazos traen id y mensaje de la regla;
+- servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check`, `why` y `search` (búsqueda léxica sobre título, tipo y atributos, con opt-in); con `--criterio`, además `capture`, `reinforce` y `object`, que escriben sólo en universos con `escritura_agentes`; los rechazos traen id y mensaje de la regla;
 - criterio en las reglas: valores ordenados, fechas, atributos con varios valores y el cuantificador `al-menos` (ver más abajo);
 - `propose --witness`: testigo localizado opt-in que dice en qué nodos o aristas falla un rechazo;
 - [orquestador obligatorio](docs/propuestas/08-orquestador-obligatorio.md) (`tools/orquestador.py`): el agente propone, Felix verifica siempre, el rechazo vuelve con su diagnóstico y sólo el ejecutor publica, con CAS;

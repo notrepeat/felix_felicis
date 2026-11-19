@@ -172,3 +172,108 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
         1
     }
 }
+
+/// Carga un universo: manifiesto y bundle, o el mensaje de error.
+fn cargar(
+    raiz: &std::path::Path,
+    manifiesto: &std::path::Path,
+) -> Result<universo_core::Estructura, String> {
+    let manifiesto = cargar_manifiesto(manifiesto).map_err(|e| format!("{e}\n"))?;
+    cargar_bundle(raiz, manifiesto)
+        .map_err(|errores| errores.iter().map(|e| format!("{e}\n")).collect::<String>())
+}
+
+/// `search --universo todos`: la misma búsqueda en cada universo del
+/// repositorio, con los resultados unidos por puntaje y su universo.
+pub(super) fn ejecutar_todos(
+    universos: Vec<(String, PathBuf, PathBuf)>,
+    resto: &[String],
+    salida: &mut impl Write,
+    error: &mut impl Write,
+) -> i32 {
+    let mut todas = Vec::new();
+    let mut total = 0;
+    let mut pedido = None;
+    for (nombre, raiz, manifiesto) in &universos {
+        let mut args = vec![
+            raiz.display().to_string(),
+            format!("--manifiesto={}", manifiesto.display()),
+        ];
+        args.extend(resto.iter().cloned());
+        let s = match parsear(&args) {
+            Ok(s) => s,
+            Err(uso) => {
+                let _ = error.write_all(uso.as_bytes());
+                return 2;
+            }
+        };
+        let estructura = match cargar(&s.raiz, &s.manifiesto) {
+            Ok(e) => e,
+            Err(mensaje) => {
+                if let Err(causa) = error.write_all(format!("{nombre}: {mensaje}").as_bytes()) {
+                    reportar_fallo_escritura(error, "stderr", &causa);
+                }
+                return 1;
+            }
+        };
+        let consulta = s.terminos.join(" ");
+        let resultado = buscar(&estructura, &consulta, usize::MAX);
+        total += resultado.total;
+        todas.extend(
+            resultado
+                .coincidencias
+                .into_iter()
+                .map(|c| (nombre.clone(), c)),
+        );
+        pedido = Some((consulta, s.limite, s.formato));
+    }
+    let Some((consulta, limite, formato)) = pedido else {
+        return 1;
+    };
+    todas.sort_by(|(ua, a), (ub, b)| {
+        b.puntaje
+            .cmp(&a.puntaje)
+            .then_with(|| ua.cmp(ub))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    todas.truncate(limite);
+    let bytes = match formato {
+        Formato::Texto => {
+            let mut texto = format!("search: {} of {total} matches\n", todas.len());
+            for (universo, c) in &todas {
+                let campos: Vec<&str> = c.campos.iter().map(|campo| campo.nombre()).collect();
+                texto.push_str(&format!(
+                    "{universo}: {} [{}] {} ({})\n",
+                    visible(&c.path.to_string()),
+                    visible(&c.tipo),
+                    visible(&c.titulo),
+                    campos.join(", ")
+                ));
+                if let Some(fragmento) = &c.fragmento {
+                    texto.push_str(&format!("  {}\n", visible(fragmento)));
+                }
+            }
+            texto
+        }
+        Formato::Json => {
+            let matches: Vec<_> = todas
+                .iter()
+                .map(|(universo, c)| {
+                    json!({"universe": universo, "path": c.path.to_string(), "type": c.tipo,
+                           "title": c.titulo,
+                           "fields": c.campos.iter().map(|campo| campo.nombre()).collect::<Vec<_>>(),
+                           "score": c.puntaje, "snippet": c.fragmento})
+                })
+                .collect();
+            format!(
+                "{}\n",
+                json!({"schema_version":1,"command":"search","query":consulta,"total":total,"matches":matches})
+            )
+        }
+    };
+    if escribir_salida(salida, error, bytes.as_bytes(), "stdout") {
+        0
+    } else {
+        1
+    }
+}

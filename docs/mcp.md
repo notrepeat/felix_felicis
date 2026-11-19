@@ -1,9 +1,12 @@
 # Loop MCP de propuesta y corrección
 
 `universo-mcp` expone consultas y simulación por `stdio`. El operador fija un
-bundle y sus archivos de configuración al iniciar el servidor. Las herramientas
-no reciben rutas de archivos del host ni ofrecen `apply`, escritura, shell,
-recovery o una puerta de publicación. La lógica de admisión permanece en
+bundle y sus archivos de configuración al iniciar el servidor (o un repositorio
+de criterio con `--criterio`). Las herramientas no reciben rutas de archivos del
+host ni ofrecen `apply` de deltas arbitrarios, shell, recovery, promoción o una
+puerta de publicación. La única escritura son `capture`, `reinforce` y `object`,
+sólo con `--criterio` y en universos con `escritura_agentes = true` (ver más
+abajo). La lógica de admisión permanece en
 `universo-core`; la captura reutiliza la política y cuotas de la simulación OKF.
 
 ```sh
@@ -19,6 +22,22 @@ puede mezclar con `--root`, `--manifiesto` ni `--invariantes`. Si `felix.toml`
 falta, es inválido, no tiene el universo pedido o pide otra versión del motor,
 el servidor no arranca y dice por qué en stderr. `--ignorar-version` salta el
 control de versión.
+
+Con `--criterio`, todas las herramientas aceptan un argumento opcional
+`universe` (sin él, el universo por defecto o el de `--universo`), y `search`
+acepta `universe: "todos"` para buscar en todos, con el universo de cada
+resultado. Si algún universo tiene `escritura_agentes = true`, el servidor
+también anuncia `capture`, `reinforce` y `object`:
+
+- **`capture`** guarda una afirmación como candidata, con su proyecto, tarea,
+  validación y autor (`agente:<author>`). Si ya existe, responde
+  `status: "similar"` con las notas existentes.
+- **`reinforce`** y **`object`** registran que un criterio se sostuvo, o no,
+  en un proyecto.
+
+Escriben con simulación y CAS, y quedan en el historial. Sobre un universo sin
+escritura fallan con `universe_read_only`. El MCP nunca promueve.
+`universo mcp-config` imprime la configuración del cliente.
 
 En Windows, los ejecutables llevan `.exe`. Un cliente MCP inicia el proceso y
 negocia MCP `2025-11-25` mediante `initialize`, envía `notifications/initialized` y usa `tools/list` y
@@ -94,20 +113,41 @@ una instantánea atómica frente a escritores externos entre llamadas.
 | Respuesta de transporte | 2 MiB |
 | Consulta `context` | profundidad 2, 256 nodos, 4096 átomos, 256 invariantes |
 | JSON de `context` antes de transporte | 1 MiB |
-| Tiempo por llamada al worker | 5 segundos |
+| Tiempo por llamada al worker | 5 segundos; 5 minutos para `capture`, `reinforce` y `object` |
 | Workers activos por servidor | 1 |
 
 El servidor ejecuta el adaptador síncrono en un proceso hijo por llamada. Al
-expirar el plazo termina y recoge ese proceso; no abandona una tarea async que
+expirar el plazo termina y recoge ese proceso. Las herramientas que escriben
+tienen un plazo largo para no cortar un apply a mitad; si aun así vence, la
+transacción queda pendiente (`universo status`) y `universo recover` la
+completa o la revierte; no abandona una tarea async que
 continúe leyendo o calculando. Una llamada concurrente se rechaza como ocupada.
 Las cuotas raw de captura OKF y el presupuesto determinista de evaluación del
 núcleo siguen vigentes. Estas cotas de bytes no son una promesa de RSS máximo.
 
-La ausencia de herramientas de escritura delimita esta API, no es un sandbox
-del sistema operativo. Si un cliente/agente recibe además acceso directo al
+El alcance de las herramientas delimita esta API, no es un sandbox del sistema
+operativo. Si un cliente/agente recibe además acceso directo al
 filesystem o a otra herramienta de escritura, esa autoridad es externa al
 servidor. Para el loop de esta fase se concede únicamente esta conexión MCP.
-El proceso se ejecuta con permisos del operador y sólo lee sus rutas fijadas.
+El proceso se ejecuta con permisos del operador y sólo lee sus rutas fijadas;
+con `--criterio` y escritura de agentes, también escribe en esos universos,
+siempre con simulación, CAS e historial.
+
+**Lo que revelan las herramientas de escritura.** `capture`, `reinforce` y
+`object` devuelven las rutas que crearon (nota, proyecto, evidencia), y si el
+proyecto ya existía. Una captura duplicada devuelve `status: "similar"` con
+las rutas de los criterios existentes. Por eso confirman la existencia de
+proyectos y criterios: quien tiene escritura en un universo puede, de hecho,
+leer sus nombres.
+
+**Límite de diseño.** Un agente con escritura puede declarar una validación
+`explicita` que el dueño no dio, o reforzar en proyectos inventados, y así
+reunir la confirmación en dos proyectos que pide `vigente`. Felix no distingue
+a una persona de un agente. La salvaguarda es la promoción, que hace el dueño:
+`universo promover` muestra las evidencias que respaldan cada confirmación y
+quién las registró queda en el historial (`universo log`). Tampoco hay límite
+de tasa: un agente que capture sin freno puede agotar el presupuesto de
+evaluación del universo.
 
 ## Demostración reproducible
 

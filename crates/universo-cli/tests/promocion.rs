@@ -332,3 +332,53 @@ fn otro_criterio_con_el_mismo_titulo_en_el_destino_es_un_conflicto() {
     assert!(s.stdout.contains("promote_conflict"), "{}", s.stdout);
     assert!(leer(&repo, "candidatos", &nota).contains("estado: candidato"));
 }
+
+#[test]
+fn search_en_todos_los_universos_dice_de_cual_viene_cada_resultado() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    candidata(&repo);
+    reforzar(&repo, "API pagos");
+    ok(&promover(&repo, &[]));
+    let s = universo_en(
+        &repo,
+        &[
+            "search",
+            "--universo",
+            "todos",
+            "reutilizar",
+            "--format=json",
+        ],
+    );
+    ok(&s);
+    let json: Value = serde_json::from_str(&s.stdout).unwrap();
+    let universos: Vec<&str> = json["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["universe"].as_str().unwrap())
+        .collect();
+    assert!(
+        universos.contains(&"candidatos") && universos.contains(&"vigente"),
+        "{json}"
+    );
+    let s = universo_en(&repo, &["search", "--universo=todos", "reutilizar"]);
+    ok(&s);
+    assert!(
+        s.stdout.contains(&format!("vigente: {NOTA}")),
+        "{}",
+        s.stdout
+    );
+}
+
+#[test]
+fn promover_muestra_las_evidencias_que_respaldan_la_confirmacion() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    candidata(&repo);
+    reforzar(&repo, "API pagos");
+    let s = promover(&repo, &["--dry-run"]);
+    ok(&s);
+    assert!(s.stdout.contains("evidence: evidencias/"), "{}", s.stdout);
+    assert!(s.stdout.contains("(API pagos)"), "{}", s.stdout);
+}

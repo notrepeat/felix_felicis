@@ -14,11 +14,26 @@ use universo_okf::{
     transaccion::simulacion::VistaSimulacion,
 };
 
+#[derive(Clone)]
 pub struct ServerConfig {
     pub root: PathBuf,
     pub manifiesto: PathBuf,
     pub invariantes: PathBuf,
 }
+
+/// Un universo de un repositorio de criterio, servido con `--criterio`.
+#[derive(Clone)]
+pub struct UniversoMcp {
+    pub nombre: String,
+    pub config: ServerConfig,
+    /// `escritura_agentes` en `felix.toml`: admite `capture`, `reinforce` y
+    /// `object`.
+    pub escritura: bool,
+}
+
+/// Herramientas que escriben (fase 10, U6): sólo en universos con
+/// `escritura_agentes = true`.
+pub const ESCRITURA: [&str; 3] = ["capture", "reinforce", "object"];
 
 #[derive(Debug)]
 pub struct DomainError {
@@ -38,7 +53,54 @@ fn dominio(codigo: &'static str) -> DomainError {
     }
 }
 
-pub fn herramientas() -> Vec<Value> {
+/// Herramientas que anuncia el servidor: con varios universos, todas aceptan
+/// `universe`; con alguno que admite escritura, se suman las de captura.
+pub fn herramientas(multiverso: bool, escritura: bool) -> Vec<Value> {
+    let mut lista = herramientas_de_consulta();
+    if escritura {
+        lista.extend(herramientas_de_escritura());
+    }
+    if multiverso {
+        for herramienta in &mut lista {
+            herramienta["inputSchema"]["properties"]["universe"] = json!({
+                "type": "string", "minLength": 1, "maxLength": 64,
+                "description": "Universe of the criterio repository (felix.toml); default: its default universe. `search` also accepts \"todos\" (all universes)."
+            });
+        }
+    }
+    lista
+}
+
+fn herramientas_de_escritura() -> Vec<Value> {
+    use universo_okf::registro_criterio::{MAX_DETALLE, MAX_PROYECTO, MAX_TEXTO, VALIDACIONES};
+    ESCRITURA.into_iter().map(|name| {
+        let mut properties = json!({
+            "schema": {"type":"string","const":"felix-mcp-v1"},
+            "project": {"type":"string","minLength":1,"maxLength":MAX_PROYECTO,"description":"Project where it was said or applied; created if missing."},
+            "validation": {"type":"string","enum":VALIDACIONES,"default":"pendiente","description":"explicita: the owner said it was right; implicita: moved on without objecting; pendiente: not validated yet."},
+            "author": {"type":"string","minLength":1,"maxLength":100,"description":"Agent name; recorded as agente:<author>."},
+            "reason": {"type":"string","minLength":1,"maxLength":500}
+        });
+        let (required, description) = if name == "capture" {
+            properties["text"] = json!({"type":"string","minLength":1,"maxLength":MAX_TEXTO,"description":"Concise paraphrase of the owner's criterio, not a transcript."});
+            properties["task"] = json!({"type":"string","minLength":1,"maxLength":MAX_DETALLE});
+            (vec!["schema", "text", "project", "author"],
+             "Store a criterio the owner expressed as a candidate, with its project, task, date and validation. If the same criterio exists, status is \"similar\" with the existing notes: reinforce one instead. Writes the bundle (with CAS, recorded in the history); only universes with escritura_agentes.")
+        } else {
+            properties["note"] = json!({"type":"string","minLength":1,"maxLength":4096,"description":"Path of the criterio note, e.g. criterios/<slug>."});
+            properties["context"] = json!({"type":"string","minLength":1,"maxLength":MAX_DETALLE});
+            (vec!["schema", "note", "project", "context", "author"],
+             if name == "reinforce" {
+                 "Record that a criterio held in a project (evidence + confirmation in that project, once per project). Writes the bundle; only universes with escritura_agentes."
+             } else {
+                 "Record that a criterio did not hold in a project (evidence, no confirmation). Writes the bundle; only universes with escritura_agentes."
+             })
+        };
+        json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}})
+    }).collect()
+}
+
+fn herramientas_de_consulta() -> Vec<Value> {
     ["context", "propose", "check", "why", "search"].into_iter().map(|name| {
         let mut properties = json!({"schema":{"type":"string","const":"felix-mcp-v1"}});
         let mut required = vec!["schema"];
@@ -87,10 +149,31 @@ pub fn ejecutar(nombre: &str, args: Value, config: &ServerConfig) -> Result<Valu
         "context" => &["schema", "node", "depth", "include_values"],
         "propose" | "check" | "why" => &["schema", "delta"],
         "search" => &["schema", "query", "limit", "include_values"],
+        "capture" => &[
+            "schema",
+            "text",
+            "project",
+            "task",
+            "validation",
+            "author",
+            "reason",
+        ],
+        "reinforce" | "object" => &[
+            "schema",
+            "note",
+            "project",
+            "context",
+            "validation",
+            "author",
+            "reason",
+        ],
         _ => return Err(protocolo()),
     };
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err(protocolo());
+    }
+    if ESCRITURA.contains(&nombre) {
+        return registrar_mcp(nombre, object, config);
     }
     // Validate tool arguments before touching configured files.
     if nombre == "search" {
@@ -365,6 +448,98 @@ fn contexto(
         return Err(dominio("context_resource_limit"));
     }
     Ok(result)
+}
+
+/// `capture`, `reinforce` y `object`: el mismo registro que la CLI
+/// (`universo_okf::registro_criterio`), con autor `agente:<author>`.
+fn registrar_mcp(
+    nombre: &str,
+    object: &serde_json::Map<String, Value>,
+    config: &ServerConfig,
+) -> Result<Value, DomainError> {
+    use universo_okf::{
+        registro_criterio::{
+            Accion, MAX_DETALLE, MAX_PROYECTO, MAX_TEXTO, Peticion, Rutas, VALIDACIONES, Veredicto,
+            linea_valida, registrar,
+        },
+        transaccion::historial::Procedencia,
+    };
+    let texto =
+        |clave: &str, maximo: usize, obligatorio: bool| -> Result<Option<String>, DomainError> {
+            match object.get(clave) {
+                None if !obligatorio => Ok(None),
+                Some(Value::String(v)) if linea_valida(v, maximo) => Ok(Some(v.clone())),
+                _ => Err(protocolo()),
+            }
+        };
+    let accion = match nombre {
+        "capture" => Accion::Capturar,
+        "reinforce" => Accion::Reforzar,
+        _ => Accion::Objetar,
+    };
+    let (objetivo, detalle) = if accion == Accion::Capturar {
+        (
+            texto("text", MAX_TEXTO, true)?,
+            texto("task", MAX_DETALLE, false)?,
+        )
+    } else {
+        (
+            texto("note", 4096, true)?,
+            texto("context", MAX_DETALLE, true)?,
+        )
+    };
+    let validacion = texto("validation", 20, false)?.unwrap_or_else(|| "pendiente".into());
+    if !VALIDACIONES.contains(&validacion.as_str()) {
+        return Err(protocolo());
+    }
+    let autor = texto("author", 100, true)?.unwrap_or_default();
+    let objetivo = objetivo.unwrap_or_default();
+    let motivo = texto("reason", 500, false)?.unwrap_or_else(|| {
+        format!("{}: {}", accion.nombre(), objetivo.trim())
+            .chars()
+            .take(500)
+            .collect()
+    });
+    let peticion = Peticion {
+        accion,
+        objetivo,
+        proyecto: texto("project", MAX_PROYECTO, true)?.unwrap_or_default(),
+        detalle,
+        validacion,
+        fecha: None,
+        forzar: false,
+    };
+    let procedencia = Procedencia {
+        autor: Some(format!("agente:{autor}")),
+        motivo: Some(motivo),
+    };
+    let rutas = Rutas {
+        raiz: &config.root,
+        manifiesto: &config.manifiesto,
+        invariantes: &config.invariantes,
+    };
+    match registrar(&rutas, &peticion, &procedencia, false) {
+        Ok((
+            plan,
+            Veredicto::Admitido {
+                sellado,
+                registrado,
+                ..
+            },
+        )) => Ok(
+            json!({"schema":"felix-mcp-v1","tool":nombre,"status":"applied",
+            "note":plan.nota,"project":plan.proyecto,"project_created":plan.proyecto_creado,
+            "evidence":plan.evidencia,"logged":registrado,"sealed":sellado,"persisted":true}),
+        ),
+        Ok((_, Veredicto::Rechazado { reglas, conflictos })) => Ok(json!({"schema":"felix-mcp-v1",
+            "tool":nombre,"status":"reject","rules":reglas,"conflicts":conflictos,"persisted":false})),
+        // Ya existe: se informa para que el agente refuerce en vez de duplicar.
+        Err(f) if f.codigo == "capture_similar" => {
+            Ok(json!({"schema":"felix-mcp-v1","tool":nombre,
+            "status":"similar","existing":f.detalle,"persisted":false}))
+        }
+        Err(f) => Err(dominio(f.codigo)),
+    }
 }
 
 #[cfg(test)]

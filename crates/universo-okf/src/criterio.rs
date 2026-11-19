@@ -246,7 +246,8 @@ impl RepoCriterio {
         }
         let mut universos = BTreeMap::new();
         for (nombre, universo) in archivo.universos {
-            if !nombre_valido(&nombre) {
+            // `todos` lo reserva `search --universo todos`.
+            if !nombre_valido(&nombre) || nombre == "todos" {
                 return Err(ErrorCriterio::Invalido(format!(
                     "nombre de universo inválido: {nombre}"
                 )));
@@ -413,6 +414,7 @@ dir = "universos/vigente"
             ("felix-criterio-v1", "otro"),
             ("por_defecto = \"candidatos\"", "por_defecto = \"nada\""),
             ("[universos.vigente]", "[universos.Vigente]"),
+            ("[universos.vigente]", "[universos.todos]"),
             (">=0.4, <0.5", "cualquiera"),
             ("escritura_agentes = true", "escritura = true"),
         ] {

@@ -11,20 +11,15 @@
 //! Felix no distingue a una persona de un agente en la CLI: que la promoción
 //! la confirme el dueño es una convención (ver `AGENTS.md`). **Su salida
 //! incluye datos del bundle** (rutas).
-use super::{
-    Formato,
-    captura_criterio::{
-        Fallo, Rutas, Veredicto, arista, fallo, proyecto, ruta_libre, simular_y_aplicar, slug,
-    },
-    criterio::resolver_repo,
-    escribir_salida,
-    historial::visible,
-};
+use super::{Formato, criterio::resolver_repo, escribir_salida, historial::visible};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, io::Write, path::PathBuf};
 use universo_core::{Atomo, BundlePath, Estructura};
 use universo_okf::{
     busqueda::normalizar,
+    registro_criterio::{
+        Fallo, Rutas, Veredicto, arista, fallo, proyecto, ruta_libre, simular_y_aplicar, slug,
+    },
     transaccion::{
         historial::{Procedencia, fecha_hoy},
         simulacion::VistaSimulacion,
@@ -158,6 +153,9 @@ fn en_destino(e: &Estructura, marca: &str, titulo: &str) -> Result<Option<String
 }
 
 struct Resumen {
+    /// Evidencias que apoyan el criterio en el origen (ruta y título), para
+    /// que quien promueve vea qué respalda cada confirmación.
+    evidencias: Vec<(String, String)>,
     /// Universos donde el cambio se aplicó pero no quedó en el historial, o
     /// no se pudo sellar.
     sin_historial: Vec<String>,
@@ -254,6 +252,25 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
         .filter(|t| vistos.insert(slug(t)))
         .collect();
     let marca = format!("Promovido desde {} ({nota})", origen.nombre);
+    let evidencias: Vec<(String, String)> = eo
+        .atomos()
+        .into_iter()
+        .filter_map(|a| match a {
+            Atomo::Edge {
+                origen,
+                destino,
+                sorte,
+                ..
+            } if destino.como_str() == nota && sorte.como_str() == "apoya" => {
+                let id = eo.por_path(&origen)?;
+                Some((
+                    origen.to_string(),
+                    eo.nodo(id)?.etiqueta.como_str().to_string(),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
 
     // Destino: crear el criterio, salvo que ya esté (promoción a medias).
     let (bundle_d, manifiesto_d, invariantes_d) = (
@@ -347,6 +364,7 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
                 sin_sello.push(origen.nombre.clone());
             }
             Ok(Resultado::Hecho(Resumen {
+                evidencias,
                 sin_historial,
                 sin_sello,
                 origen: format!("{}/{nota}", origen.nombre),
@@ -396,6 +414,7 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
                        "status": if r.aplicado { "applied" } else { "admit" },
                        "dry_run": s.dry_run, "from": r.origen, "to": r.destino,
                        "to_existed": r.destino_existia,
+                       "evidence": r.evidencias.iter().map(|(p, t)| json!({"path": p, "title": t})).collect::<Vec<_>>(),
                        "not_logged": r.sin_historial, "not_sealed": r.sin_sello,
                        "projects": r.proyectos.iter().map(|(p, c)| json!({"path": p, "created": c})).collect::<Vec<_>>(),
                        "errors": []})
@@ -415,6 +434,9 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
             for (p, creado) in &r.proyectos {
                 let estado = if *creado { "created" } else { "existing" };
                 texto.push_str(&format!("project: {p} ({estado})\n"));
+            }
+            for (ruta, titulo) in &r.evidencias {
+                texto.push_str(&format!("evidence: {ruta} — {titulo}\n"));
             }
             for u in &r.sin_historial {
                 texto.push_str(&format!("history: not recorded in {u}\n"));

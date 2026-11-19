@@ -9,6 +9,7 @@ pub mod documento;
 pub mod errores;
 pub mod explicacion_json;
 pub mod manifiesto_toml;
+pub mod registro_criterio;
 pub mod serializar;
 pub mod transaccion;
 

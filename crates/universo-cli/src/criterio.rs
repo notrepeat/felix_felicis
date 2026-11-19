@@ -56,6 +56,9 @@ fn uso(comando: &str) -> Option<Uso> {
     })
 }
 
+/// Nombre reservado: `search --universo todos` busca en todos los universos.
+const TODOS: &str = "todos";
+
 /// Opciones de los comandos que llevan un valor en el argumento siguiente.
 const CON_VALOR: &[&str] = &[
     "--format",
@@ -105,6 +108,12 @@ pub(super) enum Preparados {
     /// Error del repositorio de criterio (salida 1), ya formateado, y si va a
     /// stdout (JSON) o a stderr (texto).
     Error { texto: String, json: bool },
+    /// `search --universo todos`: cada universo (nombre, bundle, manifiesto) y
+    /// los argumentos del comando sin las opciones de criterio.
+    BuscarTodos {
+        universos: Vec<(String, PathBuf, PathBuf)>,
+        resto: Vec<String>,
+    },
 }
 
 fn error(comando: &str, json: bool, e: &ErrorCriterio) -> Preparados {
@@ -311,6 +320,20 @@ pub(super) fn preparar(args: Vec<String>, uso_general: &str) -> Preparados {
         },
         (None, None) => None,
     };
+    // `todos` está reservado: la búsqueda recorre cada universo.
+    if comando == "search" && nombre.as_deref() == Some(TODOS) {
+        let mut universos = Vec::new();
+        for nombre in repo.universos.keys() {
+            match repo.universo(Some(nombre)) {
+                Ok(u) => universos.push((u.nombre.clone(), u.bundle(), u.manifiesto())),
+                Err(e) => return error(comando, json, &e),
+            }
+        }
+        return Preparados::BuscarTodos {
+            universos,
+            resto: opciones.resto.clone(),
+        };
+    }
     let universo = match repo.universo(nombre.as_deref()) {
         Ok(universo) => universo,
         Err(e) => return error(comando, json, &e),
@@ -327,6 +350,144 @@ pub(super) fn preparar(args: Vec<String>, uso_general: &str) -> Preparados {
     args.extend(agregadas);
     args.extend(opciones.resto.iter().cloned());
     Preparados::Listos(args)
+}
+
+/// `universo mcp-config`: la configuración del MCP para conectar un agente a
+/// este repositorio de criterio, con rutas absolutas.
+pub(super) struct SolicitudMcpConfig {
+    cliente: String,
+    nombre: String,
+    criterio: Option<PathBuf>,
+    universo: Option<String>,
+}
+
+pub(super) const USO_MCP_CONFIG: &str = "Uso: universo mcp-config [--cliente claude-code|codex|json] [--nombre <servidor>] [--criterio <dir>] [--universo <nombre>]\nImprime la configuración para que un cliente MCP use este repositorio de criterio con universo-mcp.\n";
+
+pub(super) fn parsear_mcp_config(args: &[String]) -> Result<SolicitudMcpConfig, String> {
+    let fail = || USO_MCP_CONFIG.to_string();
+    let mut valores = std::collections::BTreeMap::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        let (nombre, valor, consumidos) = match arg.split_once('=') {
+            Some((n, v)) => (n, v.to_string(), 1),
+            None => (arg.as_str(), args.get(i + 1).cloned().ok_or_else(fail)?, 2),
+        };
+        let clave = match nombre {
+            "--cliente" => "cliente",
+            "--nombre" => "nombre",
+            "--criterio" => "criterio",
+            "--universo" => "universo",
+            _ => return Err(fail()),
+        };
+        if valor.is_empty() || valor.starts_with('-') || valores.insert(clave, valor).is_some() {
+            return Err(fail());
+        }
+        i += consumidos;
+    }
+    let cliente = valores
+        .remove("cliente")
+        .unwrap_or_else(|| "claude-code".into());
+    let nombre = valores
+        .remove("nombre")
+        .unwrap_or_else(|| "felix-criterio".into());
+    let nombre_valido = nombre
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if !["claude-code", "codex", "json"].contains(&cliente.as_str()) || !nombre_valido {
+        return Err(fail());
+    }
+    Ok(SolicitudMcpConfig {
+        cliente,
+        nombre,
+        criterio: valores.remove("criterio").map(PathBuf::from),
+        universo: valores.remove("universo"),
+    })
+}
+
+/// Cita una ruta para la shell sólo si hace falta.
+fn citar(texto: &str) -> String {
+    if texto
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-:".contains(c))
+    {
+        texto.to_string()
+    } else {
+        format!("'{}'", texto.replace('\'', "'\\''"))
+    }
+}
+
+pub(super) fn ejecutar_mcp_config(
+    s: SolicitudMcpConfig,
+    salida: &mut impl std::io::Write,
+    error: &mut impl std::io::Write,
+) -> i32 {
+    let repo = match resolver_repo(s.criterio, true) {
+        Ok(repo) => repo,
+        Err(e) => {
+            let texto = format!("mcp-config: error\ncode: {}\n{e}\n", e.codigo());
+            super::escribir_salida(salida, error, texto.as_bytes(), "stdout");
+            return 1;
+        }
+    };
+    let raiz = repo.raiz.canonicalize().unwrap_or(repo.raiz.clone());
+    // universo-mcp se instala junto a universo; si no está, se confía en el PATH.
+    let binario = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            let hermano =
+                exe.with_file_name(format!("universo-mcp{}", std::env::consts::EXE_SUFFIX));
+            hermano.is_file().then_some(hermano)
+        })
+        .map_or_else(
+            || {
+                let _ = error.write_all(
+                    b"aviso: universo-mcp no est\xc3\xa1 junto a universo; se usa el del PATH\n",
+                );
+                "universo-mcp".to_string()
+            },
+            |p| p.display().to_string(),
+        );
+    if let Some(u) = &s.universo {
+        if let Err(e) = repo.universo(Some(u)) {
+            let texto = format!("mcp-config: error\ncode: {}\n{e}\n", e.codigo());
+            super::escribir_salida(salida, error, texto.as_bytes(), "stdout");
+            return 1;
+        }
+    }
+    let mut argumentos = vec!["--criterio".to_string(), raiz.display().to_string()];
+    if let Some(u) = &s.universo {
+        argumentos.extend(["--universo".to_string(), u.clone()]);
+    }
+    let texto = match s.cliente.as_str() {
+        "claude-code" => format!(
+            "# A nivel de usuario: el criterio se consulta desde cualquier proyecto.\nclaude mcp add --scope user {} -- {} {}\n",
+            s.nombre,
+            citar(&binario),
+            argumentos
+                .iter()
+                .map(|a| citar(a))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        "codex" => format!(
+            "# En ~/.codex/config.toml\n[mcp_servers.{}]\ncommand = {}\nargs = {}\n",
+            s.nombre,
+            serde_json::to_string(&binario).unwrap_or_default(),
+            serde_json::to_string(&argumentos).unwrap_or_default()
+        ),
+        _ => format!(
+            "{}\n",
+            serde_json::to_string_pretty(&json!({"mcpServers": {s.nombre.clone(): {
+                "command": binario, "args": argumentos}}}))
+            .unwrap_or_default()
+        ),
+    };
+    if super::escribir_salida(salida, error, texto.as_bytes(), "stdout") {
+        0
+    } else {
+        1
+    }
 }
 
 #[cfg(test)]

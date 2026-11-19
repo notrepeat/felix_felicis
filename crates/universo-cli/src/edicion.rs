@@ -2,12 +2,7 @@
 //! puntuales en un universo, cada uno en un comando. Arman el delta, lo
 //! simulan y lo aplican con CAS, con autor y motivo, como `capturar`.
 //! **Su salida incluye datos del bundle** (rutas y valores).
-use super::{
-    Formato,
-    captura_criterio::{Fallo, Rutas, Veredicto, arista, es_arista, fallo, simular_y_aplicar},
-    escribir_salida,
-    historial::visible,
-};
+use super::{Formato, escribir_salida, historial::visible};
 use serde_json::{Value, json};
 use std::{
     io::Write,
@@ -18,6 +13,7 @@ use universo_okf::{
     cargar_manifiesto,
     delta::serializar_delta_json_canonico,
     delta_desde_borrador,
+    registro_criterio::{Fallo, Rutas, Veredicto, arista, es_arista, fallo, simular_y_aplicar},
     transaccion::{historial::Procedencia, simulacion::VistaSimulacion},
 };
 

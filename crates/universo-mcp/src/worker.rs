@@ -70,10 +70,18 @@ pub(crate) fn consultar(
         .arg(config.manifiesto)
         .arg("--invariantes")
         .arg(config.invariantes);
+    // Una escritura no se corta a mitad de un apply: matar el worker dejaría
+    // la transacción pendiente (con el lock) y al agente con un error por una
+    // escritura que sí ocurrió. Las consultas conservan su plazo corto.
+    let plazo = if crate::dominio::ESCRITURA.contains(&request.nombre.as_str()) {
+        crate::WRITE_DEADLINE_MS
+    } else {
+        TOOL_DEADLINE_MS
+    };
     supervisar(
         command,
         &serde_json::to_vec(&request).map_err(|_| "worker_request_invalid")?,
-        Duration::from_millis(TOOL_DEADLINE_MS),
+        Duration::from_millis(plazo),
     )
 }
 fn supervisar(

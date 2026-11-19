@@ -210,9 +210,11 @@ de forma explícita.
 - [x] Un universo inexistente es error (`universe_not_found`) con la lista de
       los que hay.
 - [x] El MCP acepta `--criterio <dir> [--universo <n>]`.
-- [ ] Sus herramientas reciben un argumento opcional `universe`; sin él usan
-      `por_defecto` (aditivo en `felix-mcp-v1`). Queda para U6.
-- [ ] `search --universo todos`. Queda para U6.
+- [x] Sus herramientas reciben un argumento opcional `universe`; sin él usan
+      `por_defecto` (aditivo en `felix-mcp-v1`). Hecho en el paso 4.
+- [x] `search --universo todos` en la CLI y `universe: "todos"` en `search`
+      del MCP, con el universo de cada resultado. `todos` queda reservado como
+      nombre de universo. Hecho en el paso 4.
 - Límites conocidos del paso 1:
   - `escritura_agentes` se lee pero todavía no se hace cumplir. Hasta U6
     es una convención, y `AGENTS.md` lo dice.
@@ -351,12 +353,28 @@ responde `external_change` con la entrada.
   `reforzar` y `objetar` (U12).
 
 **Aceptación.**
-- [ ] Con sólo `AGENTS.md` y la configuración MCP, un agente de prueba
-      consulta, captura una candidata, la refuerza en otro proyecto y recibe un
-      rechazo explicado al intentar algo inválido.
-- [ ] `capture` sobre `vigente` no existe: `tools/list` no la anuncia para ese
-      universo y la llamada falla.
-- [ ] Cada escritura de agente queda en el historial con autor agente.
+- [x] Con la configuración MCP, un agente de prueba (guionizado, en
+      `crates/universo-mcp/tests/criterio_mcp.rs`) consulta, captura una
+      candidata, la refuerza en otro proyecto y recibe un error al intentar
+      escribir en `vigente`. Falta la prueba con un agente real (U13).
+- [x] `capture`, `reinforce` y `object` sólo se anuncian si algún universo
+      tiene `escritura_agentes = true`. Sobre un universo sin escritura, la
+      llamada falla con `universe_read_only`. `tools/list` es uno solo para
+      todo el servidor, así que no se puede omitir por universo.
+- [x] Cada escritura de agente queda en el historial con autor
+      `agente:<author>`.
+- [x] `universo mcp-config --cliente claude-code|codex|json` imprime la
+      configuración con rutas absolutas al binario y al repositorio.
+- Hecho en el paso 4 (2026-11-18):
+  - La lógica de captura pasa a `universo_okf::registro_criterio`, compartida
+    por la CLI y el MCP, junto con la plantilla del esquema de captura.
+  - Una captura duplicada por MCP devuelve `status: "similar"` con las notas
+    existentes, para que el agente refuerce.
+  - Las herramientas que escriben tienen un plazo de 5 minutos (no 5 s), para
+    no cortar un apply a mitad.
+  - **Límite conocido:** un agente con escritura puede fabricar la evidencia
+    que pide `vigente` (proyectos inventados, validación `explicita` no dada).
+    La salvaguarda es la promoción humana: `promover` muestra las evidencias.
 
 ### U7 — Usarlo en varios computadores
 
@@ -400,6 +418,10 @@ Un test con `git` disponible en el CI:
 3. Clonar en B. `guard` da pass en ambos universos; `search`, `log`, `show` y
    `diff` dan lo mismo que en A.
 4. Cambiar en B, push, y pull en A. Sigue encadenado.
+
+   Los pasos 1 a 4 están hechos (`crates/universo-cli/tests/dos_clones.rs`,
+   2026-11-18). El paso 6 lo cubre `criterio_repo.rs` en Linux y Windows. El
+   paso 5 depende de U5 y U7.
 5. Cambio concurrente en A y B, y merge. `guard` lo detecta; `check` y `seal`
    lo aceptan; `diff` informa `external_change`.
 6. En Windows: clon con `core.autocrlf=true`, y `guard` da pass.
