@@ -163,6 +163,8 @@ flowchart LR
     P4 --> P8[08 Integración privada]
     P7 --> P9[09 Versionado]
     P8 --> P9
+    P9 --> P10[10 Criterio distribuible]
+    P10 --> P11[11 Evaluación del criterio]
 ```
 
 ## Fases
@@ -176,9 +178,10 @@ flowchart LR
 | [05](05-demo-publica.md) | Demo pública | completo | 01–03 + subconjunto de 04 (propuesta/evaluación core usadas por la demo) | La historia de contradicción, corrección y readmisión se reproduce con un comando; CI `38500576872` pasó en Linux y Windows. Este alcance no requiere completar apply, publicación ni recovery de fase 04. |
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | completo | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | completo | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
-| [08](08-integracion-privada.md) | Integración privada | pendiente | 04 | El bundle real valida el motor sin filtrarse al repositorio público. |
-| [09](09-versionado-y-evidencia.md) | Versionado y evidencia | pendiente | 07–08 | Cada tag corresponde a capacidades demostradas y CI verde. |
+| [08](08-integracion-privada.md) | Integración privada | completo (legacy desde 2026-11-18) | 04 | El bundle real valida el motor sin filtrarse al repositorio público. |
+| [09](09-versionado-y-evidencia.md) | Versionado y evidencia | en curso: `v0.2.0` a `v0.4.0` publicadas; siguiente gate `v0.5.0` | 07–08 | Cada tag corresponde a capacidades demostradas y CI verde. |
 | [10](10-criterio-distribuible.md) | Criterio distribuible | en curso: `v0.4.0` publicada; falta U10 (uso real) | `v0.3.0` | El criterio vive en su propio repositorio Git privado; se captura con un comando, lo usa cualquier agente y se mueve entre computadores sin perder el historial. |
+| [11](11-evaluacion-criterio.md) | Evaluación del criterio | propuesto | 10 | Se mide si consultar el criterio guardado hace que un agente decida como quiere el dueño, frente a no tenerlo y a tenerlo en el prompt; gate `v0.5.0`. |
 
 ## Reglas de progreso
 
@@ -201,7 +204,7 @@ flowchart LR
 - [x] 05 — La demo pública se reproduce con un comando, compara goldens y CI pasa en Linux y Windows; el criterio 3 correlaciona el testigo con la fixture solo dentro del test y conserva redactada la salida pública.
 - [x] 06 — El loop MCP funciona de extremo a extremo; paridad CLI, rechazo/corrección/readmisión, reinicio y privacidad verificados. Code Mode opcional tiene evidencia local separada de CI.
 - [x] 07 — La evaluación comparativa tiene resultados publicados: 12/12 éxitos en ambos brazos y cero llamadas Felix; resultado neutral, gate de mejora no superado.
-- [ ] 08 — La integración privada pasa sin exponer datos.
+- [x] 08 — La integración privada pasa sin exponer datos ([registro](08-integracion-privada.md#registro-de-evidencia)); la instancia queda legacy en `v0.2.1`.
 - [ ] 09 — Se publica el tag correspondiente con evidencia enlazada.
 
 ## Próximo paso
