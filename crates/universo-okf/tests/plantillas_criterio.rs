@@ -258,6 +258,182 @@ fn las_reglas_propias_de_vigente_fallan_solas() {
     assert!(f.is_empty(), "{f:?}");
 }
 
+/// Un segundo criterio con `extra` en su frontmatter (D2: relaciones entre
+/// criterios y `forma`).
+fn otro(estado: &str, proyectos: &str, extra: &str) -> (&'static str, String) {
+    (
+        "criterios/otra.md",
+        format!(
+            "---\ntype: criterio\ntitle: Otra\nestado: {estado}\nvalidacion: explicita\nfecha: 2026-11-19\nconfirmado_en: [{proyectos}]\n{extra}---\nOtra\n"
+        ),
+    )
+}
+
+#[test]
+fn forma_reemplaza_y_contradice_entre_criterios_valen_en_las_dos_plantillas() {
+    for (plantilla, estado, proyectos, fijas) in [
+        (INVARIANTES_CANDIDATOS, "candidato", EN_ALFA, vec![ALFA]),
+        (
+            INVARIANTES_VIGENTE,
+            "vigente",
+            EN_ALFA_Y_BETA,
+            vec![ALFA, BETA],
+        ),
+    ] {
+        for forma in ["principio", "decision", "preferencia", "antipatron"] {
+            let con_forma = (
+                "criterios/regla.md",
+                criterio(estado, proyectos)
+                    .1
+                    .replace("validacion:", &format!("forma: {forma}\nvalidacion:")),
+            );
+            let f = fallan_con(plantilla, &fijas, &[con_forma]);
+            assert!(f.is_empty(), "{estado}, {forma}: {f:?}");
+        }
+        // Una evidencia que es una fuente: sigue siendo evidencia.
+        let f = fallan_con(
+            plantilla,
+            &fijas,
+            &[criterio(estado, proyectos), evidencia(EV_EN_ALFA)],
+        );
+        assert!(f.is_empty(), "{estado}: {f:?}");
+    }
+    // En candidatos, dos candidatas pueden contradecirse y una reemplazar a
+    // otra que sigue candidata: se resuelve al promover.
+    for arista in ["contradice", "reemplaza"] {
+        let f = fallan_con(
+            INVARIANTES_CANDIDATOS,
+            &[ALFA],
+            &[
+                criterio("candidato", EN_ALFA),
+                otro(
+                    "candidato",
+                    EN_ALFA,
+                    &format!("{arista}: [\"[[regla]]\"]\n"),
+                ),
+            ],
+        );
+        assert!(f.is_empty(), "{arista}: {f:?}");
+    }
+    // En vigente, un vigente que reemplaza a un retirado y contradice a otro
+    // retirado.
+    let f = fallan_con(
+        INVARIANTES_VIGENTE,
+        &[ALFA, BETA],
+        &[
+            criterio("retirado", EN_ALFA),
+            otro(
+                "vigente",
+                EN_ALFA_Y_BETA,
+                "reemplaza: [\"[[regla]]\"]\ncontradice: [\"[[regla]]\"]\n",
+            ),
+        ],
+    );
+    assert!(f.is_empty(), "{f:?}");
+}
+
+#[test]
+fn las_reglas_de_d2_fallan_solas() {
+    for (plantilla, estado, proyectos, fijas) in [
+        (INVARIANTES_CANDIDATOS, "candidato", EN_ALFA, vec![ALFA]),
+        (
+            INVARIANTES_VIGENTE,
+            "vigente",
+            EN_ALFA_Y_BETA,
+            vec![ALFA, BETA],
+        ),
+    ] {
+        let base = criterio(estado, proyectos);
+        // forma-de-criterio: sólo un criterio tiene forma.
+        let f = fallan_con(
+            plantilla,
+            &fijas,
+            &[
+                base.clone(),
+                (
+                    "proyectos/proyecto-gamma.md",
+                    "---\ntype: proyecto\ntitle: Gamma\nforma: principio\n---\n".into(),
+                ),
+            ],
+        );
+        assert_eq!(f, ids(&["forma-de-criterio"]), "{estado}");
+
+        // aristas-bien-tipadas: reemplaza y contradice van entre criterios.
+        for arista in ["reemplaza", "contradice"] {
+            for (ruta, nota) in [
+                (
+                    "proyectos/proyecto-gamma.md",
+                    format!("---\ntype: proyecto\ntitle: Gamma\n{arista}: [\"[[regla]]\"]\n---\n"),
+                ),
+                (
+                    "criterios/regla.md",
+                    base.1.replace(
+                        "confirmado_en:",
+                        &format!("{arista}: [\"[[proyecto-alfa]]\"]\nconfirmado_en:"),
+                    ),
+                ),
+            ] {
+                let notas = if ruta == "criterios/regla.md" {
+                    vec![(ruta, nota)]
+                } else {
+                    vec![base.clone(), (ruta, nota)]
+                };
+                let f = fallan_con(plantilla, &fijas, &notas);
+                // En vigente, un vigente que «reemplaza» a un proyecto tampoco
+                // lo deja retirado.
+                let esperado: &[&str] =
+                    if estado == "vigente" && arista == "reemplaza" && ruta == "criterios/regla.md"
+                    {
+                        &["aristas-bien-tipadas", "reemplazado-retirado"]
+                    } else {
+                        &["aristas-bien-tipadas"]
+                    };
+                assert_eq!(f, ids(esperado), "{estado}: {arista} {ruta}");
+            }
+        }
+    }
+
+    // sin-contradiccion-vigente: dos vigentes que se contradicen, en
+    // cualquier sentido; con uno retirado, se cumple (caso de arriba).
+    let f = fallan_con(
+        INVARIANTES_VIGENTE,
+        &[ALFA, BETA],
+        &[
+            criterio("vigente", EN_ALFA_Y_BETA),
+            otro("vigente", EN_ALFA_Y_BETA, "contradice: [\"[[regla]]\"]\n"),
+        ],
+    );
+    assert_eq!(f, ids(&["sin-contradiccion-vigente"]));
+
+    // reemplazado-retirado: lo que un vigente reemplaza no sigue vigente;
+    // un retirado que reemplaza a un vigente no obliga a nada.
+    let f = fallan_con(
+        INVARIANTES_VIGENTE,
+        &[ALFA, BETA],
+        &[
+            criterio("vigente", EN_ALFA_Y_BETA),
+            otro("vigente", EN_ALFA_Y_BETA, "reemplaza: [\"[[regla]]\"]\n"),
+        ],
+    );
+    assert_eq!(f, ids(&["reemplazado-retirado"]));
+    let f = fallan_con(
+        INVARIANTES_VIGENTE,
+        &[ALFA, BETA],
+        &[
+            criterio("vigente", EN_ALFA_Y_BETA),
+            otro("retirado", EN_ALFA, "reemplaza: [\"[[regla]]\"]\n"),
+        ],
+    );
+    assert!(f.is_empty(), "{f:?}");
+    // Un retirado sin sucesor es válido (D2: no se exige quien lo reemplace).
+    let f = fallan_con(
+        INVARIANTES_VIGENTE,
+        &[ALFA],
+        &[criterio("retirado", EN_ALFA)],
+    );
+    assert!(f.is_empty(), "{f:?}");
+}
+
 /// Cada regla de las plantillas está cubierta por algún caso de arriba.
 #[test]
 fn ninguna_regla_queda_sin_caso() {
@@ -268,6 +444,9 @@ fn ninguna_regla_queda_sin_caso() {
         "aristas-bien-tipadas",
         "solo-criterio-probado",
         "vigente-confirmado",
+        "forma-de-criterio",
+        "sin-contradiccion-vigente",
+        "reemplazado-retirado",
     ]);
     let mut vistas = 0;
     for plantilla in [INVARIANTES_CANDIDATOS, INVARIANTES_VIGENTE] {
@@ -279,5 +458,5 @@ fn ninguna_regla_queda_sin_caso() {
             }
         }
     }
-    assert_eq!(vistas, 10);
+    assert_eq!(vistas, 14);
 }

@@ -249,3 +249,107 @@ fn fuera_de_un_repositorio_se_dan_las_rutas() {
     ok(&s);
     assert!(s.stdout.contains("applied"), "{}", s.stdout);
 }
+
+/// Quita de las plantillas actuales lo que agregó D2 (2026-11-19): así
+/// quedaba un repositorio creado antes.
+fn anterior_a_d2(texto: &str) -> String {
+    let mut salida = String::new();
+    for bloque in texto.split_inclusive("\n\n") {
+        let d2 = bloque.contains("clave = \"reemplaza\"")
+            || bloque.contains("clave = \"contradice\"")
+            || bloque.contains("nombre = \"Forma\"")
+            || bloque.contains(":id \"forma-de-criterio\"")
+            || bloque.contains(":id \"sin-contradiccion-vigente\"")
+            || bloque.contains(":id \"reemplazado-retirado\"");
+        if !d2 {
+            salida.push_str(bloque);
+        }
+    }
+    let anterior = salida
+        .lines()
+        .filter(|l| !l.contains("Edge e x y reemplaza") && !l.contains("Edge e x y contradice"))
+        .map(|l| format!("{l}\n"))
+        .collect::<String>()
+        .replace(
+            "(Type x evidencia) (Type y proyecto)))\n",
+            "(Type x evidencia) (Type y proyecto)))))\n",
+        )
+        .replace("; reemplaza y contradice, entre criterios.\"", ".\"");
+    format!("{}\n", anterior.trim_end())
+}
+
+#[test]
+fn un_repositorio_anterior_a_d2_se_actualiza_con_manifiesto_y_reglas_aplicar() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    let nuevas = dir.path().join("nuevas");
+    for u in ["candidatos", "vigente"] {
+        let base = repo.join("universos").join(u);
+        fs::create_dir_all(nuevas.join(u)).unwrap();
+        for archivo in ["manifest.toml", "invariants.sx"] {
+            let actual = fs::read_to_string(base.join(archivo)).unwrap();
+            fs::write(nuevas.join(u).join(archivo), &actual).unwrap();
+            fs::write(base.join(archivo), anterior_a_d2(&actual)).unwrap();
+        }
+        ok(&universo_en(
+            &repo,
+            &["seal", "--universo", u, "--motivo", "pre-D2"],
+        ));
+    }
+    let nota = "criterios/regla-firme";
+    let forma = ["atributo", nota, "forma", "principio"];
+    let s = universo_en(&repo, &forma);
+    assert_eq!(s.codigo, 1, "{}{}", s.stdout, s.stderr);
+    assert!(s.stdout.contains("attribute_unknown"), "{}", s.stdout);
+
+    // Las reglas nuevas nombran relaciones que el manifiesto anterior no
+    // declara: primero el manifiesto.
+    let reglas_v = nuevas.join("candidatos/invariants.sx");
+    let s = universo_en(&repo, &["reglas", "aplicar", reglas_v.to_str().unwrap()]);
+    assert_eq!(s.codigo, 1, "{}{}", s.stdout, s.stderr);
+    assert!(
+        s.stdout.contains("invalid_invariant_statement"),
+        "{}",
+        s.stdout
+    );
+    let actualizar = |u: &str| {
+        for (cmd, archivo) in [("manifiesto", "manifest.toml"), ("reglas", "invariants.sx")] {
+            let ruta = nuevas.join(u).join(archivo);
+            ok(&universo_en(
+                &repo,
+                &[
+                    cmd,
+                    "aplicar",
+                    ruta.to_str().unwrap(),
+                    "--universo",
+                    u,
+                    "--motivo",
+                    "D2",
+                ],
+            ));
+        }
+        ok(&universo_en(&repo, &["guard", "--universo", u]));
+    };
+    actualizar("candidatos");
+    ok(&universo_en(&repo, &forma));
+    ok(&universo_en(
+        &repo,
+        &["reforzar", nota, "--proyecto", "Beta", "--contexto", "c"],
+    ));
+
+    // Con `vigente` aún sin `forma`, la promoción se rechaza sin escribir.
+    let promover = ["promover", nota, "--a", "vigente"];
+    let s = universo_en(&repo, &promover);
+    assert_eq!(s.codigo, 1, "{}{}", s.stdout, s.stderr);
+    assert!(s.stdout.contains("attribute_unknown"), "{}", s.stdout);
+    assert!(
+        !repo
+            .join("universos/vigente/bundle")
+            .join(format!("{nota}.md"))
+            .exists()
+    );
+    ok(&universo_en(&repo, &["guard", "--universo", "candidatos"]));
+
+    actualizar("vigente");
+    ok(&universo_en(&repo, &promover));
+}

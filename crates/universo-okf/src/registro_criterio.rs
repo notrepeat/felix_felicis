@@ -6,8 +6,12 @@
 //! historial. Usan el **esquema de captura v1** que `universo init --git` deja
 //! en cada universo: tipos `criterio`, `evidencia` y `proyecto`; aristas
 //! `confirmado_en` (criterio → proyecto), `apoya` y `objeta` (evidencia →
-//! criterio) y `en_proyecto` (evidencia → proyecto); atributos `estado`,
-//! `validacion` y `fecha`; directorios `criterios`, `evidencias` y `proyectos`.
+//! criterio), `en_proyecto` (evidencia → proyecto), y `reemplaza` y
+//! `contradice` (criterio → criterio); atributos `estado`, `validacion`,
+//! `fecha` y `forma` (opcional); directorios `criterios`, `evidencias` y
+//! `proyectos`. Las dos relaciones entre criterios y `forma` llegaron con D2
+//! (2026-11-19): un repositorio anterior se actualiza con
+//! `universo manifiesto aplicar` y luego `universo reglas aplicar`.
 use crate::{
     busqueda::normalizar,
     parsear_delta_json,
@@ -44,6 +48,12 @@ clave = "objeta"
 [[aristas]]
 clave = "en_proyecto"
 
+[[aristas]]
+clave = "reemplaza"
+
+[[aristas]]
+clave = "contradice"
+
 [[predicados]]
 nombre = "Estado"
 clave = "estado"
@@ -58,6 +68,11 @@ dominio = ["explicita", "implicita", "pendiente"]
 nombre = "Fecha"
 clave = "fecha"
 tipo = "fecha"
+
+[[predicados]]
+nombre = "Forma"
+clave = "forma"
+dominio = ["principio", "decision", "preferencia", "antipatron"]
 
 [layout]
 directorios = ["criterios", "evidencias", "proyectos"]
@@ -85,12 +100,19 @@ pub const INVARIANTES_CANDIDATOS: &str = r#"; Reglas de candidatos creadas por `
              (or (al-menos 1 ((e E) (y N)) :guarda (Edge e x y apoya) (Type y criterio))
                  (al-menos 1 ((e E) (y N)) :guarda (Edge e x y objeta) (Type y criterio)))))))
 
-(regla :id "aristas-bien-tipadas" :mensaje "confirmado_en va de un criterio a un proyecto; apoya y objeta, de una evidencia a un criterio; en_proyecto, de una evidencia a un proyecto."
+(regla :id "aristas-bien-tipadas" :mensaje "confirmado_en va de un criterio a un proyecto; apoya y objeta, de una evidencia a un criterio; en_proyecto, de una evidencia a un proyecto; reemplaza y contradice, entre criterios."
   (and
     (forall ((e E) (x N) (y N)) :guarda (Edge e x y confirmado_en) (and (Type x criterio) (Type y proyecto)))
     (forall ((e E) (x N) (y N)) :guarda (Edge e x y apoya) (and (Type x evidencia) (Type y criterio)))
     (forall ((e E) (x N) (y N)) :guarda (Edge e x y objeta) (and (Type x evidencia) (Type y criterio)))
-    (forall ((e E) (x N) (y N)) :guarda (Edge e x y en_proyecto) (and (Type x evidencia) (Type y proyecto)))))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y en_proyecto) (and (Type x evidencia) (Type y proyecto)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y reemplaza) (and (Type x criterio) (Type y criterio)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y contradice) (and (Type x criterio) (Type y criterio)))))
+
+(regla :id "forma-de-criterio" :mensaje "Sólo un criterio tiene forma (principio, decisión, preferencia o antipatrón)."
+  (forall ((x N))
+    (=> (or (Forma x principio) (Forma x decision) (Forma x preferencia) (Forma x antipatron))
+        (Type x criterio))))
 "#;
 
 /// Reglas de `vigente`: las de candidatos y, además, confirmación en dos proyectos.
@@ -115,12 +137,19 @@ pub const INVARIANTES_VIGENTE: &str = r#"; Reglas de vigente creadas por `univer
              (or (al-menos 1 ((e E) (y N)) :guarda (Edge e x y apoya) (Type y criterio))
                  (al-menos 1 ((e E) (y N)) :guarda (Edge e x y objeta) (Type y criterio)))))))
 
-(regla :id "aristas-bien-tipadas" :mensaje "confirmado_en va de un criterio a un proyecto; apoya y objeta, de una evidencia a un criterio; en_proyecto, de una evidencia a un proyecto."
+(regla :id "aristas-bien-tipadas" :mensaje "confirmado_en va de un criterio a un proyecto; apoya y objeta, de una evidencia a un criterio; en_proyecto, de una evidencia a un proyecto; reemplaza y contradice, entre criterios."
   (and
     (forall ((e E) (x N) (y N)) :guarda (Edge e x y confirmado_en) (and (Type x criterio) (Type y proyecto)))
     (forall ((e E) (x N) (y N)) :guarda (Edge e x y apoya) (and (Type x evidencia) (Type y criterio)))
     (forall ((e E) (x N) (y N)) :guarda (Edge e x y objeta) (and (Type x evidencia) (Type y criterio)))
-    (forall ((e E) (x N) (y N)) :guarda (Edge e x y en_proyecto) (and (Type x evidencia) (Type y proyecto)))))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y en_proyecto) (and (Type x evidencia) (Type y proyecto)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y reemplaza) (and (Type x criterio) (Type y criterio)))
+    (forall ((e E) (x N) (y N)) :guarda (Edge e x y contradice) (and (Type x criterio) (Type y criterio)))))
+
+(regla :id "forma-de-criterio" :mensaje "Sólo un criterio tiene forma (principio, decisión, preferencia o antipatrón)."
+  (forall ((x N))
+    (=> (or (Forma x principio) (Forma x decision) (Forma x preferencia) (Forma x antipatron))
+        (Type x criterio))))
 
 (regla :id "solo-criterio-probado" :mensaje "En vigente, un criterio está vigente o retirado: las candidatas viven en candidatos."
   (forall ((x N))
@@ -130,6 +159,14 @@ pub const INVARIANTES_VIGENTE: &str = r#"; Reglas de vigente creadas por `univer
   (forall ((x N))
     (=> (Estado x vigente)
         (al-menos 2 ((e E) (y N)) :guarda (Edge e x y confirmado_en) (Type y proyecto)))))
+
+(regla :id "sin-contradiccion-vigente" :mensaje "Dos criterios vigentes no se contradicen: retira uno antes."
+  (forall ((e E) (x N) (y N)) :guarda (Edge e x y contradice)
+    (not (and (Estado x vigente) (Estado y vigente)))))
+
+(regla :id "reemplazado-retirado" :mensaje "Lo que un criterio vigente reemplaza debe ser un criterio retirado: retíralo antes de relacionarlos."
+  (forall ((e E) (x N) (y N)) :guarda (Edge e x y reemplaza)
+    (=> (Estado x vigente) (Estado y retirado))))
 "#;
 
 /// Qué guardar y en qué contexto; la validación de los campos la hace quien

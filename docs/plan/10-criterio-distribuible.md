@@ -321,9 +321,9 @@ test avisa si se agrega una regla sin caso. Estados reales del esquema v1:
 `candidato`, `promovido` (lo que queda en `candidatos` tras promoverlo),
 `vigente` y `retirado`.
 
-**Pendiente de tu revisión (D2): la ampliación.** No la implementé porque D2
-la reserva para revisarla contigo. Mi recomendación, aditiva y aplicable con
-U5 a un repositorio existente (`manifiesto aplicar` y `reglas aplicar`):
+**La ampliación (D2), aceptada el 2026-11-19 tal como se recomendó.** Es
+aditiva y se aplica con U5 a un repositorio existente (`manifiesto aplicar` y
+`reglas aplicar`):
 
 1. **Mantener los tipos `criterio`, `evidencia` y `proyecto`.** Pasar a
    `principio`, `decision`, `preferencia`, `antipatron` y `fuente` como tipos
@@ -342,9 +342,32 @@ U5 a un repositorio existente (`manifiesto aplicar` y `reglas aplicar`):
    real** (U10). Ningún comando de captura los escribe; `confianza` sólo
    aparece como orden de ejemplo en pruebas.
 
-Con tu visto bueno: plantillas nuevas en `registro_criterio`, sus tests
-(uno que falla y otro que cumple por regla) y una nota en el README del
-repositorio de criterio con los dos comandos para actualizar uno existente.
+**Hecho** (2026-11-19):
+
+- `registro_criterio` declara `reemplaza`, `contradice` y `forma`. Las dos
+  plantillas exigen que `forma` sea sólo de criterios
+  (`forma-de-criterio`) y que `reemplaza` y `contradice` vayan entre criterios
+  (`aristas-bien-tipadas`). `vigente` agrega `sin-contradiccion-vigente` y
+  `reemplazado-retirado`. En `candidatos` dos candidatas pueden contradecirse;
+  la regla de `vigente` actúa al promover.
+- Cada regla nueva falla sola y se cumple en otro caso, en las dos plantillas
+  (`crates/universo-okf/tests/plantillas_criterio.rs`, 14 reglas cubiertas).
+- `promover` copia la `forma`. Si el destino es anterior a D2, responde
+  `attribute_unknown` sin escribir. También copia `reemplaza` y `contradice`
+  cuando el otro criterio ya está en el destino, así que una candidata que
+  contradice a un vigente se rechaza al promoverla
+  (`sin-contradiccion-vigente`). Si el otro no está en el destino, la relación
+  no se copia y la salida lo informa (`relation not copied`,
+  `relations_not_copied` en JSON). La revisión independiente encontró que la
+  primera versión las descartaba en silencio.
+- Reemplazar en `vigente`: la relación se rechaza (`reemplazado-retirado`)
+  mientras el anterior siga vigente; tras `atributo <anterior> estado retirado`
+  se admite (`crates/universo-cli/tests/promocion.rs`).
+- Actualizar un repositorio anterior: `manifiesto aplicar` y luego
+  `reglas aplicar` en cada universo; al revés falla con
+  `invalid_invariant_statement` sin cambiar nada
+  (`crates/universo-cli/tests/configuracion.rs`). El README que deja
+  `init --git` lo explica, junto con `forma` y las dos relaciones.
 
 ### U5 — Cambiar reglas y manifiesto sin romper el historial
 
@@ -677,15 +700,15 @@ caso.
 
 ## Decisiones
 
-Aceptadas el 2026-11-18 tal como las recomienda la última columna. D2 sigue
-abierta en su detalle: las plantillas se revisan contigo antes de implementar
-U4.
+Aceptadas el 2026-11-18 tal como las recomienda la última columna. D1 y el
+detalle de D2 (la ampliación de U4) se aceptaron el 2026-11-19 tal como se
+recomendaron.
 
 
 | # | Decisión | Opciones | Recomendación |
 |---|---|---|---|
-| D1 | Escritura de agentes | (a) sólo CLI; (b) `capture` en el MCP; (c) sólo orquestador | **Resuelta por el diseño de universos, pendiente de tu OK:** los agentes escriben (CLI o MCP) sólo en universos con `escritura_agentes = true` (`candidatos`); `vigente` sólo por promoción |
-| D2 | Plantillas (U4) | la propuesta, otra taxonomía, o sólo la mínima | la propuesta, revisada contigo antes de implementarla |
+| D1 | Escritura de agentes | (a) sólo CLI; (b) `capture` en el MCP; (c) sólo orquestador | **Resuelta por el diseño de universos, aceptada el 2026-11-19:** los agentes escriben (CLI o MCP) sólo en universos con `escritura_agentes = true` (`candidatos`); `vigente` sólo por promoción |
+| D2 | Plantillas (U4) | la propuesta, otra taxonomía, o sólo la mínima | la propuesta, revisada contigo: aceptada el 2026-11-19 en la versión aditiva de U4 |
 | D3 | `init --git` hace el primer commit | sí / no | no: el primer commit lo haces tú |
 | D4 | Felix ejecuta Git más allá de `init` | nunca / comandos de ayuda | nunca |
 | D5 | Gates de 09 | `v0.4.0` = evaluación comparativa, o esta fase | esta fase como `v0.4.0` y la evaluación a `v0.5.0` |

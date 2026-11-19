@@ -152,6 +152,41 @@ fn en_destino(e: &Estructura, marca: &str, titulo: &str) -> Result<Option<String
     }
 }
 
+/// El criterio del destino que corresponde a `nota` del origen, para copiar
+/// una relación entre criterios: el que lleva su marca de promoción o, si no
+/// hay, el único con el mismo título. Dos con el mismo título son un
+/// conflicto.
+fn par_en_destino(
+    e: &Estructura,
+    origen: &str,
+    nota: &str,
+    titulo: &str,
+) -> Result<Option<String>, Fallo> {
+    let marca = format!("Promovido desde {origen} ({nota})");
+    let criterios = || e.nodos().filter(|(_, n)| n.tipo.como_str() == "criterio");
+    if let Some((_, n)) =
+        criterios().find(|(id, _)| e.anexo(*id).is_some_and(|a| a.cuerpo.contains(&marca)))
+    {
+        return Ok(Some(n.path.to_string()));
+    }
+    let buscado = normalizar(titulo.trim());
+    let iguales: Vec<String> = criterios()
+        .filter(|(_, n)| normalizar(n.etiqueta.como_str().trim()) == buscado)
+        .map(|(_, n)| n.path.to_string())
+        .collect();
+    match iguales.len() {
+        0 => Ok(None),
+        1 => Ok(iguales.into_iter().next()),
+        _ => Err(Fallo {
+            codigo: "promote_conflict",
+            detalle: json!(iguales),
+        }),
+    }
+}
+
+/// Relaciones entre criterios (D2) que viajan con la promoción.
+const RELACIONES: [&str; 2] = ["reemplaza", "contradice"];
+
 struct Resumen {
     /// Evidencias que apoyan el criterio en el origen (ruta y título), para
     /// que quien promueve vea qué respalda cada confirmación.
@@ -164,6 +199,9 @@ struct Resumen {
     destino: String,
     destino_existia: bool,
     proyectos: Vec<(String, bool)>,
+    /// Relaciones entre criterios cuyo destino no está en el universo
+    /// destino: no se copian (clave y nota del origen).
+    relaciones_omitidas: Vec<(String, String)>,
     aplicado: bool,
 }
 
@@ -229,6 +267,30 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
     }
     let validacion = atributo(eo, &nota, "Validacion");
     let fecha_original = atributo(eo, &nota, "Fecha");
+    let forma = atributo(eo, &nota, "Forma");
+    // (clave, nota destino, título) de cada relación saliente hacia otro criterio.
+    let relaciones: Vec<(String, String, String)> = eo
+        .atomos()
+        .into_iter()
+        .filter_map(|a| match a {
+            Atomo::Edge {
+                origen,
+                destino,
+                sorte,
+                ..
+            } if origen.como_str() == nota && RELACIONES.contains(&sorte.como_str()) => {
+                let n = eo.nodo(eo.por_path(&destino)?)?;
+                (n.tipo.como_str() == "criterio").then(|| {
+                    (
+                        sorte.to_string(),
+                        destino.to_string(),
+                        n.etiqueta.como_str().to_string(),
+                    )
+                })
+            }
+            _ => None,
+        })
+        .collect();
     let titulos_proyectos: Vec<String> = eo
         .atomos()
         .into_iter()
@@ -284,9 +346,15 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
     let mut proyectos = Vec::new();
     let mut sin_historial = Vec::new();
     let mut sin_sello = Vec::new();
+    let mut relaciones_omitidas = Vec::new();
     let (en_destino, destino_existia) = match en_destino(ed, &marca, &titulo)? {
         Some(existente) => (existente, true),
         None => {
+            // Un destino anterior a D2 no declara `forma`: se actualiza con
+            // `manifiesto aplicar` y `reglas aplicar` antes de promover.
+            if forma.is_some() && ed.manifiesto().predicado("Forma").is_none() {
+                return Err(fallo("attribute_unknown"));
+            }
             let mut reservados = BTreeSet::new();
             let base = nota.rsplit('/').next().unwrap_or_default().to_string();
             let nueva = ruta_libre(ed, "criterios", &base, &reservados);
@@ -300,6 +368,9 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
             if let Some(f) = &fecha_original {
                 agregar.push(format!("Fecha({nueva}, {f})"));
             }
+            if let Some(f) = &forma {
+                agregar.push(format!("Forma({nueva}, {f})"));
+            }
             for titulo_p in &titulos_proyectos {
                 let (ruta_p, creado) = proyecto(ed, titulo_p, &reservados);
                 if creado {
@@ -308,6 +379,19 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
                 }
                 agregar.extend(arista(ed, &nueva, &ruta_p, "confirmado_en"));
                 proyectos.push((ruta_p, creado));
+            }
+            // Las relaciones hacia un criterio que ya está en el destino se
+            // copian y las reglas del destino deciden; las demás no tienen
+            // nada que proteger allí y se informan.
+            // Una relación repetida en el origen (o dos que llevan al mismo
+            // criterio) se copia una vez: el id de la arista no puede repetirse.
+            let mut copiadas = BTreeSet::new();
+            for (clave, otra, titulo_otra) in &relaciones {
+                match par_en_destino(ed, &origen.nombre, otra, titulo_otra)? {
+                    Some(par) if !copiadas.insert((clave.clone(), par.clone())) => {}
+                    Some(par) => agregar.extend(arista(ed, &nueva, &par, clave)),
+                    None => relaciones_omitidas.push((clave.clone(), otra.clone())),
+                }
             }
             let delta = json!({"schema":"felix-delta-v2","create":crear,"update":[],"add":agregar,"remove":[]});
             let rutas = Rutas {
@@ -371,6 +455,7 @@ fn correr(s: &Solicitud) -> Result<Resultado, Fallo> {
                 destino: format!("{}/{en_destino}", destino.nombre),
                 destino_existia,
                 proyectos,
+                relaciones_omitidas,
                 aplicado,
             }))
         }
@@ -417,6 +502,7 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
                        "evidence": r.evidencias.iter().map(|(p, t)| json!({"path": p, "title": t})).collect::<Vec<_>>(),
                        "not_logged": r.sin_historial, "not_sealed": r.sin_sello,
                        "projects": r.proyectos.iter().map(|(p, c)| json!({"path": p, "created": c})).collect::<Vec<_>>(),
+                       "relations_not_copied": r.relaciones_omitidas.iter().map(|(k, n)| json!({"relation": k, "to": n})).collect::<Vec<_>>(),
                        "errors": []})
             ),
             0,
@@ -437,6 +523,11 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
             }
             for (ruta, titulo) in &r.evidencias {
                 texto.push_str(&format!("evidence: {ruta} — {titulo}\n"));
+            }
+            for (clave, otra) in &r.relaciones_omitidas {
+                texto.push_str(&format!(
+                    "relation not copied: {clave} -> {otra} (not in the destination universe)\n"
+                ));
             }
             for u in &r.sin_historial {
                 texto.push_str(&format!("history: not recorded in {u}\n"));

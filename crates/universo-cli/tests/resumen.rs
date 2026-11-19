@@ -104,7 +104,7 @@ fn resumen_cuenta_por_universo_y_dice_que_promover_y_que_revisar() {
     assert_eq!(c["notes"]["evidencia"], 2, "{c}");
     assert_eq!(c["notes"]["proyecto"], 3, "{c}");
     assert_eq!(c["criterios_by_state"]["candidato"], 3, "{c}");
-    assert_eq!(c["rules"], 4);
+    assert_eq!(c["rules"], 5);
     // regla-firme: Alfa y Beta. regla-dudosa: objetada. Ninguna sin relaciones.
     let listas: Vec<&str> = c["ready_to_promote"]
         .as_array()
@@ -122,7 +122,7 @@ fn resumen_cuenta_por_universo_y_dice_que_promover_y_que_revisar() {
     assert_eq!(c["recent"].as_array().unwrap().len(), 3, "{c}");
     let v = universo(&json, "vigente");
     assert_eq!(v["notes"], serde_json::json!({}), "{v}");
-    assert_eq!(v["rules"], 6);
+    assert_eq!(v["rules"], 9);
 
     // «Listas para promover» es lo que vigente admite.
     for nota in ["criterios/regla-firme", "criterios/regla-suelta"] {

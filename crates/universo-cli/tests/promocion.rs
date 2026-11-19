@@ -382,3 +382,245 @@ fn promover_muestra_las_evidencias_que_respaldan_la_confirmacion() {
     assert!(s.stdout.contains("evidence: evidencias/"), "{}", s.stdout);
     assert!(s.stdout.contains("(API pagos)"), "{}", s.stdout);
 }
+
+/// D2 (2026-11-19): la `forma` de una candidata viaja con la promoción, y en
+/// `vigente` un criterio sólo reemplaza a otro ya retirado.
+#[test]
+fn la_forma_se_promueve_y_reemplazar_exige_retirar_antes() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    candidata(&repo);
+    ok(&universo_en(
+        &repo,
+        &["atributo", NOTA, "forma", "principio"],
+    ));
+    reforzar(&repo, "API pagos");
+    ok(&promover(&repo, &[]));
+    let vigente = leer(&repo, "vigente", NOTA);
+    assert!(vigente.contains("forma: principio"), "{vigente}");
+
+    // Un segundo criterio vigente que reemplaza al primero.
+    let nueva = "criterios/reutilizar-y-documentar-lo-reutilizado";
+    for (args, proyecto) in [
+        (
+            vec![
+                "capturar",
+                "Reutilizar y documentar lo reutilizado",
+                "--proyecto",
+                "Tienda web",
+                "--validacion",
+                "explicita",
+            ],
+            None,
+        ),
+        (vec![], Some("API pagos")),
+    ] {
+        if let Some(p) = proyecto {
+            ok(&universo_en(
+                &repo,
+                &["reforzar", nueva, "--proyecto", p, "--contexto", "c"],
+            ));
+        } else {
+            ok(&universo_en(&repo, &args));
+        }
+    }
+    ok(&universo_en(&repo, &["promover", nueva, "--a", "vigente"]));
+
+    let s = universo_en(
+        &repo,
+        &[
+            "relacion",
+            nueva,
+            "reemplaza",
+            NOTA,
+            "--universo",
+            "vigente",
+        ],
+    );
+    assert_eq!(s.codigo, 1, "{}{}", s.stdout, s.stderr);
+    assert!(
+        s.stdout.contains("rule: reemplazado-retirado"),
+        "{}",
+        s.stdout
+    );
+    ok(&universo_en(
+        &repo,
+        &[
+            "atributo",
+            NOTA,
+            "estado",
+            "retirado",
+            "--universo",
+            "vigente",
+        ],
+    ));
+    ok(&universo_en(
+        &repo,
+        &[
+            "relacion",
+            nueva,
+            "reemplaza",
+            NOTA,
+            "--universo",
+            "vigente",
+        ],
+    ));
+    ok(&universo_en(&repo, &["guard", "--universo", "vigente"]));
+}
+
+/// Una segunda candidata, confirmada en dos proyectos, con `relacion` hacia
+/// la primera.
+fn segunda(repo: &Path, relacion: &str) -> &'static str {
+    let nueva = "criterios/crear-sin-reutilizar";
+    ok(&universo_en(
+        repo,
+        &[
+            "capturar",
+            "Crear sin reutilizar",
+            "--proyecto",
+            "Tienda web",
+            "--validacion",
+            "explicita",
+        ],
+    ));
+    ok(&universo_en(
+        repo,
+        &[
+            "reforzar",
+            nueva,
+            "--proyecto",
+            "API pagos",
+            "--contexto",
+            "c",
+        ],
+    ));
+    ok(&universo_en(repo, &["relacion", nueva, relacion, NOTA]));
+    nueva
+}
+
+/// D2: `contradice` y `reemplaza` viajan con la promoción cuando su destino
+/// ya está en vigente, y ahí deciden las reglas de vigente.
+#[test]
+fn las_relaciones_entre_criterios_se_promueven_y_las_reglas_de_vigente_deciden() {
+    for (relacion, regla) in [
+        ("contradice", "sin-contradiccion-vigente"),
+        ("reemplaza", "reemplazado-retirado"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = repo(dir.path());
+        candidata(&repo);
+        reforzar(&repo, "API pagos");
+        ok(&promover(&repo, &[]));
+        let nueva = segunda(&repo, relacion);
+        let s = universo_en(&repo, &["promover", nueva, "--a", "vigente"]);
+        assert_eq!(s.codigo, 1, "{relacion}: {}{}", s.stdout, s.stderr);
+        assert!(s.stdout.contains(&format!("rule: {regla}")), "{}", s.stdout);
+
+        // Con el anterior retirado, se admite y la relación queda en vigente.
+        ok(&universo_en(
+            &repo,
+            &[
+                "atributo",
+                NOTA,
+                "estado",
+                "retirado",
+                "--universo",
+                "vigente",
+            ],
+        ));
+        ok(&universo_en(&repo, &["promover", nueva, "--a", "vigente"]));
+        let vigente = leer(&repo, "vigente", nueva);
+        assert!(
+            vigente.contains(&format!("{relacion}: [\"[[reutilizar-antes-de-crear]]\"]")),
+            "{vigente}"
+        );
+        ok(&universo_en(&repo, &["guard", "--universo", "vigente"]));
+    }
+}
+
+/// Si el destino de la relación no está en vigente, no hay nada que proteger
+/// allí: la relación no se copia y la salida lo dice.
+#[test]
+fn una_relacion_hacia_un_criterio_que_no_esta_en_vigente_se_informa() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    candidata(&repo);
+    let nueva = segunda(&repo, "contradice");
+    let s = universo_en(
+        &repo,
+        &[
+            "promover",
+            nueva,
+            "--a",
+            "vigente",
+            "--dry-run",
+            "--format=json",
+        ],
+    );
+    ok(&s);
+    let json: Value = serde_json::from_str(&s.stdout).unwrap();
+    assert_eq!(
+        json["relations_not_copied"],
+        serde_json::json!([{"relation": "contradice", "to": NOTA}])
+    );
+    let s = universo_en(&repo, &["promover", nueva, "--a", "vigente"]);
+    ok(&s);
+    assert!(
+        s.stdout
+            .contains(&format!("relation not copied: contradice -> {NOTA}")),
+        "{}",
+        s.stdout
+    );
+    let vigente = leer(&repo, "vigente", nueva);
+    assert!(!vigente.contains("contradice"), "{vigente}");
+}
+
+/// Una relación repetida en el origen llega una sola vez al destino.
+#[test]
+fn una_relacion_repetida_se_promueve_una_vez() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    candidata(&repo);
+    reforzar(&repo, "API pagos");
+    ok(&promover(&repo, &[]));
+    ok(&universo_en(
+        &repo,
+        &[
+            "atributo",
+            NOTA,
+            "estado",
+            "retirado",
+            "--universo",
+            "vigente",
+        ],
+    ));
+    let nueva = segunda(&repo, "contradice");
+    // `relacion` no repite una relación; una edición a mano aceptada con
+    // `seal`, sí.
+    let ruta = repo
+        .join("universos/candidatos/bundle")
+        .join(format!("{nueva}.md"));
+    let texto = std::fs::read_to_string(&ruta).unwrap().replace(
+        "contradice: [\"[[reutilizar-antes-de-crear]]\"]",
+        "contradice: [\"[[reutilizar-antes-de-crear]]\", \"[[reutilizar-antes-de-crear]]\"]",
+    );
+    std::fs::write(&ruta, texto).unwrap();
+    ok(&universo_en(
+        &repo,
+        &["seal", "--universo", "candidatos", "--motivo", "a mano"],
+    ));
+    let origen = leer(&repo, "candidatos", nueva);
+    assert_eq!(
+        origen.matches("[[reutilizar-antes-de-crear]]").count(),
+        2,
+        "{origen}"
+    );
+    ok(&universo_en(&repo, &["promover", nueva, "--a", "vigente"]));
+    let vigente = leer(&repo, "vigente", nueva);
+    assert_eq!(
+        vigente.matches("[[reutilizar-antes-de-crear]]").count(),
+        1,
+        "{vigente}"
+    );
+    ok(&universo_en(&repo, &["guard", "--universo", "vigente"]));
+}
