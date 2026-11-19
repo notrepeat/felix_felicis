@@ -91,7 +91,7 @@ Sólo hace falta para trabajar en Felix o para una plataforma sin binario
 ```sh
 git clone <url-del-repositorio> felix_felicis
 cd felix_felicis
-git checkout v0.7.0        # o la versión que quieras; sin esto, la rama actual
+git checkout v0.8.0        # o la versión que quieras; sin esto, la rama actual
 cargo install --locked --path crates/universo-cli
 cargo install --locked --path crates/universo-mcp
 ```

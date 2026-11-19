@@ -3,7 +3,12 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
-## Sin publicar
+## 0.8.0 — 2026-11-19
+
+Medición más simple: `metrics` en el MCP y lectura desde cualquier carpeta.
+Ver [notas](docs/release/v0.8.0.md). Cambio incompatible pre-1.0: un
+repositorio de criterio creado con `0.7.x` debe cambiar `motor` en
+`felix.toml`.
 
 - Herramienta `metrics` en el MCP (con `--criterio`): las métricas del
   repositorio para que un agente responda «¿cómo va mi criterio?»; conteos y
