@@ -45,7 +45,8 @@ Dentro de él los comandos no necesitan rutas. `universo conectar --aplicar` lo
 conecta a Claude Code en un paso (hooks, MCP y skill; sin `--aplicar` sólo
 muestra qué cambiaría), y `universo mcp-config` imprime la configuración para
 otros clientes (Codex o JSON). El agente podrá consultar todos los universos y
-capturar candidatas. `capturar` guarda una afirmación
+capturar candidatas. `universo grafo` lo muestra como un grafo interactivo en
+una página local. `capturar` guarda una afirmación
 como candidata con su proyecto y contexto; `reforzar` y `objetar` registran
 que se sostuvo, o no, en otro proyecto. `promover` la lleva a `vigente`, cuyas
 reglas exigen la confirmación en al menos dos proyectos; `relacion`,

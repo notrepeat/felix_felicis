@@ -67,7 +67,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
 }
 
 /// Resumen de un universo, ya en JSON.
-fn resumir(
+pub(super) fn resumir(
     nombre: &str,
     e: &Estructura,
     reglas: usize,

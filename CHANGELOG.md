@@ -9,6 +9,12 @@ está en sus notas (`docs/release/`); aquí queda el resumen.
   paso, con vista previa por defecto, `--aplicar` y `--verificar`. Guarda la
   ruta del binario en `git config felix.bin` y activa los hooks, registra el
   MCP a nivel de usuario e instala la skill de esta versión.
+- `universo grafo` genera una página HTML local e interactiva con el grafo de
+  un repositorio de criterio (o de cualquier bundle OKF): notas por tipo y
+  estado, relaciones, promociones entre universos, y candidatas listas para
+  promover u objetadas, con el mismo cálculo que `resumen`. Trae panel de
+  detalle, búsqueda, filtros, zoom y modo oscuro. Los datos van incrustados y
+  la página no usa la red; incluye datos del bundle.
 - Los hooks leen `felix.bin`, así que ya no dependen del `PATH`. Si no
   encuentran el binario, `pre-commit` falla con un mensaje que dice cómo
   arreglarlo, en vez de «orden no encontrada».

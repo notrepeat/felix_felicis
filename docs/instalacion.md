@@ -112,6 +112,31 @@ para ver su estado (con un límite de 60 s). Si `claude` no está instalado,
 aplica el resto, muestra el comando del MCP para correrlo a mano y termina con
 1 hasta que el MCP quede registrado. Repítelo en cada computador donde clones el repositorio.
 
+## Ver el criterio como grafo
+
+```sh
+universo grafo                       # todos los universos del repositorio
+universo grafo --universo vigente    # uno solo
+universo grafo --salida grafo.html   # dónde escribir la página
+universo grafo <bundle> --manifiesto <m.toml> --invariantes <i.sx>  # cualquier bundle OKF
+```
+
+Genera una página HTML que se abre en el navegador:
+
+- nodos coloreados por tipo; los criterios promovidos se ven huecos, las
+  candidatas más claras y los retirados atenuados;
+- relaciones;
+- las promociones como líneas punteadas entre universos;
+- anillos para las candidatas listas para promover (verde) y las objetadas
+  (rojo).
+
+Un clic en un nodo muestra sus atributos, relaciones y cuerpo. Sin `--salida`,
+la página va al directorio temporal con un nombre nuevo cada vez
+(`felix-grafo-<repositorio>-…html`); la ruta sale en la terminal. Incluye los datos del bundle y no carga
+nada de la red: no la compartas si el repositorio es privado. Es de sólo
+lectura; los cambios siguen pasando por `capturar`, `promover` y los demás
+comandos.
+
 ## Desinstalar
 
 ```sh
