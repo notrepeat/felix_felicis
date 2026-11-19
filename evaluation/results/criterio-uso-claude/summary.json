@@ -1,0 +1,83 @@
+{
+  "brazos": {
+    "A_sin_criterio": {
+      "adherencia_aciertos": 28,
+      "adherencia_total": 36,
+      "inventado": 0,
+      "control_total": 12,
+      "sin_respuesta": 0,
+      "tool_calls": 0,
+      "segundos": 175.93,
+      "filas": 48,
+      "herramientas_no_permitidas": 0,
+      "adherencia": 0.7778,
+      "inventado_tasa": 0.0
+    },
+    "B_criterio_mcp": {
+      "adherencia_aciertos": 36,
+      "adherencia_total": 36,
+      "inventado": 0,
+      "control_total": 12,
+      "sin_respuesta": 0,
+      "tool_calls": 151,
+      "segundos": 307.01,
+      "filas": 48,
+      "herramientas_no_permitidas": 0,
+      "adherencia": 1.0,
+      "inventado_tasa": 0.0
+    },
+    "C_criterio_prompt": {
+      "adherencia_aciertos": 36,
+      "adherencia_total": 36,
+      "inventado": 0,
+      "control_total": 12,
+      "sin_respuesta": 0,
+      "tool_calls": 0,
+      "segundos": 155.96,
+      "filas": 48,
+      "herramientas_no_permitidas": 0,
+      "adherencia": 1.0,
+      "inventado_tasa": 0.0
+    }
+  },
+  "B_menos_A": {
+    "diferencia": 0.2222,
+    "ic95": [
+      0.0,
+      0.4722
+    ],
+    "tareas": 12
+  },
+  "C_menos_A": {
+    "diferencia": 0.2222,
+    "ic95": [
+      0.0,
+      0.4722
+    ],
+    "tareas": 12
+  },
+  "B_menos_C": {
+    "diferencia": 0.0,
+    "ic95": [
+      0.0,
+      0.0
+    ],
+    "tareas": 12
+  },
+  "decision": {
+    "criterio_ayuda": false,
+    "mcp_aporta": true,
+    "regla": "ayuda: B-A pareada >= 0.15, IC95 excluye 0 y la tasa de criterio citado en control de B no supera la de A; MCP aporta: B-C pareada >= -0.05"
+  },
+  "protocolo": "felix-criterio-uso-v1",
+  "modelo": "claude-sonnet-5-5",
+  "filas": 144,
+  "plan_runs": 144,
+  "plan_sha256": "3999a8b9330c69bb977875b6870fc75d05fefa3653600ce46b19a47107aac381",
+  "git_commit": "08caf1abe7cfe0990f4de3d68a9a67bea7dc1cd3",
+  "binarios": {
+    "universo": "universo 0.4.0"
+  },
+  "corte": null,
+  "completo": true
+}

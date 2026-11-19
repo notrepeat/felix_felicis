@@ -1,0 +1,774 @@
+{
+  "schema": "felix-criterio-uso-v1",
+  "configured_model_alias": "claude-sonnet-5-5",
+  "schedule_seed": 1119,
+  "repetitions": 3,
+  "arms": [
+    "A_sin_criterio",
+    "B_criterio_mcp",
+    "C_criterio_prompt"
+  ],
+  "timeout_seconds": 180,
+  "mcp_tool_call_budget_b": 6,
+  "mcp_tools_b": [
+    "search",
+    "context"
+  ],
+  "system_prompt": "Eres un agente de código que trabaja para el dueño de un proyecto. Para cada tarea eliges una de las opciones dadas, la que el dueño querría. Entrega la respuesta con la herramienta de salida estructurada.",
+  "instruction": "Elige la opción para la tarea. Devuelve `opcion` (la letra), `justificacion` (una o dos frases) y `criterio_aplicado`: el texto del criterio del dueño que decidió tu elección, o null si ninguno aplica o no conoces criterios del dueño. No inspecciones archivos, no uses la red ni ejecutes comandos.",
+  "mcp_note": " El dueño guarda su criterio en un repositorio que puedes consultar con las herramientas `search` y `context` (usa `include_values: true` y `universe: \"todos\"`; el universo `vigente` tiene criterio confirmado y `candidatos`, criterio sin confirmar). `search` busca palabras en los títulos: usa pocas palabras. Consúltalo antes de decidir, con un máximo de 6 llamadas.",
+  "prompt_note": " Este es el criterio vigente del dueño:",
+  "decision_rule": {
+    "mejora_minima": 0.15,
+    "tolerancia_mcp": 0.05,
+    "bootstrap": {
+      "muestras": 10000,
+      "semilla": 1119,
+      "unidad": "tarea"
+    }
+  },
+  "primary_endpoints": [
+    "adherencia (oráculo)",
+    "criterio inventado en control"
+  ],
+  "secondary_endpoints": [
+    "sin_respuesta",
+    "tool_calls",
+    "elapsed_seconds",
+    "provider_usage"
+  ],
+  "stopping_rule": "correr todas las filas del plan y publicar todas; sin ampliar ni repetir corridas",
+  "source_sha256": {
+    "evaluation/criterio_uso/criterios.json": "830d797ea87840106e7909abbe3c14b9fdeafd0da92648fa62e7dbdd260bb3cf",
+    "evaluation/criterio_uso/tasks.json": "bff8f46b67a59db0eb84ba5b9de7a2bf9bfa1712b9d0ffa69d8941b35c6ca896",
+    "evaluation/criterio_uso/oracle.json": "9c3774d33ff0e23892841ae8d368bffe8c74e5b9cde959f710e5476a468bf188",
+    "evaluation/run_criterio_uso.py": "ffee311f77e49beaba2aa40bd5633a0c3dbe178dd7da4c1ab2b4605f3407bf4a",
+    "evaluation/mcp_proxy_v2.py": "8483dae9882d5e4b81e8c96ca28d822055049bb9cdb44caf1eb3cdeaad0523e1",
+    "evaluation/run_paired.py": "b0e40db1720ba714020c053ccc6054550ae66661ce4148b8ba2a32866175d92a",
+    "evaluation/run_four_arms.py": "0286bb49c32634b86a0470d386c8bf7589b3ae7a7744d4c8550dfbadf1ae77f8",
+    "evaluation/run_criterio_deteccion.py": "bb5bc0a82d9292d9b2fb096f8f93c867e219a60f4f570222ad31ba0fc3592d7e"
+  },
+  "runs": 144,
+  "schedule": [
+    {
+      "case": "k03",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k03",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k03",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k04",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k04",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k04",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t08",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t08",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t08",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t11",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t11",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t11",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t10",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t10",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t10",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t07",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t07",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t07",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t03",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t03",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t03",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t02",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t02",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t02",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t04",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t04",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t04",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t12",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t12",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t12",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t09",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t09",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t09",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t01",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t01",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t01",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k01",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k01",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k01",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t06",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t06",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t06",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t05",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t05",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t05",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k02",
+      "repetition": 1,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k02",
+      "repetition": 1,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k02",
+      "repetition": 1,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t05",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t05",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t05",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k02",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k02",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k02",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t08",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t08",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t08",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k03",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k03",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k03",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t06",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t06",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t06",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t11",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t11",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t11",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t07",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t07",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t07",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t09",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t09",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t09",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t04",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t04",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t04",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k01",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k01",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k01",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t03",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t03",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t03",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t02",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t02",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t02",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t12",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t12",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t12",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k04",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k04",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k04",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t01",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t01",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t01",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t10",
+      "repetition": 2,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t10",
+      "repetition": 2,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t10",
+      "repetition": 2,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t01",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t01",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t01",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t06",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t06",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t06",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t11",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t11",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t11",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k04",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k04",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k04",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t07",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t07",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t07",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k03",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k03",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k03",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t10",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t10",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t10",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t08",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t08",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t08",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t12",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t12",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t12",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t09",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t09",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t09",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k02",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k02",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k02",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "k01",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "k01",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "k01",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t02",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t02",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t02",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t04",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t04",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t04",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t03",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t03",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t03",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    },
+    {
+      "case": "t05",
+      "repetition": 3,
+      "arm": "C_criterio_prompt"
+    },
+    {
+      "case": "t05",
+      "repetition": 3,
+      "arm": "A_sin_criterio"
+    },
+    {
+      "case": "t05",
+      "repetition": 3,
+      "arm": "B_criterio_mcp"
+    }
+  ]
+}

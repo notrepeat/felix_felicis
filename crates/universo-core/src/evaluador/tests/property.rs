@@ -99,6 +99,10 @@ fn el_evaluador_coincide_con_el_oraculo_en_estructuras_generadas() {
         "(forall ((e E) (x N) (y N)) :guarda (and (Edge e x y rel) (Type x a)) (Type y b))",
         "(forall ((e E) (x N) (y N)) :guarda (Edge e x y sub) (tc Parent x y))",
         "(al-menos 1 ((e E) (y N)) :guarda (Edge e @n/v0 y rel) (Type y a))",
+        // Extremo ligado por un cuantificador exterior: aristas salientes o entrantes.
+        "(forall ((x N)) (al-menos 1 ((e E) (y N)) :guarda (Edge e x y sub) (Type y a)))",
+        "(forall ((y N)) (exists ((e E) (x N)) :guarda (Edge e x y sub) (Type x b)))",
+        "(exists ((x N)) (forall ((e E) (y N)) :guarda (Edge e y x rel) (not (= x y))))",
     ];
     proptest!(|(n in 1usize..6, semilla in any::<u64>())| {
         let estructura = mundo_generado(n, semilla);

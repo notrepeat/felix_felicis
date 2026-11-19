@@ -1,0 +1,34 @@
+{
+  "schema": "felix-criterio-uso-criterios-v1",
+  "nota": "Criterio ficticio para la fase 11. No describe a ninguna persona ni proyecto real.",
+  "fecha": "2026-10-01",
+  "proyectos": ["Tienda web", "API pagos", "App reservas", "Panel interno", "Servicio envíos"],
+  "vigentes": [
+    {"id": "v01", "titulo": "Los identificadores públicos de entidades son UUIDv7, no enteros autoincrementales", "proyectos": ["Tienda web", "API pagos"]},
+    {"id": "v02", "titulo": "Los errores esperables del dominio se devuelven como valores de tipo Result, no como excepciones", "proyectos": ["API pagos", "Servicio envíos"]},
+    {"id": "v03", "titulo": "La API expone las fechas como texto ISO 8601 en UTC con sufijo Z", "proyectos": ["App reservas", "API pagos"]},
+    {"id": "v04", "titulo": "Una utilidad de menos de 50 líneas se escribe en el proyecto en vez de agregar una dependencia", "proyectos": ["Tienda web", "Panel interno"]},
+    {"id": "v05", "titulo": "Los tests de una unidad viven en un archivo junto a ella, no en una carpeta de tests aparte", "proyectos": ["Tienda web", "App reservas"]},
+    {"id": "v06", "titulo": "La paginación de listados usa un cursor opaco, no offset ni número de página", "proyectos": ["Panel interno", "API pagos"]},
+    {"id": "v07", "titulo": "Los montos de dinero se guardan como enteros en la unidad mínima de la moneda", "proyectos": ["API pagos", "Tienda web"]},
+    {"id": "v08", "titulo": "Las migraciones de base de datos sólo agregan: renombrar o borrar una columna toma dos despliegues", "proyectos": ["Servicio envíos", "Panel interno"]},
+    {"id": "v09", "titulo": "La configuración por ambiente se lee de variables de entorno, sin archivos de configuración versionados", "proyectos": ["Servicio envíos", "App reservas"]},
+    {"id": "v10", "titulo": "Los mensajes de commit siguen Conventional Commits y se escriben en español", "proyectos": ["Panel interno", "Tienda web"]},
+    {"id": "v11", "titulo": "Los componentes de interfaz se componen; no se heredan unos de otros", "proyectos": ["Tienda web", "App reservas"]},
+    {"id": "v12", "titulo": "Una llamada de red fallida se reintenta con espera exponencial y un máximo de tres intentos", "proyectos": ["Servicio envíos", "API pagos"]},
+    {"id": "v13", "titulo": "Los nombres de ramas siguen el formato tipo/descripcion-corta", "proyectos": ["Panel interno", "Servicio envíos"]},
+    {"id": "v14", "titulo": "La documentación de una función pública incluye un ejemplo ejecutable", "proyectos": ["API pagos", "Panel interno"]},
+    {"id": "v15", "titulo": "Los logs se emiten como JSON estructurado", "proyectos": ["Servicio envíos", "Tienda web"]},
+    {"id": "v16", "titulo": "Las consultas SQL usan parámetros, sin concatenar texto", "proyectos": ["API pagos", "App reservas"]},
+    {"id": "v17", "titulo": "Un feature flag se retira a más tardar un mes después de activarse para todos", "proyectos": ["Tienda web", "Panel interno"]},
+    {"id": "v18", "titulo": "Las dependencias se fijan a versión exacta en el manifiesto", "proyectos": ["App reservas", "Servicio envíos"]}
+  ],
+  "candidatos": [
+    {"id": "c01", "titulo": "Preferir tablas sobre listas en la documentación técnica", "proyecto": "Panel interno"},
+    {"id": "c02", "titulo": "Los servicios internos se comunican por gRPC", "proyecto": "Servicio envíos"},
+    {"id": "c03", "titulo": "Los scripts de mantenimiento se escriben en Python", "proyecto": "Panel interno"},
+    {"id": "c04", "titulo": "Las pantallas de error muestran un código de soporte", "proyecto": "App reservas"},
+    {"id": "c05", "titulo": "Los nombres de componentes van en inglés", "proyecto": "Tienda web"},
+    {"id": "c06", "titulo": "Cada pedido de revisión de código describe su riesgo", "proyecto": "API pagos"}
+  ]
+}

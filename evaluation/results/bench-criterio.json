@@ -1,0 +1,153 @@
+{
+  "schema": "felix-bench-criterio-v1",
+  "version": "universo 0.4.0",
+  "git_commit": "f976bc8b34a4800ac1fe72ef8e7fb3a3aa688b8d",
+  "fecha": "2026-11-19",
+  "plataforma": "Linux x86_64",
+  "python": "3.15.2",
+  "repeticiones": 3,
+  "resultados": [
+    {
+      "notas": 100,
+      "preparacion_segundos": 0.01,
+      "operaciones": {
+        "search_todos": {
+          "segundos": [
+            0.0034,
+            0.003,
+            0.0029
+          ],
+          "mediana": 0.003,
+          "ok": true,
+          "error": null
+        },
+        "resumen": {
+          "segundos": [
+            0.0045,
+            0.0042,
+            0.0039
+          ],
+          "mediana": 0.0042,
+          "ok": true,
+          "error": null
+        },
+        "capturar": {
+          "segundos": [
+            0.2769,
+            0.2829,
+            0.283
+          ],
+          "mediana": 0.2829,
+          "ok": true,
+          "error": null
+        },
+        "promover": {
+          "segundos": [
+            0.3245,
+            0.3,
+            0.3091
+          ],
+          "mediana": 0.3091,
+          "ok": true,
+          "error": null
+        }
+      }
+    },
+    {
+      "notas": 1000,
+      "preparacion_segundos": 0.06,
+      "operaciones": {
+        "search_todos": {
+          "segundos": [
+            0.0186,
+            0.0176,
+            0.0183
+          ],
+          "mediana": 0.0183,
+          "ok": true,
+          "error": null
+        },
+        "resumen": {
+          "segundos": [
+            0.0388,
+            0.0378,
+            0.0394
+          ],
+          "mediana": 0.0388,
+          "ok": true,
+          "error": null
+        },
+        "capturar": {
+          "segundos": [
+            2.6308,
+            2.6337,
+            2.62
+          ],
+          "mediana": 2.6308,
+          "ok": true,
+          "error": null
+        },
+        "promover": {
+          "segundos": [
+            3.1279,
+            3.1068,
+            2.8683
+          ],
+          "mediana": 3.1068,
+          "ok": true,
+          "error": null
+        }
+      }
+    },
+    {
+      "notas": 5000,
+      "preparacion_segundos": 0.34,
+      "operaciones": {
+        "search_todos": {
+          "segundos": [
+            0.1016,
+            0.0986,
+            0.1
+          ],
+          "mediana": 0.1,
+          "ok": true,
+          "error": null
+        },
+        "resumen": {
+          "segundos": [
+            0.2628,
+            0.2523,
+            0.236
+          ],
+          "mediana": 0.2523,
+          "ok": true,
+          "error": null
+        },
+        "capturar": {
+          "segundos": [
+            16.3278,
+            15.57,
+            16.0693
+          ],
+          "mediana": 16.0693,
+          "ok": true,
+          "error": null
+        },
+        "promover": {
+          "segundos": [
+            17.2381,
+            16.6266,
+            16.6312
+          ],
+          "mediana": 16.6312,
+          "ok": true,
+          "error": null
+        }
+      }
+    },
+    {
+      "notas": 10000,
+      "error": "evaluation_budget_exhausted"
+    }
+  ]
+}

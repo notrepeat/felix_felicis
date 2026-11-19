@@ -3,6 +3,23 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
+## 0.5.0 — 2026-11-19
+
+Gate «evaluación comparativa y benchmarks publicados». Ver
+[notas](docs/release/v0.5.0.md). Cambio incompatible pre-1.0: un repositorio
+de criterio creado con `0.4.x` debe cambiar `motor` en `felix.toml`.
+
+- El evaluador recorre sólo las aristas salientes o entrantes de un extremo
+  ya fijado en una guarda `(Edge e x y k)`. Antes, un repositorio de criterio
+  con entre 500 y 1 000 notas agotaba el presupuesto de evaluación y no
+  admitía más escrituras.
+- Fase 11: evaluación del criterio con 144 corridas prerregistradas
+  ([informe](evaluation/criterio_uso_report.md)). Con el criterio consultable
+  por MCP o en el prompt, el agente siguió el criterio en 36/36 decisiones;
+  sin él, en 28/36. Neutral por la regla prerregistrada: el intervalo de la
+  diferencia toca el cero porque el modelo ya elegía por su cuenta lo que
+  pedía el criterio en 9 de las 12 tareas. Más benchmarks del repositorio de criterio.
+
 ## 0.4.0 — 2026-11-19
 
 Criterio distribuible (fase 10): `init --git` crea un repositorio de criterio
