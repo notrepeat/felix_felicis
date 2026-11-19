@@ -308,8 +308,43 @@ Plantillas para `candidatos` y `vigente`, opcionales y modificables con U5
 | Reglas en `vigente` | confirmado en al menos dos proyectos (la regla de arriba); sin `contradice` entre dos vigentes; lo reemplazado queda retirado; un retirado tiene quien lo reemplace |
 
 **Aceptación.**
-- [ ] Ambas plantillas pasan `check` con una nota de ejemplo de cada tipo.
-- [ ] Cada regla tiene un test que la hace fallar y otro que la cumple.
+- [x] Ambas plantillas pasan `check` con una nota de ejemplo de cada tipo.
+- [x] Cada regla tiene un test que la hace fallar y otro que la cumple.
+
+**Hecho para las plantillas actuales** (2026-11-18,
+`crates/universo-okf/tests/plantillas_criterio.rs`). Las que deja
+`init --git` (esquema de captura v1) pasan con un ejemplo de cada tipo, y cada
+una de sus seis reglas falla en cada una de sus cláusulas y se cumple en otro
+caso; cuando un caso incumple a la vez otra regla por la misma causa (en
+`vigente`, un criterio sin estado tampoco es «probado»), el test lo dice. Un
+test avisa si se agrega una regla sin caso. Estados reales del esquema v1:
+`candidato`, `promovido` (lo que queda en `candidatos` tras promoverlo),
+`vigente` y `retirado`.
+
+**Pendiente de tu revisión (D2): la ampliación.** No la implementé porque D2
+la reserva para revisarla contigo. Mi recomendación, aditiva y aplicable con
+U5 a un repositorio existente (`manifiesto aplicar` y `reglas aplicar`):
+
+1. **Mantener los tipos `criterio`, `evidencia` y `proyecto`.** Pasar a
+   `principio`, `decision`, `preferencia`, `antipatron` y `fuente` como tipos
+   rompe `capturar`, `reforzar`, `objetar`, el MCP y los repositorios ya
+   creados. La misma distinción cabe en un atributo `forma` (`principio`,
+   `decision`, `preferencia`, `antipatron`), opcional en candidatos, y
+   `fuente` como un caso de evidencia.
+2. **Agregar las relaciones `reemplaza` (nuevo → anterior) y `contradice`.**
+3. **Agregar a `vigente`:**
+   - `sin-contradiccion-vigente`: no hay `contradice` entre dos vigentes.
+   - `reemplazado-retirado`: lo que un vigente reemplaza queda retirado.
+4. **No agregar «un retirado tiene quien lo reemplace».** Un criterio
+   puede dejar de valer sin un sucesor (por ejemplo, tras objeciones); esa
+   regla obligaría a inventar uno.
+5. **Dejar `confianza`, `vigente_desde` y `ambito` para cuando haya uso
+   real** (U10). Ningún comando de captura los escribe; `confianza` sólo
+   aparece como orden de ejemplo en pruebas.
+
+Con tu visto bueno: plantillas nuevas en `registro_criterio`, sus tests
+(uno que falla y otro que cumple por regla) y una nota en el README del
+repositorio de criterio con los dos comandos para actualizar uno existente.
 
 ### U5 — Cambiar reglas y manifiesto sin romper el historial
 
