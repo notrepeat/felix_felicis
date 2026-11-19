@@ -404,7 +404,22 @@ pub(super) fn parsear_mcp_config(args: &[String]) -> Result<SolicitudMcpConfig, 
     })
 }
 
-/// Cita una ruta para la shell sólo si hace falta.
+/// En Windows, `canonicalize` devuelve rutas `\\?\C:\...` (o
+/// `\\?\UNC\servidor\...`), que varios clientes MCP no aceptan: se
+/// devuelve la forma corriente. En otros sistemas, la ruta tal cual.
+pub(super) fn sin_prefijo_verbatim(ruta: PathBuf) -> PathBuf {
+    let texto = ruta.to_string_lossy();
+    if let Some(resto) = texto.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{resto}"));
+    }
+    match texto.strip_prefix(r"\\?\") {
+        Some(resto) if resto.as_bytes().get(1) == Some(&b':') => PathBuf::from(resto),
+        _ => ruta,
+    }
+}
+
+/// Cita una ruta para la shell sólo si hace falta (comillas simples: valen
+/// en sh, Git Bash y PowerShell, no en `cmd.exe`).
 fn citar(texto: &str) -> String {
     if texto
         .chars()
@@ -429,7 +444,7 @@ pub(super) fn ejecutar_mcp_config(
             return 1;
         }
     };
-    let raiz = repo.raiz.canonicalize().unwrap_or(repo.raiz.clone());
+    let raiz = sin_prefijo_verbatim(repo.raiz.canonicalize().unwrap_or(repo.raiz.clone()));
     // universo-mcp se instala junto a universo; si no está, se confía en el PATH.
     let binario = std::env::current_exe()
         .ok()
@@ -491,6 +506,22 @@ pub(super) fn ejecutar_mcp_config(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sin_prefijo_verbatim_deja_la_forma_corriente() {
+        use super::sin_prefijo_verbatim as f;
+        use std::path::PathBuf;
+        assert_eq!(f(PathBuf::from(r"\\?\C:\a\b")), PathBuf::from(r"C:\a\b"));
+        assert_eq!(
+            f(PathBuf::from(r"\\?\UNC\srv\c\d")),
+            PathBuf::from(r"\\srv\c\d")
+        );
+        assert_eq!(f(PathBuf::from("/tmp/x")), PathBuf::from("/tmp/x"));
+        assert_eq!(
+            f(PathBuf::from(r"\\?\Volume{x}\a")),
+            PathBuf::from(r"\\?\Volume{x}\a")
+        );
+    }
+
     use super::*;
 
     fn v(args: &[&str]) -> Vec<String> {

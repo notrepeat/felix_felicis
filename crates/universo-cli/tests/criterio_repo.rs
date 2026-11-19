@@ -421,7 +421,20 @@ fn felix_universo_no_unicode_es_error_de_uso() {
 fn mcp_config_imprime_la_configuracion_para_cada_cliente() {
     let dir = tempfile::tempdir().unwrap();
     let repo = repo(dir.path());
-    let real = repo.canonicalize().unwrap();
+    // La ruta que imprime: canónica, sin el prefijo `\\?\` de Windows, y
+    // entre comillas simples si tiene caracteres fuera de `[A-Za-z0-9/._:-]`.
+    let canonica = repo.canonicalize().unwrap().display().to_string();
+    let canonica = canonica
+        .strip_prefix(r"\\?\")
+        .map_or(canonica.clone(), str::to_string);
+    let citada = if canonica
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-:".contains(c))
+    {
+        canonica.clone()
+    } else {
+        format!("'{canonica}'")
+    };
     let s = universo_en(&repo, &["mcp-config"], &[]);
     assert_eq!(s.codigo, 0, "{}{}", s.stdout, s.stderr);
     assert!(
@@ -431,7 +444,7 @@ fn mcp_config_imprime_la_configuracion_para_cada_cliente() {
         s.stdout
     );
     assert!(
-        s.stdout.contains(&format!("--criterio {}", real.display())),
+        s.stdout.contains(&format!("--criterio {citada}")),
         "{}",
         s.stdout
     );
@@ -450,7 +463,7 @@ fn mcp_config_imprime_la_configuracion_para_cada_cliente() {
         "{json}"
     );
     assert_eq!(servidor["args"][0], "--criterio");
-    assert_eq!(servidor["args"][1], real.display().to_string());
+    assert_eq!(servidor["args"][1], canonica);
     let s = universo_en(&repo, &["mcp-config", "--cliente=codex"], &[]);
     assert!(
         s.stdout.contains("[mcp_servers.felix-criterio]"),
