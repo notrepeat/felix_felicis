@@ -1,6 +1,7 @@
 {
   "schema": "felix-bench-criterio-v1",
   "version": "universo 0.4.0",
+  "git_commit": "f976bc8b34a4800ac1fe72ef8e7fb3a3aa688b8d",
   "fecha": "2026-11-19",
   "plataforma": "Linux x86_64",
   "python": "3.15.2",
@@ -12,123 +13,135 @@
       "operaciones": {
         "search_todos": {
           "segundos": [
-            0.0036,
-            0.0035,
-            0.0035
+            0.0034,
+            0.003,
+            0.0029
           ],
-          "mediana": 0.0035,
-          "ok": true
+          "mediana": 0.003,
+          "ok": true,
+          "error": null
         },
         "resumen": {
           "segundos": [
-            0.0051,
-            0.0051,
-            0.005
+            0.0045,
+            0.0042,
+            0.0039
           ],
-          "mediana": 0.0051,
-          "ok": true
+          "mediana": 0.0042,
+          "ok": true,
+          "error": null
         },
         "capturar": {
           "segundos": [
-            0.2925,
-            0.3189,
-            0.3125
+            0.2769,
+            0.2829,
+            0.283
           ],
-          "mediana": 0.3125,
-          "ok": true
+          "mediana": 0.2829,
+          "ok": true,
+          "error": null
         },
         "promover": {
           "segundos": [
-            0.3772,
-            0.3704,
-            0.3618
+            0.3245,
+            0.3,
+            0.3091
           ],
-          "mediana": 0.3704,
-          "ok": true
+          "mediana": 0.3091,
+          "ok": true,
+          "error": null
         }
       }
     },
     {
       "notas": 1000,
-      "preparacion_segundos": 0.07,
+      "preparacion_segundos": 0.06,
       "operaciones": {
         "search_todos": {
           "segundos": [
-            0.0232,
-            0.0228,
-            0.0232
+            0.0186,
+            0.0176,
+            0.0183
           ],
-          "mediana": 0.0232,
-          "ok": true
+          "mediana": 0.0183,
+          "ok": true,
+          "error": null
         },
         "resumen": {
           "segundos": [
-            0.0463,
-            0.0464,
-            0.0463
+            0.0388,
+            0.0378,
+            0.0394
           ],
-          "mediana": 0.0463,
-          "ok": true
+          "mediana": 0.0388,
+          "ok": true,
+          "error": null
         },
         "capturar": {
           "segundos": [
-            3.231,
-            3.3562,
-            3.1897
+            2.6308,
+            2.6337,
+            2.62
           ],
-          "mediana": 3.231,
-          "ok": true
+          "mediana": 2.6308,
+          "ok": true,
+          "error": null
         },
         "promover": {
           "segundos": [
-            3.6497,
-            3.6618,
-            3.6714
+            3.1279,
+            3.1068,
+            2.8683
           ],
-          "mediana": 3.6618,
-          "ok": true
+          "mediana": 3.1068,
+          "ok": true,
+          "error": null
         }
       }
     },
     {
       "notas": 5000,
-      "preparacion_segundos": 0.43,
+      "preparacion_segundos": 0.34,
       "operaciones": {
         "search_todos": {
           "segundos": [
-            0.1183,
-            0.116,
-            0.1215
+            0.1016,
+            0.0986,
+            0.1
           ],
-          "mediana": 0.1183,
-          "ok": true
+          "mediana": 0.1,
+          "ok": true,
+          "error": null
         },
         "resumen": {
           "segundos": [
-            0.3105,
-            0.2821,
-            0.2994
+            0.2628,
+            0.2523,
+            0.236
           ],
-          "mediana": 0.2994,
-          "ok": true
+          "mediana": 0.2523,
+          "ok": true,
+          "error": null
         },
         "capturar": {
           "segundos": [
-            20.1877,
-            19.8827,
-            20.2255
+            16.3278,
+            15.57,
+            16.0693
           ],
-          "mediana": 20.1877,
-          "ok": true
+          "mediana": 16.0693,
+          "ok": true,
+          "error": null
         },
         "promover": {
           "segundos": [
-            21.3052,
-            21.1843,
-            21.1606
+            17.2381,
+            16.6266,
+            16.6312
           ],
-          "mediana": 21.1843,
-          "ok": true
+          "mediana": 16.6312,
+          "ok": true,
+          "error": null
         }
       }
     },

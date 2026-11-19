@@ -186,7 +186,7 @@ class AgenteClaudeTest(unittest.TestCase):
         self.assertEqual(sorted(excluidas), ["mcp__felix__check", "mcp__felix__propose", "mcp__felix__why"])
         # El directorio con el repositorio de criterio se monta en sólo lectura.
         i = con.index("/work")
-        self.assertEqual((con[i - 2], con[i - 1]), ("--ro-bind", "/tmp/w"))
+        self.assertEqual((con[i - 2], con[i - 1]), ("--ro-bind", str(Path("/tmp/w"))))
 
 
 @unittest.skipUnless(BINARIO.is_file(), "requiere target/debug/universo (cargo build)")

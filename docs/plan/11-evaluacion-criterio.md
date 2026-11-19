@@ -133,15 +133,15 @@ cada brazo, sólo con tareas respondidas en ambos, y un intervalo bootstrap al
 
 ## Hallazgos de los benchmarks (2026-11-19)
 
-Mediana de tres repeticiones, binario `release` 0.4.0 con el arreglo de
-abajo, Linux x86_64, notas en `candidatos`
+Mediana de tres repeticiones, binario `release` 0.4.0 en el commit
+`f976bc8` (con el arreglo de abajo), Linux x86_64, notas en `candidatos`
 (`evaluation/results/bench-criterio.json`):
 
 | Notas | `search --universo todos` | `resumen` | `capturar` | `promover` |
 |---|---|---|---|---|
-| 100 | 0,004 s | 0,005 s | 0,31 s | 0,37 s |
-| 1 000 | 0,023 s | 0,046 s | 3,2 s | 3,7 s |
-| 5 000 | 0,12 s | 0,30 s | 20 s | 21 s |
+| 100 | 0,003 s | 0,004 s | 0,28 s | 0,31 s |
+| 1 000 | 0,018 s | 0,039 s | 2,6 s | 3,1 s |
+| 5 000 | 0,10 s | 0,25 s | 16 s | 17 s |
 | 10 000 | — | — | — | — (`seal` agota el presupuesto) |
 
 1. **Costo cuadrático de una guarda con extremo ligado (corregido).** En
