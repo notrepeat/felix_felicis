@@ -33,6 +33,9 @@ pub(super) const USO: &str = "Uso: universo conectar [--aplicar | --verificar] [
 
 const SKILL: &str = include_str!("../../../skills/felix-criterio/SKILL.md");
 const SERVIDOR: &str = "felix-criterio";
+/// Prefijo del detalle que dice a qué apunta hoy el MCP; tras aplicarlo, pasa
+/// a «antes apuntaba a».
+const APUNTA_HOY: &str = "hoy apunta a: ";
 /// Marca de los hooks que escribe Felix: un hook sin ella es del usuario y no
 /// se sobrescribe.
 const MARCA_HOOK: &str = "Hook de Felix";
@@ -409,7 +412,7 @@ fn paso_mcp(c: &Contexto) -> Paso {
                         "claude mcp remove {SERVIDOR} --scope user; {}",
                         comando_manual(c)
                     ),
-                    Some(format!("hoy apunta a: {comando} {args}")),
+                    Some(format!("{APUNTA_HOY}{comando} {args}")),
                 )
             }
         }
@@ -520,6 +523,14 @@ fn aplicar(c: &Contexto, paso: &mut Paso) {
         _ => false,
     };
     paso.estado = if ok { Estado::Aplicado } else { Estado::Error };
+    // Aplicado, lo que el paso describía como actual pasó a ser lo anterior.
+    if ok {
+        if let Some(d) = &paso.detalle {
+            if let Some(resto) = d.strip_prefix(APUNTA_HOY) {
+                paso.detalle = Some(format!("antes apuntaba a: {resto}"));
+            }
+        }
+    }
 }
 
 fn texto(

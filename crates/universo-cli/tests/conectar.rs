@@ -287,6 +287,12 @@ fn hooks_viejos_skill_vieja_y_un_mcp_que_apunta_a_otro_lado_se_actualizan() {
 
     let s = e.conectar(&["--aplicar"]);
     assert_eq!(s.codigo, 0, "{}{}", s.stdout, s.stderr);
+    // Tras reemplazar el MCP, el detalle no describe el estado anterior como
+    // si fuera el actual.
+    let linea_mcp = s.stdout.lines().find(|l| l.contains("] mcp")).unwrap();
+    assert!(linea_mcp.starts_with("[aplicado] mcp"), "{linea_mcp}");
+    assert!(!linea_mcp.contains("hoy apunta a"), "{linea_mcp}");
+    assert!(linea_mcp.contains("antes apuntaba a"), "{linea_mcp}");
     // Los hooks están versionados: queda un commit pendiente.
     assert!(s.stdout.contains("git commit"), "{}", s.stdout);
     assert!(fs::read_to_string(&hook).unwrap().contains("felix.bin"));
