@@ -2,6 +2,7 @@
 
 pub mod bundle;
 pub mod busqueda;
+pub mod criterio;
 pub mod delta;
 pub mod diferencia;
 pub mod documento;

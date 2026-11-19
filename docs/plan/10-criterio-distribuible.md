@@ -14,7 +14,7 @@ sugerida, revisión AGM, recuperación avanzada), que sigue fuera de alcance.
 
 | Campo | Valor |
 |---|---|
-| Estado | propuesto (2026-11-18), pendiente de revisión |
+| Estado | en curso (2026-11-18): plan aceptado con las recomendaciones de D1 a D10; paso 1 (U1, U2) hecho, salvo el argumento `universe` por llamada del MCP y `search --universo todos`, que pasan a U6 |
 | Depende de | `v0.3.0` (búsqueda, historial con efecto, `diff`, instalación) |
 | Desbloquea | Uso diario real, con un repositorio de criterio propio que reemplaza a la instancia privada legacy |
 
@@ -200,16 +200,26 @@ con `engine_version_mismatch` y dice cuál pide. `--ignorar-version` lo salta,
 de forma explícita.
 
 **Aceptación.**
-- [ ] `check`, `search`, `log`, `show`, `diff`, `guard`, `propose` y `status`
-      funcionan sin rutas dentro de un repositorio con `felix.toml`.
-- [ ] La precedencia está probada caso por caso.
-- [ ] Las rutas de `felix.toml` son relativas a él y no pueden salir del
-      repositorio: error `criterio_path_invalid`.
-- [ ] Un universo inexistente es error (`universe_not_found`) con la lista de
+- [x] `check`, `search`, `log`, `show`, `diff`, `guard`, `propose` y `status`
+      funcionan sin rutas dentro de un repositorio con `felix.toml` (también
+      `atomos`, `validate`, `seal`, `recover` y `delta`).
+- [x] La precedencia está probada: rutas explícitas, `--criterio`,
+      `FELIX_CRITERIO` y búsqueda hacia arriba; `--universo` y `FELIX_UNIVERSO`.
+- [x] Las rutas de `felix.toml` son relativas a él y no pueden salir del
+      repositorio, tampoco por un enlace: error `criterio_path_invalid`.
+- [x] Un universo inexistente es error (`universe_not_found`) con la lista de
       los que hay.
-- [ ] El MCP acepta `--criterio <dir>`. Sus herramientas reciben un argumento
-      opcional `universe`; sin él usan `por_defecto`. Es un cambio aditivo en
-      `felix-mcp-v1`.
+- [x] El MCP acepta `--criterio <dir> [--universo <n>]`.
+- [ ] Sus herramientas reciben un argumento opcional `universe`; sin él usan
+      `por_defecto` (aditivo en `felix-mcp-v1`). Queda para U6.
+- [ ] `search --universo todos`. Queda para U6.
+- Límites conocidos del paso 1:
+  - `escritura_agentes` se lee pero todavía no se hace cumplir. Hasta U6
+    es una convención, y `AGENTS.md` lo dice.
+  - `show` y `diff` toman un primer argumento numérico como número de
+    entrada, no como raíz. Un directorio llamado `2` se pasa como `./2`.
+  - Un `FELIX_UNIVERSO` vacío se ignora (usa el universo por defecto); uno que
+    no es texto es error de uso.
 
 ### U2 — `universo init --git`: un repositorio de criterio listo
 
@@ -227,11 +237,12 @@ universos de partida y además:
 No hace el primer commit ni configura un remoto (D3).
 
 **Aceptación.**
-- [ ] `git status` tras `init --git` y un apply muestra sólo archivos que deben
+- [x] `git status` tras `init --git` y un apply muestra sólo archivos que deben
       versionarse.
-- [ ] Un clon en otro directorio pasa `guard` en todos los universos.
-- [ ] Un clon en Windows con `core.autocrlf=true` también pasa `guard`, en el
-      job de Windows del CI.
+- [x] Un clon en otro directorio pasa `guard` en todos los universos, y el
+      historial viaja con él.
+- [x] Un clon con `core.autocrlf=true` también pasa `guard`; el test corre en
+      Linux y en el job de Windows del CI.
 
 ### U3 — Capturar sin fricción, con contexto
 
@@ -479,7 +490,12 @@ Es la parte difícil: cuándo una frase es criterio y cuándo no.
       positivo ensucia la base. La cobertura se informa tal cual.
 - [ ] Ninguna captura al cierre se escribe sin tu confirmación.
 
-## Decisiones que necesito de ti
+## Decisiones
+
+Aceptadas el 2026-11-18 tal como las recomienda la última columna. D2 sigue
+abierta en su detalle: las plantillas se revisan contigo antes de implementar
+U4.
+
 
 | # | Decisión | Opciones | Recomendación |
 |---|---|---|---|

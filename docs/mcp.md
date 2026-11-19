@@ -12,6 +12,14 @@ cargo build -p universo-mcp -p universo-cli
 python tools/demo_mcp.py --binary target/debug/universo-mcp --cli target/debug/universo
 ```
 
+Con un [repositorio de criterio](plan/10-criterio-distribuible.md) basta
+`universo-mcp --criterio <dir> [--universo <nombre>]`: las tres rutas salen de
+su `felix.toml` y, sin `--universo`, se usa su universo por defecto. No se
+puede mezclar con `--root`, `--manifiesto` ni `--invariantes`. Si `felix.toml`
+falta, es inválido, no tiene el universo pedido o pide otra versión del motor,
+el servidor no arranca y dice por qué en stderr. `--ignorar-version` salta el
+control de versión.
+
 En Windows, los ejecutables llevan `.exe`. Un cliente MCP inicia el proceso y
 negocia MCP `2025-11-25` mediante `initialize`, envía `notifications/initialized` y usa `tools/list` y
 `tools/call`. `stdout` queda reservado al protocolo. El SDK es `rmcp 3.2`, ya

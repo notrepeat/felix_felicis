@@ -24,6 +24,22 @@ Eso instala `universo` (la CLI) y `universo-mcp` (el servidor MCP). Desde
 `v0.3.0`, cada release trae también binarios para Linux, macOS y Windows con
 su `.sha256`. Ver [instalación](docs/instalacion.md).
 
+## Un repositorio de criterio
+
+```sh
+universo init mi-criterio --git
+cd mi-criterio
+universo guard                       # universo por defecto: candidatos
+universo search reutilizar --universo vigente
+```
+
+`init --git` crea un repositorio Git aparte, sin commits, con `felix.toml`, dos
+universos (`candidatos` y `vigente`), `README.md`, `AGENTS.md`, `.gitignore`
+para los transitorios, `.gitattributes` con LF y un hook de `guard` apagado.
+Dentro de él los comandos no necesitan rutas. Desde otro lugar, usa
+`--criterio <dir>` o `FELIX_CRITERIO`, y `universo-mcp --criterio <dir>` para
+un agente. El plan completo está en la [fase 10](docs/plan/10-criterio-distribuible.md).
+
 ## Estado
 
 Implementado:

@@ -25,11 +25,20 @@ async fn run() -> Result<(), ()> {
         args.next();
     }
     let (mut root, mut manifiesto, mut invariantes) = (None, None, None);
+    let (mut criterio, mut universo, mut ignorar_version) = (None, None, false);
     while let Some(arg) = args.next() {
+        if arg == "--ignorar-version" {
+            if std::mem::replace(&mut ignorar_version, true) {
+                return Err(());
+            }
+            continue;
+        }
         let target = match arg.to_str() {
             Some("--root") => &mut root,
             Some("--manifiesto") => &mut manifiesto,
             Some("--invariantes") => &mut invariantes,
+            Some("--criterio") => &mut criterio,
+            Some("--universo") => &mut universo,
             _ => return Err(()),
         };
         if target.is_some() {
@@ -37,10 +46,42 @@ async fn run() -> Result<(), ()> {
         }
         *target = Some(PathBuf::from(args.next().ok_or(())?));
     }
-    let config = ServerConfig {
-        root: root.ok_or(())?,
-        manifiesto: manifiesto.ok_or(())?,
-        invariantes: invariantes.ok_or(())?,
+    let config = match criterio {
+        // Repositorio de criterio (fase 10): las rutas salen de felix.toml.
+        Some(dir) => {
+            if root.is_some() || manifiesto.is_some() || invariantes.is_some() {
+                return Err(());
+            }
+            // stdout es del protocolo: el motivo va a stderr.
+            let informar = |e: universo_okf::criterio::ErrorCriterio| {
+                eprintln!("criterio: error\ncode: {}\n{e}", e.codigo());
+            };
+            let repo = universo_okf::criterio::RepoCriterio::cargar(&dir).map_err(informar)?;
+            if !ignorar_version {
+                repo.comprobar_motor(env!("CARGO_PKG_VERSION"))
+                    .map_err(informar)?;
+            }
+            let nombre = universo
+                .as_ref()
+                .map(|u| u.to_str().ok_or(()))
+                .transpose()?;
+            let elegido = repo.universo(nombre).map_err(informar)?;
+            ServerConfig {
+                root: elegido.bundle(),
+                manifiesto: elegido.manifiesto(),
+                invariantes: elegido.invariantes(),
+            }
+        }
+        None => {
+            if universo.is_some() || ignorar_version {
+                return Err(());
+            }
+            ServerConfig {
+                root: root.ok_or(())?,
+                manifiesto: manifiesto.ok_or(())?,
+                invariantes: invariantes.ok_or(())?,
+            }
+        }
     };
     if worker {
         universo_mcp::ejecutar_worker(&config).map_err(|_| ())
