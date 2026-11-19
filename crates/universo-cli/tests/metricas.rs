@@ -211,3 +211,26 @@ fn el_uso_se_lee_del_gitdir_real_y_las_fechas_invalidas_son_uso() {
         );
     }
 }
+
+/// Activado pero sin llamadas todavía no es «no medido».
+#[test]
+fn medicion_activada_sin_llamadas() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    assert!(
+        Command::new("git")
+            .args(["config", "felix.medirUso", "true"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let u = &metricas(&repo, &[])["uso_mcp"];
+    assert_eq!(u["estado"], "sin_llamadas", "{u}");
+    let s = universo_en(&repo, &["metricas", "--hasta", "2026-11-19"]);
+    assert!(
+        s.stdout.contains("activado, sin llamadas todavía"),
+        "{}",
+        s.stdout
+    );
+}

@@ -3,6 +3,11 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
+## Sin publicar
+
+- `universo metricas` distingue la medición del MCP activada pero sin
+  llamadas todavía («activado, sin llamadas todavía») de la no activada.
+
 ## 0.7.0 — 2026-11-19
 
 Medición del uso del criterio. Ver [notas](docs/release/v0.7.0.md). Cambio

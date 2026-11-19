@@ -284,6 +284,18 @@ fn uso_mcp(raiz: &Path) -> Value {
     let texto = universo_okf::criterio::dir_git(raiz)
         .and_then(|git| std::fs::read_to_string(git.join(ARCHIVO_USO_MCP)).ok());
     let Some(texto) = texto else {
+        // Activado por `conectar --medir-uso` pero sin llamadas todavía.
+        let activado = std::process::Command::new("git")
+            .arg("-C")
+            .arg(raiz)
+            .args(["config", "--get", "felix.medirUso"])
+            .output()
+            .is_ok_and(|o| {
+                o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true"
+            });
+        if activado {
+            return json!({"estado": "sin_llamadas", "llamadas": 0});
+        }
         return json!({"estado": "no_medido",
                       "nota": "se activa con universo conectar --aplicar --medir-uso"});
     };
@@ -491,6 +503,8 @@ fn texto(m: &Value) -> String {
             "uso del MCP: {} llamadas, {} con error\n",
             u["llamadas"], u["errores"]
         ));
+    } else if u["estado"] == "sin_llamadas" {
+        t.push_str("uso del MCP: activado, sin llamadas todavía\n");
     } else {
         t.push_str("uso del MCP: no medido (universo conectar --aplicar --medir-uso lo activa)\n");
     }
