@@ -141,6 +141,33 @@ impl std::ops::Deref for Base<'_> {
     }
 }
 
+/// Una arista se escribe en el bundle como `[[stem]]` del destino: si otra
+/// nota comparte ese nombre, el cargador OKF la vería ambigua y el apply
+/// fallaría al recargar. Se rechaza aquí, con el mismo criterio del cargador
+/// (stem exacto), para que la simulación y el apply coincidan. Dos notas con
+/// el mismo nombre sin aristas hacia ellas siguen siendo válidas.
+pub(crate) fn verificar_enlaces(e: &Estructura) -> Result<(), ErrorCandidato> {
+    let mut cuenta: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (_, nodo) in e.nodos() {
+        *cuenta.entry(nodo.path.stem()).or_default() += 1;
+    }
+    if cuenta.values().all(|n| *n < 2) {
+        return Ok(());
+    }
+    for (_, arista) in e.aristas() {
+        let destino = e
+            .nodo(arista.destino)
+            .ok_or(ErrorCandidato::SnapshotInconsistente)?;
+        if cuenta.get(destino.path.stem()).is_some_and(|n| *n > 1) {
+            return Err(ErrorCandidato::InvalidOperation {
+                clase: ClaseOperacion::Edge,
+                codigo: "edge_target_ambiguous",
+            });
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn base_con_notas<'a>(
     snapshot: &'a Estructura,
     delta: &Delta,

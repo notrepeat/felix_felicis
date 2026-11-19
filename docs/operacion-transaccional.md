@@ -115,6 +115,13 @@ existentes, conservando su frontmatter no mapeado); `universo delta` lo genera
 desde un borrador editado. El test de cortes del apply incluye una
 actualización de cuerpo junto con la nota nueva.
 
+Una arista se escribe como `[[stem]]` de su destino. Si otra nota comparte ese
+nombre, el cargador la vería ambigua al recargar; por eso `propose` responde
+`error` con `edge_target_ambiguous` (no `reject`: el delta no se puede
+representar, no incumple una regla) en la simulación y en el apply, con el
+mismo criterio del cargador (nombre exacto, sólo el destino). Dos notas con el
+mismo nombre sin aristas hacia ellas siguen siendo válidas.
+
 ## Sello e historial
 
 Tras `Committed`, bajo el mismo lock, apply escribe el sello del estado admitido

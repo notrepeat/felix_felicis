@@ -609,7 +609,11 @@ Es la parte difícil: cuándo una frase es criterio y cuándo no.
   pero el apply falla con `snapshot_bundle_invalid`: el enlace `[[x]]` es
   ambiguo al recargar. No se corrompe nada (`guard` sigue en `pass`), pero la
   simulación debería rechazarlo. Los comandos de captura lo evitan con nombres
-  únicos; la corrección en el motor queda pendiente.
+  únicos. **Corregido** (2026-11-18): `proponer` rechaza con
+  `edge_target_ambiguous` una arista hacia una nota cuyo nombre comparte otra,
+  con el mismo criterio del cargador; dos notas con el mismo nombre sin
+  aristas hacia ellas siguen siendo válidas
+  (`crates/universo-cli/tests/notas_v2.rs`).
 
 ## Decisiones
 

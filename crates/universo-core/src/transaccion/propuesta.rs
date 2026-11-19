@@ -166,6 +166,7 @@ fn proponer_con_presupuesto_evaluacion(
     if conflictos.hay_conflictos() {
         return Ok(ResultadoPropuesta::RechazadaConflictos(conflictos));
     }
+    super::notas::verificar_enlaces(candidato.estructura()).map_err(error_candidato)?;
 
     let expansion = expandir_sentencias_fuente(
         invariantes,

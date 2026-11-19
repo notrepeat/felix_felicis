@@ -135,3 +135,65 @@ fn el_apply_actualiza_el_cuerpo_de_una_nota_existente() {
     );
     assert!(texto.ends_with("Prosa nueva.\n"), "{texto}");
 }
+
+/// Una arista hacia una nota cuyo nombre (stem) comparte otra nota no se
+/// puede escribir como `[[stem]]`: el cargador la vería ambigua. La
+/// simulación la rechaza como el apply, en vez de admitirla y fallar después.
+#[test]
+fn una_arista_hacia_un_nombre_repetido_no_se_admite() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("bundle");
+    fs::create_dir_all(root.join("n")).unwrap();
+    fs::create_dir_all(root.join("m")).unwrap();
+    fs::write(root.join("n/x.md"), "---\ntype: a\ntitle: X\n---\n").unwrap();
+    let manifest = dir.path().join("manifest.toml");
+    fs::write(
+        &manifest,
+        "version = \"t/1\"\n[nodos]\nsortes = [\"a\", \"Retirado\", \"Patrón\"]\n[[aristas]]\nclave = \"liga\"\n[layout]\ndirectorios = [\"n\", \"m\"]\n",
+    )
+    .unwrap();
+    let invariants = dir.path().join("invariants.sx");
+    fs::write(&invariants, "(Type @n/x a)\n").unwrap();
+    let correr = |delta: &str| {
+        let ruta = dir.path().join("delta.json");
+        fs::write(&ruta, delta).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_universo"))
+            .arg("propose")
+            .arg(&root)
+            .arg("--manifiesto")
+            .arg(&manifest)
+            .arg("--invariantes")
+            .arg(&invariants)
+            .arg("--delta")
+            .arg(&ruta)
+            .args(["--format", "json"])
+            .output()
+            .unwrap();
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        (out.status.code().unwrap(), v)
+    };
+    // m/x repite el nombre de n/x, y una arista apunta a uno de los dos.
+    let (code, v) = correr(
+        r#"{"schema":"felix-delta-v2","create":[{"path":"m/x","type":"a","title":"Otra X","body":""},{"path":"m/y","type":"a","title":"Y","body":""}],"add":["Edge(m/y→m/x#liga#0, m/y, m/x, liga)","HasLab(m/y→m/x#liga#0, \"\")"],"remove":[]}"#,
+    );
+    assert_eq!(code, 1, "{v}");
+    assert_ne!(v["status"], "admit", "{v}");
+    assert!(v.to_string().contains("edge_target_ambiguous"), "{v}");
+    // También hacia una nota que ya existía y cuyo nombre repite una nueva.
+    let (code, v) = correr(
+        r#"{"schema":"felix-delta-v2","create":[{"path":"m/x","type":"a","title":"Otra X","body":""},{"path":"m/y","type":"a","title":"Y","body":""}],"add":["Edge(m/y→n/x#liga#0, m/y, n/x, liga)","HasLab(m/y→n/x#liga#0, \"\")"],"remove":[]}"#,
+    );
+    assert!(v.to_string().contains("edge_target_ambiguous"), "{code} {v}");
+    // Un origen con nombre repetido hacia un destino único sí se escribe sin
+    // ambigüedad: el enlace vive en el origen y nombra al destino.
+    let (code, v) = correr(
+        r#"{"schema":"felix-delta-v2","create":[{"path":"m/x","type":"a","title":"Otra X","body":""},{"path":"m/y","type":"a","title":"Y","body":""}],"add":["Edge(m/x→m/y#liga#0, m/x, m/y, liga)","HasLab(m/x→m/y#liga#0, \"\")"],"remove":[]}"#,
+    );
+    assert_eq!((code, &v["status"]), (0, &Value::from("admit")), "{v}");
+    // Sin la arista, dos notas con el mismo nombre son válidas (el cargador
+    // también las acepta).
+    let (code, v) = correr(
+        r#"{"schema":"felix-delta-v2","create":[{"path":"m/x","type":"a","title":"Otra X","body":""}],"add":[],"remove":[]}"#,
+    );
+    assert_eq!((code, &v["status"]), (0, &Value::from("admit")), "{v}");
+}
