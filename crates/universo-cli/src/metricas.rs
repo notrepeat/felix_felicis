@@ -288,13 +288,14 @@ fn uso_mcp(raiz: &Path) -> Value {
         let activado = std::process::Command::new("git")
             .arg("-C")
             .arg(raiz)
-            .args(["config", "--get", "felix.medirUso"])
+            .args(["config", "--local", "--get", "felix.medirUso"])
             .output()
             .is_ok_and(|o| {
                 o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true"
             });
         if activado {
-            return json!({"estado": "sin_llamadas", "llamadas": 0});
+            return json!({"estado": "sin_llamadas", "llamadas": 0, "errores": 0,
+                          "por_herramienta": {}, "por_semana": {}, "descartadas": 0});
         }
         return json!({"estado": "no_medido",
                       "nota": "se activa con universo conectar --aplicar --medir-uso"});
