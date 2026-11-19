@@ -1,5 +1,6 @@
 """Tests del corpus y el runner de detección de criterio (fase 10, U13), sin LLM."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -192,6 +193,7 @@ class ClaudeFalso(runner.AgenteClaude):
         return [sys.executable, "-c", self.script]
 
 
+@unittest.skipIf(os.name == "nt", "el agente Claude corre con bwrap: sólo en Linux")
 class ClaudeTest(unittest.TestCase):
     CASO = {"id": "x", "turnos": [{"rol": "dueño", "texto": "t"}], "objetivo": 0, "categoria": "ninguna"}
 

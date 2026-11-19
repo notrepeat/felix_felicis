@@ -337,7 +337,7 @@ def main(argv=None):
 
     print(f"precisión {fmt(metricas['precision'])} (IC95 {metricas['precision_ic95']}) · "
           f"cobertura {fmt(metricas['cobertura'])} · categoría {fmt(metricas['categoria_correcta'])} · "
-          f"{metricas['casos']} casos → {salida}")
+          f"{metricas['casos']} casos -> {salida}")
     if corte is not None:
         print(f"corrida cortada: {corte}; {len(filas)} casos clasificados", file=sys.stderr)
         return 2
