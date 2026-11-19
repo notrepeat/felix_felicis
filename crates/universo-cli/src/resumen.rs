@@ -14,7 +14,7 @@ use universo_okf::transaccion::{
     estado::inspeccionar, historial::leer, simulacion::VistaSimulacion,
 };
 
-pub(super) const USO: &str = "Uso: universo resumen [--criterio <dir>] [--ignorar-version] [--format text|json]\nPor universo: notas por tipo, criterios por estado, relaciones, reglas, candidatas listas para promover, objetadas, sin relaciones y últimos cambios.\n";
+pub(super) const USO: &str = "Uso: universo resumen [--criterio <dir>] [--ignorar-version] [--format text|json]\nPor universo: notas por tipo, criterios por estado, relaciones, reglas, candidatas listas para promover, objetadas (candidatas o vigentes), sin relaciones y últimos cambios.\n";
 
 pub(super) struct Solicitud {
     criterio: Option<PathBuf>,
@@ -128,11 +128,17 @@ fn resumir(
             _ => {}
         }
     }
-    // Sólo cuentan las objeciones a candidatas: lo promovido o retirado ya se
+    // Cuentan las objeciones a candidatas y a vigentes (una objeción no retira
+    // un vigente: se marca para revisarlo). Lo promovido o retirado ya se
     // decidió.
     let objetadas: BTreeSet<String> = objetadas
         .into_iter()
-        .filter(|n| estado_de.get(n).map(String::as_str) == Some("candidato"))
+        .filter(|n| {
+            matches!(
+                estado_de.get(n).map(String::as_str),
+                Some("candidato" | "vigente")
+            )
+        })
         .collect();
     // Lo mismo que exige la regla `vigente-confirmado` de la plantilla: una
     // candidata confirmada en al menos dos proyectos distintos. Está escrito

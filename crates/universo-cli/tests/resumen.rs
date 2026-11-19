@@ -188,3 +188,67 @@ fn resumen_respeta_ignorar_version_json_y_universos_invalidos() {
     assert_eq!(json["errors"][0]["code"], "engine_version_mismatch");
     ok(&universo_en(&repo, &["resumen", "--ignorar-version"]));
 }
+
+/// U12: una objeción a un criterio ya vigente no lo retira, pero `resumen`
+/// la marca para revisarla.
+#[test]
+fn resumen_marca_una_objecion_a_un_criterio_vigente() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    ok(&universo_en(
+        &repo,
+        &["promover", "criterios/regla-firme", "--a", "vigente"],
+    ));
+    ok(&universo_en(
+        &repo,
+        &[
+            "objetar",
+            "criterios/regla-firme",
+            "--universo",
+            "vigente",
+            "--proyecto",
+            "Delta",
+            "--contexto",
+            "no aplicó",
+            "--fecha",
+            "2026-11-20",
+        ],
+    ));
+    let s = universo_en(&repo, &["resumen", "--format=json"]);
+    ok(&s);
+    let json: Value = serde_json::from_str(&s.stdout).unwrap();
+    let v = universo(&json, "vigente");
+    assert_eq!(
+        v["objected"],
+        serde_json::json!(["criterios/regla-firme"]),
+        "{v}"
+    );
+    assert_eq!(v["criterios_by_state"]["vigente"], 1, "{v}");
+    // Retirado, ya no se marca.
+    ok(&universo_en(
+        &repo,
+        &[
+            "atributo",
+            "criterios/regla-firme",
+            "estado",
+            "retirado",
+            "--universo",
+            "vigente",
+        ],
+    ));
+    let s = universo_en(&repo, &["resumen", "--format=json"]);
+    let json2: Value = serde_json::from_str(&s.stdout).unwrap();
+    assert_eq!(
+        universo(&json2, "vigente")["objected"],
+        serde_json::json!([]),
+        "{}",
+        s.stdout
+    );
+    // Lo promovido que queda en candidatos no se marca allí.
+    let c = universo(&json, "candidatos");
+    assert_eq!(
+        c["objected"],
+        serde_json::json!(["criterios/regla-dudosa"]),
+        "{c}"
+    );
+}

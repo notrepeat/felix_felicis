@@ -355,3 +355,43 @@ fn universe_en_un_servidor_sin_criterio_es_un_error() {
     );
     assert_eq!(r[0]["isError"], true, "{}", r[0]);
 }
+
+/// U12: una objeción aparece en `context` del criterio (con valores).
+#[test]
+fn una_objecion_aparece_en_el_contexto_del_criterio() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_captura(dir.path());
+    let raiz = dir.path().to_str().unwrap();
+    let r = sesion(
+        &["--criterio", raiz],
+        &[
+            herramienta(
+                "capture",
+                json!({"schema":"felix-mcp-v1","text":"Reutilizar antes de crear",
+                "project":"Tienda web","author":"prueba"}),
+            ),
+            herramienta(
+                "object",
+                json!({"schema":"felix-mcp-v1","note":"criterios/reutilizar-antes-de-crear",
+                "project":"Prototipo","context":"se prefirió duplicar","author":"prueba"}),
+            ),
+            herramienta(
+                "context",
+                json!({"schema":"felix-mcp-v1","node":"criterios/reutilizar-antes-de-crear",
+                "depth":1,"include_values":true}),
+            ),
+        ],
+    );
+    assert_eq!(r[1]["structuredContent"]["status"], "applied", "{}", r[1]);
+    let evidencia = r[1]["structuredContent"]["evidence"].as_str().unwrap();
+    let atomos = r[2]["structuredContent"]["atoms"].as_array().unwrap();
+    assert!(
+        atomos.iter().any(|a| {
+            let a = a.as_str().unwrap();
+            a.starts_with("Edge(")
+                && a.contains(evidencia)
+                && a.ends_with(", criterios/reutilizar-antes-de-crear, objeta)")
+        }),
+        "{atomos:?}"
+    );
+}

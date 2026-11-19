@@ -450,7 +450,8 @@ la entrada `seal`; `dos_clones.rs` prueba el flujo completo con dos clones.
 
 - notas por tipo y estado, relaciones y reglas;
 - candidatas con evidencia suficiente para promover;
-- candidatas objetadas;
+- candidatas o vigentes con objeciones (la marca de un vigente persiste
+  hasta que se retire: no hay forma de dar una objeción por revisada);
 - notas sin relaciones;
 - últimos cambios.
 
@@ -566,7 +567,9 @@ universo objetar  notas/componentes-reutilizables --proyecto prototipo-x \
 - [x] Dos refuerzos en el mismo proyecto dejan un solo `confirmado_en` a ese
       proyecto.
 - [x] Objetar deja la evidencia con `objeta` y no confirma.
-- [ ] Una objeción aparece en `resumen` (U8) y en `context` del criterio.
+- [x] Una objeción aparece en `resumen` (U8) y en `context` del criterio.
+      `resumen` marca las objeciones a candidatas y a vigentes; `context`
+      con `include_values` muestra la arista `objeta`.
 
 ### U13 — Detectar el criterio en la conversación
 
