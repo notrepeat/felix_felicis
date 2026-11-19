@@ -14,7 +14,7 @@ sugerida, revisión AGM, recuperación avanzada), que sigue fuera de alcance.
 
 | Campo | Valor |
 |---|---|
-| Estado | en curso (2026-11-18): plan aceptado con las recomendaciones de D1 a D10; paso 1 (U1, U2) hecho, salvo el argumento `universe` por llamada del MCP y `search --universo todos`, que pasan a U6 |
+| Estado | preparada como `v0.4.0` (2026-11-19), salvo U10: U1 a U9 y U11 a U13 hechas; falta el repositorio de criterio propio en uso diario (U10), que cierra la fase |
 | Depende de | `v0.3.0` (búsqueda, historial con efecto, `diff`, instalación) |
 | Desbloquea | Uso diario real, con un repositorio de criterio propio que reemplaza a la instancia privada legacy |
 

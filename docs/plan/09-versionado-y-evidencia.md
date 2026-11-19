@@ -17,7 +17,8 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 |---|---|
 | `v0.2.0` | Evaluador, testigos, transacciones y demo CLI reproducible. |
 | `v0.3.0` | Loop MCP completo y equivalente al CLI. |
-| `v0.4.0` | Evaluación comparativa y benchmarks publicados. |
+| `v0.4.0` | Criterio distribuible ([fase 10](10-criterio-distribuible.md)): repositorio de criterio, captura, promoción y MCP con varios universos. |
+| `v0.5.0` | Evaluación comparativa y benchmarks publicados (D5 de la fase 10 la movió desde `v0.4.0`). |
 | `v1.0.0` | Contratos declarados estables y evidencia sostenida en uso real. |
 
 Mientras la API sea `0.x`, los parches corrigen comportamiento compatible y

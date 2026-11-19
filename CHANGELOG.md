@@ -3,6 +3,19 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
+## 0.4.0 — 2026-11-19
+
+Criterio distribuible (fase 10): `init --git` crea un repositorio de criterio
+con universos `candidatos` y `vigente`; `capturar`, `reforzar`, `objetar` y
+`promover`; plantillas con `forma`, `reemplaza` y `contradice`; `reglas
+aplicar` y `manifiesto aplicar` sin perder el historial; merges entre
+computadores; MCP con varios universos y escritura sólo donde se permite;
+`resumen`; skill para detectar criterio en la conversación, medida sobre un
+corpus ficticio. Cambios incompatibles pre-1.0: API de `universo-mcp` y
+`Diferencia::config`, entrada `seal` en el historial, códigos y formato de
+texto de `diff`, `log`, `show` y `seal`, `edge_target_ambiguous` y el rango
+`motor` de `felix.toml`. Ver [notas](docs/release/v0.4.0.md).
+
 ## 0.3.0 — 2026-11-18
 
 Búsqueda léxica (`universo search` y `search` en el MCP, con opt-in),

@@ -12,7 +12,7 @@ Necesitas Git y Rust. El repositorio fija la toolchain `1.88.0` en
 ```sh
 git clone <url-del-repositorio> felix_felicis
 cd felix_felicis
-git checkout v0.3.0        # o la versión que quieras; sin esto, la rama actual
+git checkout v0.4.0        # o la versión que quieras; sin esto, la rama actual
 cargo install --locked --path crates/universo-cli
 cargo install --locked --path crates/universo-mcp
 ```

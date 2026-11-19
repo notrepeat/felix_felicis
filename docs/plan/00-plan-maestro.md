@@ -178,7 +178,7 @@ flowchart LR
 | [07](07-validacion-empirica.md) | Validación empírica | completo | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
 | [08](08-integracion-privada.md) | Integración privada | pendiente | 04 | El bundle real valida el motor sin filtrarse al repositorio público. |
 | [09](09-versionado-y-evidencia.md) | Versionado y evidencia | pendiente | 07–08 | Cada tag corresponde a capacidades demostradas y CI verde. |
-| [10](10-criterio-distribuible.md) | Criterio distribuible | propuesto | `v0.3.0` | El criterio vive en su propio repositorio Git privado; se captura con un comando, lo usa cualquier agente y se mueve entre computadores sin perder el historial. |
+| [10](10-criterio-distribuible.md) | Criterio distribuible | en curso: `v0.4.0` preparada; falta U10 (uso real) | `v0.3.0` | El criterio vive en su propio repositorio Git privado; se captura con un comando, lo usa cualquier agente y se mueve entre computadores sin perder el historial. |
 
 ## Reglas de progreso
 
