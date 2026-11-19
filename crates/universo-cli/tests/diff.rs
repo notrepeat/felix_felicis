@@ -162,8 +162,8 @@ fn diff_no_confunde_un_alta_ya_presente_con_un_cambio() {
     );
 }
 
-/// Un `seal` que acepta una edición externa es un cambio sin entrada en el
-/// historial: diff lo informa como hueco en vez de omitirlo.
+/// Un `seal` que acepta una edición externa deja una entrada `seal`: diff no
+/// sabe qué cambió y lo informa (`external_change`) en vez de omitirlo.
 #[test]
 fn diff_detecta_el_hueco_de_un_cambio_fuera_del_historial() {
     let dir = tempfile::tempdir().unwrap();
@@ -180,15 +180,16 @@ fn diff_detecta_el_hueco_de_un_cambio_fuera_del_historial() {
     assert_eq!(universo(&["seal", raiz, &manifiesto, &invariantes]).0, 0);
     aplicar(&kb, VOLVER, "volver");
 
-    let (codigo, texto) = universo(&["diff", raiz, "0", "2"]);
-    assert_eq!(
-        (codigo, texto.as_str()),
-        (1, "diff: error\ncode: history_gap\nentry: 2\n")
+    let (codigo, texto) = universo(&["diff", raiz, "0", "3"]);
+    assert_eq!(codigo, 1);
+    assert!(
+        texto.starts_with("diff: error\ncode: external_change\nentry: 2\n"),
+        "{texto}"
     );
-    assert_eq!(universo(&["diff", raiz, "1", "2"]).0, 1);
-    // Los tramos sin hueco siguen disponibles.
+    assert_eq!(universo(&["diff", raiz, "1", "3"]).0, 1);
+    // Los tramos que no cruzan el sello siguen disponibles.
     assert_eq!(universo(&["diff", raiz, "0", "1"]).0, 0);
-    assert_eq!(universo(&["diff", raiz, "2", "2"]).0, 0);
+    assert_eq!(universo(&["diff", raiz, "2", "3"]).0, 0);
 }
 
 #[test]

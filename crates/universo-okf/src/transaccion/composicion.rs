@@ -11,8 +11,11 @@
 //! (las detecta `universo guard`). Para que la suma de efectos sea la
 //! diferencia real, cada entrada guarda los tokens del estado del que partió y
 //! del que dejó, y la composición exige que encadenen: un cambio sin entrada
-//! (un historial que no se pudo escribir, un `recover`, un `seal` que aceptó
-//! ediciones externas) es un hueco y se informa como error, no se ignora.
+//! (un historial que no se pudo escribir, un `recover`, un `seal` anterior a
+//! U5) es un hueco y se informa como error, no se ignora. Desde la fase 10
+//! (U5), un `seal` que acepta ediciones externas deja una entrada `seal`
+//! (`external_change`) y un cambio de reglas o manifiesto, una `config`, que
+//! se compone por su efecto y se lista en `Diferencia::config`.
 //!
 //! Una nota creada en el rango no existía en el estado base: los átomos que la
 //! mencionan van a su propio grupo. Como los efectos son exactos, ese grupo es
@@ -47,6 +50,8 @@ pub struct Diferencia {
     pub agregar: Vec<Atomo>,
     /// Átomos presentes tras `desde` y no tras `hasta`.
     pub retirar: Vec<Atomo>,
+    /// Entradas del rango que cambiaron las reglas o el manifiesto.
+    pub config: Vec<usize>,
 }
 
 /// Por qué no se pudo componer el rango.
@@ -90,8 +95,9 @@ impl Neto {
 /// un efecto legible (las anteriores a este campo no lo tienen);
 /// `state_not_recorded` si no guarda los tokens de estado y `history_gap` si
 /// no parte del estado que dejó la anterior; `delta_omitted` o
-/// `delta_not_recorded` si no guarda su delta, y `history_inconsistent` si
-/// crea dos veces la misma nota.
+/// `delta_not_recorded` si no guarda su delta, `history_inconsistent` si
+/// crea dos veces la misma nota, `external_change` si cruza una entrada `seal`
+/// y `entry_kind_unknown` si cruza una clase de entrada que no conoce.
 pub fn componer(
     historial: &Historial,
     desde: usize,
@@ -107,11 +113,28 @@ pub fn componer(
         return Err(error("entry_not_found", Some(hasta)));
     }
     let mut global = Neto::default();
+    let mut configs = Vec::new();
     let mut creadas: BTreeMap<BundlePath, (NotaCreada, Neto)> = BTreeMap::new();
     // Por path: huella del cuerpo en el estado base y en el último estado.
     let mut cuerpos: BTreeMap<BundlePath, (String, String)> = BTreeMap::new();
     for numero in desde + 1..=hasta {
         let entrada = &historial.entradas[numero - 1];
+        // Un `seal` aceptó un cambio hecho fuera de Felix: no se sabe qué
+        // cambió, así que la diferencia a través de él no es exacta.
+        if entrada.clase.as_deref() == Some("seal") {
+            return Err(error("external_change", Some(numero)));
+        }
+        let config = match entrada.clase.as_deref() {
+            None => false,
+            // Un cambio de configuración no trae delta; si lo trae, la línea
+            // fue alterada.
+            Some("config") if entrada.delta.is_some() || entrada.delta_omitido => {
+                return Err(error("history_inconsistent", Some(numero)));
+            }
+            Some("config") => true,
+            // Una clase que esta versión no conoce: no se sabe qué cambió.
+            Some(_) => return Err(error("entry_kind_unknown", Some(numero))),
+        };
         let efecto = match &entrada.efecto {
             Some(efecto) => efecto,
             None if entrada.efecto_invalido => return Err(error("effect_invalid", Some(numero))),
@@ -131,7 +154,13 @@ pub fn componer(
                 None => return Err(error("state_not_recorded", Some(numero - 1))),
             }
         }
+        // Un cambio de configuración no tiene delta: no crea notas ni cambia
+        // cuerpos, y su efecto sobre los átomos está en `effect`.
         let delta = match &entrada.delta {
+            _ if config => {
+                configs.push(numero);
+                universo_core::Delta::default()
+            }
             Some(texto) => crate::parsear_delta_json(texto)
                 .map_err(|_| error("delta_not_recorded", Some(numero)))?,
             None if entrada.delta_omitido => return Err(error("delta_omitted", Some(numero))),
@@ -185,6 +214,7 @@ pub fn componer(
         }
     }
     Ok(Diferencia {
+        config: configs,
         creadas: creadas
             .into_values()
             .map(|(mut nota, neto)| {
@@ -227,6 +257,7 @@ mod tests {
             efecto_invalido: false,
             estado_desde: None,
             estado_hasta: None,
+            clase: None,
         }
     }
 
@@ -459,5 +490,40 @@ mod tests {
         assert_eq!(componer(&h, 1, 2).unwrap_err().codigo, "delta_omitted");
         h.descartadas = 1;
         assert_eq!(componer(&h, 0, 1).unwrap_err().codigo, "history_incomplete");
+    }
+
+    #[test]
+    fn una_entrada_config_compone_sin_delta_y_un_seal_corta_la_diferencia() {
+        let mut h = historial(&[V1_A, VACIO, V1_B]);
+        h.entradas[1].clase = Some("config".into());
+        h.entradas[1].delta = None;
+        let d = componer(&h, 0, 3).unwrap();
+        assert_eq!(d.config, vec![2]);
+        assert_eq!(textos(&d.agregar), vec!["Estado(n/a, retirado)"]);
+        // Una `config` con delta fue alterada.
+        let mut alterado = h.clone();
+        alterado.entradas[1].delta = historial(&[V1_A]).entradas[0].delta.clone();
+        assert_eq!(
+            componer(&alterado, 0, 3).unwrap_err().codigo,
+            "history_inconsistent"
+        );
+        h.entradas[1].clase = Some("futura".into());
+        assert_eq!(
+            componer(&h, 0, 2).unwrap_err(),
+            ErrorComposicion {
+                codigo: "entry_kind_unknown",
+                entrada: Some(2)
+            }
+        );
+        h.entradas[1].clase = Some("seal".into());
+        assert_eq!(
+            componer(&h, 0, 3).unwrap_err(),
+            ErrorComposicion {
+                codigo: "external_change",
+                entrada: Some(2)
+            }
+        );
+        // Después del seal, la diferencia vuelve a ser exacta.
+        assert!(componer(&h, 2, 3).is_ok());
     }
 }

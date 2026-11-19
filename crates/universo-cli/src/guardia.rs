@@ -2,9 +2,12 @@
 use super::{Formato, escribir_salida};
 use serde_json::json;
 use std::{io::Write, path::PathBuf};
-use universo_okf::transaccion::sello::{EstadoSello, evaluar_guardia, sellar};
+use universo_okf::transaccion::{
+    historial::Procedencia,
+    sello::{EstadoSello, evaluar_guardia, sellar_con},
+};
 
-pub(super) const USO: &str = "Uso:\n  universo guard <raiz> --manifiesto <m.toml> --invariantes <i.sx> [--format text|json]\n  universo seal <raiz> --manifiesto <m.toml> --invariantes <i.sx> [--format text|json]\n";
+pub(super) const USO: &str = "Uso:\n  universo guard <raiz> --manifiesto <m.toml> --invariantes <i.sx> [--format text|json]\n  universo seal <raiz> --manifiesto <m.toml> --invariantes <i.sx> [--autor <a>] [--motivo <m>] [--format text|json]\nSi el estado difiere del sello anterior, seal deja una entrada `seal` en el historial: un cambio hecho fuera de Felix.\n";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Accion {
@@ -17,12 +20,14 @@ pub(super) struct Solicitud {
     raiz: PathBuf,
     manifiesto: PathBuf,
     invariantes: PathBuf,
+    procedencia: Procedencia,
     formato: Formato,
 }
 
 pub(super) fn parsear(accion: Accion, args: &[String]) -> Result<Solicitud, String> {
     let fail = || USO.to_string();
     let (mut raiz, mut manifiesto, mut invariantes, mut formato) = (None, None, None, None);
+    let mut procedencia = Procedencia::default();
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -48,6 +53,12 @@ pub(super) fn parsear(accion: Accion, args: &[String]) -> Result<Solicitud, Stri
         match nombre {
             "--manifiesto" if manifiesto.is_none() => manifiesto = Some(PathBuf::from(valor)),
             "--invariantes" if invariantes.is_none() => invariantes = Some(PathBuf::from(valor)),
+            "--autor" if accion == Accion::Seal && procedencia.autor.is_none() => {
+                procedencia.autor = Some(valor.to_string())
+            }
+            "--motivo" if accion == Accion::Seal && procedencia.motivo.is_none() => {
+                procedencia.motivo = Some(valor.to_string())
+            }
             "--format" if formato.is_none() => {
                 formato = Some(match valor {
                     "text" => Formato::Texto,
@@ -64,6 +75,7 @@ pub(super) fn parsear(accion: Accion, args: &[String]) -> Result<Solicitud, Stri
         raiz: raiz.ok_or_else(fail)?,
         manifiesto: manifiesto.ok_or_else(fail)?,
         invariantes: invariantes.ok_or_else(fail)?,
+        procedencia,
         formato: formato.unwrap_or(Formato::Texto),
     })
 }
@@ -126,13 +138,15 @@ fn guard(s: &Solicitud) -> (String, i32) {
 }
 
 fn seal(s: &Solicitud) -> (String, i32) {
-    match sellar(&s.raiz, &s.manifiesto, &s.invariantes) {
-        Ok(()) => (
+    match sellar_con(&s.raiz, &s.manifiesto, &s.invariantes, &s.procedencia) {
+        Ok(externo) => (
             match s.formato {
                 Formato::Json => format!(
                     "{}\n",
-                    json!({"schema_version":1,"command":"seal","status":"ok","errors":[]})
+                    json!({"schema_version":1,"command":"seal","status":"ok",
+                           "external_change_recorded":externo,"errors":[]})
                 ),
+                Formato::Texto if externo => "seal: ok\nnote: el estado difería del sello anterior; quedó en el historial como cambio externo (`universo log`).\n".to_string(),
                 Formato::Texto => "seal: ok\n".to_string(),
             },
             0,

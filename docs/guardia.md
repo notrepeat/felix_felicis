@@ -5,7 +5,7 @@ puede editar el Markdown, el manifiesto o las invariantes sin pasar por
 `propose`. La guardia no lo impide; lo **detecta** de inmediato.
 
 ```text
-universo seal  <raiz> --manifiesto <m.toml> --invariantes <i.sx> [--format text|json]
+universo seal  <raiz> --manifiesto <m.toml> --invariantes <i.sx> [--autor <a>] [--motivo <m>] [--format text|json]
 universo guard <raiz> --manifiesto <m.toml> --invariantes <i.sx> [--format text|json]
 ```
 
@@ -24,7 +24,35 @@ Felix admitió:
   que `guard` informa como `mismatch` (alarma, nunca falso `match`).
 - `seal` acepta a mano el estado actual, sólo si no hay transacción pendiente y
   las invariantes se cumplen. Úsalo para el primer sello o tras revisar un
-  cambio manual correcto.
+  cambio manual correcto. Si había un sello de otro estado, deja en el
+  historial una entrada `kind: "seal"` (con `--autor` y `--motivo`), que
+  `universo log` muestra y que `universo diff` informa como `external_change`:
+  no sabe qué cambió fuera de Felix, así que no compone a través de ella.
+  JSON: `"external_change_recorded": true|false`. Un sello ilegible (tras un
+  merge de Git queda con marcadores de conflicto) también cuenta como otro
+  estado. Un sello atrasado respecto del historial (un apply que no pudo
+  sellar) no: la última entrada ya deja ese estado. Si el historial no se
+  puede escribir, `seal` falla con `seal_history_io` y no sella.
+
+## Cambiar reglas o manifiesto
+
+Editar `invariants.sx` o `manifest.toml` a mano hace fallar `guard`. Para
+cambiarlos sin romper el historial:
+
+```text
+universo reglas aplicar <nuevo.sx> [--autor <a>] [--motivo <m>] [--dry-run] [--format text|json]
+universo manifiesto aplicar <nuevo.toml> [--autor <a>] [--motivo <m>] [--dry-run] [--format text|json]
+```
+
+Dentro de un repositorio de criterio actúan sobre el universo elegido; fuera,
+`universo reglas <raiz> aplicar <nuevo.sx> --manifiesto <m> --invariantes <i>`.
+Bajo el lock exigen que el estado actual sea el sellado (si no,
+`config_seal_mismatch`: una edición externa, o un universo nunca sellado, se
+acepta antes con `seal`, que deja la edición en el historial) y comprueban que el bundle cumple la configuración nueva. Si
+no, responden `reject` con id y mensaje de cada regla que falla y no escriben
+nada. Si la cumple, instalan el archivo de forma atómica, sellan y añaden al
+historial una entrada `kind: "config"` con el efecto sobre los átomos; `diff`
+la cruza y la lista (`config changed (entry n)`, `config_changes`).
 
 ## Guard
 

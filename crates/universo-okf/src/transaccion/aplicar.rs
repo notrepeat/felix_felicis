@@ -251,6 +251,7 @@ fn aplicar_archivo_con_hooks(
             efecto: Some(&efecto),
             desde: Some(esperado),
             hasta: instalado,
+            clase: None,
         },
     )
     .is_ok();

@@ -13,6 +13,7 @@ use super::{
     captura::capturar_snapshot,
     durabilidad::{self, Punto},
     estado,
+    historial::{self, Procedencia, Registro, anotar},
     journal::RawTreeDigest,
     lock::LockEscritura,
     raiz::UbicacionRaiz,
@@ -143,6 +144,20 @@ pub fn evaluar_guardia(
 /// Acepta el estado actual como admitido: exige transacción limpia e
 /// invariantes cumplidas, y escribe el sello bajo el lock de escritor.
 pub fn sellar(raiz: &Path, manifiesto: &Path, invariantes: &Path) -> Result<(), ErrorSello> {
+    sellar_con(raiz, manifiesto, invariantes, &Procedencia::default()).map(|_| ())
+}
+
+/// Como `sellar`, con procedencia. Si había un sello de otro estado (o uno
+/// ilegible), el cambio se hizo fuera de Felix: deja en el historial una entrada
+/// `kind: "seal"` (de ese sello al nuevo) para que `universo diff` lo diga en
+/// vez de ver un hueco. Devuelve si escribió esa entrada.
+pub fn sellar_con(
+    raiz: &Path,
+    manifiesto: &Path,
+    invariantes: &Path,
+    procedencia: &Procedencia,
+) -> Result<bool, ErrorSello> {
+    procedencia.validar().map_err(|e| ErrorSello(e.codigo()))?;
     let ubicacion = UbicacionRaiz::nueva(raiz).map_err(|_| ErrorSello("seal_root_invalid"))?;
     let estado = estado::inspeccionar(raiz).map_err(|e| ErrorSello(e.codigo()))?;
     if estado.sin_rastro() {
@@ -159,7 +174,46 @@ pub fn sellar(raiz: &Path, manifiesto: &Path, invariantes: &Path) -> Result<(), 
     if fallidas > 0 {
         return Err(ErrorSello("seal_invariants_rejected"));
     }
-    escribir_sello(&ubicacion, token).map_err(|_| ErrorSello("seal_io"))
+    // Sólo la ausencia de sello (el primero, o tras un apply interrumpido)
+    // no deja rastro. Un sello ilegible es otro estado: tras un merge de Git
+    // queda con marcadores de conflicto.
+    let (distinto, previo) = match leer_sello(&ubicacion) {
+        Ok(None) => (false, None),
+        Ok(Some(previo)) => (previo != token, Some(previo)),
+        Err(_) => (true, None),
+    };
+    // Un sello atrasado (un apply que no pudo sellar, o un `seal` anterior que
+    // registró pero no escribió el sello) no es un cambio externo: la última
+    // entrada del historial ya deja este estado.
+    let ya_registrado = historial::leer(raiz)
+        .ok()
+        .and_then(|h| h.entradas.last().and_then(|e| e.estado_hasta.clone()))
+        == Some(token.to_hex());
+    let registrar = distinto && !ya_registrado;
+    // Primero el historial: si el sello no llega a escribirse, el próximo
+    // `seal` encuentra la entrada y no la repite. Si el historial no se puede
+    // escribir, no se sella: el sello viejo es la evidencia del cambio
+    // externo, y el `seal` queda reintentable.
+    let registrado = registrar
+        && anotar(
+            &ubicacion,
+            procedencia,
+            Some(token),
+            true,
+            &Registro {
+                delta: None,
+                efecto: None,
+                desde: previo,
+                hasta: Some(token),
+                clase: Some("seal"),
+            },
+        )
+        .is_ok();
+    if registrar && !registrado {
+        return Err(ErrorSello("seal_history_io"));
+    }
+    escribir_sello(&ubicacion, token).map_err(|_| ErrorSello("seal_io"))?;
+    Ok(registrado)
 }
 
 fn ruta_sello(ubicacion: &UbicacionRaiz) -> Option<(PathBuf, PathBuf, PathBuf)> {
@@ -173,7 +227,7 @@ fn ruta_sello(ubicacion: &UbicacionRaiz) -> Option<(PathBuf, PathBuf, PathBuf)> 
     Some((parent.clone(), sello, parent.join(nombre)))
 }
 
-fn leer_sello(ubicacion: &UbicacionRaiz) -> Result<Option<SnapshotToken>, ErrorSello> {
+pub(crate) fn leer_sello(ubicacion: &UbicacionRaiz) -> Result<Option<SnapshotToken>, ErrorSello> {
     let (_, sello, _) = ruta_sello(ubicacion).ok_or(ErrorSello("seal_root_invalid"))?;
     // Sólo un archivo regular (no un symlink ni un directorio) cuenta como sello.
     match fs::symlink_metadata(&sello) {
@@ -228,7 +282,7 @@ pub(crate) fn borrar_sello(ubicacion: &UbicacionRaiz) -> io::Result<()> {
     }
 }
 
-fn sincronizar_parent(parent: &Path) -> io::Result<()> {
+pub(crate) fn sincronizar_parent(parent: &Path) -> io::Result<()> {
     // Windows no abre directorios con `File::open`; ahí el fsync de directorio
     // es un no-op documentado (ver `durabilidad`).
     #[cfg(unix)]

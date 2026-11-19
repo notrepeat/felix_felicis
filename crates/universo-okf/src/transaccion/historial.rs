@@ -228,6 +228,9 @@ pub(crate) struct Registro<'a> {
     pub desde: Option<SnapshotToken>,
     /// Token del estado instalado, si la recaptura coincide con lo verificado.
     pub hasta: Option<SnapshotToken>,
+    /// Clase de cambio que no es un apply: `config` (reglas o manifiesto) o
+    /// `seal` (cambio externo aceptado). `None`: un apply.
+    pub clase: Option<&'static str>,
 }
 
 /// Entrada pública del historial (sin el token del estado).
@@ -251,6 +254,9 @@ pub struct EntradaHistorial {
     /// sirven para comprobar que el historial no tiene huecos.
     pub(crate) estado_desde: Option<String>,
     pub(crate) estado_hasta: Option<String>,
+    /// `config` o `seal` (ver [`Registro::clase`]), u otra de una versión
+    /// posterior que `componer` rechaza; `None` en un apply.
+    pub clase: Option<String>,
 }
 
 /// Historial leído. `descartadas` cuenta líneas ilegibles o fuera de formato
@@ -356,6 +362,9 @@ pub(crate) fn anotar(
         "state": estado.map(SnapshotToken::to_hex),
     });
     let historial_holgado = previo.unwrap_or(0) < HISTORIAL_SIN_DELTAS_DESDE;
+    if let Some(clase) = registro.clase {
+        linea["kind"] = json!(clase);
+    }
     if registro.efecto.is_some() || registro.desde.is_some() {
         linea["from"] = json!(registro.desde.map(SnapshotToken::to_hex));
         linea["to"] = json!(registro.hasta.map(SnapshotToken::to_hex));
@@ -474,6 +483,19 @@ fn parsear_linea(linea: &str) -> Option<EntradaHistorial> {
         efecto_invalido: valor
             .get("effect")
             .is_some_and(|e| !e.is_null() && Efecto::desde_json(e).is_none()),
+        // Una clase desconocida (de una versión posterior) se conserva:
+        // `componer` la rechaza en vez de tratarla como un apply. Una que no
+        // es texto corto en `[a-z_]` queda como `unknown`, nunca como apply.
+        clase: valor.get("kind").filter(|k| !k.is_null()).map(|k| {
+            k.as_str()
+                .filter(|k| {
+                    !k.is_empty()
+                        && k.len() <= 32
+                        && k.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                })
+                .unwrap_or("unknown")
+                .to_string()
+        }),
         estado_desde: token_hex(valor.get("from")),
         estado_hasta: token_hex(valor.get("to")),
         efecto_omitido: valor
@@ -609,6 +631,28 @@ mod tests {
         assert_eq!(historial.entradas.len(), 2);
         assert!(historial.entradas[0].delta.is_some() && !historial.entradas[0].delta_omitido);
         assert!(historial.entradas[1].delta.is_none() && historial.entradas[1].delta_omitido);
+    }
+
+    #[test]
+    fn una_clase_invalida_queda_como_desconocida_y_nunca_como_apply() {
+        let linea = |kind: &str| {
+            format!(
+                r#"{{"schema":"felix-log-v1","time":"2026-11-18T00:00:00Z","author":null,"reason":null,"sealed":true,"state":null{kind}}}"#
+            )
+        };
+        let clase = |kind: &str| parsear_linea(&linea(kind)).unwrap().clase;
+        assert_eq!(clase(""), None);
+        assert_eq!(clase(r#","kind":null"#), None);
+        assert_eq!(clase(r#","kind":"config""#).as_deref(), Some("config"));
+        assert_eq!(clase(r#","kind":"futura""#).as_deref(), Some("futura"));
+        for mala in [
+            r#","kind":"Config""#,
+            r#","kind":"a-b""#,
+            r#","kind":7"#,
+            r#","kind":"""#,
+        ] {
+            assert_eq!(clase(mala).as_deref(), Some("unknown"), "{mala}");
+        }
     }
 
     #[test]

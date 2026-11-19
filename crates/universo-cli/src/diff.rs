@@ -71,9 +71,13 @@ fn texto(d: &Diferencia, desde: usize, hasta: usize, total: usize) -> String {
     let vacia = d.creadas.is_empty()
         && d.cuerpos.is_empty()
         && d.agregar.is_empty()
-        && d.retirar.is_empty();
+        && d.retirar.is_empty()
+        && d.config.is_empty();
     if vacia {
         salida.push_str("no changes\n");
+    }
+    for n in &d.config {
+        salida.push_str(&format!("config changed (entry {n})\n"));
     }
     for nota in &d.creadas {
         salida.push_str(&format!("create {} (entry {})\n", nota.path, nota.entrada));
@@ -113,7 +117,7 @@ fn json(d: &Diferencia, desde: usize, hasta: usize, total: usize) -> String {
         "{}\n",
         json!({"schema_version":1,"command":"diff","status":"ok","from":desde,"to":hasta,"entries":total,
                "created":creadas,"body_updated":textos(&d.cuerpos),"add":textos(&d.agregar),
-               "remove":textos(&d.retirar),"errors":[]})
+               "remove":textos(&d.retirar),"config_changes":d.config,"errors":[]})
     )
 }
 
@@ -136,7 +140,16 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
                 .entrada
                 .map(|n| format!("entry: {n}\n"))
                 .unwrap_or_default();
-            (format!("diff: error\ncode: {}\n{entrada}", e.codigo), 1)
+            let nota = match (e.codigo, e.entrada) {
+                ("external_change", Some(n)) => format!(
+                    "note: la entrada {n} selló un cambio hecho fuera de Felix; diff no puede componer a través de ella. Usa un <desde> de {n} o mayor.\n"
+                ),
+                _ => String::new(),
+            };
+            (
+                format!("diff: error\ncode: {}\n{entrada}{nota}", e.codigo),
+                1,
+            )
         }
         (Err(e), Formato::Json) => {
             let mut detalle = json!({"code": e.codigo});

@@ -41,9 +41,8 @@ fn uso(comando: &str) -> Option<Uso> {
         "atomos" | "validate" | "verificar" => (true, false, Extra::Libres),
         "check" | "propose" | "guard" | "seal" => (true, true, Extra::Libres),
         "search" | "delta" => (true, false, Extra::Libres),
-        "capturar" | "reforzar" | "objetar" | "relacion" | "atributo" | "nota" => {
-            (true, true, Extra::Libres)
-        }
+        "capturar" | "reforzar" | "objetar" | "relacion" | "atributo" | "nota" | "reglas"
+        | "manifiesto" => (true, true, Extra::Libres),
         "status" | "recover" | "log" => (false, false, Extra::Ninguno),
         "show" => (false, false, Extra::Uno),
         "diff" => (false, false, Extra::Numeros),

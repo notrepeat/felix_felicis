@@ -8,7 +8,7 @@ use std::{
 };
 use universo_okf::transaccion::sello::sellar;
 
-pub(super) const USO: &str = "Uso: universo init <directorio> [--git] [--format text|json]\nCrea manifest.toml, invariants.sx y bundle/ en un directorio nuevo o vacío.\nCon --git crea un repositorio de criterio: felix.toml, los universos candidatos y vigente, README.md, AGENTS.md, .gitignore, .gitattributes y un hook de guard apagado, y ejecuta git init.\n";
+pub(super) const USO: &str = "Uso: universo init <directorio> [--git] [--format text|json]\nCrea manifest.toml, invariants.sx y bundle/ en un directorio nuevo o vacío.\nCon --git crea un repositorio de criterio: felix.toml, los universos candidatos y vigente, README.md, AGENTS.md, .gitignore, .gitattributes y hooks de guard apagados (pre-commit y post-merge), y ejecuta git init.\n";
 
 const MANIFIESTO: &str = r#"# Manifiesto inicial creado por `universo init`. Ajusta sortes, aristas y
 # predicados a tu criterio antes de agregar conocimiento.
@@ -146,13 +146,18 @@ fn crear(dir: &Path) -> Result<(), &'static str> {
 
 const UNIVERSOS: [&str; 2] = ["candidatos", "vigente"];
 
-const GITIGNORE: &str = "# Transitorios de Felix: el lock y los archivos de una transacción a medias.\n# El historial (*.felix.log) y el sello (*.felix.seal) sí se versionan.\n*.felix.lock\n*.felix.journal\n*.felix.*.tmp\n*.felix.backup\n*.felix.stage.*\n*.felix.admctx*\n";
+const GITIGNORE: &str = "# Transitorios de Felix: el lock y los archivos de una transacción a medias.\n# El historial (*.felix.log) y el sello (*.felix.seal) sí se versionan.\n*.felix.lock\n*.felix.journal\n*.felix.*.tmp\n*.felix.backup\n*.felix.stage.*\n*.felix.admctx*\n# Temporales de `universo reglas aplicar` y `manifiesto aplicar`.\n.felix-config-*\n*.felix-config.tmp\n";
 
 const GITATTRIBUTES: &str = "# Finales de línea LF en todos los computadores: con CRLF el sello deja de\n# coincidir y `universo guard` falla.\n* text=auto eol=lf\n# El historial sólo crece: un merge conserva las líneas de ambos lados.\n*.felix.log merge=union\n";
 
 const HOOK: &str = "#!/bin/sh\n# Hook de Felix: verifica cada universo antes de un commit. Se activa con\n#   git config core.hooksPath .githooks\n# FELIX_BIN elige otro binario de universo.\nset -e\nFELIX_BIN=\"${FELIX_BIN:-universo}\"\nraiz=\"$(git rev-parse --show-toplevel)\"\nfor u in candidatos vigente; do\n  \"$FELIX_BIN\" guard --criterio \"$raiz\" --universo \"$u\"\ndone\n";
 
-const README: &str = "# Repositorio de criterio\n\nCreado con `universo init --git` (Felix Felicis).\nGuarda criterio, no código: decisiones, principios y preferencias que Felix\nverifica antes de aceptar.\n\n## Universos\n\n- `universos/candidatos`: todo lo que se captura, con su contexto. Los agentes\n  pueden escribir aquí.\n- `universos/vigente`: criterio probado. Sólo entra por promoción.\n\n`felix.toml` los declara; `escritura_agentes` es por ahora una convención que\nla CLI no hace cumplir. Dentro de este directorio los comandos no necesitan\nrutas: `universo check`, `universo search <términos>`, `universo log`, y\n`--universo vigente` para el otro universo.\n\n## Flujo entre computadores\n\n```sh\ngit pull --rebase\nuniverso guard --universo candidatos && universo guard --universo vigente\n# ... trabajar con universo ...\ngit add -A && git commit -m \"criterio: ...\"\ngit push\n```\n\nPara verificar antes de cada commit: `git config core.hooksPath .githooks`.\n\n## Privacidad\n\nQuien tenga acceso a este repositorio ve todo su criterio y su historial,\nincluso lo retirado. No guardes secretos ni credenciales.\n";
+/// Hook `post-merge`: tras un `git pull` o `merge`, corre `guard` en cada
+/// universo y explica cómo aceptar un estado mezclado. Termina con 0: el merge ya
+/// ocurrió.
+const HOOK_POST_MERGE: &str = "#!/bin/sh\n# Hook de Felix: tras un merge, verifica cada universo y avisa. Se activa con\n#   git config core.hooksPath .githooks\n# FELIX_BIN elige otro binario de universo. Termina con 0 aunque guard falle: el merge ya ocurrió.\nFELIX_BIN=\"${FELIX_BIN:-universo}\"\nraiz=\"$(git rev-parse --show-toplevel)\" || exit 0\nif ! command -v \"$FELIX_BIN\" >/dev/null 2>&1; then\n  echo \"felix: no encuentro $FELIX_BIN; no se verificó el merge.\"\n  exit 0\nfi\nfor u in candidatos vigente; do\n  if ! \"$FELIX_BIN\" guard --criterio \"$raiz\" --universo \"$u\" >/dev/null 2>&1; then\n    echo \"felix: $u no coincide con su último estado admitido tras el merge.\"\n    echo \"felix:   revisa con: universo guard --universo $u && universo check --universo $u\"\n    echo \"felix:   si es correcto: universo seal --universo $u --motivo merge, y luego git commit\"\n  fi\ndone\nexit 0\n";
+
+const README: &str = "# Repositorio de criterio\n\nCreado con `universo init --git` (Felix Felicis).\nGuarda criterio, no código: decisiones, principios y preferencias que Felix\nverifica antes de aceptar.\n\n## Universos\n\n- `universos/candidatos`: todo lo que se captura, con su contexto. Los agentes\n  pueden escribir aquí.\n- `universos/vigente`: criterio probado. Sólo entra por promoción.\n\n`felix.toml` los declara; `escritura_agentes` es por ahora una convención que\nla CLI no hace cumplir. Dentro de este directorio los comandos no necesitan\nrutas: `universo check`, `universo search <términos>`, `universo log`, y\n`--universo vigente` para el otro universo.\n\n## Flujo entre computadores\n\n```sh\ngit pull --rebase\nuniverso guard --universo candidatos && universo guard --universo vigente\n# ... trabajar con universo ...\ngit add -A && git commit -m \"criterio: ...\"\ngit push\n```\n\nPara verificar antes de cada commit y avisar tras cada merge:\n`git config core.hooksPath .githooks` (`post-merge` corre con `git pull` o\n`git merge`, no con `git pull --rebase`; ahí corre `universo guard` a mano).\n\nSi dos computadores cambiaron el criterio a la vez, el merge une los\nhistoriales y el sello queda en conflicto: `universo guard` falla. Revisa el\nresultado (`universo check`), acéptalo con\n`universo seal --universo <u> --motivo merge` en cada universo afectado y haz\ncommit. `seal` deja la entrada en el historial y `universo diff` la nombra\n(`external_change`).\n\n## Privacidad\n\nQuien tenga acceso a este repositorio ve todo su criterio y su historial,\nincluso lo retirado. No guardes secretos ni credenciales.\n";
 
 const AGENTS: &str = "# Instrucciones para agentes\n\nEste repositorio guarda el criterio de su dueño. Úsalo con la CLI `universo`\n(dentro de este directorio no hace falta pasar rutas) o con el MCP\n(`universo mcp-config` imprime la configuración): `search` con `universe: \"todos\"`,\n`context`, y `capture`, `reinforce` y `object` para guardar, que sólo escriben en\n`candidatos`.\n\n- **Antes de decidir**, consulta: `universo search <términos> --universo vigente`\n  y luego `--universo candidatos`.\n- **Cuando el dueño exprese criterio** («quiero que…», «siempre…», «prefiero…»),\n  guárdalo: `universo capturar \"<paráfrasis concisa>\" --proyecto <proyecto> --tarea <tarea>\n  --validacion explicita|implicita|pendiente --autor agente:<nombre>`. Guarda una\n  paráfrasis, no la conversación. Si responde `capture_similar`, ya existe: refuerza\n  la nota que indica en vez de duplicarla. La fecha por defecto es la UTC de hoy.\n- **Cuando un criterio se aplique en otro proyecto** y se sostenga:\n  `universo reforzar <nota> --proyecto <p> --contexto <c>`. Si el dueño lo\n  contradice: `universo objetar <nota> --proyecto <p> --contexto <c>`.\n- **Cambia el criterio sólo con Felix.** Para otros cambios, `universo propose\n  --delta <d.json>` simula y `--apply` publica. Nunca edites los archivos de\n  `universos/` a mano ni ejecutes `universo seal`.\n- **Escribe sólo en `candidatos`** y **no promuevas**: `universo promover` lo\n  ejecuta el dueño cuando lo decide. Es una regla de uso: la CLI no distingue\n  a una persona de un agente.\n- Para correcciones puntuales: `universo atributo <nota> <clave> <valor>`,\n  `universo relacion <origen> <clave> <destino> [--quitar]`.\n- Si Felix rechaza un cambio, lee la regla que falla y corrige; no la evites.\n";
 
@@ -183,14 +188,12 @@ fn crear_repositorio(dir: &Path) -> Result<(), &'static str> {
     escribir(".gitignore", GITIGNORE)?;
     escribir(".gitattributes", GITATTRIBUTES)?;
     escribir(".githooks/pre-commit", HOOK)?;
+    escribir(".githooks/post-merge", HOOK_POST_MERGE)?;
     #[cfg(unix)]
-    {
+    for hook in [".githooks/pre-commit", ".githooks/post-merge"] {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(
-            dir.join(".githooks/pre-commit"),
-            fs::Permissions::from_mode(0o755),
-        )
-        .map_err(|_| "init_io")?;
+        fs::set_permissions(dir.join(hook), fs::Permissions::from_mode(0o755))
+            .map_err(|_| "init_io")?;
     }
     for universo in UNIVERSOS {
         let base = format!("universos/{universo}");

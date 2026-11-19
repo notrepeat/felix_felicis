@@ -329,11 +329,24 @@ una entrada `config` marca «reglas cambiadas», y a través de una `seal`
 responde `external_change` con la entrada.
 
 **Aceptación.**
-- [ ] Endurecer una regla que el bundle incumple se rechaza sin escribir.
-- [ ] Tras `reglas aplicar`, `diff` sobre el rango funciona y lo marca.
-- [ ] `seal` de una edición externa deja la entrada `seal`, y `diff` la
+- [x] Endurecer una regla que el bundle incumple se rechaza sin escribir.
+- [x] Tras `reglas aplicar`, `diff` sobre el rango funciona y lo marca.
+- [x] `seal` de una edición externa deja la entrada `seal`, y `diff` la
       informa por su nombre.
-- [ ] Los lectores anteriores de `felix-log-v1` siguen leyendo el log.
+- [x] Los lectores anteriores de `felix-log-v1` siguen leyendo el log.
+
+**Hecho.** `universo_okf::transaccion::cambio_config::aplicar_config` y
+`sello::sellar_con`; CLI `universo reglas aplicar`, `manifiesto aplicar`
+(con `--dry-run`, `--autor`, `--motivo`) y `seal --autor --motivo`. `log` y
+`show` muestran `kind` (`apply`, `config`, `seal`); `diff` lista
+`config changed (entry n)` / `config_changes`. El campo `kind` es opcional:
+`log` de la v0.3.0 sigue leyendo estas líneas, y su `diff` se detiene en ellas
+con un error (no tienen delta o efecto) en vez de dar un resultado falso. Una
+clase que esta versión no conoce corta `diff` con `entry_kind_unknown`.
+`reglas aplicar` exige que el estado actual sea el sellado
+(`config_seal_mismatch`), para no aceptar una edición externa en silencio.
+Límite: el texto de `reglas aplicar` muestra id y mensaje de las reglas que
+fallan, no qué notas las incumplen (`universo check --explain` lo detalla).
 
 ### U6 — Que cualquier agente lo use
 
@@ -391,6 +404,11 @@ responde `external_change` con la entrada.
 - El conflicto en un sello se resuelve volviendo a sellar.
 - Un hook `post-merge` opcional corre `guard` y avisa.
 
+**Hecho** (2026-11-18). `init --git` escribe `.githooks/post-merge` (apagado
+como el `pre-commit`; termina con 0) y el README del repositorio explica la
+resolución de un merge. `seal` acepta un sello en conflicto (ilegible) y deja
+la entrada `seal`; `dos_clones.rs` prueba el flujo completo con dos clones.
+
 ### U8 — Ver cómo crece la base
 
 `universo resumen`, en texto y JSON, para todos los universos:
@@ -423,11 +441,13 @@ Un test con `git` disponible en el CI:
    `diff` dan lo mismo que en A.
 4. Cambiar en B, push, y pull en A. Sigue encadenado.
 
-   Los pasos 1 a 4 están hechos (`crates/universo-cli/tests/dos_clones.rs`,
-   2026-11-18). El paso 6 lo cubre `criterio_repo.rs` en Linux y Windows. El
-   paso 5 depende de U5 y U7.
+   Los pasos 1 a 5 están hechos (`crates/universo-cli/tests/dos_clones.rs`,
+   2026-11-18). El paso 6 lo cubre `criterio_repo.rs` en Linux y Windows.
 5. Cambio concurrente en A y B, y merge. `guard` lo detecta; `check` y `seal`
-   lo aceptan; `diff` informa `external_change`.
+   lo aceptan; `diff` informa `external_change`. Hecho: el merge une los logs
+   (`merge=union`) y el sello queda en conflicto; `seal` lo reemplaza y deja la
+   entrada `seal`. Un `diff` desde antes del merge falla con `history_gap` (las
+   ramas no encadenan) o `external_change`; desde la entrada `seal`, es exacto.
 6. En Windows: clon con `core.autocrlf=true`, y `guard` da pass.
 
 ### U10 — Tu primer repositorio de criterio real

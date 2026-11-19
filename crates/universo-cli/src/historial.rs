@@ -3,7 +3,7 @@
 use super::{Formato, escribir_salida};
 use serde_json::{Value, json};
 use std::{io::Write, path::PathBuf};
-use universo_okf::transaccion::historial::leer;
+use universo_okf::transaccion::historial::{EntradaHistorial, leer};
 
 pub(super) const USO: &str = "Uso: universo log <raiz> [--format text|json]\n";
 
@@ -49,6 +49,11 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     })
 }
 
+/// `apply`, `config` (reglas o manifiesto) o `seal` (cambio externo aceptado).
+fn clase(e: &EntradaHistorial) -> &str {
+    e.clase.as_deref().unwrap_or("apply")
+}
+
 /// Muestra autor, motivo, fecha y sello de cada cambio; nunca el token.
 pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl Write) -> i32 {
     let (payload, codigo) = match (leer(&s.raiz), s.formato) {
@@ -56,7 +61,7 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
             let entries: Vec<_> = historial
                 .entradas
                 .iter()
-                .map(|e| json!({"time": e.fecha, "author": e.autor, "reason": e.motivo, "sealed": e.sellado}))
+                .map(|e| json!({"time": e.fecha, "author": e.autor, "reason": e.motivo, "sealed": e.sellado, "kind": clase(e)}))
                 .collect();
             (
                 format!(
@@ -74,8 +79,9 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
             );
             for e in &historial.entradas {
                 text.push_str(&format!(
-                    "{} author={} sealed={} reason={}\n",
+                    "{} kind={} author={} sealed={} reason={}\n",
                     e.fecha,
+                    clase(e),
                     e.autor.as_deref().unwrap_or("none"),
                     if e.sellado { "yes" } else { "no" },
                     e.motivo.as_deref().unwrap_or("none"),
@@ -194,16 +200,17 @@ pub(super) fn ejecutar_show(
                     "{}\n",
                     json!({"schema_version":1,"command":"show","status":"ok","entry":s.numero,"entries":total,
                            "time":e.fecha,"author":e.autor,"reason":e.motivo,"sealed":e.sellado,
-                           "delta":delta,"delta_omitted":e.delta_omitido,"errors":[]})
+                           "kind":clase(&e),"delta":delta,"delta_omitted":e.delta_omitido,"errors":[]})
                 ),
                 0,
             )
         }
         (Ok((e, total)), Formato::Texto) => {
             let mut text = format!(
-                "show: entry {} of {}\ntime: {}\nauthor: {}\nreason: {}\nsealed: {}\n",
+                "show: entry {} of {}\nkind: {}\ntime: {}\nauthor: {}\nreason: {}\nsealed: {}\n",
                 s.numero,
                 total,
+                clase(&e),
                 e.fecha,
                 e.autor.as_deref().unwrap_or("none"),
                 e.motivo.as_deref().unwrap_or("none"),

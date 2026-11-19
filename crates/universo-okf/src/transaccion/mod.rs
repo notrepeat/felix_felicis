@@ -5,6 +5,7 @@
 pub(crate) mod admision;
 #[allow(dead_code)]
 pub(crate) mod anclado;
+pub mod cambio_config;
 #[allow(dead_code)]
 pub(crate) mod captura;
 pub mod composicion;

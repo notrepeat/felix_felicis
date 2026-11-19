@@ -120,6 +120,7 @@ fn init_git_crea_un_repositorio_de_criterio_listo() {
         ".gitignore",
         ".gitattributes",
         ".githooks/pre-commit",
+        ".githooks/post-merge",
         "universos/candidatos/manifest.toml",
         "universos/candidatos/invariants.sx",
         "universos/candidatos/bundle/criterios/.gitkeep",
@@ -485,4 +486,44 @@ fn mcp_config_fija_el_universo_de_arranque() {
     let s = universo_en(&repo, &["mcp-config", "--universo", "axiomas"], &[]);
     assert_eq!(s.codigo, 1);
     assert!(s.stdout.contains("universe_not_found"), "{}", s.stdout);
+}
+
+/// U7: el hook `post-merge` corre `guard` en cada universo y, si algo no
+/// coincide, explica cómo aceptarlo; termina con 0 (el merge ya ocurrió).
+#[cfg(unix)]
+#[test]
+fn el_hook_post_merge_avisa_sin_fallar() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    let hook = repo.join(".githooks/post-merge");
+    assert!(hook.is_file());
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(
+        std::fs::metadata(&hook).unwrap().permissions().mode() & 0o111,
+        0o111
+    );
+    let correr = || {
+        let out = Command::new("sh")
+            .arg(&hook)
+            .current_dir(&repo)
+            .env("FELIX_BIN", env!("CARGO_BIN_EXE_universo"))
+            .env_remove("FELIX_CRITERIO")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap() + &String::from_utf8(out.stderr).unwrap()
+    };
+    assert!(!correr().contains("felix:"), "{}", correr());
+    std::fs::write(
+        repo.join("universos/vigente/bundle/criterios/a-mano.md"),
+        "---\ntype: criterio\ntitle: A mano\n---\n",
+    )
+    .unwrap();
+    let aviso = correr();
+    assert!(aviso.contains("felix: vigente"), "{aviso}");
+    assert!(
+        aviso.contains("universo seal --universo vigente"),
+        "{aviso}"
+    );
+    assert!(!aviso.contains("felix: candidatos"), "{aviso}");
 }
