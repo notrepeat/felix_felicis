@@ -1,0 +1,140 @@
+{
+  "schema": "felix-bench-criterio-v1",
+  "version": "universo 0.4.0",
+  "fecha": "2026-11-19",
+  "plataforma": "Linux x86_64",
+  "python": "3.15.2",
+  "repeticiones": 3,
+  "resultados": [
+    {
+      "notas": 100,
+      "preparacion_segundos": 0.01,
+      "operaciones": {
+        "search_todos": {
+          "segundos": [
+            0.0036,
+            0.0035,
+            0.0035
+          ],
+          "mediana": 0.0035,
+          "ok": true
+        },
+        "resumen": {
+          "segundos": [
+            0.0051,
+            0.0051,
+            0.005
+          ],
+          "mediana": 0.0051,
+          "ok": true
+        },
+        "capturar": {
+          "segundos": [
+            0.2925,
+            0.3189,
+            0.3125
+          ],
+          "mediana": 0.3125,
+          "ok": true
+        },
+        "promover": {
+          "segundos": [
+            0.3772,
+            0.3704,
+            0.3618
+          ],
+          "mediana": 0.3704,
+          "ok": true
+        }
+      }
+    },
+    {
+      "notas": 1000,
+      "preparacion_segundos": 0.07,
+      "operaciones": {
+        "search_todos": {
+          "segundos": [
+            0.0232,
+            0.0228,
+            0.0232
+          ],
+          "mediana": 0.0232,
+          "ok": true
+        },
+        "resumen": {
+          "segundos": [
+            0.0463,
+            0.0464,
+            0.0463
+          ],
+          "mediana": 0.0463,
+          "ok": true
+        },
+        "capturar": {
+          "segundos": [
+            3.231,
+            3.3562,
+            3.1897
+          ],
+          "mediana": 3.231,
+          "ok": true
+        },
+        "promover": {
+          "segundos": [
+            3.6497,
+            3.6618,
+            3.6714
+          ],
+          "mediana": 3.6618,
+          "ok": true
+        }
+      }
+    },
+    {
+      "notas": 5000,
+      "preparacion_segundos": 0.43,
+      "operaciones": {
+        "search_todos": {
+          "segundos": [
+            0.1183,
+            0.116,
+            0.1215
+          ],
+          "mediana": 0.1183,
+          "ok": true
+        },
+        "resumen": {
+          "segundos": [
+            0.3105,
+            0.2821,
+            0.2994
+          ],
+          "mediana": 0.2994,
+          "ok": true
+        },
+        "capturar": {
+          "segundos": [
+            20.1877,
+            19.8827,
+            20.2255
+          ],
+          "mediana": 20.1877,
+          "ok": true
+        },
+        "promover": {
+          "segundos": [
+            21.3052,
+            21.1843,
+            21.1606
+          ],
+          "mediana": 21.1843,
+          "ok": true
+        }
+      }
+    },
+    {
+      "notas": 10000,
+      "error": "evaluation_budget_exhausted"
+    }
+  ]
+}

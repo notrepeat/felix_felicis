@@ -3,6 +3,15 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
+## Sin publicar
+
+- El evaluador recorre sólo las aristas salientes o entrantes de un extremo
+  ya fijado en una guarda `(Edge e x y k)`. Antes, un repositorio de criterio
+  con entre 500 y 1 000 notas agotaba el presupuesto de evaluación y no
+  admitía más escrituras.
+- Fase 11: dataset, runner y prerregistro de la evaluación del criterio, y
+  benchmarks del repositorio de criterio.
+
 ## 0.4.0 — 2026-11-19
 
 Criterio distribuible (fase 10): `init --git` crea un repositorio de criterio

@@ -1853,7 +1853,29 @@ fn evaluar_por_aristas(
         // Candidatos: cada arista de la clave cuyos extremos encajan con los
         // términos fijos, con la asignación de sus variables.
         let mut candidatos: Vec<(AristaId, Vec<(&Var, NodoId)>)> = Vec::new();
-        for (id, arista) in estructura.aristas() {
+        // Si un extremo ya está fijado (constante o ligado por un cuantificador
+        // exterior), basta recorrer sus aristas salientes o entrantes: las demás
+        // no encajan. Así `forall x … (al-menos 1 ((e E) (y N)) :guarda
+        // (Edge e x y k) …)` cuesta del orden de las aristas de cada `x`, no de
+        // todas. Si algún extremo fijo no se puede resolver, se recorre todo:
+        // así el error aparece en la misma arista que antes.
+        let fijo = |termino: &TerminoNodo| {
+            ligada_aqui(termino, ligaduras)
+                .is_none()
+                .then(|| resolver_nodo(termino, estructura, entorno))
+        };
+        let recorrido: Vec<AristaId> = match (fijo(rango.origen), fijo(rango.destino)) {
+            (Some(Err(_)), _) | (_, Some(Err(_))) => {
+                estructura.aristas().map(|(id, _)| id).collect()
+            }
+            (Some(Ok(nodo)), _) => estructura.salientes(nodo).to_vec(),
+            (None, Some(Ok(nodo))) => estructura.entrantes(nodo).to_vec(),
+            (None, None) => estructura.aristas().map(|(id, _)| id).collect(),
+        };
+        for id in recorrido {
+            let Some(arista) = estructura.arista(id) else {
+                continue;
+            };
             presupuesto.consumir(1)?;
             if arista.tipo != *rango.sorte {
                 continue;

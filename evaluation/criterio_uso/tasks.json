@@ -1,0 +1,150 @@
+{
+  "schema": "felix-criterio-uso-tareas-v1",
+  "nota": "Tareas ficticias de decisión de código para la fase 11. El oráculo está en oracle.json y no se entrega al agente.",
+  "cases": [
+    {
+      "id": "t01",
+      "escenario": "Un servicio nuevo en PostgreSQL necesita la tabla `pedidos`. Los pedidos se consultan por URL desde la app (`/pedidos/<id>`). Elige el tipo de la clave primaria.",
+      "opciones": {
+        "a": "BIGSERIAL (entero autoincremental)",
+        "b": "UUIDv4 aleatorio",
+        "c": "UUIDv7"
+      }
+    },
+    {
+      "id": "t02",
+      "escenario": "En el servicio de cobros (TypeScript), `cobrar(tarjeta, monto)` puede no completarse porque el banco rechaza la tarjeta, algo que pasa a diario. Elige cómo expresa ese caso la función.",
+      "opciones": {
+        "a": "Lanza `TarjetaRechazadaError` y el llamador la captura",
+        "b": "Devuelve `{ ok: false, error: \"tarjeta_rechazada\" }` y `{ ok: true, valor }` si cobra",
+        "c": "Devuelve `null`"
+      }
+    },
+    {
+      "id": "t03",
+      "escenario": "El endpoint `GET /reservas/<id>` devuelve el inicio de la reserva, que el usuario agendó a las 14:00 en Santiago de Chile. Elige el formato del campo `inicio` en el JSON.",
+      "opciones": {
+        "a": "Número: milisegundos desde 1970",
+        "b": "Texto con la hora local y su offset, `2026-03-01T14:00:00-03:00`",
+        "c": "Texto en UTC, `2026-03-01T17:00:00Z`"
+      }
+    },
+    {
+      "id": "t04",
+      "escenario": "El buscador del frontend necesita `debounce` para no consultar en cada tecla. Una implementación propia tiene unas 15 líneas. Elige cómo obtenerla.",
+      "opciones": {
+        "a": "Agregar `lodash.debounce` a las dependencias",
+        "b": "Escribir `src/utils/debounce.ts` en el proyecto",
+        "c": "Agregar el paquete `debounce` de npm"
+      }
+    },
+    {
+      "id": "t05",
+      "escenario": "Vas a agregar tests para `src/precios/descuento.ts`. El proyecto todavía no tiene tests. Elige dónde va el archivo de tests.",
+      "opciones": {
+        "a": "`tests/precios/descuento.test.ts`",
+        "b": "`src/precios/descuento.test.ts`",
+        "c": "`__tests__/descuento.test.ts` en la raíz"
+      }
+    },
+    {
+      "id": "t06",
+      "escenario": "El panel lista productos con `GET /productos`; hay decenas de miles y se agregan a diario. Elige cómo se pagina.",
+      "opciones": {
+        "a": "`?cursor=<token>&limit=50`, con el token que devuelve la página anterior",
+        "b": "`?page=3&size=50`",
+        "c": "`?offset=100&limit=50`"
+      }
+    },
+    {
+      "id": "t07",
+      "escenario": "Hay que guardar el precio de cada producto (en pesos chilenos y en dólares) en la base. Elige el tipo de la columna `precio`.",
+      "opciones": {
+        "a": "`NUMERIC(12,2)`",
+        "b": "`BIGINT` con el monto en la unidad mínima de la moneda",
+        "c": "`DOUBLE PRECISION`"
+      }
+    },
+    {
+      "id": "t08",
+      "escenario": "En producción, la columna `clientes.nombre` debe pasar a llamarse `nombre_completo`. Varias instancias del servicio leen la tabla y se despliegan una a una. Elige el plan.",
+      "opciones": {
+        "a": "Agregar `nombre_completo`, copiar los datos y escribir en ambas; en un despliegue posterior, dejar de usar y borrar `nombre`",
+        "b": "Una migración con `ALTER TABLE clientes RENAME COLUMN nombre TO nombre_completo`",
+        "c": "Renombrar la columna y crear una vista `clientes_v1` con el nombre viejo"
+      }
+    },
+    {
+      "id": "t09",
+      "escenario": "El servicio debe conectarse a una base distinta en staging y en producción. Elige de dónde lee la URL de la base.",
+      "opciones": {
+        "a": "De `config/staging.yaml` y `config/production.yaml`, versionados en el repositorio",
+        "b": "De un diccionario por ambiente en `settings.py`",
+        "c": "De la variable de entorno `DATABASE_URL`"
+      }
+    },
+    {
+      "id": "t10",
+      "escenario": "Corregiste un error en el cálculo del IVA del módulo de precios. Elige el mensaje de commit.",
+      "opciones": {
+        "a": "`Fix VAT calculation in pricing module`",
+        "b": "`Corregido el IVA`",
+        "c": "`fix(precios): corregir el cálculo del IVA`"
+      }
+    },
+    {
+      "id": "t11",
+      "escenario": "En la app (React) existe el componente `Boton`. Necesitas un botón rojo para acciones destructivas que se comporte igual. Elige cómo crearlo.",
+      "opciones": {
+        "a": "Un componente `BotonPeligro` que renderiza `<Boton variante=\"peligro\" {...props} />`",
+        "b": "Una clase `BotonPeligro extends Boton` que sobrescribe el estilo",
+        "c": "Copiar `Boton` a `BotonPeligro` y cambiar el color"
+      }
+    },
+    {
+      "id": "t12",
+      "escenario": "El cliente HTTP de la API de envíos recibe a veces un 503 que dura unos segundos. Elige qué hace ante ese error.",
+      "opciones": {
+        "a": "Reintenta con espera exponencial, hasta tres intentos en total",
+        "b": "Propaga el error al llamador sin reintentar",
+        "c": "Reintenta cada segundo hasta que responda"
+      }
+    },
+    {
+      "id": "k01",
+      "escenario": "En la pantalla de confirmación de compra hay un botón principal, «Pagar». El diseño no fija su color. Elige el color.",
+      "opciones": {
+        "a": "Azul",
+        "b": "Verde",
+        "c": "Negro"
+      }
+    },
+    {
+      "id": "k02",
+      "escenario": "Una función recibe una lista de 10 números y debe devolverla ordenada de menor a mayor. Elige cómo ordenar.",
+      "opciones": {
+        "a": "La función de ordenamiento del lenguaje (`sorted`)",
+        "b": "Un quicksort propio",
+        "c": "Un ordenamiento por inserción propio"
+      }
+    },
+    {
+      "id": "k03",
+      "escenario": "En un script hay que nombrar la variable que guarda cuántos usuarios activos hay. Elige el nombre.",
+      "opciones": {
+        "a": "`total_usuarios_activos`",
+        "b": "`n_activos`",
+        "c": "`cantidad_activos`"
+      }
+    },
+    {
+      "id": "k04",
+      "escenario": "Vas a crear el primer archivo YAML del proyecto, para una herramienta que acepta cualquier indentación. Elige la indentación.",
+      "opciones": {
+        "a": "2 espacios",
+        "b": "4 espacios",
+        "c": "Tabuladores"
+      }
+    }
+  ]
+}
