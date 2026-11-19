@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | `v0.5.0` publicada (2026-11-19) |
+| Estado | `v0.6.0` publicada (2026-11-19) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
@@ -19,6 +19,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 | `v0.3.0` | Loop MCP completo y equivalente al CLI. |
 | `v0.4.0` | Criterio distribuible ([fase 10](10-criterio-distribuible.md)): repositorio de criterio, captura, promoción y MCP con varios universos. |
 | `v0.5.0` | Evaluación comparativa y benchmarks publicados (D5 de la fase 10 la movió desde `v0.4.0`). |
+| `v0.6.0` | Uso diario sin Rust: instaladores, `universo conectar` y `universo grafo`. |
 | `v1.0.0` | Contratos declarados estables y evidencia sostenida en uso real. |
 
 Mientras la API sea `0.x`, los parches corrigen comportamiento compatible y
@@ -79,6 +80,7 @@ git tag --list --sort=-version:refname
 | 2026-11-18 | `v0.3.0` | `220a24a` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows | [Notas](../release/v0.3.0.md): búsqueda, historial consultable con `diff`, `why` y `search` en el MCP, instalación. Gate «loop MCP completo y equivalente al CLI»: el loop se cumple; la equivalencia es parcial a propósito (el MCP no escribe ni expone el historial). |
 | 2026-11-19 | `v0.4.0` | `2a9bbe0` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows | [Notas](../release/v0.4.0.md): criterio distribuible (fase 10). Gate redefinido por D5: esta fase como `v0.4.0` y la evaluación comparativa en `v0.5.0`. La fase sigue abierta hasta U10 (uso real). |
 | 2026-11-19 | `v0.5.0` | `e029cbc` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows | [Notas](../release/v0.5.0.md): evaluación del criterio (fase 11, neutral por la regla) y benchmarks publicados; arreglo del evaluador para guardas Edge con extremo fijado. |
+| 2026-11-19 | `v0.6.0` | `9b5b128` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows e instaladores sin Rust | [Notas](../release/v0.6.0.md): `universo conectar`, `universo grafo`, hooks con `felix.bin` e instaladores; probado en un entorno sin Rust. |
 
 ## Decisión posterior
 

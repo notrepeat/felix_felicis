@@ -12,17 +12,13 @@ repositorio y se entregan al CLI mediante una ruta.
 
 ## Instalación
 
-Desde un clon del repositorio, con Rust:
-
-```sh
-cargo install --locked --path crates/universo-cli
-cargo install --locked --path crates/universo-mcp
-universo --version
-```
-
-Eso instala `universo` (la CLI) y `universo-mcp` (el servidor MCP). Desde
-`v0.3.0`, cada release trae también binarios para Linux, macOS y Windows con
-su `.sha256`. Ver [instalación](docs/instalacion.md).
+No necesitas Rust. Cada release trae binarios para Linux, macOS y Windows con
+su `.sha256`, y las posteriores a `v0.5.0` traen además un instalador:
+`sh instalar.sh` en Linux y macOS, o `instalar.ps1` en Windows. Baja los
+binarios de la release, verifica la suma y deja `universo` (la CLI) y
+`universo-mcp` (el servidor MCP) en una carpeta de tu usuario. Ver
+[instalación](docs/instalacion.md), que también explica cómo compilar desde
+el código para desarrollar Felix.
 
 ## Un repositorio de criterio
 
@@ -41,9 +37,12 @@ universo promover criterios/los-componentes-deben-ser-reutilizables --a vigente
 `init --git` crea un repositorio Git aparte, vacío y sin commits, con `felix.toml`,
 dos universos (`candidatos` y `vigente`) con el esquema de captura, `README.md`, `AGENTS.md`, `.gitignore`
 para los transitorios, `.gitattributes` con LF y un hook de `guard` apagado.
-Dentro de él los comandos no necesitan rutas, y `universo mcp-config` imprime
-la configuración para conectar un agente (Claude Code, Codex o JSON), que podrá
-consultar todos los universos y capturar candidatas. `capturar` guarda una afirmación
+Dentro de él los comandos no necesitan rutas. `universo conectar --aplicar` lo
+conecta a Claude Code en un paso (hooks, MCP y skill; sin `--aplicar` sólo
+muestra qué cambiaría), y `universo mcp-config` imprime la configuración para
+otros clientes (Codex o JSON). El agente podrá consultar todos los universos y
+capturar candidatas. `universo grafo` lo muestra como un grafo interactivo en
+una página local. `capturar` guarda una afirmación
 como candidata con su proyecto y contexto; `reforzar` y `objetar` registran
 que se sostuvo, o no, en otro proyecto. `promover` la lleva a `vigente`, cuyas
 reglas exigen la confirmación en al menos dos proyectos; `relacion`,
@@ -102,12 +101,14 @@ El [estudio prerregistrado de cuatro brazos](evaluation/four_arms_report.md)
 
 ## Loop de corrección por MCP
 
+Con `universo` y `universo-mcp` instalados (ver Instalación), desde un clon
+del repositorio:
+
 ```sh
-cargo build -p universo-mcp -p universo-cli
-python tools/demo_mcp.py --binary target/debug/universo-mcp --cli target/debug/universo
+python tools/demo_mcp.py --binary "$(command -v universo-mcp)" --cli "$(command -v universo)"
 ```
 
-En Windows usa los ejecutables `.exe`. La demo consulta contexto, obtiene un
+En Windows pasa las rutas de los ejecutables `.exe`. La demo consulta contexto, obtiene un
 rechazo, deriva la corrección de las respuestas y la readmite; comprueba paridad
 con la CLI, reinicio determinista y archivos intactos. Es un agente sintético
 determinista, no una medición de utilidad de un modelo. MCP directo es la opción
@@ -115,10 +116,13 @@ predeterminada; Code Mode es una capa opcional de composición.
 
 ## Probar el ejemplo
 
+Con `universo` instalado, desde un clon del repositorio (los ejemplos viven
+en él):
+
 ```powershell
-cargo run -p universo-cli -- validate examples/knowledge-base --manifiesto manifests/example.toml
-cargo run -p universo-cli -- atomos examples/knowledge-base --manifiesto manifests/example.toml
-cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/invariants.sx
+universo validate examples/knowledge-base --manifiesto manifests/example.toml
+universo atomos examples/knowledge-base --manifiesto manifests/example.toml
+universo check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/invariants.sx
 ```
 
 `validate` comprueba estructura, no invariantes. `verificar` conserva el mismo
@@ -132,8 +136,8 @@ intencionalmente falsa y está separada del ejemplo normal; al ejecutarla,
 repara archivos, no persiste resultados y no ejecuta recovery.
 
 ```powershell
-cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/rejected-invariants.sx --format json
-cargo run -p universo-cli -- check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/rejected-invariants.sx --explain decide --format json
+universo check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/rejected-invariants.sx --format json
+universo check examples/knowledge-base --manifiesto manifests/example.toml --invariantes examples/knowledge-base/rejected-invariants.sx --explain decide --format json
 ```
 
 El comando usa código 0 para `admit`, 1 para `reject` o `error` y 2 para uso
@@ -141,9 +145,7 @@ inválido. En texto, el resultado va por `stdout` y los diagnósticos por
 `stderr`; con `--format json` y uso válido, el proceso `universo-cli` escribe un
 objeto JSON en una sola línea por `stdout` y deja su propio `stderr` vacío. Los
 errores de uso no producen JSON y escriben el diagnóstico por `stderr`. El
-schema es v1 sin `--explain` y v2 cuando se solicita. Al invocarlo mediante
-`cargo run`, Cargo puede emitir sus propios mensajes de compilación,
-lanzamiento o fallo.
+schema es v1 sin `--explain` y v2 cuando se solicita.
 Sin `--explain`, un `reject` informa solo cantidades, no contraejemplos,
 asignaciones ni contenido del bundle. `--explain decide|enumerate` solicita una
 explicación redactada en un pase opt-in separado. Un archivo vacío o solo con

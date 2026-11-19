@@ -1,26 +1,53 @@
 # Instalación
 
 Felix se instala como dos ejecutables: `universo` (la CLI) y `universo-mcp`
-(el servidor MCP local). No hay paquete en crates.io ni en gestores del
-sistema; hay dos caminos.
+(el servidor MCP local). **No necesitas Rust ni nada de su ecosistema** para
+instalarlo ni usarlo: cada release trae binarios precompilados y un
+instalador. Compilar desde el código queda para quien desarrolla Felix.
 
-## Desde el código, con Cargo
+## Con el instalador (recomendado)
 
-Necesitas Git y Rust. El repositorio fija la toolchain `1.88.0` en
-`rust-toolchain.toml`; con `rustup` se instala sola la primera vez.
+Las releases posteriores a `v0.5.0` traen, junto a los binarios, `instalar.sh`
+(Linux y macOS) e `instalar.ps1` (Windows). Cada uno baja el archivo de tu
+plataforma desde esa misma release y verifica su suma SHA-256: si no coincide,
+no instala nada. Después prepara los dos ejecutables completos en una carpeta de
+tu usuario antes de reemplazar ninguno, sin pedir permisos de administrador:
+si la descarga o la verificación fallan, queda la versión anterior intacta. La suma viene de la misma release, así que detecta
+una descarga corrupta o incompleta, no una release adulterada; cada instalador
+trae también su propio `.sha256`.
+
+En Linux o macOS, descarga `instalar.sh` desde la página de la release y
+ejecútalo:
 
 ```sh
-git clone <url-del-repositorio> felix_felicis
-cd felix_felicis
-git checkout v0.5.0        # o la versión que quieras; sin esto, la rama actual
-cargo install --locked --path crates/universo-cli
-cargo install --locked --path crates/universo-mcp
+sh instalar.sh
 ```
 
-Los binarios quedan en `~/.cargo/bin` (en Windows,
-`%USERPROFILE%\.cargo\bin`), que `rustup` agrega al `PATH`. `--locked` usa
-exactamente las dependencias de `Cargo.lock`. Para instalar en otro directorio,
-agrega `--root <dir>` y pon `<dir>/bin` en el `PATH`.
+Deja `universo` y `universo-mcp` en `~/.local/bin`. Si esa carpeta no está en
+tu `PATH`, te dice qué línea agregar según tu shell (bash, zsh o fish). En
+Linux necesita glibc 2.39 o posterior; en sistemas con musl, como Alpine, lo
+dice y no instala. Solo necesita `curl` o `wget`, `tar` y
+`sha256sum` o `shasum`, que vienen con el sistema.
+
+En Windows, descarga `instalar.ps1`, revísalo, desbloquéalo y ejecútalo en
+PowerShell:
+
+```powershell
+Unblock-File .\instalar.ps1
+.\instalar.ps1
+```
+
+Si tu política de ejecución no permite scripts, usa
+`powershell -ExecutionPolicy Bypass -File .\instalar.ps1` sólo para esa vez.
+
+Deja `universo.exe` y `universo-mcp.exe` en
+`%LOCALAPPDATA%\Programs\felix-felicis\bin` y agrega esa carpeta al `PATH` de
+tu usuario, sin tocar el resto de sus entradas; abre una terminal nueva para
+usarlos. Si `universo-mcp.exe` está en uso, por ejemplo por Claude Code, lo
+reemplaza igual. En Windows ARM corre el binario x86_64 emulado.
+
+Para dejar los binarios en otra carpeta, define `FELIX_BIN_DIR`. Para actualizar, corre
+el instalador de la release nueva.
 
 ## Binarios precompilados
 
@@ -48,11 +75,31 @@ if ((Get-FileHash $archivo -Algorithm SHA256).Hash -ne $esperado) { throw "la su
 Expand-Archive $archivo -DestinationPath .
 ```
 
-Copia los dos ejecutables a un directorio del `PATH`. Los binarios no están
+Copia los dos ejecutables a un directorio del `PATH` (por ejemplo,
+`~/.local/bin`); es lo mismo que hace el instalador. Los binarios no están
 firmados: macOS y Windows pueden advertir al abrirlos la primera vez. El de
 Linux se compila en Ubuntu 24.04 y necesita glibc 2.39 o posterior (Ubuntu
 24.04, Debian 13 o equivalentes); en sistemas más viejos, o en macOS Intel y
 Linux ARM, que no tienen binario, instala desde el código.
+
+## Desde el código (para desarrollar Felix)
+
+Sólo hace falta para trabajar en Felix o para una plataforma sin binario
+(macOS Intel, Linux ARM o glibc anterior a 2.39). Necesitas Git y Rust. El repositorio fija la toolchain `1.88.0` en
+`rust-toolchain.toml`; con `rustup` se instala sola la primera vez.
+
+```sh
+git clone <url-del-repositorio> felix_felicis
+cd felix_felicis
+git checkout v0.6.0        # o la versión que quieras; sin esto, la rama actual
+cargo install --locked --path crates/universo-cli
+cargo install --locked --path crates/universo-mcp
+```
+
+Los binarios quedan en `~/.cargo/bin` (en Windows,
+`%USERPROFILE%\.cargo\bin`), que `rustup` agrega al `PATH`. `--locked` usa
+exactamente las dependencias de `Cargo.lock`. Para instalar en otro directorio,
+agrega `--root <dir>` y pon `<dir>/bin` en el `PATH`.
 
 ## Comprobar la instalación
 
@@ -75,22 +122,74 @@ directorio de trabajo del proceso lo decide el cliente.
 `skills/felix-criterio/SKILL.md` enseña a un agente qué frases son criterio
 (instrucciones generales, validaciones explícitas o implícitas), qué no lo es,
 a preguntar ante la duda y a no guardar nada al cerrar una sesión sin tu
-confirmación. Para instalarla en Claude Code, copia el directorio:
+confirmación. `evaluation/run_criterio_deteccion.py` mide su precisión sobre un
+corpus ficticio (fase 10, U13).
+
+## Conectar un repositorio de criterio a Claude Code
+
+Dentro del repositorio de criterio (el que crea `universo init --git`):
 
 ```sh
-mkdir -p ~/.claude/skills
-cp -r skills/felix-criterio ~/.claude/skills/
+universo conectar            # muestra qué cambiaría, sin escribir nada
+universo conectar --aplicar  # lo hace
+universo conectar --verificar
 ```
 
-`evaluation/run_criterio_deteccion.py` mide su precisión sobre un corpus
-ficticio (fase 10, U13); la corrida con Claude está pendiente.
+`--aplicar` revisa cinco pasos y hace sólo los que faltan:
+
+- `binario`: guarda la ruta de este `universo` en `git config felix.bin`, para
+  que los hooks no dependan del `PATH`. Usa siempre el mismo binario, el
+  instalado: correrlo con otro (por ejemplo, `target/debug/universo`) cambia
+  la ruta guardada;
+- `hooks_archivos`: pone al día `.githooks/` si son de una versión anterior.
+  Como están versionados, queda un `git commit` pendiente. Un hook que no
+  escribió Felix no se toca: el paso lo informa;
+- `hooks_activos`: activa los hooks (`git config core.hooksPath .githooks`);
+- `mcp`: registra el MCP `felix-criterio` en Claude Code a nivel de usuario
+  (`claude mcp add --scope user`), con `universo-mcp` y el repositorio en rutas
+  absolutas. El nombre es uno por usuario: si ya apunta a otro repositorio de
+  criterio, la vista previa lo dice y `--aplicar` lo reemplaza. Un servidor con
+  el mismo nombre en otro alcance (local o de proyecto) no se toca;
+- `skill`: deja la skill de esta versión en `~/.claude/skills/felix-criterio/`.
+
+Sólo toca la configuración local de Git de ese repositorio, la de Claude Code y
+la carpeta de la skill: no hace commits, no cambia la shell ni otros programas.
+Para revisar el MCP usa `claude mcp get`, que arranca el servidor registrado
+para ver su estado (con un límite de 60 s). Si `claude` no está instalado,
+aplica el resto, muestra el comando del MCP para correrlo a mano y termina con
+1 hasta que el MCP quede registrado. Repítelo en cada computador donde clones el repositorio.
+
+## Ver el criterio como grafo
+
+```sh
+universo grafo                       # todos los universos del repositorio
+universo grafo --universo vigente    # uno solo
+universo grafo --salida grafo.html   # dónde escribir la página
+universo grafo <bundle> --manifiesto <m.toml> --invariantes <i.sx>  # cualquier bundle OKF
+```
+
+Genera una página HTML que se abre en el navegador:
+
+- nodos coloreados por tipo; los criterios promovidos se ven huecos, las
+  candidatas más claras y los retirados atenuados;
+- relaciones;
+- las promociones como líneas punteadas entre universos;
+- anillos para las candidatas listas para promover (verde) y las objetadas
+  (rojo).
+
+Un clic en un nodo muestra sus atributos, relaciones y cuerpo. Sin `--salida`,
+la página va al directorio temporal con un nombre nuevo cada vez
+(`felix-grafo-<repositorio>-…html`); la ruta sale en la terminal. Incluye los datos del bundle y no carga
+nada de la red: no la compartas si el repositorio es privado. Es de sólo
+lectura; los cambios siguen pasando por `capturar`, `promover` y los demás
+comandos.
 
 ## Desinstalar
 
-```sh
-cargo uninstall universo-cli
-cargo uninstall universo-mcp
-```
-
-o borra los dos ejecutables si los copiaste a mano. Los repositorios de
-conocimiento son directorios normales y no se tocan.
+Borra los dos ejecutables: `~/.local/bin/universo` y `~/.local/bin/universo-mcp`
+(en Windows, la carpeta `%LOCALAPPDATA%\Programs\felix-felicis`). Si los
+instalaste desde el código, `cargo uninstall universo-cli universo-mcp`. Si
+usaste `universo conectar`, quita también el MCP con
+`claude mcp remove felix-criterio --scope user` y la skill de
+`~/.claude/skills/felix-criterio/`. Los repositorios de criterio son
+directorios normales y no se tocan.

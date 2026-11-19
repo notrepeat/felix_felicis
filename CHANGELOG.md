@@ -3,6 +3,30 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
+## 0.6.0 — 2026-11-19
+
+Uso diario sin Rust. Ver [notas](docs/release/v0.6.0.md). Cambio incompatible
+pre-1.0: un repositorio de criterio creado con `0.5.x` debe cambiar `motor` en
+`felix.toml`.
+
+- Instaladores sin Rust en cada release (`instalar.sh` e `instalar.ps1`), que
+  verifican la suma, preparan los dos binarios completos antes de reemplazar
+  ninguno en una carpeta del usuario y la ponen en el `PATH` (en Windows) o
+  dicen cómo hacerlo. La documentación ya no pide `cargo`.
+- `universo conectar` conecta un repositorio de criterio a Claude Code en un
+  paso, con vista previa por defecto, `--aplicar` y `--verificar`. Guarda la
+  ruta del binario en `git config felix.bin` y activa los hooks, registra el
+  MCP a nivel de usuario e instala la skill de esta versión.
+- `universo grafo` genera una página HTML local e interactiva con el grafo de
+  un repositorio de criterio (o de cualquier bundle OKF): notas por tipo y
+  estado, relaciones, promociones entre universos, y candidatas listas para
+  promover u objetadas, con el mismo cálculo que `resumen`. Trae panel de
+  detalle, búsqueda, filtros, zoom y modo oscuro. Los datos van incrustados y
+  la página no usa la red; incluye datos del bundle.
+- Los hooks usan `felix.bin` si existe y, si no, el `universo` del `PATH`. Si no
+  encuentran el binario, `pre-commit` falla con un mensaje que dice cómo
+  arreglarlo, en vez de «orden no encontrada».
+
 ## 0.5.0 — 2026-11-19
 
 Gate «evaluación comparativa y benchmarks publicados». Ver

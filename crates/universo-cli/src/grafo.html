@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:">
+<title>Grafo de criterio</title>
+<style>
+:root {
+  --fondo: #f7f7f5; --panel: #ffffff; --texto: #1d1d1f; --suave: #6b6b70; --borde: #dcdcd8;
+  --criterio: #3b6fd8; --evidencia: #c27a1a; --proyecto: #2f9467; --otro: #8a5cc4;
+  --lista: #18a058; --objetada: #d03a3a; --arista: #a7a7a2; --promovido: #8a5cc4; --foco: #111;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fondo: #141416; --panel: #1d1d20; --texto: #ececee; --suave: #9a9aa2; --borde: #33333a;
+    --criterio: #6f9cf5; --evidencia: #e0a24a; --proyecto: #4cc28c; --otro: #b48cf0;
+    --lista: #3fd17f; --objetada: #ff6b6b; --arista: #55555c; --promovido: #b48cf0; --foco: #fff;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--fondo); color: var(--texto);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+#app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px;
+  border-bottom: 1px solid var(--borde); background: var(--panel); }
+header h1 { font-size: 16px; margin: 0 8px 0 0; }
+header .grupo { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+header label { display: inline-flex; gap: 4px; align-items: center; color: var(--suave); cursor: pointer; }
+#buscar { padding: 5px 8px; border: 1px solid var(--borde); border-radius: 6px; background: var(--fondo);
+  color: var(--texto); min-width: 200px; }
+#conteo { color: var(--suave); }
+main { position: relative; overflow: hidden; }
+svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+svg.arrastrando { cursor: grabbing; }
+.arista { stroke: var(--arista); stroke-width: 1; }
+.arista.promovido { stroke: var(--promovido); stroke-dasharray: 4 3; stroke-width: 1.5; }
+.arista.objeta { stroke: var(--objetada); }
+.arista.contradice { stroke: var(--objetada); stroke-dasharray: 2 2; }
+.arista.reemplaza { stroke: var(--suave); stroke-dasharray: 6 2; }
+.arista.atenuada, .nodo.atenuado { opacity: .12; }
+.nodo { cursor: pointer; }
+.nodo circle.cuerpo { stroke: var(--panel); stroke-width: 1.5; }
+.nodo.promovido circle.cuerpo { fill-opacity: .25; }
+.nodo.retirado { opacity: .35; }
+.nodo.candidato circle.cuerpo { fill-opacity: .7; }
+.nodo circle.halo { fill: none; stroke-width: 3; }
+.nodo.seleccionado circle.cuerpo { stroke: var(--foco); stroke-width: 2.5; }
+.universo-titulo { font-size: 16px; font-weight: 600; fill: var(--suave); text-anchor: middle; }
+.nodo text { font-size: 11px; fill: var(--texto); pointer-events: none; paint-order: stroke;
+  stroke: var(--fondo); stroke-width: 3px; }
+#panel { position: absolute; top: 12px; right: 12px; width: min(380px, calc(100% - 24px)); max-height: calc(100% - 24px);
+  overflow: auto; background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: 14px 16px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.12); display: none; }
+#panel.visible { display: block; }
+#panel h2 { font-size: 15px; margin: 0 24px 4px 0; }
+#panel .meta { color: var(--suave); font-size: 12px; word-break: break-all; }
+#panel table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+#panel td { border-top: 1px solid var(--borde); padding: 3px 4px; vertical-align: top; }
+#panel td:first-child { color: var(--suave); width: 35%; }
+#panel ul { padding-left: 16px; margin: 6px 0; font-size: 12px; }
+#panel li a { color: var(--criterio); cursor: pointer; text-decoration: underline; }
+#panel pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; background: var(--fondo);
+  padding: 8px; border-radius: 6px; max-height: 240px; overflow: auto; }
+#panel .cerrar { position: absolute; top: 8px; right: 10px; border: 0; background: none; color: var(--suave);
+  font-size: 18px; cursor: pointer; }
+.chip { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; margin: 4px 4px 0 0;
+  color: #fff; }
+.chip.lista_para_promover { background: var(--lista); }
+.chip.objetada { background: var(--objetada); }
+#leyenda { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--borde);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--suave); }
+#leyenda span.punto { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin: 0 4px 0 8px;
+  vertical-align: -1px; }
+#leyenda span.punto:first-child { margin-left: 0; }
+#vacio { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--suave); }
+@media (max-width: 640px) { #buscar { min-width: 0; flex: 1; } #leyenda { display: none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1 id="titulo">Grafo</h1>
+    <input id="buscar" type="search" placeholder="Buscar por título…" aria-label="Buscar por título">
+    <div class="grupo" id="filtro-universos"></div>
+    <div class="grupo" id="filtro-tipos"></div>
+    <label><input type="checkbox" id="solo-marcas"> sólo marcas</label>
+    <span id="conteo"></span>
+  </header>
+  <main>
+    <svg id="lienzo" aria-label="Grafo de notas y relaciones"><g id="vista"><g id="aristas"></g><g id="nodos"></g></g></svg>
+    <div id="vacio">No hay notas que mostrar.</div>
+    <aside id="panel" aria-live="polite"><button class="cerrar" id="cerrar" aria-label="Cerrar">×</button><div id="detalle"></div></aside>
+    <div id="leyenda"></div>
+  </main>
+</div>
+<script id="datos" type="application/json">/*DATOS*/</script>
+<script>
+(function () {
+  "use strict";
+  var NS = ["http:", "", "www.w3.org", "2000", "svg"].join("/");
+  var D = JSON.parse(document.getElementById("datos").textContent);
+  var $ = function (id) { return document.getElementById(id); };
+  var el = function (tag, attrs, svg) {
+    var e = svg ? document.createElementNS(NS, tag) : document.createElement(tag);
+    for (var k in attrs || {}) e.setAttribute(k, attrs[k]);
+    return e;
+  };
+  var texto = function (tag, t, attrs) { var e = el(tag, attrs); e.textContent = t; return e; };
+
+  $("titulo").textContent = D.titulo || "Grafo";
+  document.title = "Grafo · " + (D.titulo || "");
+
+  var TIPOS_CONOCIDOS = ["criterio", "evidencia", "proyecto"];
+  var color = function (tipo) {
+    return "var(--" + (TIPOS_CONOCIDOS.indexOf(tipo) >= 0 ? tipo : "otro") + ")";
+  };
+
+  // Nodos y aristas en memoria.
+  var nodos = D.nodos.map(function (n) {
+    return { d: n, x: 0, y: 0, vx: 0, vy: 0, grado: 0, fijo: false, visible: true };
+  });
+  var porId = {};
+  nodos.forEach(function (n) { porId[n.d.id] = n; });
+  var aristas = D.aristas.map(function (a) {
+    return { d: a, o: porId[a.origen], t: porId[a.destino] };
+  }).filter(function (a) { return a.o && a.t; });
+  aristas.forEach(function (a) { a.o.grado++; a.t.grado++; });
+
+  // Posición inicial: cada universo en su columna.
+  var universos = D.universos;
+  var centroX = function (u) { var i = universos.indexOf(u); return (i - (universos.length - 1) / 2) * 900; };
+  nodos.forEach(function (n, i) {
+    var ang = i * 2.399963, r = 30 + 8 * Math.sqrt(i);
+    n.x = centroX(n.d.universo) + r * Math.cos(ang);
+    n.y = r * Math.sin(ang);
+  });
+
+  // Filtros.
+  var activos = { universos: {}, tipos: {} };
+  var tipos = [];
+  nodos.forEach(function (n) { if (tipos.indexOf(n.d.tipo) < 0) tipos.push(n.d.tipo); });
+  tipos.sort();
+  var casilla = function (grupo, contenedor, valor, etiqueta) {
+    activos[grupo][valor] = true;
+    var c = el("input", { type: "checkbox" }); c.checked = true;
+    c.addEventListener("change", function () { activos[grupo][valor] = c.checked; aplicarFiltros(); });
+    var l = el("label"); l.appendChild(c); l.appendChild(document.createTextNode(etiqueta));
+    contenedor.appendChild(l);
+  };
+  if (universos.length > 1) universos.forEach(function (u) { casilla("universos", $("filtro-universos"), u, u); });
+  else activos.universos[universos[0]] = true;
+  tipos.forEach(function (t) { casilla("tipos", $("filtro-tipos"), t, t); });
+
+  // Leyenda.
+  var ley = $("leyenda");
+  tipos.forEach(function (t) {
+    var p = el("span", { "class": "punto" }); p.style.background = color(t);
+    ley.appendChild(p); ley.appendChild(document.createTextNode(t));
+  });
+  [["lista_para_promover", "lista para promover", "--lista"], ["objetada", "objetada", "--objetada"]].forEach(function (m) {
+    var p = el("span", { "class": "punto" }); p.style.border = "2px solid var(" + m[2] + ")";
+    ley.appendChild(p); ley.appendChild(document.createTextNode(m[1]));
+  });
+
+  // Dibujo.
+  var gA = $("aristas"), gN = $("nodos");
+  // Con más de un universo, un título sobre cada columna.
+  var titulos = universos.length > 1 ? universos.map(function (u) {
+    var t = el("text", { "class": "universo-titulo" }, true); t.textContent = u;
+    $("vista").insertBefore(t, gA);
+    return { u: u, e: t };
+  }) : [];
+  aristas.forEach(function (a) {
+    var clase = "arista " + a.d.clave;
+    a.e = el("line", { "class": clase }, true);
+    var t = el("title", {}, true); t.textContent = a.d.clave; a.e.appendChild(t);
+    gA.appendChild(a.e);
+  });
+  // Etiquetas: siempre las de criterios en grafos chicos; las demás al
+  // acercarse o al seleccionar.
+  var pocos = nodos.length <= 150;
+  var conEtiqueta = function (n) { return n.d.tipo === "criterio" || n.d.tipo === "proyecto"; };
+  nodos.forEach(function (n) {
+    var estado = (n.d.atributos && n.d.atributos.Estado) || "";
+    var g = el("g", { "class": "nodo " + estado }, true);
+    n.r = 5 + Math.min(12, Math.sqrt(n.grado) * 2.2);
+    (n.d.marcas || []).forEach(function (m, i) {
+      var h = el("circle", { "class": "halo", r: n.r + 3 + 3 * i }, true);
+      h.style.stroke = m === "lista_para_promover" ? "var(--lista)" : "var(--objetada)";
+      g.appendChild(h);
+    });
+    var c = el("circle", { "class": "cuerpo", r: n.r }, true);
+    c.style.fill = color(n.d.tipo);
+    g.appendChild(c);
+    var t = el("title", {}, true); t.textContent = n.d.titulo; g.appendChild(t);
+    n.etiqueta = el("text", { x: n.r + 4, y: 4 }, true);
+    var corto = n.d.titulo.length > 48 ? n.d.titulo.slice(0, 47) + "…" : n.d.titulo;
+    n.etiqueta.textContent = corto;
+    n.etiqueta.style.display = pocos && conEtiqueta(n) ? "" : "none";
+    g.appendChild(n.etiqueta);
+    g.addEventListener("pointerdown", function (ev) { iniciarArrastreNodo(ev, n); });
+    g.addEventListener("click", function (ev) { ev.stopPropagation(); seleccionar(n); });
+    n.e = g;
+    gN.appendChild(g);
+  });
+
+  // Simulación de fuerzas: resortes en las aristas, repulsión por grilla y
+  // atracción suave al centro de cada universo.
+  var alfa = 1;
+  function paso() {
+    var celda = 90, grilla = {};
+    var vis = nodos.filter(function (n) { return n.visible; });
+    vis.forEach(function (n) {
+      var k = Math.floor(n.x / celda) + "," + Math.floor(n.y / celda);
+      (grilla[k] = grilla[k] || []).push(n);
+    });
+    vis.forEach(function (n) {
+      var cx = Math.floor(n.x / celda), cy = Math.floor(n.y / celda);
+      for (var i = -1; i <= 1; i++) for (var j = -1; j <= 1; j++) {
+        var vecinos = grilla[(cx + i) + "," + (cy + j)];
+        if (!vecinos) continue;
+        for (var v = 0; v < vecinos.length; v++) {
+          var m = vecinos[v]; if (m === n) continue;
+          var dx = n.x - m.x, dy = n.y - m.y, d2 = dx * dx + dy * dy + 0.01;
+          if (d2 > celda * celda) continue;
+          var f = 900 / d2;
+          n.vx += dx * f * 0.05; n.vy += dy * f * 0.05;
+        }
+      }
+      n.vx += (centroX(n.d.universo) - n.x) * 0.012;
+      n.vy += (0 - n.y) * 0.004;
+    });
+    aristas.forEach(function (a) {
+      if (!a.o.visible || !a.t.visible) return;
+      var dx = a.t.x - a.o.x, dy = a.t.y - a.o.y, d = Math.sqrt(dx * dx + dy * dy) + 0.01;
+      var largo = a.d.clave === "promovido" ? 220 : 70;
+      var f = (d - largo) / d * 0.04;
+      a.o.vx += dx * f; a.o.vy += dy * f; a.t.vx -= dx * f; a.t.vy -= dy * f;
+    });
+    vis.forEach(function (n) {
+      if (n.fijo) { n.vx = n.vy = 0; return; }
+      n.vx *= 0.6; n.vy *= 0.6;
+      n.x += Math.max(-30, Math.min(30, n.vx * alfa)); n.y += Math.max(-30, Math.min(30, n.vy * alfa));
+    });
+    alfa *= 0.985;
+  }
+  function pintar() {
+    titulos.forEach(function (t) {
+      var propios = nodos.filter(function (n) { return n.visible && n.d.universo === t.u; });
+      t.e.style.display = propios.length ? "" : "none";
+      if (!propios.length) return;
+      var x = propios.reduce(function (s, n) { return s + n.x; }, 0) / propios.length;
+      var y = Math.min.apply(null, propios.map(function (n) { return n.y; })) - 40;
+      t.e.setAttribute("x", x.toFixed(1)); t.e.setAttribute("y", y.toFixed(1));
+    });
+    nodos.forEach(function (n) {
+      if (n.visible) n.e.setAttribute("transform", "translate(" + n.x.toFixed(1) + "," + n.y.toFixed(1) + ")");
+    });
+    aristas.forEach(function (a) {
+      if (!a.o.visible || !a.t.visible) return;
+      a.e.setAttribute("x1", a.o.x.toFixed(1)); a.e.setAttribute("y1", a.o.y.toFixed(1));
+      a.e.setAttribute("x2", a.t.x.toFixed(1)); a.e.setAttribute("y2", a.t.y.toFixed(1));
+    });
+  }
+  var corriendo = false;
+  function animar() {
+    if (corriendo) return; corriendo = true;
+    (function cuadro() {
+      for (var i = 0; i < 2; i++) paso();
+      pintar();
+      if (alfa > 0.02) requestAnimationFrame(cuadro); else corriendo = false;
+    })();
+  }
+  function reactivar() { alfa = Math.max(alfa, 0.4); animar(); }
+
+  // Vista: zoom y desplazamiento.
+  var svg = $("lienzo"), vista = $("vista");
+  var cam = { x: 0, y: 0, k: 1 };
+  var bandaEtiquetas = null;
+  function aplicarCam() {
+    var w = svg.clientWidth, h = svg.clientHeight;
+    vista.setAttribute("transform", "translate(" + (w / 2 + cam.x) + "," + (h / 2 + cam.y) + ") scale(" + cam.k + ")");
+    // Las etiquetas sólo cambian al cruzar un umbral de zoom o de selección.
+    var banda = (cam.k > 1.6 ? 2 : cam.k > 0.45 ? 1 : 0) + "|" + (elegido ? elegido.d.id : "");
+    if (banda === bandaEtiquetas) return;
+    bandaEtiquetas = banda;
+    var cerca = cam.k > 1.6;
+    nodos.forEach(function (n) {
+      var ver = cerca || n === elegido || (pocos && conEtiqueta(n) && cam.k > 0.45);
+      n.etiqueta.style.display = ver ? "" : "none";
+    });
+  }
+  function encuadrar() {
+    var vis = nodos.filter(function (n) { return n.visible; });
+    if (!vis.length) return;
+    var x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    vis.forEach(function (n) { x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x); y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y); });
+    var w = svg.clientWidth, h = svg.clientHeight;
+    if (!w || !h) return false;
+    cam.k = Math.max(0.05, Math.min(2, 0.85 * Math.min(w / (x1 - x0 + 80), h / (y1 - y0 + 80))));
+    cam.x = -cam.k * (x0 + x1) / 2; cam.y = -cam.k * (y0 + y1) / 2;
+    aplicarCam();
+    return true;
+  }
+  svg.addEventListener("wheel", function (ev) {
+    ev.preventDefault();
+    var r = svg.getBoundingClientRect();
+    var px = ev.clientX - r.left - r.width / 2 - cam.x, py = ev.clientY - r.top - r.height / 2 - cam.y;
+    var f = Math.exp(-ev.deltaY * 0.0015), k = Math.max(0.05, Math.min(8, cam.k * f));
+    f = k / cam.k; cam.x -= px * (f - 1); cam.y -= py * (f - 1); cam.k = k;
+    aplicarCam();
+  }, { passive: false });
+  var arrastre = null;
+  svg.addEventListener("pointerdown", function (ev) {
+    if (arrastre) return;
+    arrastre = { tipo: "fondo", x: ev.clientX, y: ev.clientY, cx: cam.x, cy: cam.y, movio: false };
+    svg.classList.add("arrastrando");
+  });
+  function iniciarArrastreNodo(ev, n) {
+    ev.stopPropagation();
+    arrastre = { tipo: "nodo", n: n, movio: false };
+    n.fijo = true;
+    svg.classList.add("arrastrando");
+  }
+  window.addEventListener("pointermove", function (ev) {
+    if (!arrastre) return;
+    if (arrastre.tipo === "fondo") {
+      cam.x = arrastre.cx + ev.clientX - arrastre.x; cam.y = arrastre.cy + ev.clientY - arrastre.y;
+      arrastre.movio = true; aplicarCam();
+    } else {
+      var r = svg.getBoundingClientRect();
+      arrastre.n.x = (ev.clientX - r.left - r.width / 2 - cam.x) / cam.k;
+      arrastre.n.y = (ev.clientY - r.top - r.height / 2 - cam.y) / cam.k;
+      arrastre.movio = true; pintar(); reactivar();
+    }
+  });
+  window.addEventListener("pointerup", function () {
+    if (arrastre && arrastre.tipo === "nodo") arrastre.n.fijo = false;
+    if (arrastre && arrastre.tipo === "fondo" && !arrastre.movio) seleccionar(null);
+    arrastre = null; svg.classList.remove("arrastrando");
+  });
+  window.addEventListener("resize", aplicarCam);
+
+  // Selección y panel de detalle.
+  var elegido = null;
+  function vecinosDe(n) {
+    var v = {}; v[n.d.id] = true;
+    aristas.forEach(function (a) { if (a.o === n) v[a.t.d.id] = true; if (a.t === n) v[a.o.d.id] = true; });
+    return v;
+  }
+  function seleccionar(n) {
+    if (elegido) elegido.e.classList.remove("seleccionado");
+    elegido = n;
+    var panel = $("panel"), det = $("detalle");
+    det.textContent = "";
+    if (!n) { panel.classList.remove("visible"); resaltar(); aplicarCam(); return; }
+    n.e.classList.add("seleccionado");
+    det.appendChild(texto("h2", n.d.titulo));
+    det.appendChild(texto("div", n.d.tipo + " · " + n.d.universo + " · " + n.d.path, { "class": "meta" }));
+    (n.d.marcas || []).forEach(function (m) {
+      det.appendChild(texto("span", m.replace(/_/g, " "), { "class": "chip " + m }));
+    });
+    var attrs = Object.keys(n.d.atributos || {});
+    if (attrs.length) {
+      var tabla = el("table");
+      attrs.forEach(function (k) {
+        var tr = el("tr"); tr.appendChild(texto("td", k)); tr.appendChild(texto("td", n.d.atributos[k]));
+        tabla.appendChild(tr);
+      });
+      det.appendChild(tabla);
+    }
+    var rel = aristas.filter(function (a) { return a.o === n || a.t === n; });
+    if (rel.length) {
+      var ul = el("ul");
+      rel.forEach(function (a) {
+        var otro = a.o === n ? a.t : a.o;
+        var li = el("li");
+        li.appendChild(document.createTextNode((a.o === n ? a.d.clave + " → " : "← " + a.d.clave + " ")));
+        var enlace = texto("a", otro.d.titulo); enlace.addEventListener("click", function () { centrar(otro); seleccionar(otro); });
+        li.appendChild(enlace); ul.appendChild(li);
+      });
+      det.appendChild(ul);
+    }
+    if (n.d.cuerpo && n.d.cuerpo.trim()) det.appendChild(texto("pre", n.d.cuerpo.trim()));
+    panel.classList.add("visible");
+    resaltar(); aplicarCam();
+  }
+  function centrar(n) { cam.x = -n.x * cam.k; cam.y = -n.y * cam.k; aplicarCam(); }
+  $("cerrar").addEventListener("click", function () { seleccionar(null); });
+
+  // Resaltado: selección, búsqueda y "sólo marcas".
+  var busqueda = "";
+  function resaltar() {
+    var foco = elegido ? vecinosDe(elegido) : null;
+    var soloMarcas = $("solo-marcas").checked;
+    nodos.forEach(function (n) {
+      var coincide = !busqueda || n.d.titulo.toLowerCase().indexOf(busqueda) >= 0;
+      var marcado = !soloMarcas || (n.d.marcas && n.d.marcas.length);
+      var enFoco = !foco || foco[n.d.id];
+      n.e.classList.toggle("atenuado", !(coincide && marcado && enFoco));
+    });
+    aristas.forEach(function (a) {
+      var enFoco = !foco || (a.o === elegido || a.t === elegido);
+      a.e.classList.toggle("atenuada", !enFoco || !!busqueda);
+    });
+  }
+  $("buscar").addEventListener("input", function (ev) { busqueda = ev.target.value.trim().toLowerCase(); resaltar(); });
+  $("buscar").addEventListener("keydown", function (ev) {
+    if (ev.key !== "Enter" || !busqueda) return;
+    var n = nodos.find(function (m) { return m.visible && m.d.titulo.toLowerCase().indexOf(busqueda) >= 0; });
+    if (n) { centrar(n); seleccionar(n); }
+  });
+  $("solo-marcas").addEventListener("change", resaltar);
+
+  function aplicarFiltros() {
+    var visibles = 0;
+    nodos.forEach(function (n) {
+      n.visible = !!(activos.universos[n.d.universo] && activos.tipos[n.d.tipo]);
+      n.e.style.display = n.visible ? "" : "none";
+      if (n.visible) visibles++;
+    });
+    aristas.forEach(function (a) { a.e.style.display = a.o.visible && a.t.visible ? "" : "none"; });
+    $("conteo").textContent = visibles + " notas · " + aristas.filter(function (a) { return a.o.visible && a.t.visible; }).length + " relaciones";
+    $("vacio").style.display = visibles ? "none" : "flex";
+    if (elegido && !elegido.visible) seleccionar(null);
+    reactivar();
+  }
+
+  aplicarFiltros();
+  for (var i = 0; i < 120; i++) paso();
+  pintar(); animar();
+  // Encuadra cuando el lienzo tiene tamaño (al cargar, o al hacerse visible).
+  var encuadrado = encuadrar();
+  if (window.ResizeObserver) {
+    new ResizeObserver(function () { if (!encuadrado) encuadrado = encuadrar(); else aplicarCam(); }).observe(svg);
+  }
+  setTimeout(function () { encuadrado = encuadrar() || encuadrado; }, 1500);
+})();
+</script>
+</body>
+</html>

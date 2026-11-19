@@ -9,10 +9,11 @@ sólo con `--criterio` y en universos con `escritura_agentes = true` (ver más
 abajo). La lógica de admisión permanece en
 `universo-core`; la captura reutiliza la política y cuotas de la simulación OKF.
 
+Con los binarios instalados ([instalación](instalacion.md)):
+
 ```sh
-cargo build -p universo-mcp -p universo-cli
-./target/debug/universo-mcp --root ./bundle --manifiesto ./manifest.toml --invariantes ./invariants.sx
-python tools/demo_mcp.py --binary target/debug/universo-mcp --cli target/debug/universo
+universo-mcp --root ./bundle --manifiesto ./manifest.toml --invariantes ./invariants.sx
+python tools/demo_mcp.py --binary "$(command -v universo-mcp)" --cli "$(command -v universo)"
 ```
 
 Con un [repositorio de criterio](plan/10-criterio-distribuible.md) basta
