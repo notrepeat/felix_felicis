@@ -436,3 +436,34 @@ fn con_home_vacio_la_skill_no_se_escribe_en_el_directorio_actual() {
     assert_eq!(estado(&json, "skill"), "no_disponible");
     assert!(!e.repo.join(".claude").exists());
 }
+
+/// `--medir-uso` registra el MCP con `--registrar-uso` y lo recuerda en
+/// `git config felix.medirUso`, así `--verificar` lo espera sin repetirlo.
+#[test]
+fn medir_uso_registra_el_mcp_con_el_contador() {
+    let e = entorno();
+    assert_eq!(e.conectar(&["--aplicar"]).codigo, 0);
+    let (_, json) = e.json(&["--medir-uso"]);
+    assert_eq!(estado(&json, "mcp"), "desactualizado", "{json}");
+    let s = e.conectar(&["--aplicar", "--medir-uso"]);
+    assert_eq!(s.codigo, 0, "{}{}", s.stdout, s.stderr);
+    assert_eq!(e.git_config("felix.medirUso").as_deref(), Some("true"));
+    let add = fs::read_to_string(e.estado_mcp.with_extension("add")).unwrap();
+    assert!(add.trim_end().ends_with("--registrar-uso"), "{add}");
+    assert_eq!(e.json(&["--verificar"]).0, 0);
+}
+
+/// La preferencia se guarda aunque el MCP ya estuviera bien o no haya
+/// `claude` con qué registrarlo.
+#[test]
+fn medir_uso_se_recuerda_aunque_no_haya_claude() {
+    let e = entorno();
+    let out = e
+        .comando(&e.repo, &["conectar", "--aplicar", "--medir-uso"])
+        .env("FELIX_CLAUDE_BIN", e.raiz.join("no-existe"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("--registrar-uso"), "{stdout}");
+    assert_eq!(e.git_config("felix.medirUso").as_deref(), Some("true"));
+}

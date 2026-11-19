@@ -5,6 +5,12 @@ está en sus notas (`docs/release/`); aquí queda el resumen.
 
 ## Sin publicar
 
+- `universo metricas` mide el uso del repositorio de criterio desde su
+  historial y sus notas: actividad por autor y semana, precisión de las
+  capturas del agente, días hasta la promoción y candidatas estancadas.
+- `universo-mcp --registrar-uso` (con `--criterio`) anota cada llamada en
+  `.git/felix-uso-mcp.jsonl`, sin contenido. `universo conectar --medir-uso`
+  lo activa y lo recuerda en `git config felix.medirUso`.
 - `universo conectar --aplicar`: tras reemplazar el MCP, la salida dice a qué
   apuntaba antes («antes apuntaba a»), en vez de presentar el destino anterior
   como el actual.

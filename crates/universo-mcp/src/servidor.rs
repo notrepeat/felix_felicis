@@ -152,10 +152,21 @@ impl ServerHandler for Servidor {
         );
         let escritura = ESCRITURA.contains(&nombre.as_str()) && self.escritura();
         if !(consulta || escritura) {
+            crate::uso::anotar("desconocida", None, false);
             return Err(ErrorData::invalid_params("unknown_tool", None));
         }
         let mut argumentos: Map<String, Value> = request.arguments.unwrap_or_default();
         let universo = argumentos.remove("universe");
+        let herramienta = nombre.clone();
+        // Sólo un universo conocido (o «todos») se anota tal cual: el
+        // argumento es texto libre y el registro no guarda contenido.
+        let universo_pedido = universo.as_ref().and_then(Value::as_str).map(|u| {
+            if u == "todos" || self.universos.iter().any(|x| x.nombre == u) {
+                u.to_string()
+            } else {
+                "otro".to_string()
+            }
+        });
         // Como en el worker: 5.0 es un entero válido en JSON Schema.
         let limite = argumentos
             .get("limit")
@@ -170,9 +181,10 @@ impl ServerHandler for Servidor {
         let (value, error) = match self.destinos(&nombre, universo) {
             Err(code) => error(code),
             Ok(destinos) => {
-                let permit = Arc::clone(&self.ocupado)
-                    .try_acquire_owned()
-                    .map_err(|_| ErrorData::internal_error("server_busy", None))?;
+                let permit = Arc::clone(&self.ocupado).try_acquire_owned().map_err(|_| {
+                    crate::uso::anotar(&herramienta, universo_pedido.as_deref(), false);
+                    ErrorData::internal_error("server_busy", None)
+                })?;
                 let varios = destinos.len() > 1;
                 let con_nombre = !self.universos.is_empty();
                 let corrida = tokio::task::spawn_blocking(move || {
@@ -222,6 +234,7 @@ impl ServerHandler for Servidor {
                 }
             }
         };
+        crate::uso::anotar(&herramienta, universo_pedido.as_deref(), !error);
         let text = serde_json::to_string(&value)
             .map_err(|_| ErrorData::internal_error("response_invalid", None))?;
         let mut result = if error {

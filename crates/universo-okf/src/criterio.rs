@@ -347,6 +347,24 @@ pub fn buscar_hacia_arriba(desde: &Path) -> Option<PathBuf> {
 
 /// Rango de motor que escribe `init` para la versión `actual` (`X.Y.Z`): la
 /// misma menor, que en `0.x` puede cambiar contratos.
+/// Directorio de Git de un repositorio: `<raiz>/.git` o, en un worktree o
+/// submódulo (`.git` es un archivo `gitdir: <ruta>`), el que indica ese
+/// archivo. `None` si no hay.
+pub fn dir_git(raiz: &Path) -> Option<PathBuf> {
+    let git = raiz.join(".git");
+    if git.is_dir() {
+        return Some(git);
+    }
+    let texto = std::fs::read_to_string(&git).ok()?;
+    let ruta = PathBuf::from(texto.trim().strip_prefix("gitdir:")?.trim());
+    let ruta = if ruta.is_absolute() {
+        ruta
+    } else {
+        raiz.join(ruta)
+    };
+    ruta.is_dir().then_some(ruta)
+}
+
 pub fn rango_para(actual: &str) -> String {
     let [mayor, menor, _] = parsear_version(actual).unwrap_or([0, 0, 0]);
     if mayor == 0 {
