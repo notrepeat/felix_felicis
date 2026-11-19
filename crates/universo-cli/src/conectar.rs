@@ -29,10 +29,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) const USO: &str = "Uso: universo conectar [--aplicar | --verificar] [--cliente claude-code] [--criterio <dir>] [--format text|json]\nConecta este repositorio de criterio a Claude Code: hooks de Git con la ruta de este binario, el MCP a nivel de usuario y la skill felix-criterio. Sin --aplicar sólo muestra qué cambiaría; --verificar termina con 1 si falta algo.\n";
+pub(super) const USO: &str = "Uso: universo conectar [--aplicar | --verificar] [--medir-uso] [--cliente claude-code] [--criterio <dir>] [--format text|json]\nConecta este repositorio de criterio a Claude Code: hooks de Git con la ruta de este binario, el MCP a nivel de usuario y la skill felix-criterio. Sin --aplicar sólo muestra qué cambiaría; --verificar termina con 1 si falta algo. --medir-uso registra además las llamadas al MCP (sin contenido) para universo metricas, y lo recuerda en git config felix.medirUso.\n";
 
 const SKILL: &str = include_str!("../../../skills/felix-criterio/SKILL.md");
 const SERVIDOR: &str = "felix-criterio";
+/// Prefijo del detalle que dice a qué apunta hoy el MCP; tras aplicarlo, pasa
+/// a «antes apuntaba a».
+const APUNTA_HOY: &str = "hoy apunta a: ";
 /// Marca de los hooks que escribe Felix: un hook sin ella es del usuario y no
 /// se sobrescribe.
 const MARCA_HOOK: &str = "Hook de Felix";
@@ -53,6 +56,7 @@ enum Modo {
 
 pub(super) struct Solicitud {
     modo: Modo,
+    medir_uso: bool,
     criterio: Option<PathBuf>,
     formato: Formato,
 }
@@ -60,9 +64,17 @@ pub(super) struct Solicitud {
 pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     let fail = || USO.to_string();
     let (mut modo, mut criterio, mut formato, mut cliente) = (None, None, None, None);
+    let mut medir_uso = false;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
+        if arg == "--medir-uso" {
+            if std::mem::replace(&mut medir_uso, true) {
+                return Err(fail());
+            }
+            i += 1;
+            continue;
+        }
         let nuevo = match arg.as_str() {
             "--aplicar" => Some(Modo::Aplicar),
             "--verificar" => Some(Modo::Verificar),
@@ -102,6 +114,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     }
     Ok(Solicitud {
         modo: modo.unwrap_or(Modo::Preview),
+        medir_uso,
         criterio,
         formato: formato.unwrap_or(Formato::Texto),
     })
@@ -151,13 +164,16 @@ struct Contexto {
     /// Candidatos para `claude`, en orden (en Windows, también `claude.cmd`).
     claude: Vec<PathBuf>,
     skill: Option<PathBuf>,
+    /// El MCP registra su uso (`--registrar-uso`): pedido ahora con
+    /// `--medir-uso` o recordado en `git config felix.medirUso`.
+    medir_uso: bool,
 }
 
 fn ruta_absoluta(p: PathBuf) -> PathBuf {
     sin_prefijo_verbatim(p.canonicalize().unwrap_or(p))
 }
 
-fn contexto(raiz: &Path) -> Contexto {
+fn contexto(raiz: &Path, medir_uso: bool) -> Contexto {
     let exe = std::env::current_exe().ok().map(ruta_absoluta);
     let mcp = std::env::var_os("FELIX_MCP_BIN")
         .map(PathBuf::from)
@@ -190,6 +206,7 @@ fn contexto(raiz: &Path) -> Contexto {
         mcp,
         claude,
         skill: home.map(|h| h.join(".claude/skills/felix-criterio/SKILL.md")),
+        medir_uso: medir_uso || config_local(raiz, "felix.medirUso").is_some_and(|v| v == "true"),
     }
 }
 
@@ -277,8 +294,9 @@ fn comando_manual(c: &Contexto) -> String {
         .as_ref()
         .map_or_else(|| "universo-mcp".to_string(), |p| p.display().to_string());
     format!(
-        "claude mcp add --scope user {SERVIDOR} -- '{mcp}' --criterio '{}'",
-        c.raiz.display()
+        "claude mcp add --scope user {SERVIDOR} -- '{mcp}' --criterio '{}'{}",
+        c.raiz.display(),
+        if c.medir_uso { " --registrar-uso" } else { "" }
     )
 }
 
@@ -397,7 +415,11 @@ fn paso_mcp(c: &Contexto) -> Paso {
             }
             let comando = campo(&salida, "Command").unwrap_or_default();
             let args = campo(&salida, "Args").unwrap_or_default();
-            let esperado = format!("--criterio {}", c.raiz.display());
+            let esperado = format!(
+                "--criterio {}{}",
+                c.raiz.display(),
+                if c.medir_uso { " --registrar-uso" } else { "" }
+            );
             if misma_ruta(Path::new(comando), mcp) && args == esperado {
                 paso(Estado::Ok, String::new(), None)
             } else {
@@ -409,7 +431,7 @@ fn paso_mcp(c: &Contexto) -> Paso {
                         "claude mcp remove {SERVIDOR} --scope user; {}",
                         comando_manual(c)
                     ),
-                    Some(format!("hoy apunta a: {comando} {args}")),
+                    Some(format!("{APUNTA_HOY}{comando} {args}")),
                 )
             }
         }
@@ -491,20 +513,22 @@ fn aplicar(c: &Contexto, paso: &mut Paso) {
                 return false;
             }
             let (mcp, raiz) = (mcp.display().to_string(), c.raiz.display().to_string());
-            let agregado = exito(claude(
-                c,
-                &[
-                    "mcp",
-                    "add",
-                    "--scope",
-                    "user",
-                    SERVIDOR,
-                    "--",
-                    &mcp,
-                    "--criterio",
-                    &raiz,
-                ],
-            ));
+            let mut args = vec![
+                "mcp",
+                "add",
+                "--scope",
+                "user",
+                SERVIDOR,
+                "--",
+                &mcp,
+                "--criterio",
+                &raiz,
+            ];
+            if c.medir_uso {
+                args.push("--registrar-uso");
+            }
+            let agregado = exito(claude(c, &args));
+
             if !agregado && paso.estado == Estado::Desactualizado {
                 paso.detalle = Some(format!(
                     "se quitó el registro anterior y no se pudo agregar el nuevo; corre: {}",
@@ -520,6 +544,14 @@ fn aplicar(c: &Contexto, paso: &mut Paso) {
         _ => false,
     };
     paso.estado = if ok { Estado::Aplicado } else { Estado::Error };
+    // Aplicado, lo que el paso describía como actual pasó a ser lo anterior.
+    if ok {
+        if let Some(d) = &paso.detalle {
+            if let Some(resto) = d.strip_prefix(APUNTA_HOY) {
+                paso.detalle = Some(format!("antes apuntaba a: {resto}"));
+            }
+        }
+    }
 }
 
 fn texto(
@@ -576,7 +608,21 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
             return 1;
         }
     };
-    let c = contexto(&repo.raiz);
+    let c = contexto(&repo.raiz, s.medir_uso);
+    // `--medir-uso` se recuerda al aplicar, pase lo que pase con el MCP: así
+    // `--verificar` y las próximas corridas esperan el contador.
+    if s.modo == Modo::Aplicar
+        && s.medir_uso
+        && !exito_git(git(
+            &c.raiz,
+            &["config", "--local", "felix.medirUso", "true"],
+        ))
+    {
+        let texto =
+            "conectar: error\ncode: config_io\nno se pudo guardar git config felix.medirUso\n";
+        escribir_salida(salida, error, texto.as_bytes(), "stdout");
+        return 1;
+    }
     let mut pasos = revisar(&c);
     let pendientes = pasos.iter().filter(|p| p.estado.pendiente()).count();
     let commit = s.modo == Modo::Aplicar

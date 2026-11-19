@@ -26,7 +26,14 @@ async fn run() -> Result<(), ()> {
     }
     let (mut root, mut manifiesto, mut invariantes) = (None, None, None);
     let (mut criterio, mut universo, mut ignorar_version) = (None, None, false);
+    let mut registrar_uso = false;
     while let Some(arg) = args.next() {
+        if arg == "--registrar-uso" {
+            if std::mem::replace(&mut registrar_uso, true) {
+                return Err(());
+            }
+            continue;
+        }
         if arg == "--ignorar-version" {
             if std::mem::replace(&mut ignorar_version, true) {
                 return Err(());
@@ -57,6 +64,12 @@ async fn run() -> Result<(), ()> {
                 eprintln!("criterio: error\ncode: {}\n{e}", e.codigo());
             };
             let repo = universo_okf::criterio::RepoCriterio::cargar(&dir).map_err(informar)?;
+            // Uso local para `universo metricas`: dentro de .git, nunca versionado.
+            if registrar_uso {
+                if let Some(git) = universo_okf::criterio::dir_git(&repo.raiz) {
+                    universo_mcp::registrar_uso_en(git.join("felix-uso-mcp.jsonl"));
+                }
+            }
             if !ignorar_version {
                 repo.comprobar_motor(env!("CARGO_PKG_VERSION"))
                     .map_err(informar)?;
@@ -84,7 +97,7 @@ async fn run() -> Result<(), ()> {
             (config_de(elegido), universos, Some(elegido.nombre.clone()))
         }
         None => {
-            if universo.is_some() || ignorar_version {
+            if universo.is_some() || ignorar_version || registrar_uso {
                 return Err(());
             }
             (

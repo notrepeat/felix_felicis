@@ -395,3 +395,73 @@ fn una_objecion_aparece_en_el_contexto_del_criterio() {
         "{atomos:?}"
     );
 }
+
+/// Con `--registrar-uso`, cada llamada deja una línea en
+/// `.git/felix-uso-mcp.jsonl` (fecha, herramienta, universo y si falló), sin
+/// el contenido. Sin el flag, o sin `.git`, no se escribe nada.
+#[test]
+fn registrar_uso_anota_cada_llamada_sin_contenido() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_captura(dir.path());
+    let ruta = dir.path().join(".git/felix-uso-mcp.jsonl");
+    let criterio = dir.path().to_str().unwrap();
+    let peticiones = [
+        herramienta(
+            "search",
+            json!({"schema":"felix-mcp-v1","query":"secreto","include_values":true,"universe":"todos"}),
+        ),
+        herramienta(
+            "context",
+            json!({"schema":"felix-mcp-v1","node":"no/existe"}),
+        ),
+        // Un universo que no existe no se anota tal cual: puede traer texto.
+        herramienta(
+            "search",
+            json!({"schema":"felix-mcp-v1","query":"x","include_values":true,"universe":"dato privado"}),
+        ),
+        herramienta("no_existe", json!({})),
+    ];
+    // Sin .git: no hay dónde anotar.
+    sesion(&["--criterio", criterio, "--registrar-uso"], &peticiones);
+    assert!(!ruta.exists());
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    // Sin el flag: nada.
+    sesion(&["--criterio", criterio], &peticiones);
+    assert!(!ruta.exists());
+    sesion(&["--criterio", criterio, "--registrar-uso"], &peticiones);
+    let texto = std::fs::read_to_string(&ruta).unwrap();
+    let lineas: Vec<Value> = texto
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lineas.len(), 4, "{texto}");
+    assert_eq!(lineas[0]["herramienta"], "search");
+    assert_eq!(lineas[0]["universo"], "todos");
+    assert_eq!(lineas[0]["ok"], true);
+    assert_eq!(lineas[1]["herramienta"], "context");
+    assert_eq!(lineas[1]["ok"], false);
+    assert_eq!(lineas[0]["fecha"].as_str().unwrap().len(), 10);
+    assert_eq!(lineas[2]["universo"], "otro", "{texto}");
+    assert_eq!(lineas[3]["herramienta"], "desconocida", "{texto}");
+    assert_eq!(lineas[3]["ok"], false);
+    for privado in ["secreto", "dato privado", "no_existe", "no/existe"] {
+        assert!(!texto.contains(privado), "{privado}: {texto}");
+    }
+    // Con .git como archivo (worktree o submódulo), se sigue el gitdir.
+    let otro = tempfile::tempdir().unwrap();
+    repo_captura(otro.path());
+    let gitdir = otro.path().join("gitdir-real");
+    std::fs::create_dir(&gitdir).unwrap();
+    std::fs::write(otro.path().join(".git"), "gitdir: gitdir-real\n").unwrap();
+    sesion(
+        &[
+            "--criterio",
+            otro.path().to_str().unwrap(),
+            "--registrar-uso",
+        ],
+        &peticiones[..1],
+    );
+    assert!(gitdir.join("felix-uso-mcp.jsonl").is_file());
+    // Sólo con --criterio.
+    assert_ne!(termina_con(&["--registrar-uso", "--root", "x"]), 0);
+}

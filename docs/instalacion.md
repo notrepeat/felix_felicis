@@ -91,7 +91,7 @@ Sólo hace falta para trabajar en Felix o para una plataforma sin binario
 ```sh
 git clone <url-del-repositorio> felix_felicis
 cd felix_felicis
-git checkout v0.6.0        # o la versión que quieras; sin esto, la rama actual
+git checkout v0.7.0        # o la versión que quieras; sin esto, la rama actual
 cargo install --locked --path crates/universo-cli
 cargo install --locked --path crates/universo-mcp
 ```
@@ -158,6 +158,32 @@ Para revisar el MCP usa `claude mcp get`, que arranca el servidor registrado
 para ver su estado (con un límite de 60 s). Si `claude` no está instalado,
 aplica el resto, muestra el comando del MCP para correrlo a mano y termina con
 1 hasta que el MCP quede registrado. Repítelo en cada computador donde clones el repositorio.
+
+## Medir el uso del criterio
+
+```sh
+universo metricas                 # texto
+universo metricas --format json   # para guardar una línea base y comparar después
+```
+
+Lo calcula todo desde lo que el repositorio ya guarda:
+
+- **Actividad:** capturas, refuerzos, objeciones y promociones, separadas por
+  autor (un autor `agente:…` es un agente; el resto, tú) y por semana.
+- **Precisión del agente:** de lo que capturaron los agentes, qué parte
+  confirmaste (reforzada en dos proyectos o promovida) frente a lo objetado o
+  retirado.
+- **Maduración:** días desde la captura hasta la promoción a `vigente`.
+- **Estancadas:** candidatas sin segundo proyecto desde hace más de 30 días
+  (`--estancada-dias`). `--hasta AAAA-MM-DD` fija la fecha de corte.
+- **Uso del MCP**, si lo activas con `universo conectar --aplicar --medir-uso`.
+  Cada llamada de un agente deja una línea en `.git/felix-uso-mcp.jsonl` (en un
+  worktree, en su directorio de Git) con la fecha, la herramienta, el universo y
+  si falló. Nunca guarda el contenido: ni la consulta ni la respuesta, y un
+  universo que no existe queda como `otro`. Está dentro de Git, así que no se
+  versiona y cada computador mide el suyo. Para
+  apagarlo: `git config --unset felix.medirUso` y
+  `universo conectar --aplicar`.
 
 ## Ver el criterio como grafo
 

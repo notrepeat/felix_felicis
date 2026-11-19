@@ -287,6 +287,12 @@ fn hooks_viejos_skill_vieja_y_un_mcp_que_apunta_a_otro_lado_se_actualizan() {
 
     let s = e.conectar(&["--aplicar"]);
     assert_eq!(s.codigo, 0, "{}{}", s.stdout, s.stderr);
+    // Tras reemplazar el MCP, el detalle no describe el estado anterior como
+    // si fuera el actual.
+    let linea_mcp = s.stdout.lines().find(|l| l.contains("] mcp")).unwrap();
+    assert!(linea_mcp.starts_with("[aplicado] mcp"), "{linea_mcp}");
+    assert!(!linea_mcp.contains("hoy apunta a"), "{linea_mcp}");
+    assert!(linea_mcp.contains("antes apuntaba a"), "{linea_mcp}");
     // Los hooks están versionados: queda un commit pendiente.
     assert!(s.stdout.contains("git commit"), "{}", s.stdout);
     assert!(fs::read_to_string(&hook).unwrap().contains("felix.bin"));
@@ -429,4 +435,35 @@ fn con_home_vacio_la_skill_no_se_escribe_en_el_directorio_actual() {
     let json: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(estado(&json, "skill"), "no_disponible");
     assert!(!e.repo.join(".claude").exists());
+}
+
+/// `--medir-uso` registra el MCP con `--registrar-uso` y lo recuerda en
+/// `git config felix.medirUso`, así `--verificar` lo espera sin repetirlo.
+#[test]
+fn medir_uso_registra_el_mcp_con_el_contador() {
+    let e = entorno();
+    assert_eq!(e.conectar(&["--aplicar"]).codigo, 0);
+    let (_, json) = e.json(&["--medir-uso"]);
+    assert_eq!(estado(&json, "mcp"), "desactualizado", "{json}");
+    let s = e.conectar(&["--aplicar", "--medir-uso"]);
+    assert_eq!(s.codigo, 0, "{}{}", s.stdout, s.stderr);
+    assert_eq!(e.git_config("felix.medirUso").as_deref(), Some("true"));
+    let add = fs::read_to_string(e.estado_mcp.with_extension("add")).unwrap();
+    assert!(add.trim_end().ends_with("--registrar-uso"), "{add}");
+    assert_eq!(e.json(&["--verificar"]).0, 0);
+}
+
+/// La preferencia se guarda aunque el MCP ya estuviera bien o no haya
+/// `claude` con qué registrarlo.
+#[test]
+fn medir_uso_se_recuerda_aunque_no_haya_claude() {
+    let e = entorno();
+    let out = e
+        .comando(&e.repo, &["conectar", "--aplicar", "--medir-uso"])
+        .env("FELIX_CLAUDE_BIN", e.raiz.join("no-existe"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("--registrar-uso"), "{stdout}");
+    assert_eq!(e.git_config("felix.medirUso").as_deref(), Some("true"));
 }

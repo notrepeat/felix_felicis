@@ -2,9 +2,11 @@
 pub mod dominio;
 mod servidor;
 mod transporte;
+mod uso;
 mod worker;
 
 pub use servidor::servir;
+pub use uso::registrar_uso_en;
 pub use worker::ejecutar_worker;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
