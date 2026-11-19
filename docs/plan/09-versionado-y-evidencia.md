@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | `v0.6.0` publicada (2026-11-19) |
+| Estado | `v0.7.0` preparada (2026-11-19) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
@@ -20,6 +20,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 | `v0.4.0` | Criterio distribuible ([fase 10](10-criterio-distribuible.md)): repositorio de criterio, captura, promoción y MCP con varios universos. |
 | `v0.5.0` | Evaluación comparativa y benchmarks publicados (D5 de la fase 10 la movió desde `v0.4.0`). |
 | `v0.6.0` | Uso diario sin Rust: instaladores, `universo conectar` y `universo grafo`. |
+| `v0.7.0` | Medición del uso real: `universo metricas` y registro opcional del uso del MCP. |
 | `v1.0.0` | Contratos declarados estables y evidencia sostenida en uso real. |
 
 Mientras la API sea `0.x`, los parches corrigen comportamiento compatible y

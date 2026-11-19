@@ -3,14 +3,19 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
-## Sin publicar
+## 0.7.0 — 2026-11-19
+
+Medición del uso del criterio. Ver [notas](docs/release/v0.7.0.md). Cambio
+incompatible pre-1.0: un repositorio de criterio creado con `0.6.x` debe
+cambiar `motor` en `felix.toml`.
 
 - `universo metricas` mide el uso del repositorio de criterio desde su
   historial y sus notas: actividad por autor y semana, precisión de las
   capturas del agente, días hasta la promoción y candidatas estancadas.
 - `universo-mcp --registrar-uso` (con `--criterio`) anota cada llamada en
-  `.git/felix-uso-mcp.jsonl`, sin contenido. `universo conectar --medir-uso`
-  lo activa y lo recuerda en `git config felix.medirUso`.
+  `felix-uso-mcp.jsonl`, dentro del directorio de Git del repositorio, sin
+  contenido. `universo conectar --aplicar --medir-uso` lo activa y lo recuerda
+  en `git config felix.medirUso`.
 - `universo conectar --aplicar`: tras reemplazar el MCP, la salida dice a qué
   apuntaba antes («antes apuntaba a»), en vez de presentar el destino anterior
   como el actual.
