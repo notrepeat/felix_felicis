@@ -65,6 +65,7 @@ async fn run() -> Result<(), ()> {
             };
             let repo = universo_okf::criterio::RepoCriterio::cargar(&dir).map_err(informar)?;
             // Uso local para `universo metricas`: dentro de .git, nunca versionado.
+            universo_mcp::usar_repositorio(repo.raiz.clone());
             if registrar_uso {
                 if let Some(git) = universo_okf::criterio::dir_git(&repo.raiz) {
                     universo_mcp::registrar_uso_en(git.join("felix-uso-mcp.jsonl"));

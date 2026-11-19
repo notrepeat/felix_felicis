@@ -2,7 +2,7 @@
 //! de criterio. Conteos, rutas y los últimos cambios, sin cuerpos: sirve para
 //! decidir qué revisar o promover. **Su salida incluye datos del bundle**
 //! (rutas).
-use super::{Formato, criterio::resolver_repo, escribir_salida, historial::visible};
+use super::{Formato, criterio::resolver_repo_lectura, escribir_salida, historial::visible};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -253,7 +253,7 @@ fn texto(universos: &[Value]) -> String {
 }
 
 pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl Write) -> i32 {
-    let repo = match resolver_repo(s.criterio, s.ignorar_version) {
+    let repo = match resolver_repo_lectura(s.criterio, s.ignorar_version) {
         Ok(repo) => repo,
         Err(e) => {
             let texto = match s.formato {

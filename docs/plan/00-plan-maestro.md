@@ -179,7 +179,7 @@ flowchart LR
 | [06](06-loop-de-agentes-mcp.md) | Loop de agentes por MCP | completo | 05 | Un agente propone, recibe veredicto, corrige y readmite. |
 | [07](07-validacion-empirica.md) | Validación empírica | completo | 05–06 | Hay mediciones públicas de corrección, utilidad y costo. |
 | [08](08-integracion-privada.md) | Integración privada | completo (legacy desde 2026-11-18) | 04 | El bundle real valida el motor sin filtrarse al repositorio público. |
-| [09](09-versionado-y-evidencia.md) | Versionado y evidencia | en curso: `v0.2.0` a `v0.7.0` publicadas | 07–08 | Cada tag corresponde a capacidades demostradas y CI verde. |
+| [09](09-versionado-y-evidencia.md) | Versionado y evidencia | en curso: `v0.2.0` a `v0.8.0` publicadas | 07–08 | Cada tag corresponde a capacidades demostradas y CI verde. |
 | [10](10-criterio-distribuible.md) | Criterio distribuible | en curso: `v0.4.0` publicada; falta U10 (uso real) | `v0.3.0` | El criterio vive en su propio repositorio Git privado; se captura con un comando, lo usa cualquier agente y se mueve entre computadores sin perder el historial. |
 | [11](11-evaluacion-criterio.md) | Evaluación del criterio | completo: neutral por la regla ([informe](../../evaluation/criterio_uso_report.md)) | 10 | Se mide si consultar el criterio guardado hace que un agente decida como quiere el dueño, frente a no tenerlo y a tenerlo en el prompt; gate `v0.5.0`. |
 | [12](12-apply-incremental.md) | Apply proporcional a lo que cambia | propuesto | 04 | El stage enlaza los archivos sin cambios en vez de copiarlos y sincronizarlos: los `fsync` de un apply dependen de lo que cambia, no del tamaño del bundle, sin tocar el protocolo de publicación de la fase 04. |

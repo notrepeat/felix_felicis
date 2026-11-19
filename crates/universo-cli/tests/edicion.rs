@@ -16,6 +16,9 @@ fn universo_con(cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Salida {
         .args(args)
         .current_dir(cwd)
         .env_remove("FELIX_CRITERIO")
+        // Sin repositorio de usuario: nunca se lee la configuración real.
+        .env("XDG_CONFIG_HOME", "/felix-tests/sin-config")
+        .env("APPDATA", "/felix-tests/sin-config")
         .env_remove("FELIX_UNIVERSO")
         .env_remove("VISUAL")
         .env_remove("EDITOR");

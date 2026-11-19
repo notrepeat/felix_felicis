@@ -4,7 +4,7 @@
 //! de `resumen` (listas para promover, objetadas). Los datos van incrustados y
 //! la página no carga nada de la red (CSP `default-src 'none'`). **Su salida
 //! incluye datos del bundle**: títulos, atributos y cuerpos.
-use super::{criterio::resolver_repo, escribir_salida, resumen::resumir};
+use super::{criterio::resolver_repo_lectura, escribir_salida, resumen::resumir};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -310,7 +310,7 @@ pub(super) fn ejecutar(s: Solicitud, salida: &mut impl Write, error: &mut impl W
             universo,
             ignorar_version,
         } => {
-            let repo = match resolver_repo(criterio.clone(), *ignorar_version) {
+            let repo = match resolver_repo_lectura(criterio.clone(), *ignorar_version) {
                 Ok(repo) => repo,
                 Err(e) => return error_texto(salida, error, e.codigo(), &format!("{e}\n")),
             };

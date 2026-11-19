@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | `v0.7.0` publicada (2026-11-19) |
+| Estado | `v0.8.0` publicada (2026-11-19) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
@@ -21,6 +21,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 | `v0.5.0` | Evaluación comparativa y benchmarks publicados (D5 de la fase 10 la movió desde `v0.4.0`). |
 | `v0.6.0` | Uso diario sin Rust: instaladores, `universo conectar` y `universo grafo`. |
 | `v0.7.0` | Medición del uso real: `universo metricas` y registro opcional del uso del MCP. |
+| `v0.8.0` | Medición simple: `metrics` en el MCP y comandos de lectura desde cualquier carpeta. |
 | `v1.0.0` | Contratos declarados estables y evidencia sostenida en uso real. |
 
 Mientras la API sea `0.x`, los parches corrigen comportamiento compatible y
@@ -83,6 +84,7 @@ git tag --list --sort=-version:refname
 | 2026-11-19 | `v0.5.0` | `e029cbc` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows | [Notas](../release/v0.5.0.md): evaluación del criterio (fase 11, neutral por la regla) y benchmarks publicados; arreglo del evaluador para guardas Edge con extremo fijado. |
 | 2026-11-19 | `v0.6.0` | `9b5b128` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows e instaladores sin Rust | [Notas](../release/v0.6.0.md): `universo conectar`, `universo grafo`, hooks con `felix.bin` e instaladores; probado en un entorno sin Rust. |
 | 2026-11-19 | `v0.7.0` | `68d2df9` | verde (Linux y Windows); release con binarios e instaladores | [Notas](../release/v0.7.0.md): `universo metricas` y registro opcional del uso del MCP; línea base del repositorio de criterio real tomada. |
+| 2026-11-19 | `v0.8.0` | `bc3fd20` | verde (Linux y Windows); release con binarios e instaladores | [Notas](../release/v0.8.0.md): `metrics` en el MCP y comandos de lectura desde cualquier carpeta. |
 
 ## Decisión posterior
 

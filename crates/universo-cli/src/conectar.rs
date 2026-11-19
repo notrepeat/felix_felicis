@@ -458,6 +458,32 @@ fn paso_skill(c: &Contexto) -> Paso {
     }
 }
 
+fn paso_repo_usuario(c: &Contexto) -> Paso {
+    let (estado, accion) = match universo_okf::criterio::archivo_repo_usuario() {
+        None => (
+            Estado::NoDisponible,
+            "no se conoce la carpeta de configuración".to_string(),
+        ),
+        Some(archivo) => {
+            let accion = format!(
+                "registrar este repositorio en {} (metricas, grafo y resumen desde cualquier carpeta)",
+                archivo.display()
+            );
+            match fs::read_to_string(&archivo) {
+                Ok(t) if misma_ruta(Path::new(t.trim()), &c.raiz) => (Estado::Ok, String::new()),
+                Ok(_) => (Estado::Desactualizado, accion),
+                Err(_) => (Estado::Falta, accion),
+            }
+        }
+    };
+    Paso {
+        id: "repo_usuario",
+        estado,
+        accion,
+        detalle: None,
+    }
+}
+
 /// Revisa cada paso sin escribir nada.
 fn revisar(c: &Contexto) -> Vec<Paso> {
     vec![
@@ -466,6 +492,7 @@ fn revisar(c: &Contexto) -> Vec<Paso> {
         paso_hooks_activos(c),
         paso_mcp(c),
         paso_skill(c),
+        paso_repo_usuario(c),
     ]
 }
 
@@ -540,6 +567,12 @@ fn aplicar(c: &Contexto, paso: &mut Paso) {
         "skill" => c.skill.as_ref().is_some_and(|ruta| {
             ruta.parent().is_some_and(|p| fs::create_dir_all(p).is_ok())
                 && fs::write(ruta, SKILL).is_ok()
+        }),
+        "repo_usuario" => universo_okf::criterio::archivo_repo_usuario().is_some_and(|archivo| {
+            archivo
+                .parent()
+                .is_some_and(|p| fs::create_dir_all(p).is_ok())
+                && fs::write(&archivo, format!("{}\n", c.raiz.display())).is_ok()
         }),
         _ => false,
     };

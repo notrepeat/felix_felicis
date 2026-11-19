@@ -345,6 +345,31 @@ pub fn buscar_hacia_arriba(desde: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// Archivo donde `universo conectar` registra el repositorio de criterio del
+/// usuario: `$XDG_CONFIG_HOME/felix/criterio` o `~/.config/felix/criterio`
+/// (en Windows, `%APPDATA%\felix\criterio`). `None` si no hay una base
+/// absoluta.
+pub fn archivo_repo_usuario() -> Option<PathBuf> {
+    let absoluta = |v: &str| {
+        std::env::var_os(v)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    let base = if cfg!(windows) {
+        absoluta("APPDATA")
+    } else {
+        absoluta("XDG_CONFIG_HOME").or_else(|| absoluta("HOME").map(|h| h.join(".config")))
+    }?;
+    Some(base.join("felix").join("criterio"))
+}
+
+/// El repositorio de criterio registrado por `conectar`, si sigue existiendo.
+pub fn repo_usuario() -> Option<PathBuf> {
+    let texto = std::fs::read_to_string(archivo_repo_usuario()?).ok()?;
+    let raiz = PathBuf::from(texto.trim());
+    (raiz.is_absolute() && raiz.join(ARCHIVO).is_file()).then_some(raiz)
+}
+
 /// Directorio de Git de un repositorio: `<raiz>/.git` o, en un worktree o
 /// submódulo (`.git` es un archivo `gitdir: <ruta>`), el que indica ese
 /// archivo. `None` si no hay.

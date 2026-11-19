@@ -1,10 +1,12 @@
 //! Adaptador MCP de solo lectura; el motor y sus veredictos permanecen en core.
 pub mod dominio;
+mod metricas;
 mod servidor;
 mod transporte;
 mod uso;
 mod worker;
 
+pub use metricas::usar_repositorio;
 pub use servidor::servir;
 pub use uso::registrar_uso_en;
 pub use worker::ejecutar_worker;
