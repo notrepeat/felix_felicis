@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | `v0.6.0` preparada (2026-11-19) |
+| Estado | `v0.6.0` publicada (2026-11-19) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
@@ -80,6 +80,7 @@ git tag --list --sort=-version:refname
 | 2026-11-18 | `v0.3.0` | `220a24a` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows | [Notas](../release/v0.3.0.md): búsqueda, historial consultable con `diff`, `why` y `search` en el MCP, instalación. Gate «loop MCP completo y equivalente al CLI»: el loop se cumple; la equivalencia es parcial a propósito (el MCP no escribe ni expone el historial). |
 | 2026-11-19 | `v0.4.0` | `2a9bbe0` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows | [Notas](../release/v0.4.0.md): criterio distribuible (fase 10). Gate redefinido por D5: esta fase como `v0.4.0` y la evaluación comparativa en `v0.5.0`. La fase sigue abierta hasta U10 (uso real). |
 | 2026-11-19 | `v0.5.0` | `e029cbc` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows | [Notas](../release/v0.5.0.md): evaluación del criterio (fase 11, neutral por la regla) y benchmarks publicados; arreglo del evaluador para guardas Edge con extremo fijado. |
+| 2026-11-19 | `v0.6.0` | `9b5b128` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows e instaladores sin Rust | [Notas](../release/v0.6.0.md): `universo conectar`, `universo grafo`, hooks con `felix.bin` e instaladores; probado en un entorno sin Rust. |
 
 ## Decisión posterior
 
