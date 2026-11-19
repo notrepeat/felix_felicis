@@ -599,7 +599,44 @@ Es la parte difícil: cuándo una frase es criterio y cuándo no.
 - [ ] La guía y la skill existen y están probadas con el corpus.
 - [ ] La precisión medida es alta, por ejemplo ≥ 0,9, porque un falso
       positivo ensucia la base. La cobertura se informa tal cual.
-- [ ] Ninguna captura al cierre se escribe sin tu confirmación.
+- [x] Ninguna captura al cierre se escribe sin tu confirmación (la skill y
+      `AGENTS.md` lo exigen; es una regla de uso, no algo que la CLI impida).
+
+**Hecho, sin la corrida real** (2026-11-18):
+
+- La guía es la skill `skills/felix-criterio/SKILL.md`, instalable en Claude
+  Code (`docs/instalacion.md`). `AGENTS.md`, que genera `init --git`, resume
+  qué no es criterio, la pregunta ante la duda y la captura al cierre con
+  confirmación.
+- El corpus `evaluation/criterio_deteccion/corpus.json` tiene 45
+  conversaciones ficticias: 15 explícitas, 8 implícitas y 22 que no son
+  criterio. Incluye casos sin los marcadores de la skill («siempre»,
+  «prefiero») y frases con esas palabras que no son instrucciones.
+- El runner `evaluation/run_criterio_deteccion.py` da la skill como
+  instrucción de sistema a Claude Code aislado con bubblewrap (sin
+  herramientas, ajustes ni MCP del usuario). Informa precisión y cobertura con
+  su intervalo de Wilson al 95 %, y el acierto de categoría. Un timeout o
+  fallo técnico no cuenta como «ninguna»: invalida la corrida. Un corte por
+  cuota conserva lo ya clasificado. `evaluation/test_criterio_deteccion.py` lo
+  prueba sin LLM, con un oráculo y con un `claude` falso.
+- Límites de la medición: se mide la guía, no que Claude Code dispare la skill
+  por su descripción. «Ante la duda pregunta» se cuenta como no capturar
+  (`ninguna`). Con 23 positivos, un falso positivo más o menos mueve la
+  precisión unos cuatro puntos: el intervalo lo muestra. La skill y el corpus
+  los escribió la misma mano; un test impide que la skill repita tramos de
+  cinco palabras del corpus, pero comparten vocabulario, así que el resultado será optimista frente a
+  conversaciones reales (U10 es la prueba de verdad).
+
+**Pendiente de tu decisión:** la corrida con Claude, como las corridas reales
+del estudio de cuatro brazos, usa tu suscripción. Son 45 llamadas, una por
+caso:
+
+```sh
+python3 evaluation/run_criterio_deteccion.py --agente claude --model claude-sonnet-5-5
+```
+
+El resultado queda en `evaluation/results/criterio-deteccion-claude.json`;
+se publica aunque sea malo. Con eso se marcan las dos primeras casillas.
 
 ## Hallazgos
 

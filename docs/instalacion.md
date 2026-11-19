@@ -70,6 +70,21 @@ describe los comandos, [guardia](guardia.md) el hook de pre-commit y
 `stdio`. Usa rutas absolutas en la configuración del cliente, porque el
 directorio de trabajo del proceso lo decide el cliente.
 
+## Skill de Claude Code para detectar criterio
+
+`skills/felix-criterio/SKILL.md` enseña a un agente qué frases son criterio
+(instrucciones generales, validaciones explícitas o implícitas), qué no lo es,
+a preguntar ante la duda y a no guardar nada al cerrar una sesión sin tu
+confirmación. Para instalarla en Claude Code, copia el directorio:
+
+```sh
+mkdir -p ~/.claude/skills
+cp -r skills/felix-criterio ~/.claude/skills/
+```
+
+`evaluation/run_criterio_deteccion.py` mide su precisión sobre un corpus
+ficticio (fase 10, U13); la corrida con Claude está pendiente.
+
 ## Desinstalar
 
 ```sh
