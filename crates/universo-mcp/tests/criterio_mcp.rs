@@ -230,7 +230,13 @@ fn con_criterio_las_herramientas_aceptan_universo_y_anuncian_la_captura() {
     ] {
         assert!(nombres.contains(&esperado), "{nombres:?}");
     }
-    for t in lista.as_array().unwrap() {
+    // `metrics` mide el repositorio entero: no lleva universo.
+    for t in lista
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["name"] != "metrics")
+    {
         assert!(
             t["inputSchema"]["properties"]["universe"].is_object(),
             "{t}"
@@ -464,4 +470,58 @@ fn registrar_uso_anota_cada_llamada_sin_contenido() {
     assert!(gitdir.join("felix-uso-mcp.jsonl").is_file());
     // Sólo con --criterio.
     assert_ne!(termina_con(&["--registrar-uso", "--root", "x"]), 0);
+}
+
+/// `metrics`: las métricas del repositorio de criterio, sólo con --criterio.
+/// Sin include_values devuelve conteos, no rutas.
+#[test]
+fn metrics_responde_las_metricas_del_repositorio() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_captura(dir.path());
+    let raiz = dir.path().to_str().unwrap();
+    let nombres = |args: &[&str]| -> Vec<String> {
+        sesion(args, &[("tools/list", json!({}))])[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(nombres(&["--criterio", raiz]).contains(&"metrics".to_string()));
+    let bundle = dir.path().join("u/candidatos");
+    let sin_criterio = nombres(&[
+        "--root",
+        bundle.join("bundle").to_str().unwrap(),
+        "--manifiesto",
+        bundle.join("manifest.toml").to_str().unwrap(),
+        "--invariantes",
+        bundle.join("invariants.sx").to_str().unwrap(),
+    ]);
+    assert!(!sin_criterio.contains(&"metrics".to_string()));
+
+    let r = sesion(
+        &["--criterio", raiz],
+        &[
+            herramienta("metrics", json!({"schema":"felix-mcp-v1"})),
+            herramienta(
+                "metrics",
+                json!({"schema":"felix-mcp-v1","include_values":true,"stale_days":10,"until":"2026-11-19"}),
+            ),
+            herramienta(
+                "metrics",
+                json!({"schema":"felix-mcp-v1","until":"2026-02-31"}),
+            ),
+            herramienta("metrics", json!({"schema":"felix-mcp-v1","otra":1})),
+        ],
+    );
+    let m = &r[0]["structuredContent"];
+    assert_eq!(m["status"], "ok", "{m}");
+    assert_eq!(m["metrics"]["schema"], "felix-metricas-v1", "{m}");
+    assert_eq!(m["metrics"]["actividad"]["capturas"]["total"], 0, "{m}");
+    assert_eq!(m["metrics"]["estancadas"]["notas"], json!([]), "{m}");
+    let m = &r[1]["structuredContent"]["metrics"];
+    assert_eq!(m["estancadas"]["dias"], 10, "{m}");
+    assert_eq!(m["hasta"], "2026-11-19", "{m}");
+    assert_eq!(r[2]["isError"], true, "{}", r[2]);
+    assert_eq!(r[3]["isError"], true, "{}", r[3]);
 }

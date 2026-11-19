@@ -7,6 +7,9 @@ fn universo(cwd: &Path, args: &[&str]) -> String {
         .args(args)
         .current_dir(cwd)
         .env_remove("FELIX_CRITERIO")
+        // Sin repositorio de usuario: nunca se lee la configuración real.
+        .env("XDG_CONFIG_HOME", "/felix-tests/sin-config")
+        .env("APPDATA", "/felix-tests/sin-config")
         .env_remove("FELIX_UNIVERSO")
         .output()
         .unwrap();
@@ -175,6 +178,9 @@ fn universo_codigo(cwd: &Path, args: &[&str]) -> (i32, String) {
         .args(args)
         .current_dir(cwd)
         .env_remove("FELIX_CRITERIO")
+        // Sin repositorio de usuario: nunca se lee la configuración real.
+        .env("XDG_CONFIG_HOME", "/felix-tests/sin-config")
+        .env("APPDATA", "/felix-tests/sin-config")
         .env_remove("FELIX_UNIVERSO")
         .output()
         .unwrap();

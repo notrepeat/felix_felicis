@@ -18,6 +18,9 @@ fn universo_en(cwd: &Path, args: &[&str], env: &[(&str, &Path)]) -> Salida {
         .args(args)
         .current_dir(cwd)
         .env_remove("FELIX_CRITERIO")
+        // Sin repositorio de usuario: nunca se lee la configuración real.
+        .env("XDG_CONFIG_HOME", "/felix-tests/sin-config")
+        .env("APPDATA", "/felix-tests/sin-config")
         .env_remove("FELIX_UNIVERSO");
     for (clave, valor) in env {
         comando.env(clave, valor);
@@ -521,6 +524,9 @@ fn el_hook_post_merge_avisa_sin_fallar() {
             .current_dir(&repo)
             .env("FELIX_BIN", env!("CARGO_BIN_EXE_universo"))
             .env_remove("FELIX_CRITERIO")
+            // Sin repositorio de usuario: nunca se lee la configuración real.
+            .env("XDG_CONFIG_HOME", "/felix-tests/sin-config")
+            .env("APPDATA", "/felix-tests/sin-config")
             .output()
             .unwrap();
         assert!(out.status.success());

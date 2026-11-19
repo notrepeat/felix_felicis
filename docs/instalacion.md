@@ -135,7 +135,7 @@ universo conectar --aplicar  # lo hace
 universo conectar --verificar
 ```
 
-`--aplicar` revisa cinco pasos y hace sólo los que faltan:
+`--aplicar` revisa seis pasos y hace sólo los que faltan:
 
 - `binario`: guarda la ruta de este `universo` en `git config felix.bin`, para
   que los hooks no dependan del `PATH`. Usa siempre el mismo binario, el
@@ -150,7 +150,14 @@ universo conectar --verificar
   absolutas. El nombre es uno por usuario: si ya apunta a otro repositorio de
   criterio, la vista previa lo dice y `--aplicar` lo reemplaza. Un servidor con
   el mismo nombre en otro alcance (local o de proyecto) no se toca;
-- `skill`: deja la skill de esta versión en `~/.claude/skills/felix-criterio/`.
+- `skill`: deja la skill de esta versión en `~/.claude/skills/felix-criterio/`;
+- `repo_usuario`: registra el repositorio como el de tu usuario
+  (`$XDG_CONFIG_HOME/felix/criterio`, o `~/.config/felix/criterio`; en
+  Windows, `%APPDATA%\felix\criterio`), así `universo metricas`, `grafo` y
+  `resumen` funcionan desde cualquier carpeta. Sólo esos comandos, que leen:
+  los que escriben, como `promover` o `conectar`, siguen pidiendo estar dentro
+  del repositorio o `--criterio`. Dentro de otro repositorio de criterio manda
+  ese. Si conectas un segundo repositorio, pasa a ser el registrado.
 
 Sólo toca la configuración local de Git de ese repositorio, la de Claude Code y
 la carpeta de la skill: no hace commits, no cambia la shell ni otros programas.
@@ -160,6 +167,11 @@ aplica el resto, muestra el comando del MCP para correrlo a mano y termina con
 1 hasta que el MCP quede registrado. Repítelo en cada computador donde clones el repositorio.
 
 ## Medir el uso del criterio
+
+Lo más simple es preguntarle al agente: «¿cómo va mi criterio?». El MCP tiene
+la herramienta `metrics`, que devuelve lo mismo que el comando: por defecto
+conteos y los nombres de tus universos, y las rutas de las candidatas
+estancadas sólo si el agente las pide. Desde la terminal, en cualquier carpeta una vez conectado:
 
 ```sh
 universo metricas                 # texto

@@ -130,7 +130,11 @@ impl ServerHandler for Servidor {
         if request.is_some_and(|p| p.cursor.is_some()) {
             return Err(ErrorData::invalid_params("pagination_not_supported", None));
         }
-        let tools = herramientas(!self.universos.is_empty(), self.escritura())
+        let mut definiciones = herramientas(!self.universos.is_empty(), self.escritura());
+        if crate::metricas::activa() {
+            definiciones.push(crate::metricas::definicion());
+        }
+        let tools = definiciones
             .into_iter()
             .map(serde_json::from_value)
             .collect::<Result<Vec<Tool>, _>>()
@@ -146,6 +150,35 @@ impl ServerHandler for Servidor {
         _: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let nombre = request.name.into_owned();
+        if nombre == "metrics" && crate::metricas::activa() {
+            let argumentos: Map<String, Value> = request.arguments.unwrap_or_default();
+            // Mismo límite de concurrencia que las demás herramientas.
+            let permit = Arc::clone(&self.ocupado).try_acquire_owned().map_err(|_| {
+                crate::uso::anotar("metrics", None, false);
+                ErrorData::internal_error("server_busy", None)
+            })?;
+            let (value, error) = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                crate::metricas::ejecutar(&argumentos)
+            })
+            .await
+            .unwrap_or_else(|_| {
+                (
+                    json!({"schema":"felix-mcp-v1","status":"error","code":"worker_failed"}),
+                    true,
+                )
+            });
+            crate::uso::anotar("metrics", None, !error);
+            let text = serde_json::to_string(&value)
+                .map_err(|_| ErrorData::internal_error("response_invalid", None))?;
+            let mut result = if error {
+                CallToolResult::error(vec![ContentBlock::text(text)])
+            } else {
+                CallToolResult::success(vec![ContentBlock::text(text)])
+            };
+            result.structured_content = Some(value);
+            return Ok(result.into());
+        }
         let consulta = matches!(
             nombre.as_str(),
             "context" | "propose" | "check" | "why" | "search"

@@ -214,8 +214,8 @@ fn ruta(ruta: &Path) -> String {
 }
 
 /// El repositorio de criterio para comandos que usan varios universos
-/// (`promover`): `--criterio`, `FELIX_CRITERIO` o el `felix.toml` más
-/// cercano, con el control de versión del motor.
+/// (`promover`, `conectar`): `--criterio`, `FELIX_CRITERIO` o el `felix.toml`
+/// más cercano, con el control de versión del motor.
 pub(super) fn resolver_repo(
     criterio: Option<PathBuf>,
     ignorar_version: bool,
@@ -233,6 +233,25 @@ pub(super) fn resolver_repo(
         repo.comprobar_motor(env!("CARGO_PKG_VERSION"))?;
     }
     Ok(repo)
+}
+
+/// Como [`resolver_repo`], para comandos que sólo leen (`metricas`, `grafo`,
+/// `resumen`): fuera de todo repositorio usa el que `conectar` registró para
+/// el usuario. Los que escriben no, para no tocar un repositorio que no se ve.
+pub(super) fn resolver_repo_lectura(
+    criterio: Option<PathBuf>,
+    ignorar_version: bool,
+) -> Result<RepoCriterio, ErrorCriterio> {
+    let fuera = criterio.is_none()
+        && de_entorno("FELIX_CRITERIO").is_none()
+        && std::env::current_dir()
+            .ok()
+            .and_then(|cwd| buscar_hacia_arriba(&cwd))
+            .is_none();
+    match (fuera, universo_okf::criterio::repo_usuario()) {
+        (true, Some(raiz)) => resolver_repo(Some(raiz), ignorar_version),
+        _ => resolver_repo(criterio, ignorar_version),
+    }
 }
 
 /// Prepara `args` (con el comando en la primera posición) para el parser.

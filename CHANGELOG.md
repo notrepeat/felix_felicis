@@ -5,6 +5,14 @@ está en sus notas (`docs/release/`); aquí queda el resumen.
 
 ## Sin publicar
 
+- Herramienta `metrics` en el MCP (con `--criterio`): las métricas del
+  repositorio para que un agente responda «¿cómo va mi criterio?»; conteos y
+  nombres de universo por defecto, rutas sólo con `include_values`. El cálculo pasa a
+  `universo_okf::metricas`, compartido con la CLI.
+- `universo conectar` registra el repositorio como el del usuario
+  (`~/.config/felix/criterio`): `metricas`, `grafo` y `resumen`, que sólo
+  leen, funcionan desde cualquier carpeta.
+- La skill `felix-criterio` dice cuándo usar `metrics`.
 - `universo metricas` distingue la medición del MCP activada pero sin
   llamadas todavía («activado, sin llamadas todavía») de la no activada.
 

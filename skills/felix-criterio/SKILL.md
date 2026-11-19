@@ -75,6 +75,13 @@ Antes de decidir algo sobre lo que el dueño podría tener opinión, consulta:
 `universo search <términos> --universo vigente`, luego `candidatos` (MCP:
 `search` con `universe: "todos"`).
 
+## Cómo va el criterio
+
+Si el dueño pregunta cómo va su criterio (qué se capturó, qué está listo para
+promover, si los agentes lo consultan), usa la herramienta `metrics` del MCP o
+`universo metricas`, y resúmelo en pocas líneas: actividad reciente, precisión
+de lo que capturaron los agentes, candidatas estancadas y qué conviene revisar.
+
 ## Captura al cerrar
 
 Al final de una sesión, si el dueño lo pide o lo acepta:

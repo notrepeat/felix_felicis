@@ -80,6 +80,9 @@ impl Entorno {
         c.args(args)
             .current_dir(cwd)
             .env_remove("FELIX_CRITERIO")
+            // Configuración de usuario dentro del HOME temporal, nunca la real.
+            .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            .env("APPDATA", self.home.join("AppData"))
             .env_remove("FELIX_UNIVERSO")
             .env_remove("FELIX_BIN")
             .env("HOME", &self.home)
@@ -169,6 +172,7 @@ fn la_vista_previa_lista_los_cambios_sin_escribir_nada() {
             ("hooks_activos", "falta"),
             ("mcp", "falta"),
             ("skill", "falta"),
+            ("repo_usuario", "falta"),
         ]
         .map(|(a, b)| (a.to_string(), b.to_string()))
     );
@@ -466,4 +470,39 @@ fn medir_uso_se_recuerda_aunque_no_haya_claude() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("--registrar-uso"), "{stdout}");
     assert_eq!(e.git_config("felix.medirUso").as_deref(), Some("true"));
+}
+
+/// `conectar` registra el repositorio como el del usuario: `metricas`,
+/// `grafo` y `resumen` funcionan desde cualquier carpeta.
+#[test]
+fn el_repositorio_de_usuario_permite_usar_metricas_desde_otra_carpeta() {
+    let e = entorno();
+    let fuera = e.raiz.join("otra-carpeta");
+    fs::create_dir_all(&fuera).unwrap();
+    // Antes de conectar: fuera de un repositorio, error.
+    assert_eq!(e.universo(&fuera, &["metricas"]).codigo, 1);
+    assert_eq!(e.conectar(&["--aplicar"]).codigo, 0);
+    let registrado = fs::read_to_string(e.home.join(".config/felix/criterio")).unwrap();
+    assert_eq!(registrado.trim(), e.repo.to_str().unwrap());
+    for args in [&["metricas"][..], &["resumen"], &["grafo", "--salida", "-"]] {
+        let s = e.universo(&fuera, args);
+        assert_eq!(s.codigo, 0, "{args:?}: {}{}", s.stdout, s.stderr);
+    }
+    // Los comandos que escriben no usan el respaldo: desde otra carpeta fallan.
+    assert_eq!(
+        e.universo(&fuera, &["promover", "criterios/x", "--a", "vigente"])
+            .codigo,
+        1
+    );
+    assert_eq!(e.universo(&fuera, &["conectar"]).codigo, 1);
+    // Dentro de otro repositorio de criterio manda ese, no el del usuario.
+    let otro = e.raiz.join("otro");
+    let s = e.universo(&e.raiz, &["init", otro.to_str().unwrap(), "--git"]);
+    assert_eq!(s.codigo, 0);
+    let j = e.universo(&otro, &["conectar", "--format=json"]);
+    let v: Value = serde_json::from_str(&j.stdout).unwrap();
+    assert_eq!(
+        v["criterio"],
+        otro.canonicalize().unwrap().to_str().unwrap()
+    );
 }
