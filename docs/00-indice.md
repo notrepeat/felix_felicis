@@ -76,6 +76,11 @@ pruebas. Frontmatter y links portan los átomos formales que el motor chequea;
 el cuerpo markdown sigue siendo contenido humano anclado al nodo, fuera de la
 garantía formal ([06](06-limites.md)).
 
+La excepción es [`universo-motor/`](../universo-motor/README.md): un universo
+real del propio motor (crates, comandos, flags, herramientas del MCP, códigos
+de error y documentos), extraído del código y verificado en CI con la última
+release.
+
 ## Plan de demostración
 
 La implementación y su evidencia de funcionamiento se siguen en el

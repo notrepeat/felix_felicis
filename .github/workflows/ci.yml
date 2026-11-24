@@ -23,6 +23,35 @@ jobs:
       # Después de cargo test: los tests de evaluación que construyen un repositorio
       # de criterio usan target/debug/universo.
       - run: python -m unittest discover -s evaluation -p "test_*.py" -v
+      # Universo del motor (universo-motor/README.md): lo verifica la última release,
+      # no el binario de esta rama, para que un bug nuevo del motor no esconda sus propias fallas.
+      - name: Universo del motor — instalar la release que verifica
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FELIX_VERIFICA: v0.8.0
+        run: |
+          a="felix-felicis-$FELIX_VERIFICA-x86_64-unknown-linux-gnu.tar.gz"
+          gh release download "$FELIX_VERIFICA" --repo "$GITHUB_REPOSITORY" --pattern "$a" --pattern "$a.sha256" --dir "$RUNNER_TEMP"
+          (cd "$RUNNER_TEMP" && sha256sum -c "$a.sha256")
+          mkdir -p "$RUNNER_TEMP/felix" && tar -xzf "$RUNNER_TEMP/$a" -C "$RUNNER_TEMP/felix" --strip-components=1
+          cargo build --locked -p universo-cli -p universo-mcp
+      - name: Universo del motor — sello y reglas admitidas
+        run: |
+          "$RUNNER_TEMP/felix/universo" guard universo-motor/bundle \
+            --manifiesto universo-motor/manifest.toml --invariantes universo-motor/invariants.sx
+      # No bloquean todavía: el bundle al día exige correr `actualizar.py --aplicar` en cada
+      # cambio de código o docs, y la deuda se mantiene aparte hasta que el motor sepa
+      # sellar con excepciones (propuesta 14, I8).
+      - name: Universo del motor — ¿el bundle refleja el código? (no bloquea)
+        continue-on-error: true
+        run: |
+          python universo-motor/actualizar.py --universo "$RUNNER_TEMP/felix/universo" \
+            --descrito target/debug/universo --descrito-mcp target/debug/universo-mcp
+      - name: Universo del motor — deuda pendiente (no bloquea)
+        continue-on-error: true
+        run: |
+          "$RUNNER_TEMP/felix/universo" reglas universo-motor/bundle aplicar universo-motor/reglas-completas.sx \
+            --manifiesto universo-motor/manifest.toml --invariantes universo-motor/invariants.sx --dry-run
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: python tools/check_public_boundary.py
