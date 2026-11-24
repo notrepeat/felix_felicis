@@ -266,6 +266,75 @@ pub fn testigo_propuesta(
     None
 }
 
+/// Todas las asignaciones falsas (`crate::testigo::testigos_de_oracion`) de
+/// cada oración falsa del candidato del delta, con su `source_index` y su
+/// `instance_index`, hasta `limite` asignaciones en total. `None` en los mismos
+/// casos que [`testigo_propuesta`]. **Revela rutas del bundle**.
+pub fn testigos_propuesta(
+    snapshot: &Estructura,
+    delta: &Delta,
+    invariantes: &[SentenciaFuente],
+    limite: usize,
+) -> Option<Result<Vec<TestigosFuente>, crate::evaluador::ErrorEvaluacion>> {
+    let base = super::notas::base_con_notas(snapshot, delta).ok()?;
+    let snapshot: &Estructura = &base;
+    let candidato = construir_sobre(snapshot, delta).ok()?;
+    if detectar_sobre(snapshot, delta).ok()?.hay_conflictos() {
+        return None;
+    }
+    let expansion = expandir_sentencias_fuente(
+        invariantes,
+        candidato.estructura().manifiesto(),
+        candidato.estructura(),
+    )
+    .ok()?;
+    Some(testigos_de_expansion(
+        &expansion.oraciones,
+        candidato.estructura(),
+        limite,
+    ))
+}
+
+/// Testigos de las oraciones falsas de una expansión, con un solo presupuesto y
+/// un límite total de asignaciones. Lo comparten `propose` y `check`.
+/// **Revela rutas del bundle**.
+pub fn testigos_de_expansion(
+    oraciones: &[crate::invariante::expansion::OracionExpandida],
+    estructura: &Estructura,
+    limite: usize,
+) -> Result<Vec<TestigosFuente>, crate::evaluador::ErrorEvaluacion> {
+    let mut presupuesto =
+        crate::testigo::PresupuestoTestigo::nuevo(TESTIGO_MAX_UNIDADES, TESTIGO_MAX_INSTANCIAS);
+    let mut salida = Vec::new();
+    let mut restantes = limite;
+    for oracion in oraciones {
+        let testigos = crate::testigo::testigos_de_oracion(
+            &oracion.formula,
+            estructura,
+            &mut presupuesto,
+            restantes,
+        )?;
+        if testigos.asignaciones.is_empty() && !testigos.truncado {
+            continue;
+        }
+        restantes -= testigos.asignaciones.len();
+        salida.push(TestigosFuente {
+            source_index: oracion.source_index,
+            instance_index: oracion.instance_index,
+            testigos,
+        });
+    }
+    Ok(salida)
+}
+
+/// Testigos de una oración falsa, con su procedencia en el programa.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestigosFuente {
+    pub source_index: usize,
+    pub instance_index: Option<u64>,
+    pub testigos: crate::testigo::TestigosOracion,
+}
+
 /// Unidades semánticas acumuladas que puede gastar la búsqueda de un testigo
 /// (diez veces el presupuesto de `proponer`: recorre instancia por instancia).
 const TESTIGO_MAX_UNIDADES: u64 = 10_000_000;

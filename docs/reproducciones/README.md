@@ -22,7 +22,7 @@ Resultados con `universo 0.8.0` (2026-11-24, Linux).
 | Caso | Issue | Qué muestra | Resultado observado |
 |---|---|---|---|
 | R01 | I1 | `check --explain` de una regla trivial sobre aristas | 20 notas y 30 aristas: consume 528 400 de 1 000 000. 30 notas y 45 aristas: `explanation_budget_exceeded`, con `status: error` y `summary: null` aunque la regla se cumple |
-| R02 | I2 | 8 nodos incumplen dos reglas | `check` da sólo conteos (`failed: 2`); `--witness` da un nodo (`n/x0001`); `--explain enumerate` da un objeto por regla y ninguno dice qué nodo |
+| R02 | I2 | 8 nodos incumplen dos reglas | `check` da sólo conteos (`failed: 2`); `--witness` da un nodo (`n/x0001`); `--explain enumerate` da un objeto por regla y ninguno dice qué nodo. Sin publicar: `check --witness` da los 8 |
 | R03 | I3 | Comparar `orden` de los dos extremos de una arista | `(>= Orden b a)` es `invariant_syntax`. Con `esquema` sobre el dominio: 20, 100 y 400 instancias, 6, 20 y 80 ms; el conteo de fallas cuenta instancias del esquema, no aristas |
 | R04 | I4 | Ciclo `x0001 → x0002 → x0003 → x0001` | `(tc Edge k a a)` es `invariant_syntax` sin decir por qué; la regla desplegada a dos pasos lo admite |
 | R05 | I5 | Ocho reglas con `(exists ((g E)) (Edge g b a j))` en el cuerpo | `check` admite en 31 ms; `propose` con delta vacío da `evaluation_budget_exhausted`. Con la arista como guarda (y un cuerpo de relleno `(= a a)`) admite en 3 ms |

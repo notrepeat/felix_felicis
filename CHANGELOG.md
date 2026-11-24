@@ -3,6 +3,17 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
+## Sin publicar
+
+- `check --witness [--witness-limit N]` y `propose --witness all`: cada regla
+  que falla (id, mensaje, línea, instancias falsas) con todas sus asignaciones
+  falsas, hasta N en total (100 por omisión; 0 lista sólo las reglas). En JSON,
+  `failed_rules` y `witness_error`. Revela rutas: sólo local. Sin `--witness`, la
+  salida de `check` no cambia (propuesta 14, I2).
+- `universo-motor/`: el motor descrito como universo propio y verificado en CI
+  con la última release.
+- Propuesta 14 y `docs/reproducciones/`.
+
 ## 0.8.0 — 2026-11-19
 
 Medición más simple: `metrics` en el MCP y lectura desde cualquier carpeta.

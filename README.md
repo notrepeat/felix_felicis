@@ -68,7 +68,7 @@ Implementado:
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
 - servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check`, `why` y `search` (búsqueda léxica sobre título, tipo y atributos, con opt-in); con `--criterio`, además `capture`, `reinforce` y `object`, que escriben sólo en universos con `escritura_agentes`; los rechazos traen id y mensaje de la regla;
 - criterio en las reglas: valores ordenados, fechas, atributos con varios valores y el cuantificador `al-menos` (ver más abajo);
-- `propose --witness`: testigo localizado opt-in que dice en qué nodos o aristas falla un rechazo;
+- `propose --witness`: testigo localizado opt-in que dice en qué nodos o aristas falla un rechazo; `check --witness` y `propose --witness all` dan todas las reglas que fallan con todas sus asignaciones falsas;
 - [orquestador obligatorio](docs/propuestas/08-orquestador-obligatorio.md) (`tools/orquestador.py`): el agente propone, Felix verifica siempre, el rechazo vuelve con su diagnóstico y sólo el ejecutor publica, con CAS;
 - [Code Mode local opcional](tools/codemode-local/README.md) con SDK Cloudflare real y sandbox adicional Linux; [comparación reproducible](docs/codemode-comparacion.md), sin enviar bundles a la nube;
 - pruebas unitarias, de propiedades, compile-fail y round-trip.
@@ -372,6 +372,26 @@ materializar evidencia, así que funciona aunque la explicación agote su
 presupuesto. Se calcula con una segunda lectura del delta y del bundle, así que
 si cambian entre el veredicto y el testigo, el testigo puede describir otro
 estado. **Revela datos del bundle**: úsalo sólo en local. El MCP no lo expone.
+
+**Todas las fallas.** `check --witness` y `propose --witness all` listan cada
+regla que falla (id, mensaje, línea e instancias falsas) y, debajo, todas sus
+asignaciones falsas, hasta `--witness-limit <n>` en total (100 por omisión; con
+`0` se listan sólo las reglas, sin rutas). En texto:
+
+```text
+REJECT: 2 fuentes, 2 instancias, 2 evaluadas, 2 fallidas
+rule: marca-si — Toda nota x lleva marca si. (línea 1; instancias falsas: 1)
+  v=n/x0001
+  v=n/x0002
+```
+
+En JSON van en `failed_rules` (`source_index`, `rule_id`, `rule_message`,
+`line`, `column`, `failed_instances`, `witnesses[].bindings`, `truncated`) y
+`witness_error`. La búsqueda no recorre el producto completo cuando la guarda
+lo acota: con `(Edge e x y k)` como guarda (o primer conjunto de la guarda)
+enumera sólo las aristas `k`, y con `(Type x s)`, sólo los nodos de tipo `s`.
+Sin `--witness`, la salida de `check` no cambia. Igual que el testigo de una
+falla, revela rutas: sólo en local.
 
 `--emit-snapshot-token` añade explícitamente el token sensible del snapshot;
 por defecto no se incluye. El token identifica árbol raw, configuración y

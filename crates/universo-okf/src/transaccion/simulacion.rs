@@ -4,8 +4,9 @@ use super::{captura::capturar_snapshot, snapshot::SnapshotToken};
 use crate::parsear_delta_json;
 use std::{fmt, path::Path};
 use universo_core::{
-    ErrorVeredicto, ModoExplicacion, ResultadoPropuesta, ValorLigadura, explicar_propuesta,
-    proponer, testigo_propuesta, veredicto::ResultadoExplicacionesMedido,
+    ErrorVeredicto, ModoExplicacion, ResultadoPropuesta, SentenciaFuente, TestigosFuente,
+    ValorLigadura, explicar_propuesta, proponer, testigo_propuesta, testigos_propuesta,
+    veredicto::ResultadoExplicacionesMedido,
 };
 
 /// Presupuesto del documento delta UTF-8 antes del parseo; no es una cota RSS.
@@ -285,6 +286,54 @@ pub fn testigo_archivo(
                 })
                 .collect(),
         })),
+    }
+}
+
+/// Programa de invariantes (para nombrar cada regla) y testigos de sus
+/// oraciones falsas.
+pub type TestigosSimulacion = (Vec<SentenciaFuente>, Vec<TestigosFuente>);
+
+/// Todas las asignaciones falsas del candidato del delta (hasta `limite` en
+/// total), con el programa de invariantes para nombrar cada regla. `None` en
+/// los mismos casos que [`testigo_archivo`]. **Revela rutas del bundle**.
+pub fn testigos_archivo(
+    raiz: &Path,
+    manifiesto: &Path,
+    invariantes: &Path,
+    delta: &Path,
+    limite: usize,
+) -> Result<Option<TestigosSimulacion>, ErrorSimulacion> {
+    let texto = leer_delta(delta)?;
+    if texto.len() > MAX_DELTA_BYTES {
+        return Err(ErrorSimulacion {
+            codigo: "delta_resource_limit",
+        });
+    }
+    let delta = parsear_delta_json(&texto).map_err(|_| ErrorSimulacion {
+        codigo: "delta_invalid",
+    })?;
+    let snapshot = capturar_snapshot(
+        raiz,
+        manifiesto,
+        invariantes,
+        VERSION_MOTOR_V1,
+        POLICY_ID_V1,
+    )
+    .map_err(|error| ErrorSimulacion {
+        codigo: error.codigo(),
+    })?;
+    let fuentes = snapshot.fuentes_invariantes();
+    match testigos_propuesta(snapshot.estructura(), &delta, fuentes, limite) {
+        None => Ok(None),
+        Some(Err(universo_core::ErrorEvaluacion::PresupuestoAgotado { .. })) => {
+            Err(ErrorSimulacion {
+                codigo: "witness_budget_exceeded",
+            })
+        }
+        Some(Err(_)) => Err(ErrorSimulacion {
+            codigo: "witness_failed",
+        }),
+        Some(Ok(testigos)) => Ok(Some((fuentes.to_vec(), testigos))),
     }
 }
 

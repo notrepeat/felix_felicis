@@ -95,6 +95,16 @@ anula el veredicto ni la explicación de las otras.
 
 ## I2 — Sólo se ve la primera falla, y por MCP ninguna ubicación
 
+**Estado (2026-11-24): partes 1 y 2 hechas en la CLI.** `check --witness` y
+`propose --witness all [--witness-limit N]` listan las reglas que fallan y todas
+sus asignaciones falsas; con `--witness-limit 0`, sólo las reglas. La búsqueda
+acota por la guarda (aristas de la clave, nodos del tipo) y baja a los
+universales anidados con la misma poda. En el universo privado de origen da los
+40 nodos en una llamada de 240 ms, donde antes hacían falta 428 llamadas (2,9 s);
+en el [universo del motor](../../universo-motor/README.md), los 43 casos en
+200 ms frente a 614 llamadas. Falta la parte 3 (testigo por MCP con opt-in),
+que espera una decisión.
+
 **Síntoma.** Para ubicar 40 nodos que incumplen 14 reglas, el agente tuvo que
 reescribir cada regla sustituyendo la variable exterior por `@ruta` y correr
 `check` una vez por nodo: 428 invocaciones (2,9 s). Por MCP no hay testigo,

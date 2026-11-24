@@ -287,3 +287,58 @@ fn uso_faltante_o_flag_desconocida_sale_con_2_sin_json() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("Uso:"));
     }
 }
+
+#[test]
+fn witness_lista_reglas_y_asignaciones_sin_cambiar_la_salida_por_omision() {
+    let (root, manifest) = bundle_valido();
+    let reglas = archivo_invariantes(
+        root.path(),
+        "(regla :id \"alto\" :mensaje \"Todo nodo es alto.\" (forall ((x N)) :guarda (Type x a) (Nivel x alto)))\n",
+    );
+    let base = [
+        "check",
+        root.path().to_str().unwrap(),
+        "--manifiesto",
+        manifest.to_str().unwrap(),
+        "--invariantes",
+        reglas.to_str().unwrap(),
+    ];
+    let con = |extra: &[&str]| universo(&[&base[..], extra].concat());
+
+    // Sin --witness, nada nuevo en la salida.
+    let json = check_result(&con(&["--format", "json"]), 1);
+    assert!(json.get("failed_rules").is_none());
+
+    let json = check_result(&con(&["--format", "json", "--witness"]), 1);
+    assert_resumen(&json, 1, 1, 1, 1);
+    assert_eq!(json["witness_error"], Value::Null);
+    let regla = &json["failed_rules"][0];
+    assert_eq!(regla["rule_id"], "alto");
+    assert_eq!(regla["rule_message"], "Todo nodo es alto.");
+    assert_eq!(regla["line"], 1);
+    assert_eq!(regla["failed_instances"], 1);
+    assert_eq!(regla["truncated"], false);
+    assert_eq!(
+        regla["witnesses"],
+        serde_json::json!([{"instance_index": null, "bindings": [{"variable": "x", "kind": "node", "value": "n/private-node"}]}])
+    );
+
+    // --witness-limit 0: las reglas sin rutas.
+    let salida = con(&["--format", "json", "--witness", "--witness-limit", "0"]);
+    let json = check_result(&salida, 1);
+    assert_eq!(json["failed_rules"][0]["rule_id"], "alto");
+    assert!(json["failed_rules"][0].get("witnesses").is_none());
+    assert!(!String::from_utf8_lossy(&salida.stdout).contains("private-node"));
+
+    let texto = String::from_utf8(con(&["--witness"]).stdout).unwrap();
+    assert_eq!(
+        texto,
+        "REJECT: 1 fuentes, 1 instancias, 1 evaluadas, 1 fallidas\nrule: alto — Todo nodo es alto. (línea 1; instancias falsas: 1)\n  x=n/private-node\n"
+    );
+
+    assert_eq!(con(&["--witness-limit", "3"]).status.code(), Some(2));
+    assert_eq!(
+        con(&["--witness", "--explain", "decide"]).status.code(),
+        Some(2)
+    );
+}
