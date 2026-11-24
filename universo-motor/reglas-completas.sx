@@ -1,6 +1,7 @@
 ; Reglas del universo del motor. Cada :mensaje dice cómo se corrige.
-; Las que el motor todavía no cumple se mantienen fuera de invariants.sx (ver README.md):
-; el motor no sabe sellar un estado con deuda conocida (propuesta 14, I8).
+; Hoy son las mismas de invariants.sx: la deuda al arrancar está pagada.
+; Una regla nueva que el motor todavía no cumple se agrega aquí y no en invariants.sx
+; (ver README.md): el motor no sabe sellar un estado con deuda conocida (propuesta 14, I8).
 
 (regla :id "capas-hacia-abajo" :mensaje "Una crate sólo depende de crates de una capa inferior (núcleo, luego formato y transacción, luego superficie)."
   (esquema ((c Dom.Capa))

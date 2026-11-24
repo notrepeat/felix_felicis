@@ -22,7 +22,12 @@ su `felix.toml` y, sin `--universo`, se usa su universo por defecto. No se
 puede mezclar con `--root`, `--manifiesto` ni `--invariantes`. Si `felix.toml`
 falta, es inválido, no tiene el universo pedido o pide otra versión del motor,
 el servidor no arranca y dice por qué en stderr. `--ignorar-version` salta el
-control de versión.
+control de versión, y `--registrar-uso` anota cada llamada, sin argumentos ni
+respuesta, en `.git/felix-uso-mcp.jsonl` para `universo metricas` (lo agrega
+`universo conectar --aplicar --medir-uso`). Ambas sólo valen con `--criterio`.
+`universo-mcp --help` lista todas las opciones. Con opciones inválidas o
+incompatibles, el servidor no arranca: escribe `mcp_server_failed` en stderr y
+termina con 1.
 
 Con `--criterio`, todas las herramientas aceptan un argumento opcional
 `universe` (sin él, el universo por defecto o el de `--universo`), y `search`
@@ -38,7 +43,9 @@ también anuncia `capture`, `reinforce` y `object`:
 
 Escriben con simulación y CAS, y quedan en el historial. Sobre un universo sin
 escritura fallan con `universe_read_only`. El MCP nunca promueve.
-`universo mcp-config` imprime la configuración del cliente.
+`universo mcp-config` imprime la configuración del cliente: `--cliente
+claude-code|codex|json` elige el formato y `--nombre <servidor>` el nombre del
+servidor en esa configuración.
 
 En Windows, los ejecutables llevan `.exe`. Un cliente MCP inicia el proceso y
 negocia MCP `2025-11-25` mediante `initialize`, envía `notifications/initialized` y usa `tools/list` y
@@ -58,6 +65,10 @@ textual compatible con clientes MCP. Los esquemas se anuncian en `tools/list`.
 | `check` | `delta` opcional | El mismo veredicto sobre el candidato, o sobre la base cuando falta el delta. |
 | `why` | `delta` opcional | Lo mismo que `propose`, más `explanations`: la explicación redactada de la primera regla fallida (id, mensaje y forma abstracta del contraejemplo), con el formato de `propose --explain decide --rules`. `explanation_error` es `explanation_not_applicable` si no fallan invariantes, `explanation_budget_exceeded` si la explicación agota su presupuesto, o `explanation_too_large` si su JSON pasa de 1 MB (el rechazo y la procedencia llegan igual). No da rutas, etiquetas ni valores del bundle. |
 | `search` | `query` obligatorio (hasta 1024 caracteres, con al menos una palabra); `limit` opcional 1–100, 20 por defecto; `include_values:true` obligatorio | La búsqueda léxica de `universo search` limitada a título, tipo y atributos: notas donde cada término empieza alguna palabra, sin distinguir mayúsculas ni tildes. `summary` (`total`, `returned`) y `matches` con `path`, `type`, `title`, `fields` (unión de los campos donde aparecieron los términos) y `score`. No busca en el cuerpo ni en los campos extra del frontmatter. `search_resource_limit` si la respuesta pasa de 700 KB. |
+| `capture` | Sólo con `--criterio` y escritura: `text`, `project` y `author` obligatorios; `task`, `validation` (`explicita`, `implicita` o `pendiente`, por defecto) y `reason` opcionales | Guarda la candidata con simulación y CAS y devuelve las rutas creadas; `status: "similar"` con las notas existentes si ya está. |
+| `reinforce` | Sólo con `--criterio` y escritura: `note`, `project`, `context` y `author` obligatorios; `validation` y `reason` opcionales | Agrega una evidencia que apoya el criterio y lo confirma en ese proyecto (una vez por proyecto). |
+| `object` | Los mismos que `reinforce` | Agrega una evidencia que objeta el criterio, sin confirmación. |
+| `metrics` | Sólo con `--criterio`: `include_values` opcional, falso por defecto; `stale_days` 0–3650, 30 por defecto; `until` `AAAA-MM-DD` opcional | Las métricas de `universo metricas`: conteos por autor y semana, precisión del agente, días hasta la promoción, estancadas y uso del MCP. Las rutas de las estancadas sólo con `include_values:true`. |
 
 Ejemplo de llamada:
 
@@ -76,6 +87,19 @@ testigo revela rutas. Un error técnico o argumentos
 inválidos de una herramienta conocida producen `isError` verdadero con código
 redactado. Los errores de envoltura JSON-RPC, método o herramienta desconocida se
 distinguen mediante el error de protocolo. Ninguno equivale a un rechazo lógico.
+
+Códigos que produce el servidor mismo (los del dominio, como
+`universe_read_only` o `capture_similar`, vienen del motor):
+
+| Código | Dónde | Cuándo |
+|---|---|---|
+| `invalid_tool_arguments` | resultado con `isError` | Falta `schema`, sobra un campo, un valor tiene otro tipo, o `universe` no corresponde (sin `--criterio`, o `todos` fuera de `search`). |
+| `worker_failed` | resultado con `isError` | El proceso hijo que atiende la llamada falló, no respondió JSON o su respuesta pasó el límite. Si vence el plazo, el código es `tool_deadline_exceeded`. |
+| `unknown_tool` | error JSON-RPC (parámetros) | La herramienta no existe o no está anunciada (por ejemplo, `capture` sin universos con escritura). |
+| `pagination_not_supported` | error JSON-RPC (parámetros) | `tools/list` con `cursor`: la lista cabe en una página. |
+| `server_busy` | error JSON-RPC (interno) | Ya hay una llamada en curso (un worker por servidor). |
+| `tool_schema_invalid` | error JSON-RPC (interno) | Una definición de herramienta no es válida; indica un bug del servidor. |
+| `response_invalid` | error JSON-RPC (interno) | La respuesta no se pudo serializar; indica un bug del servidor. |
 
 ## Contexto y privacidad
 

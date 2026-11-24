@@ -2,5 +2,6 @@
 type: flag
 title: universo --medir-uso
 de: ["[[bin-universo]]"]
-documentado_en: ["[[doc-docs-instalacion]]"]
+en_ayuda: ["[[bin-universo]]"]
+documentado_en: ["[[doc-docs-instalacion]]", "[[doc-docs-mcp]]"]
 ---

@@ -178,8 +178,17 @@ fn agent_context_reject_correct_readmit_restart_without_writes() {
         json!({"schema":"felix-mcp-v1","delta":corrected,"apply":true}),
     );
     assert_eq!(invalid["isError"], true);
+    assert_eq!(
+        invalid["structuredContent"]["code"],
+        "invalid_tool_arguments"
+    );
     let unknown = client.request("tools/call", json!({"name":"apply","arguments":{}}));
-    assert!(unknown.get("error").is_some());
+    assert_eq!(unknown["error"]["message"], "unknown_tool", "{unknown}");
+    let paginada = client.request("tools/list", json!({"cursor":"1"}));
+    assert_eq!(
+        paginada["error"]["message"], "pagination_not_supported",
+        "{paginada}"
+    );
     drop(client);
     let mut restarted = Client::start(&root, &manifest, &invariants);
     assert_eq!(

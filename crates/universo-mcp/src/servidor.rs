@@ -75,6 +75,32 @@ fn error(code: &str) -> (Value, bool) {
     )
 }
 
+/// Una llamada a la vez: si el worker está ocupado, `server_busy`.
+fn turno(
+    ocupado: &Arc<tokio::sync::Semaphore>,
+    herramienta: &str,
+    universo: Option<&str>,
+) -> Result<tokio::sync::OwnedSemaphorePermit, ErrorData> {
+    Arc::clone(ocupado).try_acquire_owned().map_err(|_| {
+        crate::uso::anotar(herramienta, universo, false);
+        ErrorData::internal_error("server_busy", None)
+    })
+}
+
+/// El contenido textual de una respuesta; `response_invalid` si no se puede serializar.
+fn texto<T: serde::Serialize>(valor: &T) -> Result<String, ErrorData> {
+    serde_json::to_string(valor).map_err(|_| ErrorData::internal_error("response_invalid", None))
+}
+
+/// Las definiciones de `tools/list`; `tool_schema_invalid` si alguna no es una `Tool`.
+fn a_tools(definiciones: Vec<Value>) -> Result<Vec<Tool>, ErrorData> {
+    definiciones
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<Tool>, _>>()
+        .map_err(|_| ErrorData::internal_error("tool_schema_invalid", None))
+}
+
 fn respuesta(resultado: Result<worker::Respuesta, &'static str>) -> (Value, bool) {
     match resultado {
         Ok(worker::Respuesta {
@@ -134,11 +160,7 @@ impl ServerHandler for Servidor {
         if crate::metricas::activa() {
             definiciones.push(crate::metricas::definicion());
         }
-        let tools = definiciones
-            .into_iter()
-            .map(serde_json::from_value)
-            .collect::<Result<Vec<Tool>, _>>()
-            .map_err(|_| ErrorData::internal_error("tool_schema_invalid", None))?;
+        let tools = a_tools(definiciones)?;
         Ok(ListToolsResult {
             tools,
             ..Default::default()
@@ -153,10 +175,7 @@ impl ServerHandler for Servidor {
         if nombre == "metrics" && crate::metricas::activa() {
             let argumentos: Map<String, Value> = request.arguments.unwrap_or_default();
             // Mismo límite de concurrencia que las demás herramientas.
-            let permit = Arc::clone(&self.ocupado).try_acquire_owned().map_err(|_| {
-                crate::uso::anotar("metrics", None, false);
-                ErrorData::internal_error("server_busy", None)
-            })?;
+            let permit = turno(&self.ocupado, "metrics", None)?;
             let (value, error) = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
                 crate::metricas::ejecutar(&argumentos)
@@ -169,8 +188,7 @@ impl ServerHandler for Servidor {
                 )
             });
             crate::uso::anotar("metrics", None, !error);
-            let text = serde_json::to_string(&value)
-                .map_err(|_| ErrorData::internal_error("response_invalid", None))?;
+            let text = texto(&value)?;
             let mut result = if error {
                 CallToolResult::error(vec![ContentBlock::text(text)])
             } else {
@@ -214,10 +232,7 @@ impl ServerHandler for Servidor {
         let (value, error) = match self.destinos(&nombre, universo) {
             Err(code) => error(code),
             Ok(destinos) => {
-                let permit = Arc::clone(&self.ocupado).try_acquire_owned().map_err(|_| {
-                    crate::uso::anotar(&herramienta, universo_pedido.as_deref(), false);
-                    ErrorData::internal_error("server_busy", None)
-                })?;
+                let permit = turno(&self.ocupado, &herramienta, universo_pedido.as_deref())?;
                 let varios = destinos.len() > 1;
                 let con_nombre = !self.universos.is_empty();
                 let corrida = tokio::task::spawn_blocking(move || {
@@ -268,8 +283,7 @@ impl ServerHandler for Servidor {
             }
         };
         crate::uso::anotar(&herramienta, universo_pedido.as_deref(), !error);
-        let text = serde_json::to_string(&value)
-            .map_err(|_| ErrorData::internal_error("response_invalid", None))?;
+        let text = texto(&value)?;
         let mut result = if error {
             CallToolResult::error(vec![ContentBlock::text(text)])
         } else {
@@ -299,4 +313,42 @@ pub async fn servir(
         .map_err(|_| ())?;
     service.waiting().await.map_err(|_| ())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn una_segunda_llamada_concurrente_es_server_busy() {
+        let ocupado = Arc::new(tokio::sync::Semaphore::new(1));
+        let primera = turno(&ocupado, "check", None).unwrap();
+        let error = turno(&ocupado, "check", None).unwrap_err();
+        assert_eq!(error.message, "server_busy");
+        drop(primera);
+        assert!(turno(&ocupado, "check", None).is_ok());
+    }
+
+    #[test]
+    fn una_respuesta_que_no_se_serializa_es_response_invalid() {
+        struct Rota;
+        impl serde::Serialize for Rota {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("rota"))
+            }
+        }
+        assert_eq!(texto(&Rota).unwrap_err().message, "response_invalid");
+        assert_eq!(texto(&json!({"a": 1})).unwrap(), r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn las_definiciones_anunciadas_son_tools_validas() {
+        for (criterio, escritura) in [(false, false), (true, false), (true, true)] {
+            let mut definiciones = herramientas(criterio, escritura);
+            definiciones.push(crate::metricas::definicion());
+            assert!(a_tools(definiciones).is_ok());
+        }
+        let rota = vec![json!({"name": 5})];
+        assert_eq!(a_tools(rota).unwrap_err().message, "tool_schema_invalid");
+    }
 }
