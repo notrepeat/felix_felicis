@@ -308,6 +308,14 @@ impl DirectorioAnclado {
             .write(OpenOptionsWriteMode::Write)
             .create_new(true)
             .follow(false);
+        // `fs_at` crea con 0o777 si no se le da modo: con umask 0022 las notas
+        // quedaban ejecutables (755). 0o666 es el modo de `std::fs::File::create`;
+        // el umask lo lleva a 644.
+        #[cfg(unix)]
+        {
+            use fs_at::os::unix::OpenOptionsExt;
+            opciones.mode(0o666);
+        }
         let archivo = opciones.open_at(raiz, componente).map_err(mapear_io)?;
         metadata_archivo_regular(&archivo)?;
         validar_scope_con(&archivo, scope_validado, scope)?;

@@ -10,6 +10,12 @@ está en sus notas (`docs/release/`); aquí queda el resumen.
   falsas, hasta N en total (100 por omisión; 0 lista sólo las reglas). En JSON,
   `failed_rules` y `witness_error`. Revela rutas: sólo local. Sin `--witness`, la
   salida de `check` no cambia (propuesta 14, I2).
+- `propose`, `seal` y `guard` dan 1 000 000 unidades de evaluación a cada
+  oración expandida, como `check`, en vez de repartirlas entre todo el
+  programa: un universo ya no deja de admitir notas al crecer (propuesta 14,
+  I18). Cambio de semántica: un programa que antes se agotaba puede admitirse.
+- `propose --apply` crea las notas con modo 0666 menos el umask (644 con
+  umask 0022); antes quedaban en 0777 menos el umask, ejecutables (I19).
 - `universo-motor/`: el motor descrito como universo propio y verificado en CI
   con la última release.
 - Propuesta 14 y `docs/reproducciones/`.

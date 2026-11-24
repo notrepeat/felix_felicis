@@ -166,6 +166,15 @@ parcial. Ese límite no es un máximo del trabajo total de la invocación. JSON
 v2 y texto opt-in ocultan rutas y contenido original, pero revelan estructura
 lógica abstracta y valores booleanos por instancia,
 ordinales/posiciones de fuente, conteos derivados y métricas deterministas.
+
+El presupuesto de **evaluación** (no el de explicación) es de 1.000.000 de
+unidades por oración expandida en `check`, `propose`, `seal` y `guard`. Hasta
+0.8.0, `propose`, `seal` y `guard` repartían ese millón entre todas las
+oraciones del programa: un universo dejaba de admitir notas al crecer aunque
+ninguna regla fuera cara, y una regla podía pasar en `check` y agotar
+`propose` (propuesta 14, I5 e I18). Una sola oración que excede su presupuesto
+sigue siendo `evaluation_budget_exhausted`; el trabajo total de una invocación
+crece con el número de oraciones.
 Los errores legacy sin `--explain` aún pueden contener rutas locales o
 absolutas. La forma completa del límite, redacción y salida v2 está en
 [03 — Veredictos explicables](plan/03-veredictos-explicables.md).

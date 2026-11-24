@@ -160,6 +160,9 @@ Mediana de tres repeticiones, binario `release` 0.4.0 en el commit
    5 859 y 5 937 notas en un universo (búsqueda binaria manual con el mismo
    generador; no está en el JSON). Sobra para un repositorio personal; para
    más, habría que hacer configurable el presupuesto o abaratar las reglas.
+   *Actualización 2026-11-24:* el presupuesto pasó a ser por oración
+   expandida, como en `check` (propuesta 14, I18); este tope ya no depende
+   del número de reglas.
 3. **`capturar` y `promover` crecen con el tamaño del universo.** Simular una
    captura con 1 000 notas tarda 0,1 s; aplicarla, 3,4 s (medición manual). El apply de la fase
    04 escribe el bundle completo en un directorio de staging y hace `fsync`

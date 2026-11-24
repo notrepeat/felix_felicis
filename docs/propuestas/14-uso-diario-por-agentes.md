@@ -29,6 +29,7 @@ esta escala, el motor dice qué falla pero casi nunca dónde.
 
 | Issue | Tema | Prioridad | Costo | Caso |
 |---|---|---|---|---|
+| I18 | El universo deja de crecer: presupuesto agregado fijo en `propose`, `seal` y `guard` | P0 | S–M | R13 |
 | I8 | Deuda conocida: línea base o excepciones; `propose` sólo rechaza lo nuevo | P0 | M | R07 |
 | I2 | Todas las fallas con su ubicación (CLI y MCP con opt-in) | P0 | M | R02 |
 | I1 | Explicación con restricción de rango, sólo de lo que falla y sin anular el veredicto | P1 | M | R01 |
@@ -46,6 +47,7 @@ esta escala, el motor dice qué falla pero casi nunca dónde.
 | I6 | `mcp-config` para un universo suelto | P3 | S | R06 |
 | I15 | Cardinalidad exacta y máxima | P3 | S | — |
 | I17 | Detalles de la CLI | P3 | S | — |
+| I19 | `propose --apply` reescribe todas las notas y las deja en 755 | P1 | S–M | R14 |
 
 Costo: S, hasta 2 días; M, de 3 a 7 días; L, más.
 
@@ -196,7 +198,7 @@ instancia y `propose` 1 000 000 para todo el programa. Escrita como
    restringe una guarda indexable, de una guarda `Edge` que no va primera en
    el `and`, y estima el costo con los tamaños del bundle. `check --lint` y
    salida en `validate`.
-4. Un mismo criterio de presupuesto en `check`, `propose`, `seal` y `guard`
+4. (Hecho con I18.) Un mismo criterio de presupuesto en `check`, `propose`, `seal` y `guard`
    (por regla con tope global, o global en todos), y un mismo código:
    hoy `check` dice `evaluation_budget_exceeded` y `propose`
    `evaluation_budget_exhausted`. El error dice qué regla lo agotó.
@@ -387,3 +389,65 @@ que la última entrada del log coincida con el sello (ya lo hace `guard`).
   cualquier carpeta.
 - Una variable con el mismo nombre que un tipo (`(forall ((x N)) :guarda
   (Type x x) …)`) da `invariant_syntax` sin explicación.
+
+## I18 — El universo deja de crecer (P0)
+
+**Estado (2026-11-24): hecho, sin publicar.** `propose`, `seal` y `guard` dan
+1 000 000 unidades a cada oración expandida, como `check`. R13 se admite en los
+cuatro tamaños, y en el universo privado de origen la regla que había quedado
+fuera entra entera. Falta que el error nombre la regla que se agotó.
+
+**Síntoma.** Pasado cierto tamaño, `propose` rechaza cualquier nota nueva, aun
+una sola y correcta, con `evaluation_budget_exhausted`. Quitar cualquier regla
+vuelve a admitir: ninguna es culpable. Ocurrió en el universo privado de
+origen al llegar a unas 340 notas y 37 reglas, y dejó una regla nueva fuera
+del motor.
+
+**Reproducción (R13).** Reglas bien escritas, todas con guarda
+(`(forall ((v N)) :guarda (Type v x) (forall ((e E) (w N)) :guarda (Edge e v w k) (Marca w si)))`):
+
+| Notas | Reglas | `check` | `propose` con una nota nueva |
+|---:|---:|---|---|
+| 340 | 40 | admite | admite |
+| 340 | 80 | admite | `evaluation_budget_exhausted` |
+| 1 000 | 20 | admite | admite |
+| 1 000 | 40 | admite | `evaluation_budget_exhausted` |
+
+**Causa.** `propose`, `seal` y `guard` comparten 1 000 000 unidades para todo
+el programa (`PRESUPUESTO_EVALUACION_PROPUESTA`); `check` da 1 000 000 a cada
+instancia. El costo total crece como reglas × tamaño del bundle, así que todo
+universo que crezca llega al techo. A diferencia de I5, aquí no hay regla mal
+escrita que corregir.
+
+**Propuesta.**
+1. Inmediato: `--presupuesto <n>` en `propose`, `seal` y `guard`, y la misma
+   clave en el manifiesto, para que el valor quede sellado con el universo.
+2. Presupuesto por regla, como en `check`, con un tope global proporcional a
+   `nodos + aristas`.
+3. El error nombra la regla que más consumió y cuánto.
+
+## I19 — `propose --apply` reescribe todas las notas y las deja en 755
+
+**Estado (2026-11-24): el modo, hecho, sin publicar.** Las notas se crean con
+0o666 (644 con umask 0022); `fs_at` usaba 0o777 por omisión. Confirmado en
+`fs_at` 0.2.1 (`unix.rs`, `self.mode.unwrap_or(0o777)`). No reescribir las
+notas sin cambios **no** está hecho: la admisión reproduce el candidato
+serializado (`admision/envelope.rs`) y la recuperación compara contra él, así
+que conservar los bytes originales toca ese contrato. Queda como trabajo M.
+
+**Síntoma.** Un apply que toca una nota reescribe todas en forma canónica y
+deja todos los archivos en 755. En un repositorio con `core.fileMode`, el diff
+queda lleno de cambios de modo y de forma, y quien revisa tiene que comparar
+`universo atomos` antes y después para saber qué cambió de verdad.
+
+**Reproducción (R14).** Cinco notas en 644 (umask 0022); un delta que cambia un
+atributo de `n/x0002`; después del apply, las cinco en 755.
+
+**Causa probable.** El staging crea los archivos con
+`fs_at::OpenOptions::default()` (`crates/universo-okf/src/transaccion/stage.rs`),
+cuyo modo de creación por omisión sería 0o777.
+
+**Propuesta.** Crear con 0o644 o conservar el modo previo de cada nota;
+escribir sólo las notas cuyos átomos cambian; y que la salida del apply diga
+cuántas notas y átomos cambió (hoy lo dice `universo show <raiz> <n>`).
+

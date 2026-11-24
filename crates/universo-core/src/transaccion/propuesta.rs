@@ -13,7 +13,10 @@ use super::{
 };
 use crate::Delta;
 
-/// Límite semántico agregado para todas las fórmulas de una propuesta.
+/// Límite semántico de **cada** oración expandida de una propuesta, el mismo
+/// que `check` da a cada instancia. Hasta 0.8 era un límite agregado para
+/// todo el programa: el universo dejaba de admitir notas al crecer, aunque
+/// ninguna regla fuera cara (propuesta 14, I18).
 const PRESUPUESTO_EVALUACION_PROPUESTA: u64 = 1_000_000;
 
 /// Procedencia pública de una instancia falsa, sin fórmula ni sustituciones.
@@ -174,10 +177,11 @@ fn proponer_con_presupuesto_evaluacion(
         candidato.estructura(),
     )
     .map_err(error_expansion)?;
-    let mut presupuesto = ContextoPresupuestoEvaluacion::nuevo(limite_evaluacion);
     let mut falsas = Vec::new();
     for oracion in &expansion.oraciones {
-        let satisfecha = presupuesto
+        // Presupuesto propio por oración: el costo de una regla no depende de
+        // cuántas otras hay ni de su orden.
+        let satisfecha = ContextoPresupuestoEvaluacion::nuevo(limite_evaluacion)
             .evaluar(&oracion.formula, candidato.estructura())
             .map_err(error_evaluacion)?;
         if !satisfecha {
@@ -489,41 +493,45 @@ mod tests {
     }
 
     #[test]
-    fn presupuesto_agregado_respeta_limite_exacto_y_agota_una_unidad_antes() {
+    fn presupuesto_por_oracion_respeta_limite_exacto_y_agota_una_unidad_antes() {
         let estructura = estructura_dos_nodos();
         let texto = "(Type @n/PRIVATE_A a)\n(Type @n/PRIVATE_A a)";
         let oraciones = expansion(texto, &estructura);
         let costo = costo_minimo(&oraciones[0].formula, &estructura);
-        let total = costo * oraciones.len() as u64;
 
-        for oracion in &oraciones {
-            assert!(evaluar_con_presupuesto(&oracion.formula, &estructura, costo).is_ok());
+        // Cada oración tiene su propio límite: dos que caben por separado se
+        // admiten aunque la suma lo supere (hasta 0.8 el límite era agregado).
+        for limite in [costo, costo + 1] {
+            assert!(matches!(
+                proponer_con_presupuesto_evaluacion(
+                    &estructura,
+                    &delta_vacio(),
+                    &parsear_programa(texto).unwrap(),
+                    limite,
+                ),
+                Ok(ResultadoPropuesta::Admitida(_))
+            ));
         }
-        assert!(matches!(
-            proponer_con_presupuesto_evaluacion(
-                &estructura,
-                &delta_vacio(),
-                &parsear_programa(texto).unwrap(),
-                total,
-            ),
-            Ok(ResultadoPropuesta::Admitida(_))
-        ));
-        assert!(matches!(
-            proponer_con_presupuesto_evaluacion(
-                &estructura,
-                &delta_vacio(),
-                &parsear_programa(texto).unwrap(),
-                total + 1,
-            ),
-            Ok(ResultadoPropuesta::Admitida(_))
-        ));
 
-        let error = error_presupuesto(texto, &estructura, total - 1);
+        let error = error_presupuesto(texto, &estructura, costo - 1);
         assert_eq!(error.etapa(), EtapaErrorPropuesta::Evaluacion);
         assert_eq!(error.codigo(), "evaluation_budget_exhausted");
+    }
 
-        let error = error_presupuesto(texto, &estructura, costo);
-        assert_eq!(error.codigo(), "evaluation_budget_exhausted");
+    #[test]
+    fn muchas_oraciones_baratas_no_agotan_el_presupuesto() {
+        let estructura = estructura_dos_nodos();
+        let texto = "(Type @n/PRIVATE_A a)\n".repeat(50);
+        let costo = costo_minimo(&expansion(&texto, &estructura)[0].formula, &estructura);
+        assert!(matches!(
+            proponer_con_presupuesto_evaluacion(
+                &estructura,
+                &delta_vacio(),
+                &parsear_programa(&texto).unwrap(),
+                costo,
+            ),
+            Ok(ResultadoPropuesta::Admitida(_))
+        ));
     }
 
     #[test]
@@ -536,8 +544,21 @@ mod tests {
         assert!(!evaluar_con_presupuesto(&oraciones[0].formula, &estructura, costo).unwrap());
         assert!(evaluar_con_presupuesto(&oraciones[1].formula, &estructura, costo).is_ok());
 
-        let primer_error = error_presupuesto(falso_primero, &estructura, costo);
-        let segundo_error = error_presupuesto(verdadero_primero, &estructura, costo);
+        // Con el límite justo, el orden no cambia el veredicto: rechazo.
+        for texto in [falso_primero, verdadero_primero] {
+            assert!(matches!(
+                proponer_con_presupuesto_evaluacion(
+                    &estructura,
+                    &delta_vacio(),
+                    &parsear_programa(texto).unwrap(),
+                    costo,
+                ),
+                Ok(ResultadoPropuesta::RechazadaInvariantes(_))
+            ));
+        }
+        // Bajo el límite, el mismo error redactado en cualquier orden.
+        let primer_error = error_presupuesto(falso_primero, &estructura, costo - 1);
+        let segundo_error = error_presupuesto(verdadero_primero, &estructura, costo - 1);
         assert_eq!(primer_error, segundo_error);
         assert_eq!(primer_error.etapa(), EtapaErrorPropuesta::Evaluacion);
         assert_eq!(primer_error.codigo(), "evaluation_budget_exhausted");
@@ -548,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn presupuesto_agregado_comparte_costo_entre_oracion_directa_y_expandida() {
+    fn oracion_directa_y_expandida_tienen_cada_una_su_presupuesto() {
         let estructura = estructura_un_nodo();
         let texto = "(Type @n/PRIVATE_A a)\n(esquema ((l Lab)) (HasLab @n/PRIVATE_A l))";
         let oraciones = expansion(texto, &estructura);
@@ -558,16 +579,21 @@ mod tests {
         assert_eq!(oraciones[1].source_index, 1);
         assert_eq!(oraciones[1].instance_index, Some(0));
 
-        let costo_maximo = oraciones
+        let costos: Vec<u64> = oraciones
             .iter()
             .map(|oracion| costo_minimo(&oracion.formula, &estructura))
-            .max()
-            .unwrap();
-        for oracion in &oraciones {
-            assert!(evaluar_con_presupuesto(&oracion.formula, &estructura, costo_maximo).is_ok());
-        }
-
-        let error = error_presupuesto(texto, &estructura, costo_maximo);
+            .collect();
+        let maximo = *costos.iter().max().unwrap();
+        assert!(matches!(
+            proponer_con_presupuesto_evaluacion(
+                &estructura,
+                &delta_vacio(),
+                &parsear_programa(texto).unwrap(),
+                maximo,
+            ),
+            Ok(ResultadoPropuesta::Admitida(_))
+        ));
+        let error = error_presupuesto(texto, &estructura, maximo - 1);
         assert_eq!(error.etapa(), EtapaErrorPropuesta::Evaluacion);
         assert_eq!(error.codigo(), "evaluation_budget_exhausted");
     }

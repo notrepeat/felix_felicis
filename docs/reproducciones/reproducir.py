@@ -246,8 +246,43 @@ def r12(base):
               f"\n  rc={p.returncode}\n  | " + (p.stdout + p.stderr).strip()[:300].replace("\n", "\n  | "))
 
 
+def r13(base):
+    """El universo deja de crecer: presupuesto agregado fijo en propose, aun con reglas con guarda."""
+    regla = ('(regla :id "vecinos-{i}" :mensaje "Los vecinos k de una nota x llevan marca si."\n'
+             '  (forall ((v N)) :guarda (Type v x) (forall ((e E) (w N)) :guarda (Edge e v w k) (Marca w si))))\n')
+    nota = json.dumps({"schema": "felix-delta-v2",
+                       "create": [{"path": "n/y0001", "type": "x", "title": "Nota nueva", "body": "Cuerpo.\n"}],
+                       "add": ["Marca(n/y0001, si)", "Orden(n/y0001, o01)"], "remove": []})
+    for notas, reglas in ((340, 40), (340, 80), (1000, 20), (1000, 40)):
+        d = generar(base, f"r13-{notas}-{reglas}", "--notas", notas, "--aristas", notas * 3 // 2)
+        inv = escribir(d / "r.sx", "".join(regla.format(i=i) for i in range(1, reglas + 1)))
+        delta = escribir(d / "nota.json", nota)
+        print(f"  -- {notas} notas, {reglas} reglas")
+        u("check", d / "bundle", *ctx(d, inv))
+        u("propose", d / "bundle", *ctx(d, inv), "--delta", delta)
+
+
+def r14(base):
+    """propose --apply reescribe todas las notas y las deja en 755, aunque el delta toque una."""
+    import os
+    d = generar(base, "r14", "--notas", 5, "--aristas", 4)
+    inv = escribir(d / "r.sx", '(regla :id "marca-si" :mensaje "m"\n'
+                               '  (forall ((v N)) :guarda (Type v x) (Marca v si)))\n')
+    u("seal", d / "bundle", *ctx(d, inv))
+    modos = lambda: sorted({oct(os.stat(f).st_mode & 0o777) for f in (d / "bundle" / "n").glob("*.md")})
+    print(f"  modos antes: {modos()} (umask del proceso)")
+    delta = escribir(d / "d.json", '{"schema":"felix-delta-v1","add":["Orden(n/x0002, o05)"],'
+                                   '"remove":["Orden(n/x0002, o02)"]}')
+    rc, out = u("propose", d / "bundle", *ctx(d, inv), "--delta", delta, "--emit-snapshot-token",
+                "--format", "json", recortar=0)
+    u("propose", d / "bundle", *ctx(d, inv), "--delta", delta, "--apply", "--expect-snapshot",
+      json.loads(out)["snapshot_token"])
+    print(f"  modos después: {modos()}; el delta sólo cambia n/x0002")
+
+
 CASOS = {"R01": r01, "R02": r02, "R03": r03, "R04": r04, "R05": r05, "R06": r06, "R07": r07, "R08": r08,
-         "R10": r10, "R11": r11, "R12": r12}
+         "R10": r10, "R11": r11, "R12": r12,
+         "R13": r13, "R14": r14}
 
 
 def main():
