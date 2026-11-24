@@ -37,13 +37,13 @@ Después de cambiar código, ayuda o documentos, corre `actualizar.py --aplicar`
 commitea el resultado junto con el cambio. Si cambiaste la ayuda de un binario,
 describe los de la rama, como hace CI: `--descrito target/debug/universo
 --descrito-mcp target/debug/universo-mcp` (la ayuda de `universo-mcp` existe
-desde la versión siguiente a la 0.8.0; con el binario instalado de la 0.8.0,
-`actualizar.py` ve un delta que no es real). Nunca edites `bundle/` a mano:
+desde la 0.9.0; con un binario instalado anterior, `actualizar.py` ve un
+delta que no es real). Nunca edites `bundle/` a mano:
 `guard` lo detecta.
 
 ## En CI
 
-El job `verify` instala la release `v0.8.0` (con su suma SHA-256) y la usa para
+El job `verify` instala la release `v0.9.0` (con su suma SHA-256) y la usa para
 verificar; los binarios de la rama sólo se usan para extraer su ayuda y sus
 herramientas. Así, un bug nuevo del motor no puede esconder sus propias fallas.
 Al publicar una versión nueva, sube `FELIX_VERIFICA` en `.github/workflows/ci.yml`.

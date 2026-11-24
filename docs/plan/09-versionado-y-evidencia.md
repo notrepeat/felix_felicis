@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | `v0.9.0` preparada (2026-11-24) |
+| Estado | `v0.9.0` publicada (2026-11-24) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
@@ -86,6 +86,7 @@ git tag --list --sort=-version:refname
 | 2026-11-19 | `v0.6.0` | `9b5b128` | verde (Linux y Windows); release con binarios para Linux, macOS y Windows e instaladores sin Rust | [Notas](../release/v0.6.0.md): `universo conectar`, `universo grafo`, hooks con `felix.bin` e instaladores; probado en un entorno sin Rust. |
 | 2026-11-19 | `v0.7.0` | `68d2df9` | verde (Linux y Windows); release con binarios e instaladores | [Notas](../release/v0.7.0.md): `universo metricas` y registro opcional del uso del MCP; línea base del repositorio de criterio real tomada. |
 | 2026-11-19 | `v0.8.0` | `bc3fd20` | verde (Linux y Windows); release con binarios e instaladores | [Notas](../release/v0.8.0.md): `metrics` en el MCP y comandos de lectura desde cualquier carpeta. |
+| 2026-11-24 | `v0.9.0` | `6080b15` | verde (Linux y Windows); release con binarios e instaladores | [Notas](../release/v0.9.0.md): todas las fallas con su ubicación, presupuesto por oración, notas en 644 y el universo del motor. |
 
 ## Decisión posterior
 

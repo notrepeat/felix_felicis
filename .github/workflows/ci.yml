@@ -28,7 +28,7 @@ jobs:
       - name: Universo del motor — instalar la release que verifica
         env:
           GH_TOKEN: ${{ github.token }}
-          FELIX_VERIFICA: v0.8.0
+          FELIX_VERIFICA: v0.9.0
         run: |
           a="felix-felicis-$FELIX_VERIFICA-x86_64-unknown-linux-gnu.tar.gz"
           gh release download "$FELIX_VERIFICA" --repo "$GITHUB_REPOSITORY" --pattern "$a" --pattern "$a.sha256" --dir "$RUNNER_TEMP"
