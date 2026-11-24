@@ -84,3 +84,42 @@ fn version_imprime_nombre_y_version_sin_configuracion() {
         );
     }
 }
+
+#[test]
+fn ayuda_lista_todas_las_opciones_sin_configuracion() {
+    for flag in ["--help", "-h"] {
+        let salida = std::process::Command::new(env!("CARGO_BIN_EXE_universo-mcp"))
+            .arg(flag)
+            .output()
+            .unwrap();
+        assert_eq!(salida.status.code(), Some(0));
+        let ayuda = String::from_utf8(salida.stdout).unwrap();
+        for opcion in [
+            "--root",
+            "--manifiesto",
+            "--invariantes",
+            "--criterio",
+            "--universo",
+            "--ignorar-version",
+            "--registrar-uso",
+            "--version",
+        ] {
+            assert!(ayuda.contains(opcion), "falta {opcion} en:\n{ayuda}");
+        }
+        assert!(!ayuda.contains("--worker"), "{ayuda}");
+    }
+}
+
+#[test]
+fn una_opcion_desconocida_no_arranca_el_servidor() {
+    let salida = std::process::Command::new(env!("CARGO_BIN_EXE_universo-mcp"))
+        .arg("--ayuda")
+        .output()
+        .unwrap();
+    assert_eq!(salida.status.code(), Some(1));
+    assert!(salida.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(salida.stderr).unwrap(),
+        "mcp_server_failed\n"
+    );
+}

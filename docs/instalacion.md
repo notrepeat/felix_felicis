@@ -159,6 +159,11 @@ universo conectar --verificar
   del repositorio o `--criterio`. Dentro de otro repositorio de criterio manda
   ese. Si conectas un segundo repositorio, pasa a ser el registrado.
 
+Cada paso informa `ok`, `falta`, `desactualizado` o `no_disponible`, y con
+`--aplicar` también `aplicado` o `error`. `no_disponible` es un paso que Felix
+no puede hacer por ti, con el motivo: por ejemplo, hooks propios en
+`.githooks/` o `claude` sin instalar.
+
 Sólo toca la configuración local de Git de ese repositorio, la de Claude Code y
 la carpeta de la skill: no hace commits, no cambia la shell ni otros programas.
 Para revisar el MCP usa `claude mcp get`, que arranca el servidor registrado
