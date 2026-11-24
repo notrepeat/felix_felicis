@@ -1,0 +1,6 @@
+---
+type: flag
+title: universo-mcp --invariantes
+de: ["[[bin-universo-mcp]]"]
+documentado_en: ["[[doc-docs-guardia]]", "[[doc-docs-instalacion]]", "[[doc-docs-mcp]]", "[[doc-docs-operacion-transaccional]]", "[[doc-readme]]"]
+---

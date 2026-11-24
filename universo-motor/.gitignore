@@ -1,0 +1,2 @@
+# Transitorio de Felix: el lock no se versiona; el log y el sello sí.
+.bundle.felix.lock

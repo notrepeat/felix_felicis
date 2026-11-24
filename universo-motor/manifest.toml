@@ -1,0 +1,46 @@
+# Universo del propio motor: crates, binarios, comandos, flags, herramientas
+# del MCP, códigos de error, documentos y versiones. Lo genera
+# `universo-motor/extraer.py` desde el código, la ayuda y docs/.
+version = "felix-motor/1"
+
+[nodos]
+sortes = ["crate", "binario", "comando", "flag", "herramienta", "codigo", "documento", "version",
+          "Retirado", "Patrón"]
+
+[[aristas]]
+clave = "depende_de"      # crate → crate ([dependencies] del Cargo.toml, sin dev)
+
+[[aristas]]
+clave = "de"              # comando, flag o herramienta → binario que la ofrece
+
+[[aristas]]
+clave = "en_ayuda"        # comando o flag → binario cuya ayuda general lo muestra
+
+[[aristas]]
+clave = "documentado_en"  # comando, flag, herramienta, código o versión → documento que lo nombra
+
+[[aristas]]
+clave = "emitido_por"     # código → crate cuyo código fuente lo produce
+
+[[aristas]]
+clave = "probado_en"      # código → crate cuyas pruebas lo nombran
+
+[[aristas]]
+clave = "en_version"      # crate → versión de su Cargo.toml
+
+[[predicados]]
+nombre = "Capa"
+clave = "capa"
+# c1 núcleo (universo-core), c2 formato y transacción (universo-okf),
+# c3 superficie (universo-cli, universo-mcp) y apoyo de pruebas (universo-testkit).
+dominio = ["c1", "c2", "c3"]
+orden = true
+
+[[predicados]]
+nombre = "Clase"
+clave = "clase"
+dominio = ["readme", "changelog", "guia", "plan", "brecha", "propuesta", "release", "otro"]
+
+[layout]
+directorios = ["crates", "binarios", "comandos", "flags", "herramientas", "codigos", "documentos",
+               "versiones"]

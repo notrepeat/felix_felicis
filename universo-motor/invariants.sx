@@ -1,0 +1,19 @@
+; Reglas admitidas del universo del motor: el estado sellado las cumple.
+; Las que todavía fallan están en reglas-completas.sx (ver README.md).
+
+(regla :id "capas-hacia-abajo" :mensaje "Una crate sólo depende de crates de una capa inferior (núcleo, luego formato y transacción, luego superficie)."
+  (esquema ((c Dom.Capa))
+    (forall ((a N)) :guarda (Type a crate)
+      (forall ((e E) (b N)) :guarda (Edge e a b depende_de) (=> (Capa a c) (< Capa b c))))))
+
+(regla :id "una-version" :mensaje "Todas las crates del workspace llevan la misma versión."
+  (forall ((v N)) :guarda (Type v version) (forall ((w N)) :guarda (Type w version) (= v w))))
+
+(regla :id "version-con-notas" :mensaje "La versión tiene su entrada en CHANGELOG.md y sus notas en docs/release/v<versión>.md."
+  (forall ((v N)) :guarda (Type v version)
+    (and (exists ((e E) (d N)) :guarda (Edge e v d documentado_en) (Clase d changelog))
+         (exists ((e E) (d N)) :guarda (Edge e v d documentado_en) (Clase d release)))))
+
+(regla :id "comando-en-ayuda" :mensaje "Todo comando de la sección Uso de `universo --help` tiene su línea en la sección Comandos."
+  (forall ((c N)) :guarda (Type c comando)
+    (exists ((e E) (b N)) :guarda (Edge e c b en_ayuda) (Type b binario))))
