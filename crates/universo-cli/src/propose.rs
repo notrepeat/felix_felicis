@@ -4,10 +4,10 @@ use serde_json::{Value, json};
 use std::{io::Write, path::PathBuf};
 use universo_core::{ModoExplicacion, PRESUPUESTO_EXPLICACION_POR_DEFECTO};
 use universo_okf::transaccion::simulacion::{
-    EstadoSimulacion, simular_archivo, simular_archivo_explicado, testigo_archivo,
+    EstadoSimulacion, simular_archivo, simular_archivo_explicado, testigo_archivo, testigos_archivo,
 };
 
-pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--witness] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
+pub(super) const USO: &str = "Uso: universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--witness [all] [--witness-limit <n>]] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\nSimula por defecto; apply requiere snapshot esperado. Usa --opcion=<ruta> si una ruta empieza con '-'.\n";
 pub(super) struct Solicitud {
     raiz: PathBuf,
     manifiesto: PathBuf,
@@ -20,6 +20,9 @@ pub(super) struct Solicitud {
     explicar: Option<ModoExplicacion>,
     con_reglas: bool,
     con_testigo: bool,
+    /// `--witness all [--witness-limit N]`: todas las reglas que fallan y
+    /// hasta N asignaciones falsas en total, en vez de sólo la primera.
+    todos_los_testigos: Option<usize>,
     autor: Option<String>,
     motivo: Option<String>,
 }
@@ -37,6 +40,8 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     let mut explicar = None;
     let mut con_reglas = false;
     let mut con_testigo = false;
+    let mut todos = false;
+    let mut limite_testigos: Option<usize> = None;
     let mut autor = None;
     let mut motivo = None;
     let mut i = 0;
@@ -56,6 +61,10 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
             }
             con_testigo = true;
             i += 1;
+            if args.get(i).is_some_and(|siguiente| siguiente == "all") {
+                todos = true;
+                i += 1;
+            }
             continue;
         }
         if arg == "--rules" {
@@ -100,6 +109,9 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
             "--expect-snapshot" if esperado.is_none() => esperado = Some(value.to_owned()),
             "--author" if autor.is_none() => autor = Some(value.to_owned()),
             "--reason" if motivo.is_none() => motivo = Some(value.to_owned()),
+            "--witness-limit" if limite_testigos.is_none() => {
+                limite_testigos = Some(value.parse().map_err(|_| fail())?)
+            }
             "--explain" if explicar.is_none() => {
                 explicar = Some(match value {
                     "decide" => ModoExplicacion::Decidir,
@@ -123,6 +135,12 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
     if con_reglas && explicar.is_none() {
         return Err(fail());
     }
+    // --witness-limit sólo acompaña a --witness all.
+    if limite_testigos.is_some() && !todos {
+        return Err(fail());
+    }
+    let todos_los_testigos =
+        todos.then(|| limite_testigos.unwrap_or(super::testigos::LIMITE_POR_OMISION));
     if aplicar != esperado.is_some()
         || aplicar && (emit_token || explicar.is_some() || con_testigo)
         || !aplicar && (autor.is_some() || motivo.is_some())
@@ -141,6 +159,7 @@ pub(super) fn parsear(args: &[String]) -> Result<Solicitud, String> {
         explicar,
         con_reglas,
         con_testigo,
+        todos_los_testigos,
         autor,
         motivo,
     })
@@ -232,15 +251,37 @@ pub(super) fn ejecutar(
     };
     // Testigo localizado opt-in: sólo si se pidió y el candidato incumple una
     // regla. Revela rutas del bundle; por eso nunca va por defecto.
-    let testigo = if solicitud.con_testigo && status == "reject" {
-        Some(testigo_archivo(
-            &solicitud.raiz,
-            &solicitud.manifiesto,
-            &solicitud.invariantes,
-            &solicitud.delta,
-        ))
-    } else {
-        None
+    let testigo =
+        if solicitud.con_testigo && solicitud.todos_los_testigos.is_none() && status == "reject" {
+            Some(testigo_archivo(
+                &solicitud.raiz,
+                &solicitud.manifiesto,
+                &solicitud.invariantes,
+                &solicitud.delta,
+            ))
+        } else {
+            None
+        };
+    // `--witness all`: reglas que fallan y sus asignaciones falsas.
+    let todos = match (solicitud.todos_los_testigos, status) {
+        (Some(limite), "reject") => Some(
+            match testigos_archivo(
+                &solicitud.raiz,
+                &solicitud.manifiesto,
+                &solicitud.invariantes,
+                &solicitud.delta,
+                limite,
+            ) {
+                Ok(Some((fuentes, encontrados))) => {
+                    let falsas: Vec<usize> = encontrados.iter().map(|t| t.source_index).collect();
+                    Ok(super::testigos::agrupar(&fuentes, &falsas, &encontrados))
+                }
+                Ok(None) => Ok(Vec::new()),
+                Err(e) => Err(e.codigo()),
+            },
+        ),
+        (Some(_), _) => Some(Ok(Vec::new())),
+        _ => None,
     };
     let testigo_json = match &testigo {
         None => Value::Null,
@@ -261,8 +302,17 @@ pub(super) fn ejecutar(
             if let Some(token) = token {
                 value["snapshot_token"] = json!(token);
             }
-            if solicitud.con_testigo {
-                value["witness"] = testigo_json.clone();
+            match &todos {
+                Some(Ok(reglas)) => {
+                    value["failed_rules"] = super::testigos::a_json(reglas, true);
+                    value["witness_error"] = Value::Null;
+                }
+                Some(Err(codigo)) => {
+                    value["failed_rules"] = Value::Null;
+                    value["witness_error"] = json!(codigo);
+                }
+                None if solicitud.con_testigo => value["witness"] = testigo_json.clone(),
+                None => {}
             }
             // Con --explain las dos claves están siempre presentes; en un error
             // técnico de la propuesta no hay invariantes que explicar.
@@ -306,6 +356,11 @@ pub(super) fn ejecutar(
                 value.push_str(&format!("witness: {regla}: {}\n", ligaduras.join(" ")));
             } else if let Some(Err(e)) = &testigo {
                 value.push_str(&format!("witness: {}\n", e.codigo()));
+            }
+            match &todos {
+                Some(Ok(reglas)) => value.push_str(&super::testigos::a_texto(reglas, true)),
+                Some(Err(codigo)) => value.push_str(&format!("witness: {codigo}\n")),
+                None => {}
             }
             if solicitud.explicar.is_some() {
                 match (&explanations, explanation_error) {

@@ -13,6 +13,6 @@ pub use conflictos::{
     ClaseConflicto, DiagnosticoConflicto, ResultadoConflictos, detectar_conflictos_funcionales,
 };
 pub use propuesta::{
-    ErrorPropuesta, EtapaErrorPropuesta, ProcedenciaInvariante, ResultadoPropuesta,
-    explicar_propuesta, proponer, testigo_propuesta,
+    ErrorPropuesta, EtapaErrorPropuesta, ProcedenciaInvariante, ResultadoPropuesta, TestigosFuente,
+    explicar_propuesta, proponer, testigo_propuesta, testigos_de_expansion, testigos_propuesta,
 };

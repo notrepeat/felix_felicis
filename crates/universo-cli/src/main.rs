@@ -17,6 +17,7 @@ mod metricas;
 mod promocion;
 mod propose;
 mod resumen;
+mod testigos;
 
 use std::fs;
 use std::io::{self, Write};
@@ -38,10 +39,10 @@ use universo_okf::explicacion_json::{
 use universo_okf::{ErrorBundle, ErrorManifiestoArchivo, Regla, cargar_bundle, cargar_manifiesto};
 
 /// Uso breve, mostrado por errores de argumentos en `stderr`.
-const USO: &str = "Uso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]  (alias de validate)\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate> [--rules]] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--witness] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n  universo guard <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo seal <raiz> --manifiesto <m> --invariantes <i> [--autor <a>] [--motivo <m>] [--format <text|json>]\n  universo init <directorio> [--git] [--format <text|json>]\n  universo log <raiz> [--format <text|json>]\n  universo show <raiz> <n> [--format <text|json>]\n  universo diff <raiz> <desde> [<hasta>] [--format <text|json>]\n  universo delta <raiz> --desde <borrador> --manifiesto <m>\n  universo search <raiz> --manifiesto <m> <términos...> [--limit <n>] [--format <text|json>]\n  universo capturar <texto> --proyecto <nombre> [--tarea <t>] [--validacion <v>] [--dry-run]\n  universo reforzar|objetar <nota> --proyecto <nombre> --contexto <c> [--validacion <v>] [--dry-run]\n  universo promover <nota> --a <universo> [--de <universo>] [--dry-run]\n  universo mcp-config [--cliente claude-code|codex|json] [--nombre <servidor>]\n  universo conectar [--aplicar | --verificar] [--format text|json]\n  universo grafo [--universo <nombre>] [--salida <archivo.html>|-]\n  universo metricas [--hasta AAAA-MM-DD] [--estancada-dias <n>] [--format text|json]\n  universo resumen [--criterio <dir>] [--format <text|json>]\n  universo relacion <origen> <clave> <destino> [--quitar] | atributo <nota> <clave> <valor> [--quitar] | nota editar <nota>\n  universo reglas aplicar <archivo.sx> | manifiesto aplicar <archivo.toml> [--autor <a>] [--motivo <m>] [--dry-run]\nUse --manifiesto=<ruta> y --invariantes=<ruta> si una ruta empieza con '-'.\nDentro de un repositorio de criterio (felix.toml) los comandos no necesitan rutas: [--criterio <dir>] [--universo <nombre>].\n";
+const USO: &str = "Uso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]  (alias de validate)\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate> [--rules] | --witness [--witness-limit <n>]] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--witness [all] [--witness-limit <n>]] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n  universo guard <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo seal <raiz> --manifiesto <m> --invariantes <i> [--autor <a>] [--motivo <m>] [--format <text|json>]\n  universo init <directorio> [--git] [--format <text|json>]\n  universo log <raiz> [--format <text|json>]\n  universo show <raiz> <n> [--format <text|json>]\n  universo diff <raiz> <desde> [<hasta>] [--format <text|json>]\n  universo delta <raiz> --desde <borrador> --manifiesto <m>\n  universo search <raiz> --manifiesto <m> <términos...> [--limit <n>] [--format <text|json>]\n  universo capturar <texto> --proyecto <nombre> [--tarea <t>] [--validacion <v>] [--fecha AAAA-MM-DD] [--forzar] [--dry-run]\n  universo reforzar|objetar <nota> --proyecto <nombre> --contexto <c> [--validacion <v>] [--fecha AAAA-MM-DD] [--dry-run]\n  universo promover <nota> --a <universo> [--de <universo>] [--fecha AAAA-MM-DD] [--dry-run]\n  universo mcp-config [--cliente claude-code|codex|json] [--nombre <servidor>]\n  universo conectar [--aplicar | --verificar] [--medir-uso] [--format text|json]\n  universo grafo [--universo <nombre>] [--salida <archivo.html>|-]\n  universo metricas [--hasta AAAA-MM-DD] [--estancada-dias <n>] [--format text|json]\n  universo resumen [--criterio <dir>] [--format <text|json>]\n  universo relacion <origen> <clave> <destino> [--quitar] | atributo <nota> <clave> <valor> [--quitar] | nota editar <nota>\n  universo reglas aplicar <archivo.sx> | manifiesto aplicar <archivo.toml> [--autor <a>] [--motivo <m>] [--dry-run]\nUse --manifiesto=<ruta> y --invariantes=<ruta> si una ruta empieza con '-'.\nDentro de un repositorio de criterio (felix.toml) los comandos no necesitan rutas: [--criterio <dir>] [--universo <nombre>].\n";
 
 /// Ayuda completa, mostrada en `stdout` con código de salida 0.
-const AYUDA: &str = "CLI de Felix Felicis\n\nUso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate> [--rules]] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--witness] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n  universo guard <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo seal <raiz> --manifiesto <m> --invariantes <i> [--autor <a>] [--motivo <m>] [--format <text|json>]\n  universo init <directorio> [--git] [--format <text|json>]\n  universo log <raiz> [--format <text|json>]\n  universo show <raiz> <n> [--format <text|json>]\n  universo diff <raiz> <desde> [<hasta>] [--format <text|json>]\n  universo delta <raiz> --desde <borrador> --manifiesto <m>\n  universo search <raiz> --manifiesto <m> <términos...> [--limit <n>] [--format <text|json>]\n  universo capturar <texto> --proyecto <nombre> [--tarea <t>] [--validacion <v>] [--dry-run]\n  universo reforzar|objetar <nota> --proyecto <nombre> --contexto <c> [--validacion <v>] [--dry-run]\n  universo promover <nota> --a <universo> [--de <universo>] [--dry-run]\n  universo mcp-config [--cliente claude-code|codex|json] [--nombre <servidor>]\n  universo conectar [--aplicar | --verificar] [--format text|json]\n  universo grafo [--universo <nombre>] [--salida <archivo.html>|-]\n  universo metricas [--hasta AAAA-MM-DD] [--estancada-dias <n>] [--format text|json]\n  universo resumen [--criterio <dir>] [--format <text|json>]\n  universo relacion <origen> <clave> <destino> [--quitar] | atributo <nota> <clave> <valor> [--quitar] | nota editar <nota>\n  universo reglas aplicar <archivo.sx> | manifiesto aplicar <archivo.toml> [--autor <a>] [--motivo <m>] [--dry-run]\n\nComandos:\n  atomos     Imprime los átomos del bundle en orden canónico.\n  validate   Valida el manifiesto, el formato OKF y la estructura del bundle.\n  verificar  Alias compatible de validate.\n  check      Evalúa el programa de invariantes sobre el bundle.\n  propose    Simula por defecto; --apply publica con snapshot esperado.\n  status     Informa, sin escribir, si hay una transacción pendiente (0 limpio, 1 pendiente).\n  recover    Toma el lock y completa o revierte una transacción interrumpida.\n  guard      Valida, evalúa invariantes y compara con el sello del último estado admitido (0 sólo si todo coincide).\n  seal       Acepta el estado actual como admitido si cumple las invariantes; si difiere del sello anterior, lo registra como cambio externo.\n  init       Crea un repositorio de conocimiento mínimo, válido y sellado; con --git, un repositorio de criterio con universos candidatos y vigente.\n  log        Muestra fecha, autor, motivo y sello de cada cambio aplicado.\n  show       Muestra el cambio n del log con los hechos que agregó y retiró (su salida incluye datos del bundle).\n  diff       Muestra los cambios netos entre dos estados del log: el que dejó la entrada <desde> (0: antes de la primera) y el que dejó <hasta> (por defecto, la última); su salida incluye datos del bundle.\n  delta      Calcula el delta que lleva el root admitido a un borrador editado (su salida incluye datos del bundle).\n  capturar   Guarda una afirmación de criterio como candidata, con su proyecto y contexto (repositorio de criterio).\n  reforzar   Registra que un criterio se sostuvo en un proyecto y lo confirma allí.\n  objetar    Registra que un criterio no se sostuvo en un proyecto.\n  promover   Lleva un criterio a otro universo del repositorio; las reglas del destino deciden.\n  relacion   Agrega o quita una relación entre dos notas.\n  atributo   Cambia, agrega o quita un valor de un atributo de una nota.\n  reglas     `reglas aplicar <archivo>` cambia las reglas del universo si el bundle actual las cumple y lo registra en el historial.\n  manifiesto `manifiesto aplicar <archivo>` cambia el manifiesto del universo con la misma comprobación.\n  resumen    Por universo: notas, estados, relaciones, reglas, listas para promover, candidatas o vigentes con objeciones y últimos cambios.\n  mcp-config Imprime la configuración del MCP para conectar un agente a este repositorio de criterio.\n  metricas   Mide el uso del criterio: capturas, refuerzos, objeciones y promociones por autor y semana, precisión del agente, días hasta la promoción, estancadas y uso del MCP.\n  grafo      Genera una página HTML local con el grafo de los universos: notas, relaciones, promociones, listas para promover y objetadas (incluye datos del bundle; no usa la red).\n  conectar   Conecta el repositorio de criterio a Claude Code (hooks con la ruta del binario, MCP de usuario y skill); sin --aplicar sólo muestra qué cambiaría.\n  nota       `nota editar <nota>` abre la nota en $VISUAL o $EDITOR y aplica lo que cambie.\n  search     Busca notas donde cada término empieza alguna palabra, sin distinguir mayúsculas ni tildes; `--` antes de términos que empiezan con '-' (su salida incluye datos del bundle).\n\nOpciones:\n  --manifiesto <ruta> | --manifiesto=<ruta>  Manifiesto TOML requerido.\n  --invariantes <ruta> | --invariantes=<ruta> Programa de invariantes requerido por check.\n  --explain decide|enumerate                  Explicación redactada opt-in de check y de propose (sólo simulación).\n  --rules                                     Con --explain: id y mensaje de cada regla en el JSON (check pasa a schema v3).\n  --witness                                   Con propose (simulación): rutas de la primera asignación que incumple una regla. Revela datos del bundle; sólo uso local.\n  --format text|json                         Formato de salida de todos los comandos salvo atomos y delta (por defecto: text).\n  -h, --help                                 Muestra esta ayuda y termina con código 0.\n  -V, --version                              Muestra la versión y termina con código 0.\n  --criterio <dir>                           Repositorio de criterio (felix.toml); también FELIX_CRITERIO o el felix.toml más cercano hacia arriba.\n  --universo <nombre>                        Universo del repositorio (también FELIX_UNIVERSO); por defecto, el de felix.toml.\n  --ignorar-version                          Sigue aunque la versión de universo no cumpla el rango motor de felix.toml.\n\nSi la ruta de un archivo empieza con `-`, usa `--opcion=<ruta>`.\nSi la raíz posicional empieza con `-`, antepone `./` (por ejemplo, `./-bundle`).\nvalidate es una comprobación estructural; no evalúa invariantes.\ncheck informa admit/reject/error y no incluye datos concretos del bundle. La explicación es redactada; su pase opt-in usa un presupuesto de 1.000.000 unidades además del pase completo que determina el resumen.\n\nCódigos de salida:\n  0  Bundle válido, check/propose admit, search completada (aunque sin coincidencias) o ayuda mostrada.\n  1  Bundle inválido, repositorio de criterio inválido o sin el universo pedido, check/propose reject/error, status pendiente/missing, guard fallido, seal/recover/delta/diff fallido o fallo de escritura.\n  2  Uso inválido.\n";
+const AYUDA: &str = "CLI de Felix Felicis\n\nUso:\n  universo atomos <raiz> --manifiesto <manifiesto.toml>\n  universo validate <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo verificar <raiz> --manifiesto <manifiesto.toml> [--format <text|json>]\n  universo check <raiz> --manifiesto <manifiesto.toml> --invariantes <archivo> [--explain <decide|enumerate> [--rules] | --witness [--witness-limit <n>]] [--format <text|json>]\n  universo propose <raiz> --manifiesto <m> --invariantes <i> --delta <d.json> [--format text|json] [--explain decide|enumerate [--rules]] [--witness [all] [--witness-limit <n>]] [--emit-snapshot-token | --apply --expect-snapshot <token> [--author <a>] [--reason <r>]]\n  universo status <raiz> [--format <text|json>]\n  universo recover <raiz> [--format <text|json>]\n  universo guard <raiz> --manifiesto <m> --invariantes <i> [--format <text|json>]\n  universo seal <raiz> --manifiesto <m> --invariantes <i> [--autor <a>] [--motivo <m>] [--format <text|json>]\n  universo init <directorio> [--git] [--format <text|json>]\n  universo log <raiz> [--format <text|json>]\n  universo show <raiz> <n> [--format <text|json>]\n  universo diff <raiz> <desde> [<hasta>] [--format <text|json>]\n  universo delta <raiz> --desde <borrador> --manifiesto <m>\n  universo search <raiz> --manifiesto <m> <términos...> [--limit <n>] [--format <text|json>]\n  universo capturar <texto> --proyecto <nombre> [--tarea <t>] [--validacion <v>] [--fecha AAAA-MM-DD] [--forzar] [--dry-run]\n  universo reforzar|objetar <nota> --proyecto <nombre> --contexto <c> [--validacion <v>] [--fecha AAAA-MM-DD] [--dry-run]\n  universo promover <nota> --a <universo> [--de <universo>] [--fecha AAAA-MM-DD] [--dry-run]\n  universo mcp-config [--cliente claude-code|codex|json] [--nombre <servidor>]\n  universo conectar [--aplicar | --verificar] [--medir-uso] [--format text|json]\n  universo grafo [--universo <nombre>] [--salida <archivo.html>|-]\n  universo metricas [--hasta AAAA-MM-DD] [--estancada-dias <n>] [--format text|json]\n  universo resumen [--criterio <dir>] [--format <text|json>]\n  universo relacion <origen> <clave> <destino> [--quitar] | atributo <nota> <clave> <valor> [--quitar] | nota editar <nota>\n  universo reglas aplicar <archivo.sx> | manifiesto aplicar <archivo.toml> [--autor <a>] [--motivo <m>] [--dry-run]\n\nComandos:\n  atomos     Imprime los átomos del bundle en orden canónico.\n  validate   Valida el manifiesto, el formato OKF y la estructura del bundle.\n  verificar  Alias compatible de validate.\n  check      Evalúa el programa de invariantes sobre el bundle.\n  propose    Simula por defecto; --apply publica con snapshot esperado.\n  status     Informa, sin escribir, si hay una transacción pendiente (0 limpio, 1 pendiente).\n  recover    Toma el lock y completa o revierte una transacción interrumpida.\n  guard      Valida, evalúa invariantes y compara con el sello del último estado admitido (0 sólo si todo coincide).\n  seal       Acepta el estado actual como admitido si cumple las invariantes; si difiere del sello anterior, lo registra como cambio externo.\n  init       Crea un repositorio de conocimiento mínimo, válido y sellado; con --git, un repositorio de criterio con universos candidatos y vigente.\n  log        Muestra fecha, autor, motivo y sello de cada cambio aplicado.\n  show       Muestra el cambio n del log con los hechos que agregó y retiró (su salida incluye datos del bundle).\n  diff       Muestra los cambios netos entre dos estados del log: el que dejó la entrada <desde> (0: antes de la primera) y el que dejó <hasta> (por defecto, la última); su salida incluye datos del bundle.\n  delta      Calcula el delta que lleva el root admitido a un borrador editado (su salida incluye datos del bundle).\n  capturar   Guarda una afirmación de criterio como candidata, con su proyecto y contexto (repositorio de criterio).\n  reforzar   Registra que un criterio se sostuvo en un proyecto y lo confirma allí.\n  objetar    Registra que un criterio no se sostuvo en un proyecto.\n  promover   Lleva un criterio a otro universo del repositorio; las reglas del destino deciden.\n  relacion   Agrega o quita una relación entre dos notas.\n  atributo   Cambia, agrega o quita un valor de un atributo de una nota.\n  reglas     `reglas aplicar <archivo>` cambia las reglas del universo si el bundle actual las cumple y lo registra en el historial.\n  manifiesto `manifiesto aplicar <archivo>` cambia el manifiesto del universo con la misma comprobación.\n  resumen    Por universo: notas, estados, relaciones, reglas, listas para promover, candidatas o vigentes con objeciones y últimos cambios.\n  mcp-config Imprime la configuración del MCP para conectar un agente a este repositorio de criterio.\n  metricas   Mide el uso del criterio: capturas, refuerzos, objeciones y promociones por autor y semana, precisión del agente, días hasta la promoción, estancadas y uso del MCP.\n  grafo      Genera una página HTML local con el grafo de los universos: notas, relaciones, promociones, listas para promover y objetadas (incluye datos del bundle; no usa la red).\n  conectar   Conecta el repositorio de criterio a Claude Code (hooks con la ruta del binario, MCP de usuario y skill); sin --aplicar sólo muestra qué cambiaría.\n  nota       `nota editar <nota>` abre la nota en $VISUAL o $EDITOR y aplica lo que cambie.\n  search     Busca notas donde cada término empieza alguna palabra, sin distinguir mayúsculas ni tildes; `--` antes de términos que empiezan con '-' (su salida incluye datos del bundle).\n\nOpciones:\n  --manifiesto <ruta> | --manifiesto=<ruta>  Manifiesto TOML requerido.\n  --invariantes <ruta> | --invariantes=<ruta> Programa de invariantes requerido por check.\n  --explain decide|enumerate                  Explicación redactada opt-in de check y de propose (sólo simulación).\n  --rules                                     Con --explain: id y mensaje de cada regla en el JSON (check pasa a schema v3).\n  --witness                                   Con check: cada regla que falla y todas sus asignaciones falsas. Con propose (simulación): la primera asignación que incumple una regla; `--witness all`, todas. Revela rutas del bundle; sólo uso local.\n  --witness-limit <n>                         Con --witness (check) o --witness all (propose): asignaciones falsas que se muestran en total (por defecto 100; 0 lista sólo las reglas, sin rutas).\n  --format text|json                         Formato de salida de todos los comandos salvo atomos y delta (por defecto: text).\n  -h, --help                                 Muestra esta ayuda y termina con código 0.\n  -V, --version                              Muestra la versión y termina con código 0.\n  --criterio <dir>                           Repositorio de criterio (felix.toml); también FELIX_CRITERIO o el felix.toml más cercano hacia arriba.\n  --universo <nombre>                        Universo del repositorio (también FELIX_UNIVERSO); por defecto, el de felix.toml.\n  --ignorar-version                          Sigue aunque la versión de universo no cumpla el rango motor de felix.toml.\n  --fecha AAAA-MM-DD                         Con capturar, reforzar, objetar y promover: la fecha que se registra (por defecto, la de hoy en UTC).\n  --forzar                                   Con capturar: guarda la candidata aunque se parezca a una existente (capture_similar).\n  --medir-uso                                Con conectar: el MCP registra sus llamadas, sin contenido, para universo metricas.\n\nSi la ruta de un archivo empieza con `-`, usa `--opcion=<ruta>`.\nSi la raíz posicional empieza con `-`, antepone `./` (por ejemplo, `./-bundle`).\nvalidate es una comprobación estructural; no evalúa invariantes.\ncheck informa admit/reject/error y no incluye datos concretos del bundle, salvo con --witness (rutas de las asignaciones que fallan). La explicación es redactada; su pase opt-in usa un presupuesto de 1.000.000 unidades además del pase completo que determina el resumen.\n\nCódigos de salida:\n  0  Bundle válido, check/propose admit, search completada (aunque sin coincidencias) o ayuda mostrada.\n  1  Bundle inválido, repositorio de criterio inválido o sin el universo pedido, check/propose reject/error, status pendiente/missing, guard fallido, seal/recover/delta/diff fallido o fallo de escritura.\n  2  Uso inválido.\n";
 
 /// Formato de salida de `validate`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +89,7 @@ enum Comando {
         formato: Formato,
         explicacion: Option<ModoExplicacion>,
         con_reglas: bool,
+        testigos: Option<usize>,
     },
 }
 
@@ -99,6 +101,9 @@ struct SolicitudCheck<'a> {
     explicacion: Option<ModoExplicacion>,
     /// `--rules`: JSON v3 con `rule_id`/`rule_message` por objeto.
     con_reglas: bool,
+    /// `--witness [--witness-limit N]`: reglas que fallan y hasta N
+    /// asignaciones falsas en total (revela rutas del bundle).
+    testigos: Option<usize>,
 }
 
 /// Interpreta los argumentos de línea de comandos (sin el nombre del
@@ -195,6 +200,8 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
     let mut formato: Option<Formato> = None;
     let mut explicacion: Option<ModoExplicacion> = None;
     let mut con_reglas = false;
+    let mut con_testigos = false;
+    let mut limite_testigos: Option<usize> = None;
     let mut i = 0;
     while i < resto.len() {
         let arg = &resto[i];
@@ -230,6 +237,22 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
             }
             invariantes = Some(PathBuf::from(valor));
             i += 2;
+        } else if arg == "--witness" {
+            if tipo_comando != 2 || con_testigos {
+                return Err(USO.to_string());
+            }
+            con_testigos = true;
+            i += 1;
+        } else if arg == "--witness-limit" || arg.starts_with("--witness-limit=") {
+            let (valor, avance) = match arg.strip_prefix("--witness-limit=") {
+                Some(valor) => (valor, 1),
+                None => (resto.get(i + 1).ok_or_else(|| USO.to_string())?.as_str(), 2),
+            };
+            if tipo_comando != 2 || limite_testigos.is_some() {
+                return Err(USO.to_string());
+            }
+            limite_testigos = Some(valor.parse().map_err(|_| USO.to_string())?);
+            i += avance;
         } else if arg == "--rules" {
             if tipo_comando != 2 || con_reglas {
                 return Err(USO.to_string());
@@ -273,6 +296,11 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
     if con_reglas && explicacion.is_none() {
         return Err(USO.to_string());
     }
+    // --witness-limit exige --witness; --witness no se combina con --explain.
+    if limite_testigos.is_some() && !con_testigos || con_testigos && explicacion.is_some() {
+        return Err(USO.to_string());
+    }
+    let testigos = con_testigos.then(|| limite_testigos.unwrap_or(testigos::LIMITE_POR_OMISION));
     let raiz = raiz.ok_or_else(|| USO.to_string())?;
     let manifiesto = manifiesto.ok_or_else(|| USO.to_string())?;
     match tipo_comando {
@@ -289,6 +317,7 @@ fn parsear_args(args: &[String]) -> Result<Comando, String> {
             formato: formato.unwrap_or(Formato::Texto),
             explicacion,
             con_reglas,
+            testigos,
         }),
     }
 }
@@ -1087,6 +1116,7 @@ fn ejecutar_check_con_presupuesto_explicacion(
         formato,
         explicacion,
         con_reglas,
+        testigos,
     } = solicitud;
     let manifiesto_cargado = match cargar_manifiesto(manifiesto) {
         Ok(manifiesto) => manifiesto,
@@ -1181,7 +1211,7 @@ fn ejecutar_check_con_presupuesto_explicacion(
     // pase baseline sigue evaluando el programa completo para conservar status
     // y summary; la explicación vuelve a evaluar trazas bajo su presupuesto
     // global independiente de 1.000.000 unidades.
-    let expansion_fuente = if explicacion.is_some() {
+    let expansion_fuente = if explicacion.is_some() || testigos.is_some() {
         match expandir_sentencias_fuente(&fuentes, estructura.manifiesto(), &estructura) {
             Ok(expansion) => Some(expansion),
             Err(error_expansion) => {
@@ -1198,7 +1228,7 @@ fn ejecutar_check_con_presupuesto_explicacion(
     } else {
         None
     };
-    let expansion_legacy = if explicacion.is_none() {
+    let expansion_legacy = if expansion_fuente.is_none() {
         let sentencias: Vec<_> = fuentes
             .iter()
             .map(|fuente| fuente.sentencia.clone())
@@ -1254,12 +1284,15 @@ fn ejecutar_check_con_presupuesto_explicacion(
 
     let mut evaluadas = 0;
     let mut fallidas = 0;
-    for formula in oraciones {
+    // Posiciones de las oraciones falsas, para nombrar sus reglas (--witness).
+    let mut posiciones_falsas = Vec::new();
+    for (posicion, formula) in oraciones.into_iter().enumerate() {
         match evaluar(formula, &estructura) {
             Ok(true) => evaluadas += 1,
             Ok(false) => {
                 evaluadas += 1;
                 fallidas += 1;
+                posiciones_falsas.push(posicion);
             }
             Err(error_evaluacion) => {
                 let diagnostico = error_evaluacion_check(invariantes, error_evaluacion);
@@ -1316,6 +1349,54 @@ fn ejecutar_check_con_presupuesto_explicacion(
                 escribir_error_check_explicado(&[diagnostico], formato, salida, error)
             }
         }
+    } else if let (Some(limite), Some(expansion)) = (testigos, expansion_fuente.as_ref()) {
+        let falsas: Vec<_> = posiciones_falsas
+            .iter()
+            .map(|&p| expansion.oraciones[p].clone())
+            .collect();
+        let (encontrados, error_testigos) = if limite == 0 || falsas.is_empty() {
+            (Vec::new(), None)
+        } else {
+            match universo_core::testigos_de_expansion(&falsas, &estructura, limite) {
+                Ok(encontrados) => (encontrados, None),
+                Err(universo_core::ErrorEvaluacion::PresupuestoAgotado { .. }) => {
+                    (Vec::new(), Some("witness_budget_exceeded"))
+                }
+                Err(_) => (Vec::new(), Some("witness_failed")),
+            }
+        };
+        let fuentes_falsas: Vec<usize> = falsas.iter().map(|o| o.source_index).collect();
+        let reglas = testigos::agrupar(&fuentes, &fuentes_falsas, &encontrados);
+        let con_asignaciones = limite > 0;
+        let bytes = if formato == Formato::Json {
+            let mut valor = resultado_json_check(status, Some(resumen), &[]);
+            valor["failed_rules"] = testigos::a_json(&reglas, con_asignaciones);
+            if con_asignaciones {
+                valor["witness_error"] = json!(error_testigos);
+            }
+            format!("{valor}\n")
+        } else {
+            let mut texto = String::new();
+            let _ = escribir_resultado_check(
+                status,
+                Some(resumen),
+                &[],
+                formato,
+                codigo_salida,
+                &mut CursorTexto(&mut texto),
+                error,
+            );
+            texto.push_str(&testigos::a_texto(&reglas, con_asignaciones));
+            if let Some(codigo) = error_testigos {
+                texto.push_str(&format!("witness: {codigo}\n"));
+            }
+            texto
+        };
+        if escribir_salida(salida, error, bytes.as_bytes(), "stdout") {
+            codigo_salida
+        } else {
+            1
+        }
     } else {
         escribir_resultado_check(
             status,
@@ -1326,6 +1407,21 @@ fn ejecutar_check_con_presupuesto_explicacion(
             salida,
             error,
         )
+    }
+}
+
+/// Acumula en un `String` lo que `escribir_resultado_check` escribe, para
+/// agregar las reglas y los testigos debajo del resumen.
+struct CursorTexto<'a>(&'a mut String);
+
+impl Write for CursorTexto<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.push_str(&String::from_utf8_lossy(buf));
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -1410,6 +1506,7 @@ pub(crate) fn ejecutar(args: Vec<String>, salida: &mut impl Write, error: &mut i
             formato,
             explicacion,
             con_reglas,
+            testigos,
         } => ejecutar_check(
             SolicitudCheck {
                 raiz: &raiz,
@@ -1418,6 +1515,7 @@ pub(crate) fn ejecutar(args: Vec<String>, salida: &mut impl Write, error: &mut i
                 formato,
                 explicacion,
                 con_reglas,
+                testigos,
             },
             salida,
             error,
@@ -1512,6 +1610,7 @@ directorios = ["n"]
                     formato: Formato::Json,
                     explicacion: Some(modo),
                     con_reglas: false,
+                    testigos: None,
                 },
                 0,
                 &mut salida,
@@ -1554,6 +1653,7 @@ directorios = ["n"]
                     formato: Formato::Json,
                     explicacion: Some(modo),
                     con_reglas: false,
+                    testigos: None,
                 },
                 limite_inyectado,
                 &mut salida_con_limite,

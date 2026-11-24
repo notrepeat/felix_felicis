@@ -1,16 +1,44 @@
 use std::path::PathBuf;
 use universo_mcp::dominio::ServerConfig;
 
+const AYUDA: &str = "Servidor MCP local de Felix Felicis (stdio)
+
+Uso:
+  universo-mcp --root <bundle> --manifiesto <manifest.toml> --invariantes <invariants.sx>
+  universo-mcp --criterio <dir> [--universo <nombre>] [--ignorar-version] [--registrar-uso]
+
+Opciones:
+  --root <dir>           Bundle que sirve el servidor (con --manifiesto e --invariantes).
+  --manifiesto <ruta>    Manifiesto TOML del bundle.
+  --invariantes <ruta>   Programa de invariantes del bundle.
+  --criterio <dir>       Repositorio de criterio (felix.toml): las rutas salen de ahí. No se mezcla con --root, --manifiesto ni --invariantes.
+  --universo <nombre>    Con --criterio: universo por defecto de las herramientas (si no, el de felix.toml).
+  --ignorar-version      Con --criterio: arranca aunque la versión no cumpla el rango motor de felix.toml.
+  --registrar-uso        Con --criterio: anota cada llamada, sin contenido, en .git/felix-uso-mcp.jsonl para universo metricas.
+  -h, --help             Muestra esta ayuda y termina con código 0.
+  -V, --version          Muestra la versión y termina con código 0.
+
+stdout es del protocolo MCP; los errores de arranque van a stderr.
+Ver docs/mcp.md.
+";
+
+/// Escribe en stdout sin `println!`: con stdout cerrado no debe entrar en pánico.
+fn imprimir(texto: &str) {
+    use std::io::Write;
+    if std::io::stdout().write_all(texto.as_bytes()).is_err() {
+        std::process::exit(1);
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if matches!(args.as_slice(), [arg] if arg == "--version" || arg == "-V") {
-        // Sin `println!`: con stdout cerrado no debe entrar en pánico.
-        use std::io::Write;
-        let texto = format!("universo-mcp {}\n", env!("CARGO_PKG_VERSION"));
-        if std::io::stdout().write_all(texto.as_bytes()).is_err() {
-            std::process::exit(1);
-        }
+        imprimir(&format!("universo-mcp {}\n", env!("CARGO_PKG_VERSION")));
+        return;
+    }
+    if matches!(args.as_slice(), [arg] if arg == "--help" || arg == "-h") {
+        imprimir(AYUDA);
         return;
     }
     if run().await.is_err() {

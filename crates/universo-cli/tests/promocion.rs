@@ -212,6 +212,39 @@ fn una_promocion_a_medias_se_completa_sin_duplicar() {
 }
 
 #[test]
+fn si_el_origen_rechaza_la_marca_lo_dice_y_el_destino_queda_escrito() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo(dir.path());
+    candidata(&repo);
+    reforzar(&repo, "API pagos");
+    // Una regla del origen que prohíbe marcar candidatas como promovidas.
+    let reglas = repo.join("universos/candidatos/invariants.sx");
+    let mas_una = dir.path().join("reglas.sx");
+    std::fs::write(
+        &mas_una,
+        std::fs::read_to_string(&reglas).unwrap()
+            + "\n(regla :id \"nada-promovido\" :mensaje \"Ningún criterio de candidatos se marca como promovido.\"\n  (forall ((x N)) (not (Estado x promovido))))\n",
+    )
+    .unwrap();
+    ok(&universo_en(
+        &repo,
+        &[
+            "reglas",
+            "aplicar",
+            mas_una.to_str().unwrap(),
+            "--universo",
+            "candidatos",
+        ],
+    ));
+    let s = promover(&repo, &[]);
+    assert_eq!(s.codigo, 1, "{}{}", s.stdout, s.stderr);
+    assert!(s.stdout.contains("promote_source_rejected"), "{}", s.stdout);
+    assert!(s.stdout.contains("rule: nada-promovido"), "{}", s.stdout);
+    assert!(leer(&repo, "vigente", NOTA).contains("estado: vigente"));
+    assert!(leer(&repo, "candidatos", NOTA).contains("estado: candidato"));
+}
+
+#[test]
 fn errores_de_promocion() {
     let dir = tempfile::tempdir().unwrap();
     let repo = repo(dir.path());

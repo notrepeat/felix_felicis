@@ -18,7 +18,7 @@ el primer usuario de las mejoras de la
 |---|---|
 | `manifest.toml` | Tipos, aristas y atributos (`capa` de las crates, `clase` de los documentos). |
 | `invariants.sx` | Reglas admitidas: el estado sellado las cumple y `guard` las exige. |
-| `reglas-completas.sx` | Todas las reglas, incluidas las que el motor todavía no cumple (la deuda). |
+| `reglas-completas.sx` | Todas las reglas, incluidas las que el motor todavía no cumple (la deuda). Hoy, las mismas diez de `invariants.sx`. |
 | `extraer.py` | Escribe un borrador del bundle desde `crates/`, `universo --help`, `universo-mcp --help`, `tools/list` del MCP y `docs/`. |
 | `actualizar.py` | Extrae, calcula el `delta` contra el bundle admitido y lo pasa por `propose`; con `--aplicar`, lo publica. |
 | `bundle/`, `.bundle.felix.seal`, `.bundle.felix.log` | Estado admitido, su sello e historial. Sólo cambian con `actualizar.py --aplicar`. |
@@ -34,12 +34,16 @@ universo guard universo-motor/bundle --manifiesto universo-motor/manifest.toml \
 ```
 
 Después de cambiar código, ayuda o documentos, corre `actualizar.py --aplicar` y
-commitea el resultado junto con el cambio. Nunca edites `bundle/` a mano:
+commitea el resultado junto con el cambio. Si cambiaste la ayuda de un binario,
+describe los de la rama, como hace CI: `--descrito target/debug/universo
+--descrito-mcp target/debug/universo-mcp` (la ayuda de `universo-mcp` existe
+desde la 0.9.0; con un binario instalado anterior, `actualizar.py` ve un
+delta que no es real). Nunca edites `bundle/` a mano:
 `guard` lo detecta.
 
 ## En CI
 
-El job `verify` instala la release `v0.8.0` (con su suma SHA-256) y la usa para
+El job `verify` instala la release `v0.9.0` (con su suma SHA-256) y la usa para
 verificar; los binarios de la rama sólo se usan para extraer su ayuda y sus
 herramientas. Así, un bug nuevo del motor no puede esconder sus propias fallas.
 Al publicar una versión nueva, sube `FELIX_VERIFICA` en `.github/workflows/ci.yml`.
@@ -50,24 +54,27 @@ Al publicar una versión nueva, sube `FELIX_VERIFICA` en `.github/workflows/ci.y
 | `actualizar.py` (¿el bundle está al día?) | No, por ahora |
 | `reglas aplicar reglas-completas.sx --dry-run` (deuda) | No |
 
-## Deuda al arrancar (2026-11-24)
+## Deuda al arrancar (2026-11-24), pagada
 
-Seis de las diez reglas fallan, en 43 casos. Son desajustes reales entre el
-código y la documentación:
+Al arrancar, seis de las diez reglas fallaban en 43 casos: desajustes reales
+entre el código y la documentación. Se corrigieron en la rama
+`deuda-universo-motor` y las diez reglas están en `invariants.sx`;
+`actualizar.py --deuda` termina con 0.
 
-| Regla | Casos | Qué falla |
-|---|---:|---|
-| `comando-documentado` | 6 | `atributo`, `nota`, `relacion`, `objetar`, `resumen` y `verificar` no aparecen como `universo <comando>` en el README ni en las guías |
-| `flag-en-ayuda` | 10 | `universo-mcp --help` no imprime ayuda (sale `mcp_server_failed`), así que ninguna de sus 7 flags aparece; en la CLI faltan `--fecha`, `--forzar` y `--medir-uso` |
-| `flag-documentada` | 8 | `--cliente`, `--de`, `--fecha`, `--forzar`, `--limit`, `--nombre` y `--quitar` de la CLI, y `--registrar-uso` del MCP, no están en el README ni en las guías |
-| `herramienta-en-tabla` | 4 | `capture`, `reinforce`, `object` y `metrics` se describen en `docs/mcp.md`, pero no tienen fila en la tabla de herramientas |
-| `codigo-de-superficie-documentado` | 8 | `invalid_tool_arguments`, `unknown_tool`, `tool_schema_invalid`, `response_invalid`, `worker_failed`, `pagination_not_supported`, `promote_source_rejected` y `no_disponible` no aparecen en ningún documento |
-| `codigo-de-superficie-probado` | 7 | Siete códigos de la CLI y del MCP, entre ellos `server_busy`, no aparecen textuales en ninguna prueba |
+| Regla | Casos | Qué fallaba | Cómo se corrigió |
+|---|---:|---|---|
+| `comando-documentado` | 6 | `atributo`, `nota`, `relacion`, `objetar`, `resumen` y `verificar` no aparecían como `universo <comando>` en el README ni en las guías | Ejemplos en el README: `objetar` y `resumen` en el recorrido del repositorio de criterio, un bloque de correcciones puntuales y `universo verificar` en la lista de comandos |
+| `flag-en-ayuda` | 10 | `universo-mcp --help` no imprimía ayuda (salía `mcp_server_failed`), así que ninguna de sus 7 flags aparecía; en la CLI faltaban `--fecha`, `--forzar` y `--medir-uso` | `universo-mcp --help` y `-h` con sus opciones (con prueba); las tres flags en el Uso y las Opciones de `universo --help` |
+| `flag-documentada` | 8 | `--cliente`, `--de`, `--fecha`, `--forzar`, `--limit`, `--nombre` y `--quitar` de la CLI, y `--registrar-uso` del MCP, no estaban en el README ni en las guías | README (`--fecha`, `--forzar`, `--de`, `--limit`, `--quitar`) y `docs/mcp.md` (`--cliente`, `--nombre`, `--registrar-uso`) |
+| `herramienta-en-tabla` | 4 | `capture`, `reinforce`, `object` y `metrics` se describían en `docs/mcp.md`, pero no tenían fila en la tabla de herramientas | Sus filas, con argumentos y resultado |
+| `codigo-de-superficie-documentado` | 8 | `invalid_tool_arguments`, `unknown_tool`, `tool_schema_invalid`, `response_invalid`, `worker_failed`, `pagination_not_supported`, `promote_source_rejected` y `no_disponible` no aparecían en ningún documento | Tabla de códigos del servidor en `docs/mcp.md`; `promote_source_rejected` en el README y `no_disponible` en `docs/instalacion.md` |
+| `codigo-de-superficie-probado` | 7 | Siete códigos de la CLI y del MCP, entre ellos `server_busy`, no aparecían textuales en ninguna prueba | Pruebas de protocolo (`unknown_tool`, `pagination_not_supported`, `invalid_tool_arguments`), unitarias del servidor (`server_busy`, `response_invalid`, `tool_schema_invalid`) y de `promover` cuando el origen rechaza la marca (`promote_source_rejected`) |
 
-Las reglas que fallan viven en `reglas-completas.sx` y no en `invariants.sx`
+Las reglas en deuda vivían en `reglas-completas.sx` y no en `invariants.sx`
 porque el motor no sabe sellar un estado con deuda conocida (I8): si
 estuvieran en `invariants.sx`, `seal` se negaría y `guard` fallaría siempre. Al
-corregir una, se mueve a `invariants.sx` con `universo reglas … aplicar`.
+corregir una, se movió a `invariants.sx` con `universo reglas … aplicar`. Una
+regla nueva que el motor todavía no cumpla sigue el mismo camino.
 
 ## Lo que este universo no ve
 

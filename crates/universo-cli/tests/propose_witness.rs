@@ -97,3 +97,50 @@ fn witness_es_solo_de_simulacion() {
     let (code, _) = run(&f, &["--apply", "--expect-snapshot", "00", "--witness"]);
     assert_eq!(code, 2);
 }
+
+const DOS_REGLAS: &str = "(regla :id \"todos-a\" :mensaje \"Todo nodo es a.\" (forall ((n N)) (Type n a)))\n(regla :id \"ninguno-a\" :mensaje \"Ningún nodo es a.\" (forall ((n N)) (not (Type n a))))\n";
+
+#[test]
+fn witness_all_lista_cada_regla_con_todas_sus_asignaciones() {
+    let f = fixture(DOS_REGLAS, A_B);
+    let (code, out) = run(&f, &["--format=json", "--witness", "all"]);
+    assert_eq!(code, 1);
+    let json: Value = serde_json::from_str(&out).unwrap();
+    assert!(json.get("witness").is_none(), "{out}");
+    assert_eq!(json["witness_error"], Value::Null);
+    let reglas = json["failed_rules"].as_array().unwrap();
+    assert_eq!(reglas.len(), 2);
+    assert_eq!(reglas[0]["rule_id"], "todos-a");
+    assert_eq!(reglas[0]["failed_instances"], 1);
+    assert_eq!(
+        reglas[0]["witnesses"],
+        serde_json::json!([{"instance_index": null, "bindings": [{"variable": "n", "kind": "node", "value": "n/y"}]}])
+    );
+    assert_eq!(reglas[1]["rule_id"], "ninguno-a");
+    assert_eq!(reglas[1]["witnesses"][0]["bindings"][0]["value"], "n/x");
+    assert_eq!(reglas[1]["truncated"], false);
+
+    // El límite es total: la segunda regla queda nombrada, sin asignaciones.
+    let (_, out) = run(
+        &f,
+        &["--format=json", "--witness", "all", "--witness-limit", "1"],
+    );
+    let json: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(json["failed_rules"][1]["witnesses"], serde_json::json!([]));
+    assert_eq!(json["failed_rules"][1]["truncated"], true);
+
+    let (_, texto) = run(&f, &["--witness", "all"]);
+    assert!(
+        texto
+            .contains("rule: todos-a — Todo nodo es a. (línea 1; instancias falsas: 1)\n  n=n/y\n"),
+        "{texto}"
+    );
+}
+
+#[test]
+fn witness_limit_exige_witness_all() {
+    let f = fixture(DOS_REGLAS, A_B);
+    assert_eq!(run(&f, &["--witness-limit", "3"]).0, 2);
+    assert_eq!(run(&f, &["--witness", "--witness-limit", "3"]).0, 2);
+    assert_eq!(run(&f, &["--witness", "all", "--witness-limit", "x"]).0, 2);
+}

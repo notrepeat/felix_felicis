@@ -91,7 +91,7 @@ Sólo hace falta para trabajar en Felix o para una plataforma sin binario
 ```sh
 git clone <url-del-repositorio> felix_felicis
 cd felix_felicis
-git checkout v0.8.0        # o la versión que quieras; sin esto, la rama actual
+git checkout v0.9.0        # o la versión que quieras; sin esto, la rama actual
 cargo install --locked --path crates/universo-cli
 cargo install --locked --path crates/universo-mcp
 ```
@@ -158,6 +158,11 @@ universo conectar --verificar
   los que escriben, como `promover` o `conectar`, siguen pidiendo estar dentro
   del repositorio o `--criterio`. Dentro de otro repositorio de criterio manda
   ese. Si conectas un segundo repositorio, pasa a ser el registrado.
+
+Cada paso informa `ok`, `falta`, `desactualizado` o `no_disponible`, y con
+`--aplicar` también `aplicado` o `error`. `no_disponible` es un paso que Felix
+no puede hacer por ti, con el motivo: por ejemplo, hooks propios en
+`.githooks/` o `claude` sin instalar.
 
 Sólo toca la configuración local de Git de ese repositorio, la de Claude Code y
 la carpeta de la skill: no hace commits, no cambia la shell ni otros programas.

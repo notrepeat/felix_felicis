@@ -3,6 +3,32 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
+## 0.9.0 — 2026-11-24
+
+Uso diario por agentes: todas las fallas con su ubicación, un universo que
+puede crecer y el motor verificándose a sí mismo. Ver
+[notas](docs/release/v0.9.0.md). Cambio incompatible pre-1.0: un repositorio
+de criterio creado con `0.8.x` debe cambiar `motor` en `felix.toml`.
+
+- `check --witness [--witness-limit N]` y `propose --witness all`: cada regla
+  que falla (id, mensaje, línea, instancias falsas) con todas sus asignaciones
+  falsas, hasta N en total (100 por omisión; 0 lista sólo las reglas). En JSON,
+  `failed_rules` y `witness_error`. Revela rutas: sólo local. Sin `--witness`, la
+  salida de `check` no cambia (propuesta 14, I2).
+- `propose`, `seal` y `guard` dan 1 000 000 unidades de evaluación a cada
+  oración expandida, como `check`, en vez de repartirlas entre todo el
+  programa: un universo ya no deja de admitir notas al crecer (propuesta 14,
+  I18). Cambio de semántica: un programa que antes se agotaba puede admitirse.
+- `propose --apply` crea las notas con modo 0666 menos el umask (644 con
+  umask 0022); antes quedaban en 0777 menos el umask, ejecutables (I19).
+- `universo-motor/`: el motor descrito como universo propio y verificado en CI
+  con la última release.
+- `universo-mcp --help` lista sus opciones (antes salía `mcp_server_failed`);
+  `universo --help` muestra `--fecha`, `--forzar` y `--medir-uso`; README y
+  `docs/mcp.md` documentan los comandos, flags, herramientas y códigos que
+  faltaban.
+- Propuesta 14 y `docs/reproducciones/`.
+
 ## 0.8.0 — 2026-11-19
 
 Medición más simple: `metrics` en el MCP y lectura desde cualquier carpeta.

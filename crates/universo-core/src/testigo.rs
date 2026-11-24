@@ -18,7 +18,9 @@ use crate::estructura::Estructura;
 use crate::evaluador::{
     ContextoPresupuestoEvaluacion, ErrorEvaluacion, LigaduraCanonica, ValorLigadura,
 };
-use crate::formula::{Formula, SorteVar, SujetoTermino, TerminoArista, TerminoNodo, Var};
+use crate::formula::{
+    Formula, SorteVar, SujetoTermino, TerminoArista, TerminoNodo, TerminoSorte, Var,
+};
 use crate::{BundlePath, IdArista};
 
 /// Presupuesto compartido de una búsqueda de testigo: unidades semánticas de
@@ -149,6 +151,245 @@ fn buscar(
             indices[posicion] = 0;
         }
     }
+}
+
+/// Asignaciones falsificantes de una oración, hasta un límite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestigosOracion {
+    /// Asignaciones en orden canónico (el del evaluador). Cada una lleva las
+    /// ligaduras del universal exterior y, si el cuerpo es otro universal, las
+    /// de su primera asignación falsa.
+    pub asignaciones: Vec<Vec<LigaduraCanonica>>,
+    /// Hay más asignaciones falsas que las devueltas.
+    pub truncado: bool,
+}
+
+/// Todas las asignaciones falsificantes del universal exterior de `formula`,
+/// hasta `limite`. Una fórmula verdadera da cero asignaciones; una falsa que
+/// no empieza por un universal da una asignación vacía.
+///
+/// A diferencia de [`testigo_de_oracion`], no recorre el producto completo
+/// cuando la guarda lo acota: si la guarda (o el primer conjunto de una guarda
+/// `and`) es `(Edge e x y k)` con `e` ligada por el mismo universal, enumera
+/// sólo las aristas de clave `k`; si es `(Type x s)`, sólo los nodos de tipo
+/// `s`. El resto de las ligaduras se recorre completo. El orden de salida es
+/// el mismo que el del recorrido completo.
+pub fn testigos_de_oracion(
+    formula: &Formula,
+    estructura: &Estructura,
+    presupuesto: &mut PresupuestoTestigo,
+    limite: usize,
+) -> Result<TestigosOracion, ErrorEvaluacion> {
+    let Formula::ParaTodo {
+        ligaduras,
+        guarda,
+        cuerpo,
+    } = formula
+    else {
+        let falsa = !presupuesto.evaluacion.evaluar(formula, estructura)?;
+        return Ok(TestigosOracion {
+            asignaciones: if falsa && limite > 0 {
+                vec![Vec::new()]
+            } else {
+                Vec::new()
+            },
+            truncado: falsa && limite == 0,
+        });
+    };
+    let mut resultado = TestigosOracion {
+        asignaciones: Vec::new(),
+        truncado: false,
+    };
+    let restantes = presupuesto
+        .max_instancias
+        .saturating_sub(presupuesto.examinadas);
+    for valores in candidatas(ligaduras, guarda.as_deref(), estructura, restantes)? {
+        presupuesto.examinadas += 1;
+        let cuerpo_instanciado = sustituir(cuerpo, &valores);
+        let instancia = match guarda {
+            Some(guarda) => Formula::Implica(
+                Box::new(sustituir(guarda, &valores)),
+                Box::new(cuerpo_instanciado.clone()),
+            ),
+            None => cuerpo_instanciado.clone(),
+        };
+        if presupuesto.evaluacion.evaluar(&instancia, estructura)? {
+            continue;
+        }
+        if resultado.asignaciones.len() == limite {
+            resultado.truncado = true;
+            break;
+        }
+        let mut testigo: Vec<LigaduraCanonica> = ligaduras
+            .iter()
+            .map(|(variable, _)| LigaduraCanonica {
+                variable: variable.clone(),
+                valor: valores[variable].clone(),
+            })
+            .collect();
+        // El cuerpo es otro universal: su primera asignación falsa completa el
+        // testigo, buscada también con la guarda acotada.
+        if matches!(cuerpo_instanciado, Formula::ParaTodo { .. }) {
+            let interior = testigos_de_oracion(&cuerpo_instanciado, estructura, presupuesto, 1)?;
+            if let Some(primera) = interior.asignaciones.into_iter().next() {
+                testigo.extend(primera);
+            }
+        }
+        resultado.asignaciones.push(testigo);
+    }
+    Ok(resultado)
+}
+
+/// Asignaciones del universal en orden canónico, acotadas por la guarda cuando
+/// su primer átomo es un `Edge` sobre una arista ligada o un `Type` sobre un
+/// nodo ligado. Las asignaciones descartadas hacen falsa la guarda, así que no
+/// pueden falsear la oración. Si hay más de `maximo` asignaciones, falla con
+/// `PresupuestoAgotado` antes de construirlas.
+fn candidatas(
+    ligaduras: &[(Var, SorteVar)],
+    guarda: Option<&Formula>,
+    estructura: &Estructura,
+    maximo: u64,
+) -> Result<Vec<HashMap<Var, ValorLigadura>>, ErrorEvaluacion> {
+    let mut nodos: Vec<(BundlePath, crate::Sorte)> = estructura
+        .nodos()
+        .map(|(_, n)| (n.path.clone(), n.tipo.clone()))
+        .collect();
+    nodos.sort();
+    let mut aristas: Vec<IdArista> = estructura
+        .aristas()
+        .filter_map(|(_, a)| {
+            Some(IdArista {
+                origen: estructura.nodo(a.origen)?.path.clone(),
+                sorte: a.tipo.clone(),
+                destino: estructura.nodo(a.destino)?.path.clone(),
+                ordinal: a.ordinal,
+            })
+        })
+        .collect();
+    aristas.sort_by_key(|id| id.to_string());
+    let pos_nodo: HashMap<&BundlePath, usize> =
+        nodos.iter().enumerate().map(|(i, (p, _))| (p, i)).collect();
+    let ligada = |v: &Var| ligaduras.iter().position(|(w, _)| w == v);
+    let atomo = match guarda {
+        Some(Formula::Y(partes)) => partes.first(),
+        otra => otra,
+    };
+
+    // Tuplas parciales (posición de ligadura -> índice en `nodos`/`aristas`)
+    // que fija el átomo acotador; sin átomo acotador, una tupla vacía.
+    let mut parciales: Vec<Vec<Option<usize>>> = vec![vec![None; ligaduras.len()]];
+    match atomo {
+        Some(Formula::Edge {
+            arista: TerminoArista::Var(e),
+            origen,
+            destino,
+            sorte: TerminoSorte::Literal(clave),
+        }) if ligada(e).is_some() => {
+            let pe = ligada(e).unwrap_or_default();
+            parciales.clear();
+            for (i, id) in aristas.iter().enumerate() {
+                if id.sorte != *clave {
+                    continue;
+                }
+                let mut tupla = vec![None; ligaduras.len()];
+                tupla[pe] = Some(i);
+                let mut cabe = true;
+                for (termino, extremo) in [(origen, &id.origen), (destino, &id.destino)] {
+                    match termino {
+                        TerminoNodo::Constante(p) => cabe &= p == extremo,
+                        TerminoNodo::Var(v) => {
+                            if let (Some(pv), Some(&j)) = (ligada(v), pos_nodo.get(extremo)) {
+                                match tupla[pv] {
+                                    Some(previo) => cabe &= previo == j,
+                                    None => tupla[pv] = Some(j),
+                                }
+                            }
+                        }
+                    }
+                }
+                if cabe {
+                    parciales.push(tupla);
+                }
+            }
+        }
+        Some(Formula::Type {
+            sujeto: TerminoNodo::Var(v),
+            sorte: TerminoSorte::Literal(sorte),
+        }) if ligada(v).is_some() => {
+            let pv = ligada(v).unwrap_or_default();
+            parciales = nodos
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, tipo))| tipo == sorte)
+                .map(|(i, _)| {
+                    let mut tupla = vec![None; ligaduras.len()];
+                    tupla[pv] = Some(i);
+                    tupla
+                })
+                .collect();
+        }
+        _ => {}
+    }
+
+    let dominio = |sorte: &SorteVar| match sorte {
+        SorteVar::Nodo => nodos.len(),
+        SorteVar::Arista => aristas.len(),
+    };
+    let mut total: u64 = 0;
+    for parcial in &parciales {
+        let mut producto: u64 = 1;
+        for (k, (_, sorte)) in ligaduras.iter().enumerate() {
+            if parcial[k].is_none() {
+                producto = producto.saturating_mul(dominio(sorte) as u64);
+            }
+        }
+        total = total.saturating_add(producto);
+    }
+    if total > maximo {
+        return Err(ErrorEvaluacion::PresupuestoAgotado { limite: maximo });
+    }
+
+    let mut tuplas: Vec<Vec<usize>> = Vec::with_capacity(total as usize);
+    for parcial in parciales {
+        let mut abiertas: Vec<Vec<usize>> = vec![Vec::new()];
+        for (k, (_, sorte)) in ligaduras.iter().enumerate() {
+            let opciones: Vec<usize> = match parcial[k] {
+                Some(i) => vec![i],
+                None => (0..dominio(sorte)).collect(),
+            };
+            abiertas = abiertas
+                .into_iter()
+                .flat_map(|prefijo| {
+                    opciones.iter().map(move |&i| {
+                        let mut t = prefijo.clone();
+                        t.push(i);
+                        t
+                    })
+                })
+                .collect();
+        }
+        tuplas.extend(abiertas);
+    }
+    // El orden lexicográfico de índices es el del odómetro del evaluador.
+    tuplas.sort();
+    tuplas.dedup();
+    Ok(tuplas
+        .into_iter()
+        .map(|tupla| {
+            ligaduras
+                .iter()
+                .zip(tupla)
+                .map(|((variable, sorte), i)| {
+                    let valor = match sorte {
+                        SorteVar::Nodo => ValorLigadura::Nodo(nodos[i].0.clone()),
+                        SorteVar::Arista => ValorLigadura::Arista(aristas[i].clone()),
+                    };
+                    (variable.clone(), valor)
+                })
+                .collect()
+        })
+        .collect())
 }
 
 fn nodo(termino: &TerminoNodo, valores: &HashMap<Var, ValorLigadura>) -> TerminoNodo {

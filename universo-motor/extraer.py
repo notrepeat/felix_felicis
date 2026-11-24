@@ -182,6 +182,11 @@ def main():
         version = d["package"]["version"]
         ver = b.nota("versiones", "ver-" + slug(version), "version", version)
         b.arista("crate-" + nombre, "en_version", ver)
+    # Todas las versiones del CHANGELOG, no sólo la actual: así una versión
+    # nunca desaparece del borrador al subir la de las crates (`delta` no
+    # borra notas). Las reglas de versión miran la que apuntan las crates.
+    for version in re.findall(r"^## (\d+\.\d+\.\d+)\b", docs["doc-changelog"], re.M):
+        b.nota("versiones", "ver-" + slug(version), "version", version)
     for c, d in datos.items():
         for dep in d.get("dependencies", {}):
             if dep in CAPAS:

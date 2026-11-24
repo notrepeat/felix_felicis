@@ -1,6 +1,7 @@
 ; Reglas del universo del motor. Cada :mensaje dice cómo se corrige.
-; Las que el motor todavía no cumple se mantienen fuera de invariants.sx (ver README.md):
-; el motor no sabe sellar un estado con deuda conocida (propuesta 14, I8).
+; Hoy son las mismas de invariants.sx: la deuda al arrancar está pagada.
+; Una regla nueva que el motor todavía no cumple se agrega aquí y no en invariants.sx
+; (ver README.md): el motor no sabe sellar un estado con deuda conocida (propuesta 14, I8).
 
 (regla :id "capas-hacia-abajo" :mensaje "Una crate sólo depende de crates de una capa inferior (núcleo, luego formato y transacción, luego superficie)."
   (esquema ((c Dom.Capa))
@@ -8,12 +9,16 @@
       (forall ((e E) (b N)) :guarda (Edge e a b depende_de) (=> (Capa a c) (< Capa b c))))))
 
 (regla :id "una-version" :mensaje "Todas las crates del workspace llevan la misma versión."
-  (forall ((v N)) :guarda (Type v version) (forall ((w N)) :guarda (Type w version) (= v w))))
+  (forall ((a N)) :guarda (Type a crate)
+    (forall ((e E) (v N)) :guarda (Edge e a v en_version)
+      (forall ((b N)) :guarda (Type b crate)
+        (forall ((f E) (w N)) :guarda (Edge f b w en_version) (= v w))))))
 
-(regla :id "version-con-notas" :mensaje "La versión tiene su entrada en CHANGELOG.md y sus notas en docs/release/v<versión>.md."
-  (forall ((v N)) :guarda (Type v version)
-    (and (exists ((e E) (d N)) :guarda (Edge e v d documentado_en) (Clase d changelog))
-         (exists ((e E) (d N)) :guarda (Edge e v d documentado_en) (Clase d release)))))
+(regla :id "version-con-notas" :mensaje "La versión de las crates tiene su entrada en CHANGELOG.md y sus notas en docs/release/v<versión>.md."
+  (forall ((a N)) :guarda (Type a crate)
+    (forall ((e E) (v N)) :guarda (Edge e a v en_version)
+      (and (exists ((f E) (d N)) :guarda (Edge f v d documentado_en) (Clase d changelog))
+           (exists ((f E) (d N)) :guarda (Edge f v d documentado_en) (Clase d release))))))
 
 (regla :id "comando-en-ayuda" :mensaje "Todo comando de la sección Uso de `universo --help` tiene su línea en la sección Comandos."
   (forall ((c N)) :guarda (Type c comando)

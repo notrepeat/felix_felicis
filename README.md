@@ -30,8 +30,11 @@ universo capturar "Los componentes deben ser reutilizables" --proyecto tienda-we
     --tarea "refactor del carrito" --validacion explicita
 universo reforzar criterios/los-componentes-deben-ser-reutilizables \
     --proyecto api-pagos --contexto "se aplicó al crear el módulo de cobros"
-universo search reutilizables
+universo objetar criterios/los-componentes-deben-ser-reutilizables \
+    --proyecto landing --contexto "una página de un solo uso" --fecha 2026-11-20
+universo search reutilizables --limit 5
 universo promover criterios/los-componentes-deben-ser-reutilizables --a vigente
+universo resumen                     # notas, estados, listas para promover y objetadas
 ```
 
 `init --git` crea un repositorio Git aparte, vacío y sin commits, con `felix.toml`,
@@ -45,11 +48,30 @@ capturar candidatas. `universo grafo` lo muestra como un grafo interactivo en
 una página local. `universo metricas` mide cómo se usa: capturas, precisión de
 lo que capturan los agentes, tiempo hasta la promoción y uso del MCP. `capturar` guarda una afirmación
 como candidata con su proyecto y contexto; `reforzar` y `objetar` registran
-que se sostuvo, o no, en otro proyecto. `promover` la lleva a `vigente`, cuyas
-reglas exigen la confirmación en al menos dos proyectos; `relacion`,
-`atributo` y `nota editar` hacen correcciones puntuales. Desde otro lugar, usa
-`--criterio <dir>` o `FELIX_CRITERIO`, y `universo-mcp --criterio <dir>` para
-un agente. El plan completo está en la [fase 10](docs/plan/10-criterio-distribuible.md).
+que se sostuvo, o no, en otro proyecto. Los tres registran la fecha de hoy
+(UTC) salvo que pases `--fecha AAAA-MM-DD`. Si la afirmación se parece a una
+que ya existe, `capturar` falla con `capture_similar` y sugiere reforzarla;
+`--forzar` la guarda igual. `promover` la lleva a `vigente`, cuyas reglas
+exigen la confirmación en al menos dos proyectos; desde un universo que no es
+el por defecto, `--de <universo>`. Si después de escribir en el destino las
+reglas del origen rechazan marcarla como promovida, falla con
+`promote_source_rejected`: corrige el origen y repite `promover`. `universo
+resumen` muestra, por universo, notas, estados, relaciones y lo que está listo
+para promover. `search` devuelve 20 resultados salvo que pases `--limit <n>`.
+Desde otro lugar, usa `--criterio <dir>` o `FELIX_CRITERIO`, y
+`universo-mcp --criterio <dir>` para un agente. El plan completo está en la
+[fase 10](docs/plan/10-criterio-distribuible.md).
+
+Correcciones puntuales, con simulación y registro en el historial como todo lo
+demás:
+
+```sh
+universo relacion criterios/a contradice criterios/b           # agrega la relación
+universo relacion criterios/a contradice criterios/b --quitar  # la quita
+universo atributo criterios/a validacion explicita             # agrega o cambia un valor
+universo atributo criterios/a validacion explicita --quitar    # lo quita
+universo nota editar criterios/a                               # abre $VISUAL o $EDITOR
+```
 
 ## Estado
 
@@ -60,7 +82,7 @@ Implementado:
 - AST y parser de invariantes FO bisortidos;
 - validación estática, expansión de esquemas y evaluador de referencia en la API de `universo-core`;
 - `check --explain decide|enumerate` opt-in, con explicaciones redactadas en texto o JSON v2; el resultado baseline conserva JSON v1;
-- CLI (`atomos`, `validate`, `check`, `propose`, `status`, `recover`, `guard`, `seal`, `init`, `log`, `show`, `diff`, `delta`, `search`; `verificar` es alias compatible de `validate`);
+- CLI (`atomos`, `validate`, `check`, `propose`, `status`, `recover`, `guard`, `seal`, `init`, `log`, `show`, `diff`, `delta`, `search`; `universo verificar` es alias compatible de `universo validate`);
 - `universo delta <raiz> --desde <borrador>` calcula el delta que lleva el estado admitido a un borrador editado;
 - `universo search <raiz> --manifiesto <m> <términos...>` busca las notas donde cada término empieza alguna palabra (título, tipo, atributos, otros campos o cuerpo), sin distinguir mayúsculas ni tildes, ordenadas por un puntaje que pesa más el título; es búsqueda por palabras, no semántica, y su salida incluye datos del bundle;
 - `universo init <dir>` crea un repositorio de conocimiento mínimo, válido y sellado (no es atómico: si falla a mitad, borra el directorio y repite); `propose --apply --author <a> --reason <r>` registra la procedencia y el delta aplicado; `universo log` lista los cambios, `universo show <raiz> <n>` muestra los hechos que agregó y retiró uno de ellos, y `universo diff <raiz> <desde> [<hasta>]` los cambios netos entre dos estados del log, compuestos con el efecto que cada apply registró (la salida de ambos incluye datos del bundle; no cubre ediciones hechas fuera de Felix, que detecta `guard`, ni entradas escritas antes de que el historial guardara ese efecto);
@@ -68,7 +90,7 @@ Implementado:
 - propuestas transaccionales con simulación, apply bajo lock, CAS y recuperación de escrituras interrumpidas (fase 04 completa);
 - servidor [MCP local por stdio](docs/mcp.md) con `context`, `propose`, `check`, `why` y `search` (búsqueda léxica sobre título, tipo y atributos, con opt-in); con `--criterio`, además `capture`, `reinforce` y `object`, que escriben sólo en universos con `escritura_agentes`; los rechazos traen id y mensaje de la regla;
 - criterio en las reglas: valores ordenados, fechas, atributos con varios valores y el cuantificador `al-menos` (ver más abajo);
-- `propose --witness`: testigo localizado opt-in que dice en qué nodos o aristas falla un rechazo;
+- `propose --witness`: testigo localizado opt-in que dice en qué nodos o aristas falla un rechazo; `check --witness` y `propose --witness all` dan todas las reglas que fallan con todas sus asignaciones falsas;
 - [orquestador obligatorio](docs/propuestas/08-orquestador-obligatorio.md) (`tools/orquestador.py`): el agente propone, Felix verifica siempre, el rechazo vuelve con su diagnóstico y sólo el ejecutor publica, con CAS;
 - [Code Mode local opcional](tools/codemode-local/README.md) con SDK Cloudflare real y sandbox adicional Linux; [comparación reproducible](docs/codemode-comparacion.md), sin enviar bundles a la nube;
 - pruebas unitarias, de propiedades, compile-fail y round-trip.
@@ -372,6 +394,26 @@ materializar evidencia, así que funciona aunque la explicación agote su
 presupuesto. Se calcula con una segunda lectura del delta y del bundle, así que
 si cambian entre el veredicto y el testigo, el testigo puede describir otro
 estado. **Revela datos del bundle**: úsalo sólo en local. El MCP no lo expone.
+
+**Todas las fallas.** `check --witness` y `propose --witness all` listan cada
+regla que falla (id, mensaje, línea e instancias falsas) y, debajo, todas sus
+asignaciones falsas, hasta `--witness-limit <n>` en total (100 por omisión; con
+`0` se listan sólo las reglas, sin rutas). En texto:
+
+```text
+REJECT: 2 fuentes, 2 instancias, 2 evaluadas, 2 fallidas
+rule: marca-si — Toda nota x lleva marca si. (línea 1; instancias falsas: 1)
+  v=n/x0001
+  v=n/x0002
+```
+
+En JSON van en `failed_rules` (`source_index`, `rule_id`, `rule_message`,
+`line`, `column`, `failed_instances`, `witnesses[].bindings`, `truncated`) y
+`witness_error`. La búsqueda no recorre el producto completo cuando la guarda
+lo acota: con `(Edge e x y k)` como guarda (o primer conjunto de la guarda)
+enumera sólo las aristas `k`, y con `(Type x s)`, sólo los nodos de tipo `s`.
+Sin `--witness`, la salida de `check` no cambia. Igual que el testigo de una
+falla, revela rutas: sólo en local.
 
 `--emit-snapshot-token` añade explícitamente el token sensible del snapshot;
 por defecto no se incluye. El token identifica árbol raw, configuración y

@@ -1,5 +1,5 @@
 ; Reglas admitidas del universo del motor: el estado sellado las cumple.
-; Las que todavía fallan están en reglas-completas.sx (ver README.md).
+; Una regla nueva que el motor todavía no cumple va primero a reglas-completas.sx (ver README.md).
 
 (regla :id "capas-hacia-abajo" :mensaje "Una crate sólo depende de crates de una capa inferior (núcleo, luego formato y transacción, luego superficie)."
   (esquema ((c Dom.Capa))
@@ -7,13 +7,46 @@
       (forall ((e E) (b N)) :guarda (Edge e a b depende_de) (=> (Capa a c) (< Capa b c))))))
 
 (regla :id "una-version" :mensaje "Todas las crates del workspace llevan la misma versión."
-  (forall ((v N)) :guarda (Type v version) (forall ((w N)) :guarda (Type w version) (= v w))))
+  (forall ((a N)) :guarda (Type a crate)
+    (forall ((e E) (v N)) :guarda (Edge e a v en_version)
+      (forall ((b N)) :guarda (Type b crate)
+        (forall ((f E) (w N)) :guarda (Edge f b w en_version) (= v w))))))
 
-(regla :id "version-con-notas" :mensaje "La versión tiene su entrada en CHANGELOG.md y sus notas en docs/release/v<versión>.md."
-  (forall ((v N)) :guarda (Type v version)
-    (and (exists ((e E) (d N)) :guarda (Edge e v d documentado_en) (Clase d changelog))
-         (exists ((e E) (d N)) :guarda (Edge e v d documentado_en) (Clase d release)))))
+(regla :id "version-con-notas" :mensaje "La versión de las crates tiene su entrada en CHANGELOG.md y sus notas en docs/release/v<versión>.md."
+  (forall ((a N)) :guarda (Type a crate)
+    (forall ((e E) (v N)) :guarda (Edge e a v en_version)
+      (and (exists ((f E) (d N)) :guarda (Edge f v d documentado_en) (Clase d changelog))
+           (exists ((f E) (d N)) :guarda (Edge f v d documentado_en) (Clase d release))))))
 
 (regla :id "comando-en-ayuda" :mensaje "Todo comando de la sección Uso de `universo --help` tiene su línea en la sección Comandos."
   (forall ((c N)) :guarda (Type c comando)
     (exists ((e E) (b N)) :guarda (Edge e c b en_ayuda) (Type b binario))))
+
+(regla :id "comando-documentado" :mensaje "Todo comando aparece como `universo <comando>` en el README o en una guía de docs/."
+  (forall ((c N)) :guarda (Type c comando)
+    (exists ((e E) (d N)) :guarda (Edge e c d documentado_en) (or (Clase d readme) (Clase d guia)))))
+
+(regla :id "flag-en-ayuda" :mensaje "Toda flag que acepta un binario aparece en su ayuda (`universo --help` o `universo-mcp --help`)."
+  (forall ((f N)) :guarda (Type f flag)
+    (forall ((e E) (b N)) :guarda (Edge e f b de)
+      (exists ((g E) (zz N)) :guarda (Edge g f zz en_ayuda) (= zz b)))))
+
+(regla :id "flag-documentada" :mensaje "Toda flag aparece en el README o en una guía de docs/."
+  (forall ((f N)) :guarda (Type f flag)
+    (exists ((e E) (d N)) :guarda (Edge e f d documentado_en) (or (Clase d readme) (Clase d guia)))))
+
+(regla :id "herramienta-en-tabla" :mensaje "Toda herramienta del MCP tiene su fila en la tabla de docs/mcp.md."
+  (forall ((h N)) :guarda (Type h herramienta)
+    (exists ((e E) (zz N)) :guarda (Edge e h zz documentado_en) (= zz @documentos/doc-docs-mcp))))
+
+(regla :id "codigo-de-superficie-documentado" :mensaje "Todo código de error que emiten la CLI o el MCP aparece en algún documento."
+  (forall ((c N)) :guarda (Type c codigo)
+    (forall ((e E) (k N)) :guarda (Edge e c k emitido_por)
+      (=> (Capa k c3) (exists ((f E) (d N)) :guarda (Edge f c d documentado_en) (Type d documento))))))
+
+; Sólo códigos de superficie: en el núcleo muchas pruebas comparan la variante del error,
+; no su texto, y la extracción no las ve.
+(regla :id "codigo-de-superficie-probado" :mensaje "Todo código de error que emiten la CLI o el MCP aparece textual en alguna prueba."
+  (forall ((c N)) :guarda (Type c codigo)
+    (forall ((e E) (k N)) :guarda (Edge e c k emitido_por)
+      (=> (Capa k c3) (exists ((f E) (j N)) :guarda (Edge f c j probado_en) (Type j crate))))))
