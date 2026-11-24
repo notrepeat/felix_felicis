@@ -3,7 +3,12 @@
 Los cambios se agrupan por release. Desde `0.2.0`, el detalle de cada versión
 está en sus notas (`docs/release/`); aquí queda el resumen.
 
-## Sin publicar
+## 0.9.0 — 2026-11-24
+
+Uso diario por agentes: todas las fallas con su ubicación, un universo que
+puede crecer y el motor verificándose a sí mismo. Ver
+[notas](docs/release/v0.9.0.md). Cambio incompatible pre-1.0: un repositorio
+de criterio creado con `0.8.x` debe cambiar `motor` en `felix.toml`.
 
 - `check --witness [--witness-limit N]` y `propose --witness all`: cada regla
   que falla (id, mensaje, línea, instancias falsas) con todas sus asignaciones
@@ -18,6 +23,10 @@ está en sus notas (`docs/release/`); aquí queda el resumen.
   umask 0022); antes quedaban en 0777 menos el umask, ejecutables (I19).
 - `universo-motor/`: el motor descrito como universo propio y verificado en CI
   con la última release.
+- `universo-mcp --help` lista sus opciones (antes salía `mcp_server_failed`);
+  `universo --help` muestra `--fecha`, `--forzar` y `--medir-uso`; README y
+  `docs/mcp.md` documentan los comandos, flags, herramientas y códigos que
+  faltaban.
 - Propuesta 14 y `docs/reproducciones/`.
 
 ## 0.8.0 — 2026-11-19

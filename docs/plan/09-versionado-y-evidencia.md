@@ -7,7 +7,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 
 | Campo | Valor |
 |---|---|
-| Estado | `v0.8.0` publicada (2026-11-19) |
+| Estado | `v0.9.0` preparada (2026-11-24) |
 | Depende de | 07, 08 |
 | Desbloquea | Decisión sobre capacidades avanzadas |
 
@@ -22,6 +22,7 @@ preciso de capacidades demostradas, con CI, demo e informe enlazados.
 | `v0.6.0` | Uso diario sin Rust: instaladores, `universo conectar` y `universo grafo`. |
 | `v0.7.0` | Medición del uso real: `universo metricas` y registro opcional del uso del MCP. |
 | `v0.8.0` | Medición simple: `metrics` en el MCP y comandos de lectura desde cualquier carpeta. |
+| `v0.9.0` | Uso diario por agentes: todas las fallas con su ubicación, presupuesto por oración y el universo del motor. |
 | `v1.0.0` | Contratos declarados estables y evidencia sostenida en uso real. |
 
 Mientras la API sea `0.x`, los parches corrigen comportamiento compatible y
